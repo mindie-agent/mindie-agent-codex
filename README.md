@@ -115,6 +115,11 @@ multi-tenant service. Tokens are service credentials, not proof of human identit
 
 ## Validation
 
+The [real-source and remote NPU acceptance report](docs/real-acceptance-2026-09-18.md)
+records actual Grok publication, local feed ingestion, two independent native
+tasks with 16 NPU operator checks, and feedback propagation into retrieval.
+Grok event delivery remains pending acceptance.
+
 ```sh
 python3 -m unittest discover -s tests -p 'test_*.py'
 # Opt-in: actual model calls, native hooks/MCP, three independent service roots.
