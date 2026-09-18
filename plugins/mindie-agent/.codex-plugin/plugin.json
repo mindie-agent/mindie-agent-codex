@@ -1,0 +1,19 @@
+{
+  "name": "mindie-agent",
+  "version": "0.1.0+codex.20260918041439",
+  "description": "Domain knowledge and experience feedback for Ascend development",
+  "author": {
+    "name": "MindIE Agent contributors"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "MindIE Agent",
+    "shortDescription": "Ascend domain knowledge and experience.",
+    "longDescription": "One domain entry skill, three knowledge tools, session-summary capture and independent usefulness judging.",
+    "developerName": "MindIE Agent contributors",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Use MindIE Agent to help with this vLLM-Ascend task."
+  },
+  "mcpServers": "./.mcp.json"
+}

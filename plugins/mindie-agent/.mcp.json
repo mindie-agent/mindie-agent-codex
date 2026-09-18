@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "mindie-knowledge": {
+      "command": "python3",
+      "args": ["./scripts/bridge.py", "mcp"],
+      "env_vars": ["MINDIE_AGENT_CONFIG"],
+      "cwd": "."
+    }
+  }
+}

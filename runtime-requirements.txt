@@ -1,0 +1,2 @@
+# Reviewed development implementation; pin a commit until the first release.
+vaws-knowledge @ git+https://github.com/vllm-ascend-workspace/vaws-knowledge@d3350be6fa0e89905a3ac7a1d83372c5fdfe861c
