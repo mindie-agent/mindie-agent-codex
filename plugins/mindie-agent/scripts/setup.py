@@ -32,6 +32,11 @@ def main():
     )
     parser.add_argument("--domain", default="vllm-ascend")
     parser.add_argument(
+        "--no-public-feed",
+        action="store_true",
+        help="Do not read the official vLLM-Ascend domain feed",
+    )
+    parser.add_argument(
         "--upstream",
         type=Path,
         help="Explicitly share completed use evidence with this service connection JSON",
@@ -45,7 +50,12 @@ def main():
     python = str(Path(args.knowledge_python).expanduser().absolute())
     # Keep the venv executable path; resolving its symlink loses its site-packages.
     subprocess.run(
-        [python, "-c", "from vaws_knowledge.loop.cli import main"], check=True
+        [
+            python,
+            "-c",
+            "from vaws_knowledge.loop.cli import main; from remote_dev.mcp import server; import knowledge_intake",
+        ],
+        check=True,
     )
     import re
 
@@ -68,6 +78,15 @@ def main():
     )
     if args.upstream:
         value["upstream"] = json.loads(args.upstream.read_text())
+    if args.domain == "vllm-ascend" and not args.no_public_feed:
+        value["feeds"] = [
+            dict(
+                repository="vllm-ascend-workspace/vaws-knowledge",
+                ref="knowledge/vllm-ascend",
+                domain="vllm-ascend",
+                interval_seconds=300,
+            )
+        ]
     write_private(engine_config, value)
     write_private(config, dict(python=python, engine_config=str(engine_config)))
     print(

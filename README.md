@@ -1,13 +1,16 @@
 # MindIE Agent · Codex
 
 Codex adapter for MindIE Agent's first domain experience loop. The user works in
-the native Codex task; this plugin adds **one entry skill and three knowledge tools**.
+the native Codex task; this plugin adds **one entry skill, three knowledge tools,
+and eleven core remote-dev tools**.
 The initial domain is `vllm-ascend`.
 
 ```mermaid
 flowchart LR
   U[User] <--> A[Native domain task A]
   A -->|query / explain / actual use| K[Local domain knowledge service]
+  A -->|remote-dev over SSH| N[Remote NPU container]
+  N -->|real output / verified artifacts| A
   A -->|Stop: final reply| H[Bounded capture hook]
   H --> O[Fresh organizer]
   O --> E[Domain experiences]
@@ -21,6 +24,13 @@ This repository owns Codex packaging, hook translation and the fresh Codex
 maintenance runner. Content, retrieval, publication, use identity, feedback and
 distribution belong to the knowledge runtime. This is a new plugin entrypoint;
 it does not install the old workspace bootstrap, updater or VAWS business skill catalog.
+
+Codex, knowledge, capture, organization and judging run on the user's local side.
+The remote server supplies the NPU execution environment. The plugin reuses
+remote-dev's SSH transport, endpoint/container semantics, owned jobs and artifact
+hash verification. Its thin wrapper selects the core read/write/search/patch,
+shell/job and artifact tools without duplicating their schemas or implementation.
+It does not provision a remote knowledge server or copy Codex credentials remotely.
 
 ## Development installation
 
@@ -66,7 +76,16 @@ records actual application; it does not cast a vote. The ordinary final reply
 supplies the use outcome. Repeated use of the same entry in one task contributes
 at most one evaluation. Producer self-use is excluded. Unknown has no weight effect.
 
-The default setup keeps content local. `--auto-publish` explicitly authorizes
+The default vLLM-Ascend setup reads the organization-owned public knowledge feed
+from `vllm-ascend-workspace/vaws-knowledge`, branch `knowledge/vllm-ascend`, every
+five minutes. It never uses a personal fork as the official source. `--no-public-feed`
+disables this read. The independent reader validates committed export hashes and
+applicability before switching searchable content; errors retain the last valid
+generation. Cases are experiences, topics are versioned knowledge, and maintenance
+diaries are excluded. This is polling; source-repository event monitoring belongs
+to the separately operated Grok maintainer.
+
+Newly collected content stays local by default. `--auto-publish` explicitly authorizes
 sanitized organized entries for distribution. `--upstream CONNECTION_JSON`
 explicitly enables snapshot sync and sharing completed use evidence with that
 trusted service. **Raw hook captures are never part of a snapshot.** Actual

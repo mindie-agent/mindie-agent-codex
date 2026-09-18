@@ -5,6 +5,12 @@
       "args": ["./scripts/bridge.py", "mcp"],
       "env_vars": ["MINDIE_AGENT_CONFIG"],
       "cwd": "."
+    },
+    "mindie-remote-dev": {
+      "command": "python3",
+      "args": ["./scripts/remote_bridge.py"],
+      "env_vars": ["MINDIE_AGENT_CONFIG"],
+      "cwd": "."
     }
   }
 }

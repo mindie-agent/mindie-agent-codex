@@ -1,2 +1,4 @@
 # Reviewed development implementation; pin a commit until the first release.
-vaws-knowledge @ git+https://github.com/vllm-ascend-workspace/vaws-knowledge@d3350be6fa0e89905a3ac7a1d83372c5fdfe861c
+vaws-knowledge @ git+https://github.com/vllm-ascend-workspace/vaws-knowledge@b625035366a4d2c6cecfd31bc51c9c352026d7b2
+knowledge-intake @ git+https://github.com/vllm-ascend-workspace/vaws-knowledge@b625035366a4d2c6cecfd31bc51c9c352026d7b2#subdirectory=tools/knowledge-intake
+vaws-remote-dev @ git+https://github.com/vllm-ascend-workspace/remote-dev@a65362882a85b4d460be3e1d15e90de9fb507e70

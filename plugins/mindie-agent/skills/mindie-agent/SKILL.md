@@ -29,5 +29,12 @@ Keep conclusions and validation limits clear in the normal final response.
 The Stop hook submits that response to the local background organizer. It does
 not read other conversations or hidden reasoning. Unavailable capture is dropped.
 
-Use the Harness's native tools and any existing remote-dev connection for work.
-This plugin does not reconfigure the user's other skills, MCPs or remote resources.
+Codex and the knowledge service run locally. Use this plugin's `mindie-remote-dev`
+tools for the remote NPU environment, with the actual host, port, user, container
+and working directory supplied or verified for the task. Reuse the returned full
+container ID. Keep CPU/source checks distinct from actual NPU execution; record
+the code revision, device, command, output and limits of real runs. Poll owned jobs
+and retrieve their artifacts through remote-dev. Preserve other tasks' live services.
+
+Use native tools for local work. The plugin does not reconfigure the user's other
+skills, MCPs or remote resources.
