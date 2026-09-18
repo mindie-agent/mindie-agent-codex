@@ -45,7 +45,7 @@ def main():
             config["python"],
             "-m",
             "vaws_knowledge.loop.cli",
-            "hook" if operation == "stop" else operation,
+            "hook" if operation == "stop" else "stop" if operation == "shutdown" else operation,
             "--config",
             config["engine_config"],
         ]

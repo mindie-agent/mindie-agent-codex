@@ -43,7 +43,7 @@ selects the domain for that task. Inspect status with:
 
 ```sh
 python3 plugins/mindie-agent/scripts/bridge.py status
-python3 plugins/mindie-agent/scripts/bridge.py stop
+python3 plugins/mindie-agent/scripts/bridge.py shutdown
 ```
 
 `setup.py` creates only `~/.config/mindie-agent/codex{,.engine}.json` by default;
