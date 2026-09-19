@@ -658,7 +658,7 @@ class AisbenchAdapterTests(unittest.TestCase):
     def test_existing_csv_normalizes_without_a_service_and_rejects_nonfinite_metric(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "summary.csv"
-            path.write_text("dataset,metric,vaws-correctness\ngsm8k,accuracy,NaN\nmath,accuracy,80\n", encoding="utf-8")
+            path.write_text("dataset,metric,mindie-correctness\ngsm8k,accuracy,NaN\nmath,accuracy,80\n", encoding="utf-8")
             normalized = aisbench.normalize_summary(path, label="existing")
             self.assertEqual(normalized["execution"], {})
             self.assertNotIn("observation", normalized)
@@ -702,7 +702,7 @@ class AisbenchAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             summary = Path(tmp) / "summary.csv"
             summary.write_text(
-                "dataset,version,metric,mode,vaws-correctness\n"
+                "dataset,version,metric,mode,mindie-correctness\n"
                 "gsm8k,abc123,accuracy,gen,56.7\n",
                 encoding="utf-8",
             )
@@ -720,7 +720,7 @@ class AisbenchAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             summary = Path(tmp) / "summary.csv"
             summary.write_text(
-                "dataset,version,metric,mode,vaws-correctness\n"
+                "dataset,version,metric,mode,mindie-correctness\n"
                 "gsm8k,abc123,accuracy,gen,56.7\n",
                 encoding="utf-8",
             )

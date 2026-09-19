@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared validation helpers for VAWS agent-facing scripts."""
+"""Shared validation helpers for MindIE domain scripts."""
 
 from __future__ import annotations
 

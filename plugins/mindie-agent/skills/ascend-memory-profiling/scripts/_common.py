@@ -147,7 +147,7 @@ def msprof_wrapper_script(mem_freq: int = 1) -> str:
     if mem_freq <= 0:
         raise ValueError("msprof memory frequency must be positive")
     return f'''#!/bin/bash
-# VAWS memory profiler wrapper
+# MindIE memory profiler wrapper
 set -e
 command -v msprof >/dev/null
 SERVE_SCRIPT="$1"

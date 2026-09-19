@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import os
+import math
 from pathlib import Path
 import shlex
 import subprocess
@@ -129,11 +130,11 @@ def _invoke(name: str, args: dict[str, Any], *, timeout: float | None = None) ->
             job_id=str(result.get("job_id") or result.get("session_id") or "") or None,
         )
     outcome = result.get("outcome")
-    if outcome == "blocked" or (
-        response.get("isError") is True
-        and outcome not in {"success", "cancelled", "timeout", "failed", "needs_input"}
-    ):
-        raise RemoteExecutionError(f"{name} failed: {_error_text(response) or result!r}"[:400])
+    if response.get("isError") is True or outcome == "blocked":
+        raise RemoteExecutionError(
+            f"{name} failed: {_error_text(response)}"[:400],
+            job_id=_job_id_of(result) or None,
+        )
     return result
 
 
@@ -193,7 +194,7 @@ def _exit_code_of(result: dict[str, Any]) -> int | None:
 
 
 def _require_positive_timeout(timeout: float | None, label: str) -> float:
-    if timeout is None or float(timeout) <= 0:
+    if timeout is None or not math.isfinite(float(timeout)) or float(timeout) <= 0:
         raise RemoteExecutionError(f"{label} requires a positive timeout")
     return float(timeout)
 
@@ -236,23 +237,19 @@ def ssh_exec(
         description="mindie-ssh-exec",
         tty=False,
     )
-    launched = 0
+    deadline = time.monotonic() + remote_timeout
+    observations = 0
     job_id = None
     stdout = stderr = ""
     result: dict[str, Any] = {}
     try:
         result = _invoke("remote_bash", args, timeout=remote_timeout)
-        launched = 1
         job_id = _job_id_of(result)
         stdout, stderr = _preview_streams(result)
         state = _state_of(result)
-        deadline = time.monotonic() + remote_timeout + 1.0
         while True:
-            if launched != 1:
-                raise RemoteExecutionError(
-                    "remote command was launched more than once; refusing to continue",
-                    job_id=job_id,
-                )
+            if len(stdout.encode()) + len(stderr.encode()) > MAX_DRAIN_CHARS:
+                raise RemoteExecutionError("remote output exceeds the local bound", job_id=job_id)
             if state in UNKNOWN_STATES:
                 raise RemoteExecutionError(
                     f"remote job {job_id or '?'} outcome is {state}; not retried",
@@ -265,7 +262,7 @@ def ssh_exec(
                 raise RemoteExecutionError(
                     f"remote command did not complete and returned no job_id: {result!r}"[:400]
                 )
-            if time.monotonic() >= deadline:
+            if time.monotonic() >= deadline or observations >= 128:
                 raise RemoteExecutionError(
                     f"command still {state or 'running'} as remote job {job_id}; "
                     "poll it with job_status/job_tail, do not relaunch",
@@ -276,6 +273,7 @@ def ssh_exec(
                     f"remote job {job_id} output exceeds the local bound; partial preview discarded",
                     job_id=job_id,
                 )
+            observations += 1
             result = _invoke(
                 "remote_job_stdin",
                 {
@@ -309,7 +307,11 @@ def ssh_exec(
                 proc.returncode, script, proc.stdout, proc.stderr
             )
         return proc
-    except (RemoteExecutionError, subprocess.CalledProcessError):
+    except RemoteExecutionError:
+        if job_id and _state_of(result) in {"running", "starting", "queued", "waiting", "created"}:
+            _stop_owned(job_id)
+        raise
+    except subprocess.CalledProcessError:
         raise
     except BaseException:
         _stop_owned(job_id)

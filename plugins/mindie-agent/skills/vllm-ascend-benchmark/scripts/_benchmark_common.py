@@ -441,7 +441,7 @@ def assemble_config(
 ) -> BenchConfig:
     """Assemble a BenchConfig with CLI > preset > nightly > default priority.
 
-    The task comes from ``--context-file`` / ``VAWS_CONTEXT_FILE``. A running
+    The task comes from ``--context-file`` / ``MINDIE_COORDINATOR_CONTEXT``. A running
     service is addressed by its execution endpoint and port; the benchmark
     does not acquire that service's NPUs again.
 
@@ -811,13 +811,13 @@ from pathlib import Path
 
 from vllm.tokenizers import get_tokenizer
 
-model = os.environ["VAWS_FIXED_MODEL"]
-tokenizer_mode = os.environ["VAWS_FIXED_TOKENIZER_MODE"]
-target_len = int(os.environ["VAWS_FIXED_INPUT_LEN"])
-output_len = int(os.environ["VAWS_FIXED_OUTPUT_LEN"])
-num_rows = int(os.environ["VAWS_FIXED_NUM_ROWS"])
-dataset_path = Path(os.environ["VAWS_FIXED_DATASET_PATH"])
-prompt = os.environ.get("VAWS_FIXED_PROMPT") or ""
+model = os.environ["MINDIE_FIXED_MODEL"]
+tokenizer_mode = os.environ["MINDIE_FIXED_TOKENIZER_MODE"]
+target_len = int(os.environ["MINDIE_FIXED_INPUT_LEN"])
+output_len = int(os.environ["MINDIE_FIXED_OUTPUT_LEN"])
+num_rows = int(os.environ["MINDIE_FIXED_NUM_ROWS"])
+dataset_path = Path(os.environ["MINDIE_FIXED_DATASET_PATH"])
+prompt = os.environ.get("MINDIE_FIXED_PROMPT") or ""
 
 tokenizer = get_tokenizer(model, tokenizer_mode=tokenizer_mode)
 
@@ -916,15 +916,15 @@ def prepare_fixed_request_dataset(
     import shlex
 
     exports = [
-        f"export VAWS_FIXED_MODEL={shlex.quote(model)}",
-        f"export VAWS_FIXED_TOKENIZER_MODE={shlex.quote(tokenizer_mode)}",
-        f"export VAWS_FIXED_INPUT_LEN={int(input_len)}",
-        f"export VAWS_FIXED_OUTPUT_LEN={int(output_len)}",
-        f"export VAWS_FIXED_NUM_ROWS={int(num_rows)}",
-        f"export VAWS_FIXED_DATASET_PATH={shlex.quote(path)}",
+        f"export MINDIE_FIXED_MODEL={shlex.quote(model)}",
+        f"export MINDIE_FIXED_TOKENIZER_MODE={shlex.quote(tokenizer_mode)}",
+        f"export MINDIE_FIXED_INPUT_LEN={int(input_len)}",
+        f"export MINDIE_FIXED_OUTPUT_LEN={int(output_len)}",
+        f"export MINDIE_FIXED_NUM_ROWS={int(num_rows)}",
+        f"export MINDIE_FIXED_DATASET_PATH={shlex.quote(path)}",
     ]
     if prompt:
-        exports.append(f"export VAWS_FIXED_PROMPT={shlex.quote(prompt)}")
+        exports.append(f"export MINDIE_FIXED_PROMPT={shlex.quote(prompt)}")
 
     remote_script = (
         _ascend_env_preamble()
@@ -958,8 +958,8 @@ import os
 import urllib.error
 import urllib.request
 
-payload = json.loads(os.environ["VAWS_BENCH_ACCURACY_PAYLOAD"])
-url = os.environ["VAWS_BENCH_ACCURACY_URL"]
+payload = json.loads(os.environ["MINDIE_BENCH_ACCURACY_PAYLOAD"])
+url = os.environ["MINDIE_BENCH_ACCURACY_URL"]
 data = json.dumps(payload).encode("utf-8")
 req = urllib.request.Request(
     url,
@@ -1018,8 +1018,8 @@ def run_accuracy_probe(
         "stream": False,
     }
     remote_script = (
-        f"export VAWS_BENCH_ACCURACY_URL={shlex.quote(f'http://127.0.0.1:{port}/v1/completions')}\n"
-        f"export VAWS_BENCH_ACCURACY_PAYLOAD={shlex.quote(json.dumps(payload, ensure_ascii=False))}\n"
+        f"export MINDIE_BENCH_ACCURACY_URL={shlex.quote(f'http://127.0.0.1:{port}/v1/completions')}\n"
+        f"export MINDIE_BENCH_ACCURACY_PAYLOAD={shlex.quote(json.dumps(payload, ensure_ascii=False))}\n"
         "python3 - <<'PY'\n"
         + _ACCURACY_PROBE_REMOTE_PY
         + "\nPY\n"

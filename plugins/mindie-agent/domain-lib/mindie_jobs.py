@@ -43,18 +43,59 @@ class TaskTargetError(RuntimeError):
     """Missing native context or coordinator refusal."""
 
 
-def task_client(context_file: str | None = None, **kwargs: Any):
-    """Bind the real coordinator TaskClient to this native task context.
+class ActivatedTaskClient:
+    """TaskClient facade: every managed action requires the same active lease.
 
-    The context file comes from the explicit argument, then
-    ``MINDIE_COORDINATOR_CONTEXT``, then the coordinator's own native-context
-    resolution. No ID is guessed from directories or history.
+    Local evidence/report helpers never construct this client. Coordinator
+    owns command deadlines and bounded waits; this adapter adds admission and
+    the persistent failure circuit without replaying requests.
     """
-    from mindie_coordinator.task_client import TaskClient
+    METHODS = frozenset({"status", "sources", "run", "target", "resolve_execution",
+                         "observe", "finish", "wait"})
 
+    def __init__(self, context_file, kwargs):
+        from mindie_exec import _credentials, _load_gate
+        _load_gate()
+        from session_gate import Sessions
+        from update_lock import update_lock
+        from mindie_coordinator.task_client import TaskClient
+        self._session, self._token = _credentials()
+        self._sessions = Sessions()
+        with update_lock(self._sessions.config):
+            self._sessions.check(self._session, self._token)
+            self._client = TaskClient(context_file, **kwargs)
+
+    @property
+    def context(self):
+        self._sessions.check(self._session, self._token)
+        return self._client.context
+
+    def __getattr__(self, name):
+        if name not in self.METHODS:
+            raise AttributeError(name)
+        def invoke(*args, **kwargs):
+            import uuid
+            from update_lock import update_lock
+            with update_lock(self._sessions.config):
+                self._sessions.check(self._session, self._token)
+                identity = name + ":" + uuid.uuid4().hex
+                if not self._sessions.claim(self._session, "coordinator", identity, self._token):
+                    raise TaskTargetError("managed action was already attempted")
+                succeeded = False
+                try:
+                    result = getattr(self._client, name)(*args, **kwargs)
+                    succeeded = True
+                    return result
+                finally:
+                    self._sessions.finish(self._session, self._token, succeeded)
+        return invoke
+
+
+def task_client(context_file: str | None = None, **kwargs: Any):
+    """Bind a manually activated task to the installed coordinator."""
     explicit = context_file or os.environ.get("MINDIE_COORDINATOR_CONTEXT", "")
     try:
-        return TaskClient(explicit, **kwargs)
+        return ActivatedTaskClient(explicit, kwargs)
     except (ValueError, RuntimeError, OSError) as exc:
         raise TaskTargetError(str(exc)) from exc
 

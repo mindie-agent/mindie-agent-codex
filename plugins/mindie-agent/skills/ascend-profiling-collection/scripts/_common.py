@@ -43,7 +43,7 @@ SERVING_SCRIPTS = Path(__file__).resolve().parents[2] / "vllm-ascend-serving" / 
 
 from mindie_receipt import progress as envelope_progress  # noqa: E402
 from mindie_state import allocate_run_dir, safe_run_token, state_root  # noqa: E402
-from mindie_exec import open_local_forward, require_transport  # noqa: E402
+from mindie_exec import open_local_forward, require_transport, RemoteExecutionError  # noqa: E402
 import mindie_exec as _mindie_exec  # noqa: E402
 from mindie_target import SshEndpoint, ascend_env_preamble, ssh_endpoint_from_mapping  # noqa: E402
 
@@ -197,14 +197,14 @@ def open_local_tunnel(ep, remote_port: int):
     and POSTed without round-tripping through SSH heredocs. Transport lives
     in ``remote-dev`` ``open_local_forward``.
     """
-    api = require_transport()
+    require_transport()
     try:
         with open_local_forward(ep, remote_port) as fwd:
             yield {
                 "local_port": int(fwd.local_port),
                 "base_url": f"http://{fwd.local_host}:{fwd.local_port}",
             }
-    except api["RemoteExecutionError"] as exc:
+    except RemoteExecutionError as exc:
         raise RuntimeError(str(exc)) from exc
 
 

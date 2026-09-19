@@ -74,11 +74,14 @@ class Gate:
                 )
             self.sessions.check(session, token)
             schema = tool["inputSchema"]
-            if set(args) - set(schema["properties"]) or set(schema["required"]) - {
-                "mindie_session_id",
-                "mindie_activation",
-            } - set(args):
-                raise ValueError("Invalid MindIE tool arguments")
+            unknown = set(args) - set(schema["properties"])
+            missing = set(schema["required"]) - {"mindie_session_id", "mindie_activation"} - set(args)
+            if unknown or missing:
+                detail = "; ".join(part for part in [
+                    "unknown keys: " + ", ".join(sorted(unknown)) if unknown else "",
+                    "missing keys: " + ", ".join(sorted(missing)) if missing else "",
+                ] if part)
+                raise ValueError("Invalid MindIE tool arguments (" + detail + ")")
             if (
                 self.surface == "knowledge"
                 and "session_id" in args

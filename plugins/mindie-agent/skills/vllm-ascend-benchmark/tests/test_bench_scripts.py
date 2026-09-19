@@ -504,8 +504,8 @@ class RemoteHelperTests(unittest.TestCase):
             )
         self.assertEqual(out["prompt_sha256"], "abc")
         script = m.call_args[0][2]
-        self.assertIn("VAWS_FIXED_INPUT_LEN=512", script)
-        self.assertIn("VAWS_FIXED_NUM_ROWS=2", script)
+        self.assertIn("MINDIE_FIXED_INPUT_LEN=512", script)
+        self.assertIn("MINDIE_FIXED_NUM_ROWS=2", script)
         self.assertIn("export PYTHONPATH=/a;", script)
 
     def test_prepare_fixed_request_dataset_hard_failure_raises(self):

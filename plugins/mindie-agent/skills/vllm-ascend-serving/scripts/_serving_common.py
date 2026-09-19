@@ -88,7 +88,7 @@ def probe_service(ep: SshEndpoint, port: int, *, served_model: str | None = None
     base = f"http://127.0.0.1:{int(port)}"
     curl = f"curl --noproxy '*' -s --connect-timeout {min(3, short):.3f} --max-time {short:.3f}"
     lines = [
-        'probe_dir=$(mktemp -d /tmp/vaws-probe.XXXXXX) || exit 1',
+        'probe_dir=$(mktemp -d /tmp/mindie-probe.XXXXXX) || exit 1',
         'trap \'rm -rf -- "$probe_dir"\' EXIT',
         f'code=$({curl} -o /dev/null -w \'%{{http_code}}\' {base}/health 2>/dev/null)',
         'rc=$?; [ "$rc" = 0 ] || { echo __PROBE_FAILED__; exit 0; }',

@@ -135,7 +135,7 @@
       "description": "Requires manual MindIE activation in this session. Read a remote file with native Read-like pagination and a read ledger.",
       "inputSchema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "host": {
             "type": "string"
@@ -227,7 +227,7 @@
           "mindie_session_id",
           "mindie_activation"
         ],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. A consumer-registered resolver may claim additional keys; remote-dev does not interpret session, profile, or binding identifiers itself. The server validates the selector before connecting. file_path is required; the alias path is also accepted (Kimi/Cursor habit). Enforced by the server so alias-only calls pass provider schema validation."
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; the alias path is also accepted (Kimi/Cursor habit). Enforced by the server so alias-only calls pass provider schema validation."
       }
     },
     {
@@ -235,7 +235,7 @@
       "description": "Requires manual MindIE activation in this session. Write a remote file with overwrite support and optional read-ledger concurrency checks.",
       "inputSchema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "host": {
             "type": "string"
@@ -314,7 +314,7 @@
           "mindie_session_id",
           "mindie_activation"
         ],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. A consumer-registered resolver may claim additional keys; remote-dev does not interpret session, profile, or binding identifiers itself. The server validates the selector before connecting. file_path is required; the alias path is also accepted. Enforced by the server so alias-only calls pass provider schema validation."
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; the alias path is also accepted. Enforced by the server so alias-only calls pass provider schema validation."
       }
     },
     {
@@ -322,7 +322,7 @@
       "description": "Requires manual MindIE activation in this session. Run a remote shell command with Bash-like semantics, logs, preview, and automatic yield, writable stdin and optional PTY.",
       "inputSchema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "host": {
             "type": "string"
@@ -420,7 +420,7 @@
           "mindie_session_id",
           "mindie_activation"
         ],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. A consumer-registered resolver may claim additional keys; remote-dev does not interpret session, profile, or binding identifiers itself. The server validates the selector before connecting. command is required; the alias cmd is also accepted (Codex habit). Enforced by the server so alias-only calls pass provider schema validation."
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. command is required; the alias cmd is also accepted (Codex habit). Enforced by the server so alias-only calls pass provider schema validation."
       }
     },
     {
@@ -428,7 +428,7 @@
       "description": "Requires manual MindIE activation in this session. Search remote files with rg-compatible semantics and a grep -E (POSIX ERE) fallback.",
       "inputSchema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "host": {
             "type": "string"
@@ -565,7 +565,7 @@
           "mindie_session_id",
           "mindie_activation"
         ],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. A consumer-registered resolver may claim additional keys; remote-dev does not interpret session, profile, or binding identifiers itself. The server validates the selector before connecting."
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
       }
     },
     {
@@ -573,7 +573,7 @@
       "description": "Requires manual MindIE activation in this session. Apply a Codex apply_patch payload or unified diff on a remote endpoint.",
       "inputSchema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "host": {
             "type": "string"
@@ -639,7 +639,7 @@
           "mindie_session_id",
           "mindie_activation"
         ],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. A consumer-registered resolver may claim additional keys; remote-dev does not interpret session, profile, or binding identifiers itself. The server validates the selector before connecting. Provide a non-empty patch or command. If both are provided, patch takes precedence. Missing patch content is rejected by the server."
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. Provide a non-empty patch or command. If both are provided, patch takes precedence. Missing patch content is rejected by the server."
       }
     },
     {
@@ -647,7 +647,7 @@
       "description": "Requires manual MindIE activation in this session. Check a remote background job through the shared process supervisor.",
       "inputSchema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "host": {
             "type": "string"
@@ -717,7 +717,7 @@
       "description": "Requires manual MindIE activation in this session. Tail remote background job logs through the shared process supervisor.",
       "inputSchema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "host": {
             "type": "string"
@@ -799,7 +799,7 @@
       "description": "Requires manual MindIE activation in this session. Stop a remote background job through the shared process supervisor.",
       "inputSchema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "host": {
             "type": "string"
@@ -872,7 +872,7 @@
       "description": "Requires manual MindIE activation in this session. Write to a remote session's stdin (Codex write_stdin habit), with optional EOF and output polling.",
       "inputSchema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "host": {
             "type": "string"
@@ -958,7 +958,7 @@
       "description": "Requires manual MindIE activation in this session. Pull a remote artifact through SSH streaming with hash verification.",
       "inputSchema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "host": {
             "type": "string"
@@ -1026,7 +1026,7 @@
           "mindie_session_id",
           "mindie_activation"
         ],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. A consumer-registered resolver may claim additional keys; remote-dev does not interpret session, profile, or binding identifiers itself. The server validates the selector before connecting."
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
       }
     },
     {
@@ -1034,7 +1034,7 @@
       "description": "Requires manual MindIE activation in this session. Push a local artifact through SSH streaming with hash verification.",
       "inputSchema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "host": {
             "type": "string"
@@ -1103,7 +1103,7 @@
           "mindie_session_id",
           "mindie_activation"
         ],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. A consumer-registered resolver may claim additional keys; remote-dev does not interpret session, profile, or binding identifiers itself. The server validates the selector before connecting."
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
       }
     }
   ]

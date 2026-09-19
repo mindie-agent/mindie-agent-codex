@@ -29,7 +29,7 @@ Usage examples:
     python3 bench_run.py --model /home/weights/DeepSeek-V4-Flash-w4a8-mtp \\
         --preset dsv4-flash --runs 6 --warmup-runs 1
 
-Progress on stderr as __VAWS_PROGRESS__=<json>.
+Progress on stderr as __MINDIE_PROGRESS__=<json>.
 Final result on stdout as a single JSON object.
 """
 
@@ -81,7 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run vllm bench serve benchmarks (single or multi-run).",
         allow_abbrev=False,
     )
-    p.add_argument("--context-file", help="VAWS task context; defaults to VAWS_CONTEXT_FILE")
+    p.add_argument("--context-file", help="MindIE coordinator context; defaults to MINDIE_COORDINATOR_CONTEXT")
     p.add_argument("--execution-id", help="live service execution; skip a new start when set")
     p.add_argument("--service", default="vllm", help="task-scoped service name")
     p.add_argument("--model", required=True, help="remote model weight path")

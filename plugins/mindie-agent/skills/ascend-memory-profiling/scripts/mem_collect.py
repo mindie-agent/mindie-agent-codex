@@ -73,7 +73,7 @@ from _common import (
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Collect Ascend NPU memory profiling data")
-    p.add_argument("--context-file", help="VAWS task context; defaults to VAWS_CONTEXT_FILE")
+    p.add_argument("--context-file", help="MindIE coordinator context; defaults to MINDIE_COORDINATOR_CONTEXT")
     p.add_argument("--execution-id", help="managed service execution; defaults to the live named service")
     p.add_argument("--service", default="vllm")
     p.add_argument("--model", default="", help="Remote model weight path (auto-detected in attach mode)")
@@ -476,8 +476,8 @@ def _main_attach(
     # Detect msprof: serving used our wrapper → msprof data at runtime_dir/msprof_data
     svc_wrap = serving_state.get("wrap_script") or ""
     svc_runtime_dir = serving_state.get("runtime_dir", "")
-    msprof_used = ("# VAWS memory profiler wrapper" in (serving_state.get("wrap_script_content") or "")
-                   or bool(re.fullmatch(r"/tmp/_vaws_msprof_wrap(?:_[A-Za-z0-9_.-]+)?\.sh", svc_wrap)))
+    msprof_used = ("# MindIE memory profiler wrapper" in (serving_state.get("wrap_script_content") or "")
+                   or bool(re.fullmatch(r"/tmp/_mindie_msprof_wrap(?:_[A-Za-z0-9_.-]+)?\.sh", svc_wrap)))
     msprof_data_dir = f"{svc_runtime_dir}/msprof_data" if msprof_used and svc_runtime_dir else ""
     if not msprof_used:
         progress(
@@ -709,7 +709,7 @@ def _main_standalone(args: argparse.Namespace) -> int:
         if proc.returncode or start_result.get("status") != "ready" or not target:
             raise RuntimeError(f"managed profiling service did not become ready: {start_result}")
         remote_dir = start_result.get("runtime_dir")
-        if not isinstance(remote_dir, str) or not remote_dir.startswith("/tmp/vaws-serve."):
+        if not isinstance(remote_dir, str) or not remote_dir.startswith("/tmp/mindie-serve."):
             raise RuntimeError("profiled service has no runtime directory in its launch receipt")
         args.session_id, args.execution_id = target["task_id"], execution_id
         args._python = selected_python(target)

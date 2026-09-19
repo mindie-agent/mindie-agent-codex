@@ -57,15 +57,18 @@ def call(payload):
             or (isinstance(details, dict) and details.get("submission_state") == "uncertain")
         )
         outcome = result.get("outcome") if isinstance(result, dict) else None
-        # isError is RPC/policy level. A completed remote command with a
-        # non-zero exit_code is still a successful observation (outcome
-        # "failed" + state/status + exit_code). Blocked paths and uncertain
-        # launches are not.
+        # Nonzero command exits are valid observations only when the command
+        # actually completed. A failed start/status/artifact RPC still trips the
+        # failure circuit; its outcome must not be disguised as successful I/O.
+        completed_command = (
+            name in {"remote_bash", "remote_job_stdin"}
+            and result.get("state") in {"succeeded", "failed", "timeout", "cancelled"}
+            and isinstance(result.get("exit_code"), int)
+        )
         is_error = (
             not isinstance(result, dict)
-            or outcome is None
-            or outcome == "blocked"
             or uncertain
+            or (outcome not in {"success", "cancelled"} and not completed_command)
         )
         return dict(
             content=[dict(type="text", text=tool_text(value))],

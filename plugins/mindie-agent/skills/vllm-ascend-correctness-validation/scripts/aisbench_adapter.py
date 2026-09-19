@@ -33,8 +33,8 @@ from typing import Any, Mapping, Sequence
 
 SCHEMA_VERSION = 1
 SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$")
-MODEL_TASK = "vaws_correctness"
-MODEL_ABBR = "vaws-correctness"
+MODEL_TASK = "mindie_correctness"
+MODEL_ABBR = "mindie-correctness"
 
 
 class AisbenchAdapterError(ValueError):

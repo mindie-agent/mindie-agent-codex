@@ -173,7 +173,7 @@ def build_serve_command(
         if runtime_dir:
             lines.extend([f"runtime_dir={shlex.quote(runtime_dir)}", 'mkdir -m 700 -- "$runtime_dir"'])
         else:
-            lines.append("runtime_dir=$(mktemp -d /tmp/vaws-serve.XXXXXX)")
+            lines.append("runtime_dir=$(mktemp -d /tmp/mindie-serve.XXXXXX)")
         lines.append("cat > \"$runtime_dir/_serve.sh\" << 'MINDIE_SERVE_EOF'")
         lines.append("#!/bin/bash")
         lines.append(f'if [ -z "${{MINDIE_PYTHON:-}}" ]; then echo "MINDIE_PYTHON is unset" >&2; exit 1; fi')
@@ -495,7 +495,7 @@ def main(argv: list[str] | None = None) -> int:
             if not wrap_script_content.strip() or len(wrap_script_content.encode("utf-8")) > 1024 * 1024:
                 raise ValueError("local wrapper must be nonempty UTF-8 text at most 1 MiB")
             wrap_script = ""
-        runtime_dir = "/tmp/vaws-serve." + uuid.uuid4().hex if wrap_script or wrap_script_content else ""
+        runtime_dir = "/tmp/mindie-serve." + uuid.uuid4().hex if wrap_script or wrap_script_content else ""
         problems = local_preset_problems(preset, launch_extra_args)
         if problems:
             print_json({"status": "needs_input", "phase": "preflight", "problems": problems})

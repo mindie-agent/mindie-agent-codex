@@ -103,7 +103,7 @@ class CollectionLifecycleTests(unittest.TestCase):
         for csvs, code in (({"memory.csv": "msprof_csvs/memory.csv"}, 0), ({"__prof_device_map__": {}}, 1)):
             with self.subTest(csvs=csvs), tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
                 run_dir = Path(tmp)
-                start = {"status": "ready", "execution_id": "exec-1", "runtime_dir": "/tmp/vaws-serve.actual",
+                start = {"status": "ready", "execution_id": "exec-1", "runtime_dir": "/tmp/mindie-serve.actual",
                          "port": 8000, "served_model_name": "model-name"}
                 client = mock.Mock()
                 client.observe.return_value = {"state": "cancelled", "resources_released": True, "stdout": "loaded"}
@@ -128,9 +128,9 @@ class CollectionLifecycleTests(unittest.TestCase):
                 self.assertIn("--enforce-eager", argv)
                 self.assertIn("--enable-expert-parallel", argv)
                 wrapper = Path(argv[argv.index("--wrap-script-local") + 1])
-                self.assertIn("# VAWS memory profiler wrapper", wrapper.read_text(encoding="utf-8"))
-                export.assert_called_once_with(EP, "/tmp/vaws-serve.actual/msprof_data")
-                collect.assert_called_once_with(EP, "/tmp/vaws-serve.actual", run_dir)
+                self.assertIn("# MindIE memory profiler wrapper", wrapper.read_text(encoding="utf-8"))
+                export.assert_called_once_with(EP, "/tmp/mindie-serve.actual/msprof_data")
+                collect.assert_called_once_with(EP, "/tmp/mindie-serve.actual", run_dir)
                 client.observe.assert_any_call("exec-1", "stop", False)
                 manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
                 self.assertEqual(manifest["component_data_available"], code == 0)
