@@ -296,8 +296,13 @@ class AutoUpdateTests(unittest.TestCase):
         (source / "domain-requirements.txt").write_text(
             "mindie-coordinator @ git+https://github.com/mindie-agent/coordinator@0191b81af67d922ede03d10fcc1b192f176a05c6\n"
         )
-        # A real interpreter without the coordinator package keeps failing.
-        self.updater.state["current"]["python"] = sys.executable
+        # Isolate the missing-dependency environment from the test runner.
+        bare = self.base / "bare-runtime"
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(bare)],
+                       check=True, timeout=15, capture_output=True)
+        self.updater.state["current"]["python"] = str(
+            bare / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        )
         atomic(self.updater.state_path, self.updater.state)
         statuses = []
         with patch.object(

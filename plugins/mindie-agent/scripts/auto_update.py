@@ -15,6 +15,7 @@ import re
 import shlex
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -324,12 +325,14 @@ class Updater:
             server["args"][0] = str(plugin / server["args"][0])
             server["cwd"] = str(plugin)
         atomic(plugin / ".mcp.json", mcp)
-        command = (
-            shlex.quote(self.settings["python"])
-            + " "
-            + shlex.quote(str(plugin / "scripts/bridge.py"))
-            + " stop >/dev/null 2>&1; printf '{}\\n'"
-        )
+        argv = [self.settings["python"], str(plugin / "scripts/bridge.py"), "stop"]
+        if os.name == "nt":
+            # Explicit cmd boundary works even if the host uses PowerShell.
+            # echo runs after missing executables/paths and masks hook failures.
+            inner = subprocess.list2cmdline(argv) + " >NUL 2>&1 & echo {}"
+            command = 'cmd.exe /d /s /c "' + inner + '"'
+        else:
+            command = shlex.join(argv) + " >/dev/null 2>&1; printf '{}\\n'"
         atomic(
             plugin / "hooks/hooks.json",
             {
