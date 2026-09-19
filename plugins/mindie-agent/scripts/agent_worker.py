@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """Fresh Codex invocation for corpus maintenance; no conversation inheritance."""
 
+import argparse
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+from process_guard import run_codex
+
+MAX_INPUT = 65536
+MAX_RESULT = 32768
 
 
 def object_schema(properties):
@@ -54,7 +60,13 @@ connection briefly. Do not invent an independent reproduction. Return only schem
 }
 
 
-def run(payload):
+def run(payload, *, model=None, reasoning_effort=None):
+    if (
+        not isinstance(payload, dict)
+        or len(json.dumps(payload, ensure_ascii=False).encode()) > MAX_INPUT
+    ):
+        raise ValueError("maintenance input exceeds limit or is not an object")
+    payload = dict(payload)
     role = payload.pop("role")
     if role not in SCHEMAS:
         raise ValueError("unsupported maintenance role")
@@ -72,6 +84,7 @@ def run(payload):
             os.environ.get("MINDIE_CODEX_BIN", "codex"),
             "exec",
             "--ignore-user-config",
+            "--ignore-rules",
             "--ephemeral",
             "--sandbox",
             "read-only",
@@ -86,6 +99,8 @@ def run(payload):
             "features.shell_tool=false",
             "-c",
             "features.multi_agent=false",
+            "-c",
+            'web_search="disabled"',
             "--output-schema",
             str(schema),
             "--output-last-message",
@@ -93,45 +108,75 @@ def run(payload):
             "--json",
             "-",
         ]
-        completed = subprocess.run(
-            command,
-            input=prompt,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=150,
-        )
-        if completed.returncode or not output.is_file():
-            raise RuntimeError(
-                f"Codex {role} exited {completed.returncode}; check Codex authentication and usage limits"
-            )
-        for line in completed.stdout.splitlines():
-            event = json.loads(line)
-            item = event.get("item", {})
-            if item.get("type") in {
-                "command_execution",
-                "mcp_tool_call",
-                "file_change",
-                "collab_tool_call",
-                "web_search",
-            }:
-                raise RuntimeError(
-                    "maintenance attempted a tool call; refusing its result"
-                )
-        result = json.loads(output.read_text())
+        if model:
+            command[2:2] = ["--model", model]
+        if reasoning_effort:
+            command[2:2] = [
+                "-c",
+                "model_reasoning_effort=" + json.dumps(reasoning_effort),
+            ]
+        run_codex(command, prompt)
+        with output.open("rb") as stream:
+            raw = stream.read(MAX_RESULT + 1)
+        if len(raw) > MAX_RESULT:
+            raise ValueError("maintenance result exceeds limit")
+        result = json.loads(raw)
         if not isinstance(result, dict):
             raise ValueError("Codex returned no structured result")
+        if role == "organize":
+            if (
+                set(result) != {"entries"}
+                or not isinstance(result["entries"], list)
+                or len(result["entries"]) > 3
+            ):
+                raise ValueError("invalid organized entries")
+            for entry in result["entries"]:
+                if not isinstance(entry, dict) or set(entry) != {"title", "content"}:
+                    raise ValueError("invalid organized entry")
+                for field, limit in (("title", 240), ("content", 8192)):
+                    if (
+                        not isinstance(entry[field], str)
+                        or not 0 < len(entry[field].strip()) <= limit
+                    ):
+                        raise ValueError("organized entry exceeds limit")
+        elif (
+            set(result) != {"verdict", "reason"}
+            or result["verdict"] not in {"helpful", "unhelpful", "unknown"}
+            or not isinstance(result["reason"], str)
+            or not 0 < len(result["reason"].strip()) <= 2000
+        ):
+            raise ValueError("invalid judge result")
         return result
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model")
+    parser.add_argument(
+        "--reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"]
+    )
+    args = parser.parse_args()
     try:
-        print(json.dumps(run(json.load(sys.stdin)), ensure_ascii=False))
+        raw = sys.stdin.buffer.read(MAX_INPUT + 1)
+        if len(raw) > MAX_INPUT:
+            raise ValueError("maintenance input exceeds limit")
+        print(
+            json.dumps(
+                run(
+                    json.loads(raw),
+                    model=args.model,
+                    reasoning_effort=args.reasoning_effort,
+                ),
+                ensure_ascii=False,
+            )
+        )
     except (
         KeyError,
         ValueError,
         OSError,
         RuntimeError,
+        TimeoutError,
+        TypeError,
         subprocess.TimeoutExpired,
     ) as exc:
         print(f"MindIE maintenance failed: {exc}", file=sys.stderr)

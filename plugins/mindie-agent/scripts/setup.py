@@ -53,7 +53,7 @@ def main():
         [
             python,
             "-c",
-            "from vaws_knowledge.loop.cli import main; from remote_dev.mcp import server; import knowledge_intake",
+            "from mindie_knowledge.loop.cli import main; from remote_dev.mcp import server; import knowledge_intake",
         ],
         check=True,
     )
@@ -75,13 +75,14 @@ def main():
             str(Path(__file__).with_name("agent_worker.py").absolute()),
         ],
         auto_publish=args.auto_publish,
+        session_activation=str(config),
     )
     if args.upstream:
         value["upstream"] = json.loads(args.upstream.read_text())
     if args.domain == "vllm-ascend" and not args.no_public_feed:
         value["feeds"] = [
             dict(
-                repository="vllm-ascend-workspace/vaws-knowledge",
+                repository="mindie-agent/knowledge",
                 ref="knowledge/vllm-ascend",
                 domain="vllm-ascend",
                 interval_seconds=300,

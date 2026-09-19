@@ -31,7 +31,7 @@ The VA knowledge maintainer was operated in the user's Grok Bot app. Its permane
 instructions and daily, weekly and event routines now publish to the organization
 repository's data branch:
 
-[vllm-ascend-workspace/vaws-knowledge:knowledge/vllm-ascend](https://github.com/vllm-ascend-workspace/vaws-knowledge/tree/knowledge/vllm-ascend).
+[mindie-agent/knowledge:knowledge/vllm-ascend](https://github.com/mindie-agent/knowledge/tree/knowledge/vllm-ascend).
 
 The branch is independent of the code branch. The personal fork is no longer the
 formal publication destination. The maintainer processed an actual head change
@@ -141,9 +141,9 @@ changes or permission expansion were used to create a test event.
 
 Latest knowledge runtime CI passed all three workflows:
 
-- [Package checks](https://github.com/vllm-ascend-workspace/vaws-knowledge/actions/runs/35308985977).
-- [Native desktop contracts](https://github.com/vllm-ascend-workspace/vaws-knowledge/actions/runs/35308985990).
-- [Independent knowledge intake](https://github.com/vllm-ascend-workspace/vaws-knowledge/actions/runs/35308985988).
+- [Package checks](https://github.com/mindie-agent/knowledge/actions/runs/35308985977).
+- [Native desktop contracts](https://github.com/mindie-agent/knowledge/actions/runs/35308985990).
+- [Independent knowledge intake](https://github.com/mindie-agent/knowledge/actions/runs/35308985988).
 
 The platform runs include macOS and Windows. A Windows path-key failure was fixed
 with POSIX archive paths. Persistent MCP reconnection after an owned service restart

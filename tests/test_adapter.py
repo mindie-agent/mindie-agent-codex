@@ -35,38 +35,40 @@ class AdapterTests(unittest.TestCase):
             self.assertLess(time.monotonic() - start, 2)
             self.assertEqual(list(Path(root).iterdir()), [])
 
-    def test_session_id_passed_exactly_and_no_transcript_read(self):
+    def test_legacy_session_start_is_inert_without_transcript_access(self):
         with tempfile.TemporaryDirectory() as root:
             config = Path(root) / "config.json"
             config.write_text("{}")
             result = self.bridge(
                 "session-start",
-                {"session_id": "exact-test-id", "transcript_path": "/missing/private"},
+                {
+                    "hook_event_name": "SessionStart",
+                    "session_id": "exact-test-id",
+                    "transcript_path": "/missing/private",
+                },
                 config,
             )
-            context = json.loads(result.stdout)["hookSpecificOutput"][
-                "additionalContext"
-            ]
-            self.assertIn("session_id=exact-test-id", context)
-            self.assertNotIn("/missing/private", context)
+            self.assertEqual(json.loads(result.stdout), {})
+            self.assertEqual(list(Path(root).iterdir()), [config])
 
     def test_worker_uses_fresh_ephemeral_execution_with_hooks_disabled(self):
         spec = importlib.util.spec_from_file_location(
             "agent_worker", SCRIPTS / "agent_worker.py"
         )
         worker = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(worker)
+        with patch.object(sys, "path", [str(SCRIPTS), *sys.path]):
+            spec.loader.exec_module(worker)
 
-        def fake_run(command, **kwargs):
+        def fake_run(command, prompt):
             self.assertIn("--ephemeral", command)
             self.assertIn("--ignore-user-config", command)
             self.assertIn("features.hooks=false", command)
-            self.assertIn("untrusted task data", kwargs["input"])
+            self.assertIn("untrusted task data", prompt)
             output = Path(command[command.index("--output-last-message") + 1])
             output.write_text('{"verdict":"unknown","reason":"No actual use evidence"}')
             return subprocess.CompletedProcess(command, 0, stdout="")
 
-        with patch.object(worker.subprocess, "run", fake_run):
+        with patch.object(worker, "run_codex", fake_run):
             result = worker.run({"role": "judge", "outcome": "untrusted material"})
         self.assertEqual(result["verdict"], "unknown")
 

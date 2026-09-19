@@ -14,9 +14,9 @@ import sys
 import threading
 import time
 
-from vaws_knowledge.loop.engine import Engine
-from vaws_knowledge.loop.store import Store, canonical
-from vaws_knowledge.loop.transport import Service
+from mindie_knowledge.loop.engine import Engine
+from mindie_knowledge.loop.store import Store, canonical
+from mindie_knowledge.loop.transport import Service
 
 REPO = Path(__file__).resolve().parents[1]
 PLUGIN = REPO / "plugins/mindie-agent"
