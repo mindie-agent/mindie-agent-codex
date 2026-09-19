@@ -9,4 +9,4 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m unittest discover -s tests -p 'test_*.py'
-      - run: python -m compileall -q plugins/mindie-agent/scripts tests
+      - run: python -m compileall -q plugins/mindie-agent domains/triton-ascend tests

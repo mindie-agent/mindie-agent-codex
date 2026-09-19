@@ -1,9 +1,10 @@
 # MindIE Agent · Codex
 
 Codex adapter for MindIE Agent's first domain experience loop. The user works in
-the native Codex task; this plugin adds **one entry skill, three knowledge tools,
-and eleven core remote-dev tools**.
-The initial domain is `vllm-ascend`.
+the native Codex task; this plugin adds **one entry skill, fourteen migrated
+vLLM-Ascend domain skills, four knowledge tools, and eleven core remote-dev tools**.
+The initial domain is `vllm-ascend`; the retired Triton workspace skills live as a
+separate domain seed under `domains/triton-ascend/` and are not loaded by this plugin.
 
 ```mermaid
 flowchart LR
@@ -40,7 +41,7 @@ The runtime requirements pin the knowledge implementation to a reviewed commit:
 
 ```sh
 uv venv --python 3.11 .venv
-uv pip install --python .venv/bin/python -r runtime-requirements.txt
+uv pip install --python .venv/bin/python -r runtime-requirements.txt -r domain-requirements.txt
 python3 plugins/mindie-agent/scripts/setup.py --knowledge-python "$PWD/.venv/bin/python"
 codex plugin marketplace add "$PWD"
 codex plugin add mindie-agent@mindie-agent
@@ -53,10 +54,16 @@ a vLLM-Ascend request and authorize the plugin's tools through Codex. Implicit s
 invocation is disabled. The manually invoked skill runs `bridge.py activate` using
 native `CODEX_THREAD_ID`, then passes the returned session ID and activation capability
 to every knowledge and remote MCP call. A query cannot activate a session.
-Activation does not start a service; the first admitted knowledge operation does.
-`bridge.py deactivate` revokes this session without touching other tasks. Leases last
+Activation performs one bounded cold start plus an authenticated domain bind
+(`capture: bound`), so Stop capture never depends on issuing a knowledge query;
+`knowledge_query` itself is strictly on demand. `bridge.py deactivate` revokes
+this session without touching other tasks. Leases last
 at most 24 hours and are bound to this adapter configuration; renewal requires another
-explicit user invocation. Do not put activation values in reports or other tasks. Inspect the existing service without starting it:
+explicit user invocation. Do not put activation values in reports or other tasks.
+Domain skill CLIs under `plugins/mindie-agent/skills/` run locally against the user's
+business directory; when the adapter is configured they require
+`MINDIE_SESSION_ID`/`MINDIE_ACTIVATION` exported from the activation step.
+Inspect the existing service without starting it:
 
 ```sh
 python3 plugins/mindie-agent/scripts/bridge.py status
@@ -124,6 +131,15 @@ tag to an exact commit. Until then, keep `main`. Disable only this updater with:
 python3 ~/.local/share/mindie-agent/updates/controller/auto_update.py disable
 ```
 
+`auto_update.py uninstall` removes scheduling and updater-owned state after
+preflighting active leases and live references; it never deletes retained native
+cache entrypoints or the generation backing the installed plugin, and keeps
+rollback metadata unless `--purge` runs with no live references. The updater also
+tops up a generation installed by a previous controller with the pinned
+`domain-requirements.txt` runtime (bounded, observable, three attempts per
+revision). Windows scheduling (Task Scheduler), locks and process bounds are
+implemented with standard primitives and marked unverified pending real hardware.
+
 The first managed install can snapshot locally tested safety fixes even when they
 are not yet on main. Remote updates remain pending until those fixes and the matching
 knowledge runtime commit pins are published. This does not publish local changes.
@@ -171,7 +187,9 @@ multi-tenant service. Tokens are service credentials, not proof of human identit
   Input is bounded at 128 KiB and summaries at 32,768 characters. Recursive,
   inactive and duplicate session/turn events are dropped before loading the runtime.
   Each admitted delivery is consumed durably before execution, even if it fails.
-  The retained `session-start` command is inert for old loaded configurations.
+  The retired `session-start` operation is rejected by current sources; caches
+  from pre-contract versions are kept callable only through the inert retired
+  entrypoint, which answers it with empty JSON.
 - Installation, MCP initialize/tools-list and hook receipt never activate a task.
   Discovery reads only a bundled schema file. Every business call requires a
   session ID and matching local capability from manual activation. The knowledge
@@ -210,8 +228,8 @@ multi-tenant service. Tokens are service credentials, not proof of human identit
   The worker aborts on error events, tool attempts or a second turn. These are
   invocation and time limits, not a provider-side token or billing quota; the
   native client's internal network behavior is not an exact token accounting API.
-  POSIX process-group support is required; unsupported platforms refuse background
-  model work instead of running it without bounds.
+  POSIX uses owned process groups; Windows uses a new process group plus tree
+  kill, implemented but not yet verified on real hardware.
 - Stop sends only the current task's final reply, never hidden reasoning or other
   conversations. Missing/offline capture is discarded; there is no offline retry queue.
 - Organizer/judge run outside the interactive task. A failed judge produces no vote
