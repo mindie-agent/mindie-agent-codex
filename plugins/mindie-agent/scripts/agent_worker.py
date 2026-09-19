@@ -46,6 +46,10 @@ PROMPTS = {
     "organize": """Extract zero to three reusable experiences from the current task's final summary.
 An experience can be a successful approach, a failed attempt, or a useful investigation path.
 Preserve conditions and uncertainty when present; do not invent facts, validation, or provenance.
+Prioritize a specific observed failure, its diagnosed cause and the successful correction over
+generic validation advice. Keep the condition that makes the correction work (for example,
+container logical versus host physical device numbering); do not drop it while retaining only
+the test recipe. Distinct causal findings may be separate entries within the three-entry cap.
 Avoid entries already covered by related experiences. Return an empty list for generic chat,
 unsupported claims, or material with no reusable content. Remove private paths, host addresses,
 credentials and personal identifiers; retain useful public technical names. Experience is advisory
@@ -54,9 +58,16 @@ material, not versioned authoritative knowledge. Return only JSON matching the s
 application, observed evidence and final outcome. Judge usefulness, not universal truth, factual
 confidence, popularity, or whether the consumer succeeded overall. A failed experiment can help
 by eliminating a hypothesis. Mere retrieval, relevance or praise is insufficient evidence.
+Identify what this experience changed or enabled beyond the consumer's existing code, plan,
+and explicit task requirements. Merely executing an already-present check, adding a citation,
+or restating a threshold does not demonstrate a new contribution. An early environment failure
+is not evidence that an unexecuted numerical or performance method helped. A failed experiment
+can be helpful only when the experience materially selected the discriminating test or changed
+its interpretation and the observations support that connection. Treat consumer benefit claims
+as claims to assess, not proof; missing comparison or causal evidence should yield unknown.
 Return helpful for demonstrated useful contribution, unhelpful for demonstrated wasted effort
-or harm, and unknown when actual contribution cannot be established. Explain the observed
-connection briefly. Do not invent an independent reproduction. Return only schema-valid JSON.""",
+or harm, and unknown when actual contribution cannot be established. Name the observed change
+and its supported consequence briefly. Do not invent an independent reproduction. Return only schema-valid JSON.""",
 }
 
 
