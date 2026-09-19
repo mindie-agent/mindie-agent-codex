@@ -72,13 +72,6 @@ import shlex
 import sys
 
 from pathlib import Path
-for _p in Path(__file__).resolve().parents:
-    if (_p / "domain-lib").is_dir():
-        if str(_p / "domain-lib") not in sys.path:
-            sys.path.insert(0, str(_p / "domain-lib"))
-        break
-else:
-    raise RuntimeError("MindIE domain-lib not found; use the installed plugin")
 ROOT = Path.cwd()  # the user's business checkout; no workspace root exists
 import time
 from pathlib import Path
@@ -437,16 +430,22 @@ def verify_outputs(
         out_dir = f"{base}/{ASCEND_OUTPUT_DIRNAME}"
         result = ssh_exec(
             ep,
-            f"ls -1t {shlex.quote(out_dir)}/{DB_GLOB} 2>/dev/null | head -n 1",
+            f"ls -1t {shlex.quote(out_dir)}/{DB_GLOB} 2>/dev/null",
             check=False,
         )
-        latest = result.stdout.strip().splitlines()[0] if result.stdout.strip() else None
+        all_paths = [line for line in result.stdout.strip().splitlines() if line.strip()]
+        latest = all_paths[0] if all_paths else None
         non_empty = False
         if latest:
             non_empty = (
                 ssh_exec(ep, f"test -s {shlex.quote(latest)}", check=False).returncode == 0
             )
-        return _db_outputs(latest, non_empty)
+        payload = _db_outputs(latest, non_empty)
+        payload["db_path"]["all_paths"] = all_paths
+        payload["db_path"]["selected_by"] = (
+            "unique" if len(all_paths) <= 1 else "mtime_newest_after_analyse"
+        )
+        return payload
     outputs: dict[str, Any] = {"export_type": export_mode, "db_path": None}
     for key, rel in EXPECTED_OUTPUTS.items():
         path = f"{base}/{rel}"
@@ -485,7 +484,13 @@ def verify_outputs_local(
         )
         latest = candidates[0] if candidates else None
         non_empty = bool(latest and latest.stat().st_size > 0)
-        return _db_outputs(str(latest) if latest else None, non_empty)
+        payload = _db_outputs(str(latest) if latest else None, non_empty)
+        all_paths = [str(path) for path in candidates]
+        payload["db_path"]["all_paths"] = all_paths
+        payload["db_path"]["selected_by"] = (
+            "unique" if len(all_paths) <= 1 else "mtime_newest_after_analyse"
+        )
+        return payload
     outputs: dict[str, Any] = {"export_type": export_mode, "db_path": None}
     for key, rel in EXPECTED_OUTPUTS.items():
         path = base / rel
@@ -762,8 +767,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    _owner_args = build_parser().parse_args()
-    if not (_owner_args.host and _owner_args.port):
-
-        ensure_managed_entry(repo_root=ROOT, entry_file=__file__)
     raise SystemExit(main())

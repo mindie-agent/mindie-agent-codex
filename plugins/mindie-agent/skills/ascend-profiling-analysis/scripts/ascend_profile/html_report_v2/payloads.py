@@ -117,94 +117,20 @@ def l3_target_for_step(step_row: dict, plan: dict[str, Any]) -> tuple[str | None
 
 
 def compute_layer_validation(root: Path, b: "hr.Bundle", analysis_summary: dict | None) -> dict[str, Any]:
-    """Layer-detection validation card data.
-
-    Primary source: ``report/analysis_summary.json`` → ``layer_validation``
-    (written by the report stage; absent on first-run renders and for
-    standalone html runs). Fallback: derive the same shape from
-    ``rank_summary.csv`` ``layer_count_inventory`` + ``segment_manifest.json``
-    ``model_context.expected_layers`` — the same inputs the summary builder
-    uses. Never raises on missing inputs; degrades to status=unknown.
-    """
-    lv = (analysis_summary or {}).get("layer_validation")
-    if isinstance(lv, dict) and lv.get("status"):
-        out = dict(lv)
-        out["source"] = "analysis_summary"
-        return out
-
-    inventories: dict[str, tuple[int, ...]] = {}
-    for row in b.rank_summary:
-        rid = str(row.get("rank_id") or "")
-        raw = store.parse_jsonish(row.get("layer_count_inventory"), [])
-        values = tuple(sorted({int(_f(v)) for v in (raw or []) if _f(v) > 0}))
-        if rid and values:
-            inventories[rid] = values
-    segment_manifest = hr.load_json(root / "segment_manifest.json") or {}
-    model_context = segment_manifest.get("model_context") or {}
-    expected = model_context.get("expected_layers")
-    try:
-        expected_layers = int(expected) if expected else None
-    except (TypeError, ValueError):
-        expected_layers = None
-
-    detected_min = detected_max = None
-    per_rank_consistent: bool | None = None
-    outliers: list[dict[str, Any]] = []
-    if inventories:
-        all_counts = [c for vals in inventories.values() for c in vals]
-        detected_min, detected_max = min(all_counts), max(all_counts)
-        tuple_counts = Counter(inventories.values())
-        modal = tuple_counts.most_common(1)[0][0]
-        per_rank_consistent = len(tuple_counts) == 1
-        outliers = [
-            {"rank_id": rid, "layer_count_inventory": list(vals)}
-            for rid, vals in sorted(inventories.items())
-            if vals != modal
-        ][:8]
-    layers_match: bool | None = None
-    if expected_layers is not None and inventories:
-        # Strict rule (review PR#71): every complete-step count in every rank
-        # must equal the expected layer count; any() used to pass inventories
-        # like [60, 61] with expected 61.
-        layers_match = all(
-            all(count == expected_layers for count in vals)
-            for vals in inventories.values()
-        )
-
-    rank_lv_mismatch = [
-        str(rank.get("rank_id") or "?")
-        for rank in (segment_manifest.get("rank_summaries") or [])
-        if isinstance(rank, dict)
-        and ((rank.get("segmentation_strategy") or {}).get("layer_count_validation") or {}).get("status") == "mismatch"
-    ]
-
-    if not inventories and expected_layers is None:
-        status = "unknown"
-    elif layers_match is False or per_rank_consistent is False or rank_lv_mismatch:
-        status = "degraded"
-    else:
-        status = "ok"
-    limitations: list[str] = []
-    if rank_lv_mismatch:
-        limitations.append(
-            "segment layer-count invariant mismatch on ranks: " + ", ".join(sorted(rank_lv_mismatch)[:8])
-        )
-    if expected_layers is None:
-        limitations.append("expected layer count unknown (no config.json / model-context layer count)")
-    if not inventories:
-        limitations.append("rank_summary.csv has no layer_count_inventory; detected_layers is null")
-    return {
-        "status": status,
-        "expected_layers": expected_layers,
-        "expected_source": "model_context" if expected_layers is not None else "unknown",
-        "detected_layers": {"min": detected_min, "max": detected_max, "per_rank_outliers": outliers},
-        "layers_match": layers_match,
-        "per_rank_consistent": per_rank_consistent,
-        "segmentation_mode": None,
-        "confidence": model_context.get("confidence") if model_context.get("available") else None,
-        "limitations": limitations,
-        "source": "computed",
+    """Use the same current-generation validation as analysis_summary.json."""
+    # Recompute from this generation's source artifacts. Reusing a previous
+    # report/analysis_summary.json during rendering can show stale validation.
+    from ..analysis_summary import _layer_validation
+    bundle = {
+        "manifests": {"segment": hr.load_json(root / "segment_manifest.json") or {}},
+        "csvs": {
+            "rank_summary": b.rank_summary,
+            "model_config_overview": hr.load_csv(root / "model_config_overview.csv"),
+        },
     }
+    result = _layer_validation(root, bundle, [])
+    result["source"] = "computed"
+    return result
 
 
 # ---------------------------------------------------------------------------

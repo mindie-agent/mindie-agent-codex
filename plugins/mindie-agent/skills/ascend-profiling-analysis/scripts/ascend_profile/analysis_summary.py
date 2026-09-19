@@ -268,7 +268,7 @@ def _layer_validation(
     if inventories:
         tuple_counts = Counter(inventories.values())
         modal_inventory = tuple_counts.most_common(1)[0][0]
-        per_rank_consistent = len(tuple_counts) == 1
+        per_rank_consistent = len(tuple_counts) == 1 if len(inventories) > 1 else None
         outliers = [
             {"rank_id": rank_id, "layer_count_inventory": list(values)}
             for rank_id, values in sorted(inventories.items())
@@ -343,15 +343,15 @@ def _layer_validation(
         generated_notes.append("model context confidence unavailable")
         lv_limitations.append(generated_notes[-1])
 
-    if not inventories and expected_layers is None:
-        status = "unknown"
-    elif (
+    if (
         "exact_cover_knowledge_miss" in modes
         or layers_match is False
         or per_rank_consistent is False
         or rank_lv_mismatch
     ):
         status = "degraded"
+    elif not inventories or expected_layers is None:
+        status = "unknown"
     else:
         status = "ok"
 
@@ -744,6 +744,7 @@ def build_analysis_summary(
             "diagnosis_findings": "diagnosis_findings.json",
             "output_dir": str(output_dir),
         },
+        "html_status": html_status or "unknown",
         "report_mode": report_mode,
         "stage_timings": timings,
         "limitations": limitations,

@@ -15,7 +15,7 @@ try:
     from .common import SCHEMA_VERSION, TOOL_VERSION, emit_stage_json, group_by_rank, read_json, utc_now, write_json
     from .cross_rank import cross_rank_profile
     from .diagnostics import diagnose_profile
-    from .normalize import normalize_profile
+    from .normalize import load_rank_db_map, normalize_profile
     from .report import render_report
     from .segment import segment_profile
     from .summarize import summarize_profile
@@ -27,7 +27,7 @@ except ImportError:  # pragma: no cover
     from common import SCHEMA_VERSION, TOOL_VERSION, emit_stage_json, group_by_rank, read_json, utc_now, write_json  # type: ignore[no-redef]
     from cross_rank import cross_rank_profile  # type: ignore[no-redef]
     from diagnostics import diagnose_profile  # type: ignore[no-redef]
-    from normalize import normalize_profile  # type: ignore[no-redef]
+    from normalize import load_rank_db_map, normalize_profile  # type: ignore[no-redef]
     from report import render_report  # type: ignore[no-redef]
     from segment import segment_profile  # type: ignore[no-redef]
     from summarize import summarize_profile  # type: ignore[no-redef]
@@ -105,6 +105,7 @@ def analyze_profile(
     hardware_model: str | None = None,
     hardware_profile: Path | None = None,
     scan_cann_hardware: bool = True,
+    rank_db_map: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     timings: list[dict[str, Any]] = []
@@ -153,7 +154,9 @@ def analyze_profile(
 
     def run_normalize() -> dict[str, Any]:
         nonlocal pipeline_events, pipeline_events_by_rank
-        events, manifest = normalize_profile(profile_root, output_dir)
+        events, manifest = normalize_profile(
+            profile_root, output_dir, rank_db_map=rank_db_map
+        )
         # Keep the events only when a downstream stage will consume them in
         # this process; otherwise let them be garbage-collected.
         if end_idx > STAGE_ORDER.index("normalize"):
@@ -328,11 +331,16 @@ def build_parser() -> argparse.ArgumentParser:
             "after editing report.py). Implies --from-stage and --to-stage."
         ),
     )
+    parser.add_argument(
+        "--rank-db-map",
+        help="JSON object mapping rank dir / rank_id to an explicit profiler db path",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    rank_db_map = load_rank_db_map(args.rank_db_map) if args.rank_db_map else None
     manifest = analyze_profile(
         Path(args.profile_root),
         Path(args.output),
@@ -349,6 +357,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         hardware_model=args.hardware_model,
         hardware_profile=Path(args.hardware_profile) if args.hardware_profile else None,
         scan_cann_hardware=not bool(args.no_cann_hardware_scan),
+        rank_db_map=rank_db_map,
     )
     emit_stage_json({
         "stage": "full_pipeline",

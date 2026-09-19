@@ -27,13 +27,6 @@ from __future__ import annotations
 import sys
 
 from pathlib import Path
-for _p in Path(__file__).resolve().parents:
-    if (_p / "domain-lib").is_dir():
-        if str(_p / "domain-lib") not in sys.path:
-            sys.path.insert(0, str(_p / "domain-lib"))
-        break
-else:
-    raise RuntimeError("MindIE domain-lib not found; use the installed plugin")
 ROOT = Path.cwd()  # the user's business checkout; no workspace root exists
 from pathlib import Path
 
@@ -250,6 +243,24 @@ def _maybe_upload_local_file(
     return f"{remote_dir}/{path.name}"
 
 
+def rank_db_map_from_collection(manifest: Mapping[str, Any] | None) -> dict[str, str]:
+    """Per-rank db paths recorded by collection. Empty if the manifest has none."""
+    out: dict[str, str] = {}
+    if not manifest:
+        return out
+    for item in manifest.get("dirs") or []:
+        if not isinstance(item, Mapping):
+            continue
+        path = item.get("path")
+        outputs = item.get("outputs") if isinstance(item.get("outputs"), Mapping) else {}
+        db = outputs.get("db_path") if isinstance(outputs, Mapping) else None
+        db_path = db.get("path") if isinstance(db, Mapping) else None
+        if path and db_path:
+            out[str(path)] = str(db_path)
+            out[Path(str(path)).name] = str(db_path)
+    return out
+
+
 def _resolve_input(args: argparse.Namespace) -> dict[str, Any]:
     """Return ``{"remote_profile_root": str, "manifest": dict | None}``.
 
@@ -347,7 +358,7 @@ def _read_remote_json(
     state (older roots, partial stage windows).
     """
     try:
-        cat = _ssh_exec_with_retry(
+        cat = common.ssh_exec(
             endpoint, f"cat {common.quote_remote(remote_path)}", timeout=timeout,
         )
     except Exception:  # noqa: BLE001 - best-effort read
@@ -406,7 +417,7 @@ def _archive_remote_output(
     """
     dst = f"{archive_root.rstrip('/')}/{run_dir_name}"
     try:
-        _ssh_exec_with_retry(
+        common.ssh_exec(
             endpoint,
             _build_output_archive_script(remote_output_dir, archive_root, run_dir_name),
             timeout=timeout,
@@ -422,38 +433,6 @@ def _archive_remote_output(
     return dst
 
 
-def _ssh_exec_with_retry(
-    endpoint: common.SshEndpoint,
-    command: str,
-    *,
-    timeout: float,
-    attempts: int = 3,
-    backoff_s: float = 5.0,
-):
-    """ssh_exec with bounded retries for transient transport stalls.
-
-    Right after a long-running streamed remote command closes, the first
-    follow-up ssh_exec on a shared control connection can stall past its
-    timeout even though the remote side is healthy (observed 2026-09-03:
-    artifact validation hung 120s immediately after an 11-minute analyze
-    stream finished; a manual retry 30s later returned in 0.2s).
-    """
-
-    last_exc: Exception | None = None
-    for attempt in range(attempts):
-        try:
-            return common.ssh_exec(endpoint, command, check=True, timeout=timeout)
-        except Exception as exc:  # noqa: BLE001 - transport-level retry
-            last_exc = exc
-            if attempt + 1 < attempts:
-                common.progress(
-                    "ssh_retry",
-                    f"ssh_exec attempt {attempt + 1}/{attempts} failed ({exc}); retrying",
-                )
-                time.sleep(backoff_s * (attempt + 1))
-    raise last_exc  # type: ignore[misc]
-
-
 def _validate_remote_artifacts(
     endpoint: common.SshEndpoint,
     remote_output_dir: str,
@@ -467,7 +446,7 @@ def _validate_remote_artifacts(
     flagged for not producing ``report/report.md``.
     """
     quoted = common.quote_remote(remote_output_dir)
-    listing = _ssh_exec_with_retry(
+    listing = common.ssh_exec(
         endpoint,
         "set -e; "
         f"cd {quoted} && "
@@ -486,7 +465,7 @@ def _validate_remote_artifacts(
             f"required artifacts missing in {remote_output_dir}: {missing}"
         )
 
-    cat = _ssh_exec_with_retry(
+    cat = common.ssh_exec(
         endpoint,
         f"cat {common.quote_remote(remote_output_dir + '/manifest.json')}",
         timeout=60,
@@ -508,7 +487,7 @@ def _validate_segment_health(endpoint: common.SshEndpoint, remote_output_dir: st
     (``exact_cover_knowledge_miss``) is visible at the top level instead of
     being buried in the manifest.
     """
-    cat = _ssh_exec_with_retry(
+    cat = common.ssh_exec(
         endpoint,
         f"cat {common.quote_remote(remote_output_dir + '/segment_manifest.json')}",
         timeout=60,
@@ -518,17 +497,9 @@ def _validate_segment_health(endpoint: common.SshEndpoint, remote_output_dir: st
     except json.JSONDecodeError as e:
         raise RuntimeError(f"segment_manifest.json is not valid JSON: {e}") from e
 
-    # New schema: ``hard_error_count`` (int) + ``interior_island_total`` (int) +
-    # ``hard_errors`` (list).  Older drafts emitted only ``hard_errors`` as a
-    # list, so accept both.
-    raw_hard = seg.get("hard_error_count")
-    if raw_hard is None:
-        legacy_hard = seg.get("hard_errors", 0)
-        if isinstance(legacy_hard, list):
-            raw_hard = len(legacy_hard)
-        else:
-            raw_hard = legacy_hard
-    hard = int(raw_hard or 0)
+    # The current producer always emits the explicit count; missing fields
+    # mean an incomplete manifest, never an implicit successful old schema.
+    hard = int(seg["hard_error_count"])
 
     interior = int(seg.get("interior_island_total", 0) or 0)
     if interior == 0:
@@ -704,6 +675,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             remote_output_dir,
             upload_subdir="input_hardware_profile",
         )
+        remote_rank_db_map = None
+        rank_db_map = rank_db_map_from_collection(manifest)
+        if rank_db_map:
+            map_dir = run_dir / "input_rank_db_map"
+            map_dir.mkdir(parents=True, exist_ok=True)
+            map_file = map_dir / "rank_db_map.json"
+            map_file.write_text(json.dumps(rank_db_map, indent=2), encoding="utf-8")
+            remote_rank_db_map = _maybe_upload_local_file(
+                endpoint,
+                run_dir,
+                str(map_file),
+                remote_output_dir,
+                upload_subdir="input_rank_db_map",
+            )
     except (RuntimeError, FileNotFoundError) as exc:
         return common.fail_return(
             "parity_sync", exc, machine=alias, remote_profile_root=remote_profile_root
@@ -732,6 +717,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         extra_flags.extend(["--hardware-profile", remote_hardware_profile])
     if args.no_cann_hardware_scan:
         extra_flags.append("--no-cann-hardware-scan")
+    if remote_rank_db_map:
+        extra_flags.extend(["--rank-db-map", remote_rank_db_map])
     cmd = (
         f"set -e; cd {common.quote_remote(remote_work_dir)} && "
         f"{py} -m {common.FRAMEWORK_PYTHON_MODULE}.analyze "
@@ -894,6 +881,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     # instead of returning an indistinguishable clean "ok".
     degraded_ranks = segment_health.get("degraded_ranks") or []
     warnings: list[str] = []
+    if html_status != "ok":
+        report_html = None
+        warnings.append(
+            f"html_status={html_status}; the HTML file is not a successful report"
+        )
     if degraded_ranks:
         warnings.append(
             f"segmentation knowledge base did not match ranks {degraded_ranks}; "
@@ -926,6 +918,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "report_xlsx": report_xlsx,
         "report_html": report_html,
         "html_status": html_status,
+        "job_id": common.LAST_REMOTE_JOB_ID,
         "analysis_context": analysis_context,
         "elapsed_s": round(elapsed, 6),
     }
@@ -934,12 +927,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    _owner_args = _build_parser().parse_args()
-    if not (_owner_args.host and _owner_args.port):
-
-        _local = ["--manifest", "--local-output-dir"]
-        _local.extend(option for option, value in (("--model-config", _owner_args.model_config),
-                                                   ("--hardware-profile", _owner_args.hardware_profile))
-                      if value and Path(value).is_file())
-        ensure_managed_entry(repo_root=_ROOT, entry_file=__file__, local_options=_local)
     raise SystemExit(main())

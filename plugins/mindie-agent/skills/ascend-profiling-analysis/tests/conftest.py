@@ -8,13 +8,21 @@ import importlib.util
 import sys
 
 from pathlib import Path
-for _p in Path(__file__).resolve().parents:
-    if (_p / "domain-lib").is_dir():
-        if str(_p / "domain-lib") not in sys.path:
-            sys.path.insert(0, str(_p / "domain-lib"))
-        break
-else:
+def _ensure_plugin_domain_lib() -> None:
+    try:
+        import mindie_state  # noqa: F401
+        return
+    except ImportError:
+        pass
+    plugin_root = Path(__file__).resolve().parents[3]
+    domain = plugin_root / "domain-lib"
+    if domain.is_dir():
+        sys.path.insert(0, str(domain))
+        return
     raise RuntimeError("MindIE domain-lib not found; use the installed plugin")
+
+
+_ensure_plugin_domain_lib()
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"

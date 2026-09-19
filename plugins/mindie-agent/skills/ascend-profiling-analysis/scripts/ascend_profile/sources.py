@@ -101,17 +101,26 @@ def kernel_db_candidates(rank_dir: Path) -> list[Path]:
     return sorted(found, key=lambda p: (-p.stat().st_mtime, p.name))
 
 
-def kernel_db_path(rank_dir: Path) -> Path | None:
+def kernel_db_path(rank_dir: Path, preferred: Path | None = None) -> Path | None:
     """Locate the torch_npu profiler sqlite db for a rank directory.
 
-    Multiple exports can coexist in one rank dir (e.g. a re-analyse without
-    cleanup). The collection skill records/validates the newest db by mtime,
-    so analysis picks the same: newest first, filename order as the stable
-    tie-breaker. Name-order-first would silently analyze a stale export.
+    Multiple exports can coexist in one rank dir. Analysis never silently
+    picks among them: pass ``preferred`` (collection manifest db_path) or
+    leave a single candidate. Zero matches → None; multiple without
+    preferred → None (caller records the skip).
     """
 
     matches = kernel_db_candidates(rank_dir)
-    return matches[0] if matches else None
+    if preferred is not None:
+        chosen = preferred if preferred.is_absolute() else (rank_dir / preferred)
+        chosen = chosen.resolve() if chosen.exists() else chosen
+        for candidate in matches:
+            if candidate.resolve() == chosen.resolve():
+                return candidate
+        return None
+    if len(matches) == 1:
+        return matches[0]
+    return None
 
 
 def kernel_details_path(rank_dir: Path) -> Path | None:

@@ -21,13 +21,6 @@ import json
 import sys
 
 from pathlib import Path
-for _p in Path(__file__).resolve().parents:
-    if (_p / "domain-lib").is_dir():
-        if str(_p / "domain-lib") not in sys.path:
-            sys.path.insert(0, str(_p / "domain-lib"))
-        break
-else:
-    raise RuntimeError("MindIE domain-lib not found; use the installed plugin")
 ROOT = Path.cwd()  # the user's business checkout; no workspace root exists
 import time
 from pathlib import Path
@@ -372,14 +365,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "failed_roots": failed,
         "remote_output_dir": remote_output_dir,
         "local_output_dir": str(run_dir),
+        "job_id": common.LAST_REMOTE_JOB_ID,
+        "execution_id": target.get("execution_id"),
     }
     common.print_json(output)
     return 0 if not failed else 1
 
 
 if __name__ == "__main__":
-    _owner_args = _build_parser().parse_args()
-    if not (_owner_args.host and _owner_args.port):
-
-        ensure_managed_entry(repo_root=ROOT, entry_file=__file__, local_options=("--local-output-dir",))
     raise SystemExit(main())

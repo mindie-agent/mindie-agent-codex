@@ -394,7 +394,7 @@ function l2DetailHTML(data, step, d, highlightLayer) {
     '<div class="sub">' + pct(pctOf(ph.tail_ms)) + ' · tail bubble ' + fmtNum(ph.tail_bubble_ms) + ' ms</div></div>' +
     '<div class="cell bubble"><div class="name">空泡总计 (bubble)</div><div class="val" style="color:var(--danger)">' + fmtNum(ph.bubble_ms) + ' ms</div>' +
     '<div class="sub">' + pct(pctOf(ph.bubble_ms)) + ' · head ' + fmtNum(ph.head_bubble_ms, 1) + ' / main ' + fmtNum(ph.main_bubble_ms, 1) + ' / tail ' + fmtNum(ph.tail_bubble_ms, 1) + ' ms</div></div>' +
-    '</div><div class="muted" style="font-size:11px;margin-top:6px">主体 = main layer 内事件 · 投机 = layer_role=spec 内事件 · 尾部 = tail 段事件 · 空泡 = step wall − active union（与 legacy 同口径）</div></div>';
+    '</div><div class="muted" style="font-size:11px;margin-top:6px">主体 = main layer 内事件 · 投机 = layer_role=spec 内事件 · 尾部 = tail 段事件 · 空泡 = step wall − active union</div></div>';
 
   // cross-rank compare
   var xr = ['<div class="xrank-row head"><div>Rank</div><div class="num">Wall ms</div><div class="num">Bubble %</div><div class="num">Δ vs 本步</div><div></div></div>'];
@@ -406,7 +406,7 @@ function l2DetailHTML(data, step, d, highlightLayer) {
       '<div class="num" style="color:' + color + '">' + (r.diff_pct > 0 ? "+" : "") + fmtNum(r.diff_pct, 1) + '%</div>' +
       '<div>' + (r.self ? "" : '<button class="back-btn" style="padding:2px 8px" data-route="l2" data-cls="' + esc(r.cls) + '" data-seg="' + esc(r.seg) + '">查看</button>') + '</div></div>');
   });
-  html += '<div class="card" style="margin-top:14px"><h3 style="margin-top:0">跨 Rank 同步对比</h3>' + xr.join("") + '</div>';
+  html += '<div class="card" style="margin-top:14px"><h3 style="margin-top:0">跨 Rank 时长对比</h3>' + ((d.xrank || []).length > 1 ? xr.join("") : '<p class="muted">单 rank，无法判断跨 rank 同步。</p>') + '</div>';
 
   // kernel rollup
   var krows = ['<div class="kernel-row head" style="grid-template-columns:1.5fr 0.5fr 0.4fr 1.6fr 0.5fr 0.7fr">' +
@@ -745,7 +745,7 @@ function opCardHTML(e, layer) {
     chips += '<span class="chip" title="' + esc(FIELD_DOCS["Block Dim"] || "") + '">block_dim=' + esc(c.bd) +
       (c.mbd && c.mbd !== "0" ? "/" + esc(c.mbd) : "") + '</span>';
   }
-  if (hostWarn) chips += '<span class="badge b-warn" title="wait_us / duration_us > 30% → 该算子很可能 host bound 或上游同步等待">host bound suspected</span>';
+  if (hostWarn) chips += '<span class="badge b-warn" title="wait_us / duration_us > 30%；等待原因需要结合 host 时间线与依赖证据核实">等待占比较高</span>';
 
   // pipeline stages
   var stageRows = "";

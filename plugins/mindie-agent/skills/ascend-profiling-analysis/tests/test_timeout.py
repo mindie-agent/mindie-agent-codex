@@ -1,81 +1,63 @@
-"""ssh_stream timeout and mux refusal at the analysis skill layer."""
+"""Remote job timeout and missing job-reference failures at the analysis skill layer."""
 from __future__ import annotations
 
-from types import SimpleNamespace
+from unittest import mock
 
 import conftest  # noqa: F401
 
 import _common as common
-from pathlib import Path
-for _p in Path(__file__).resolve().parents:
-    if (_p / "domain-lib").is_dir():
-        if str(_p / "domain-lib") not in sys.path:
-            sys.path.insert(0, str(_p / "domain-lib"))
-        break
-else:
-    raise RuntimeError("MindIE domain-lib not found; use the installed plugin")
-import mindie_exec as remote_dev
-
 
 
 def _local_endpoint() -> common.SshEndpoint:
     return common.SshEndpoint(host="192.0.2.10", port=22, user="root")
 
 
-def test_timed_out_stream_raises_timeout_error() -> None:
-    original = remote_dev.require_transport
-
-    def fake_require(*args, **kwargs):
-        api = dict(original(*args, **kwargs))
-        api["run_stream"] = lambda *a, **k: SimpleNamespace(
-            returncode=0, timed_out=True, stdout="", stderr=""
-        )
-        return api
-
-    remote_dev.require_transport = fake_require
+def test_remote_job_requires_positive_timeout() -> None:
     try:
+        common.run_remote_job(_local_endpoint(), "true", timeout=0, name="t")
+    except RuntimeError as exc:
+        assert "timeout" in str(exc).lower()
+    else:
+        raise AssertionError("timeout=0 must fail closed")
+
+
+def test_timed_out_job_raises_timeout_error() -> None:
+    with mock.patch.object(common._mindie_exec, "start_job", return_value="job-1"), mock.patch.object(
+        common._mindie_exec, "job_status", return_value={"outcome": "success", "state": "running"}
+    ), mock.patch.object(common._mindie_exec, "job_stop") as stop, mock.patch.object(
+        common.time, "monotonic", side_effect=[0.0, 5.0]
+    ):
         try:
-            common.ssh_stream(_local_endpoint(), "sleep 30", timeout=2, forward_prefix="[t] ")
+            common.run_remote_job(_local_endpoint(), "sleep 30", timeout=2, name="t")
         except TimeoutError as exc:
+            assert "job-1" in str(exc)
             assert "2" in str(exc)
         else:
-            raise AssertionError("timed-out stream must raise TimeoutError")
-    finally:
-        remote_dev.require_transport = original
+            raise AssertionError("timed-out job must raise TimeoutError")
+        stop.assert_called()
 
 
-def test_completed_stream_returns_exit_code() -> None:
-    original = remote_dev.require_transport
-
-    def fake_require(*args, **kwargs):
-        api = dict(original(*args, **kwargs))
-        api["run_stream"] = lambda *a, **k: SimpleNamespace(
-            returncode=0, timed_out=False, stdout="", stderr=""
-        )
-        return api
-
-    remote_dev.require_transport = fake_require
-    try:
-        assert common.ssh_stream(_local_endpoint(), "true", timeout=None) == 0
-    finally:
-        remote_dev.require_transport = original
+def test_completed_job_returns_exit_code() -> None:
+    with mock.patch.object(common._mindie_exec, "start_job", return_value="job-ok"), mock.patch.object(
+        common._mindie_exec, "job_status", return_value={"outcome": "success", "state": "completed", "exit_code": 0}
+    ):
+        rc, job_id = common.run_remote_job(_local_endpoint(), "true", timeout=10, name="t")
+    assert rc == 0
+    assert job_id == "job-ok"
 
 
-def test_skill_layer_refuses_muxed_stream() -> None:
-    """A muxed endpoint passed to run_stream is refused from this skill."""
-    api = remote_dev.require_transport()
-    endpoint = remote_dev.as_endpoint("192.0.2.10", 22, "root", ssh_mux=True)
-    try:
-        api["run_stream"](endpoint, "true")
-    except api["RemoteExecutionError"] as exc:
-        message = str(exc).lower()
-        assert "mux" in message or "controlmaster" in message or "stream" in message, exc
-    else:
-        raise AssertionError("muxed run_stream must raise RemoteExecutionError")
+def test_missing_job_id_is_explicit_failure() -> None:
+    with mock.patch.object(common._mindie_exec, "start_job", return_value=""):
+        try:
+            common.run_remote_job(_local_endpoint(), "true", timeout=10, name="t")
+        except RuntimeError as exc:
+            assert "execution reference" in str(exc)
+        else:
+            raise AssertionError("empty job id must fail")
 
 
 if __name__ == "__main__":
-    test_timed_out_stream_raises_timeout_error()
-    test_completed_stream_returns_exit_code()
-    test_skill_layer_refuses_muxed_stream()
-    print("ok")
+    test_remote_job_requires_positive_timeout()
+    test_timed_out_job_raises_timeout_error()
+    test_completed_job_returns_exit_code()
+    test_missing_job_id_is_explicit_failure()

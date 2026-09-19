@@ -133,13 +133,13 @@ def test_read_remote_json_non_dict_returns_none() -> None:
         assert profile_analyze._read_remote_json(_endpoint(), "/out/x.json") is None
 
 
-def test_read_remote_json_ssh_failure_returns_none_after_retries() -> None:
+def test_read_remote_json_ssh_failure_is_not_replayed() -> None:
     with mock.patch.object(
         common, "ssh_exec", side_effect=RuntimeError("transport down")
     ) as mocked, mock.patch("time.sleep"):
         assert profile_analyze._read_remote_json(_endpoint(), "/out/x.json") is None
-    # _ssh_exec_with_retry policy: 3 attempts before giving up.
-    assert mocked.call_count == 3
+    # An uncertain transport failure must never replay this request.
+    assert mocked.call_count == 1
 
 
 def test_read_remote_analysis_summary_targets_report_subpath() -> None:
@@ -193,7 +193,7 @@ if __name__ == "__main__":
     test_read_remote_json_parses_dict()
     test_read_remote_json_bad_json_returns_none()
     test_read_remote_json_non_dict_returns_none()
-    test_read_remote_json_ssh_failure_returns_none_after_retries()
+    test_read_remote_json_ssh_failure_is_not_replayed()
     test_read_remote_analysis_summary_targets_report_subpath()
     test_diagnosis_counts_from_data_canonical_key()
     test_diagnosis_counts_from_data_legacy_key_fallbacks()

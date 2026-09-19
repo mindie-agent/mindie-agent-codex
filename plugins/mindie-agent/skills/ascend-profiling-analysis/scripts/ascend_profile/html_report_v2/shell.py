@@ -60,15 +60,18 @@ def _kpi_strip(ov: dict) -> str:
     comp = kpi["companion"]
     lv = ov["layer_validation"]
 
-    if ep["available"]:
+    if ep["available"] and kpi["rank_count"] > 1:
         ep_val = f"{ep['peak_to_mean']:.2f}×"
         ep_color = "var(--danger)" if ep["peak_to_mean"] >= 1.10 else "var(--success)"
         ep_sub = f"peak {ep['peak_ms']:.1f} ms / mean {ep['mean_ms']:.1f} ms"
     else:
-        ep_val, ep_color, ep_sub = "—", "var(--muted)", "无 GroupedMatmul 事件"
+        ep_val, ep_color = "—", "var(--muted)"
+        ep_sub = "单 rank，无法比较" if kpi["rank_count"] < 2 else "无 GroupedMatmul 事件"
 
     comp_color = "var(--warn)" if comp["n_companion"] > 0 else "var(--success)"
-    comp_msg = "存在 real ↔ dummy 错位" if comp["n_companion"] > 0 else "所有 rank 同步"
+    comp_msg = "检测到陪跑步" if comp["n_companion"] > 0 else "未检测到陪跑步"
+    if kpi["rank_count"] < 2:
+        comp_color, comp_msg = "var(--muted)", "单 rank，无法判断跨 rank 同步"
 
     lv_status = lv.get("status", "unknown")
     lv_badge = {
@@ -81,9 +84,9 @@ def _kpi_strip(ov: dict) -> str:
         '<div class="kpi-strip">'
         f'<div class="kpi"><div class="label">参与 Rank</div><div class="value">{kpi["rank_count"]}</div>'
         f'<div class="sub">{kpi["step_count"]} step · 平均 wall {_fmt_ms(kpi["avg_wall_ms"])} ms / rank</div></div>'
-        f'<div class="kpi"><div class="label">EP 峰均比 (GMM) <span class="ui-only-pill" title="UI-only heuristic — 非 diagnosis finding">UI-only</span></div>'
+        f'<div class="kpi"><div class="label">EP 峰均比 (GMM) <span class="ui-only-pill" title="仅作排查线索，需要结合采集覆盖范围验证">推断</span></div>'
         f'<div class="value" style="color:{ep_color}">{ep_val}</div><div class="sub">{_esc(ep_sub)}</div></div>'
-        f'<div class="kpi"><div class="label">DP 陪跑步数 <span class="ui-only-pill" title="UI-only heuristic — 非 diagnosis finding">UI-only</span></div>'
+        f'<div class="kpi"><div class="label">DP 陪跑步数 <span class="ui-only-pill" title="仅作排查线索，需要结合采集覆盖范围验证">推断</span></div>'
         f'<div class="value" style="color:{comp_color}">{comp["n_companion"]} / {comp["n_total_aligned"]}</div>'
         f'<div class="sub">{_esc(comp_msg)}</div></div>'
         f'<div class="kpi"><div class="label">Findings</div><div class="value">{kpi["findings_count"]}</div>'
@@ -92,9 +95,8 @@ def _kpi_strip(ov: dict) -> str:
         f'<div class="sub">详见下方 Layer Validation 卡</div></div>'
         '</div>'
         '<div class="muted" style="margin-top:6px;font-size:11px">'
-        '<span class="ui-only-pill" style="margin-right:6px">UI-only</span>'
-        '标签项为 UI 推断信号（EP 峰均比 / DP 陪跑 / Layer composition / 模型结构猜测），'
-        '不会写入 <code>diagnosis_findings.json</code>，也不参与 evidence-chain 校验。'
+        '<span class="ui-only-pill" style="margin-right:6px">推断</span>'
+        '标签项仅作排查线索；需要结合模型配置、采集覆盖范围和原始时间线核实。'
         '</div>'
     )
 
@@ -146,8 +148,7 @@ def _layer_validation_card(ov: dict) -> str:
         '<div class="card" style="margin-top:14px">'
         f'<h3 style="margin-top:0">Layer Validation · {_badge(status, badge_cls)}</h3>'
         '<div class="muted" style="font-size:11.5px;margin-bottom:6px">'
-        '检测层数 vs 预期层数 + 每 rank 一致性。数据取自 <code>analysis_summary.json</code>；'
-        '该文件不存在时（如 report 首次渲染）由 layer_segments / segment_manifest 现算，口径一致。'
+        '依据本次采集结果与模型配置比较层数；缺少配置或多 rank 证据时保留未知。'
         '</div>'
         f'<div class="kv-grid">{body}</div>'
         f'{outliers_html}{lim_html}'
@@ -160,6 +161,8 @@ def _cross_rank_card(ov: dict) -> str:
     for r in ov["ranks"]:
         speed_badge = {"slow": _badge("慢卡", "b-slow"), "fast": _badge("轻卡", "b-fast")}.get(
             r["speed"], _badge("normal", "b-success"))
+        if len(ov["ranks"]) < 2:
+            speed_badge = _badge("无法比较", "b-unknown")
         gmm = f"{r['gmm_ms']:.1f} ms" if r["gmm_ms"] is not None else "—"
         rows.append(
             "<tr>"
@@ -190,7 +193,7 @@ def _cross_rank_card(ov: dict) -> str:
 
 def _ep_card(ov: dict) -> str:
     ep = ov["kpis"]["ep"]
-    if not ep["available"]:
+    if not ep["available"] or ov["kpis"]["rank_count"] < 2:
         return ""
     by_rank = ep.get("by_rank_ms") or {}
     peak = max(by_rank.values(), default=0.0)
@@ -210,16 +213,16 @@ def _ep_card(ov: dict) -> str:
             "</tr>"
         )
     verdict = (
-        _badge("EP imbalance", "b-danger") if ep["peak_to_mean"] >= 1.10
-        else _badge("EP balanced", "b-success")
+        _badge("采集 rank 耗时差异较大", "b-danger") if ep["peak_to_mean"] >= 1.10
+        else _badge("采集 rank 耗时差异较小", "b-success")
     )
     return (
         '<div class="card" style="margin-top:14px">'
         f'<h3 style="margin-top:0">EP 负载（GroupedMatmul wall）· {verdict}</h3>'
         '<div class="muted" style="font-size:11.5px;margin-bottom:6px">'
         f'峰均比 = max / mean = <b>{ep["peak_to_mean"]:.3f}</b> · spread = <b>{ep["spread_pct"]:.1f}%</b>'
-        ' · 经验阈值：&gt; 1.10 视为 EP 不均（GroupedMatmul 是 MoE expert dispatch 的核心 kernel，'
-        '每 rank 的 GMM 总耗时直接反映分到的 token 量）'
+        ' · 以 1.10 为展示阈值；GMM 耗时受 token 量、算子形状和硬件状态影响。'
+        '该比较仅覆盖已采集的 rank。'
         '</div>'
         '<table><thead><tr><th>Rank</th><th class="num">GMM 总耗时 ms</th><th>Deviation vs mean</th></tr></thead>'
         f'<tbody>{"".join(rows)}</tbody></table></div>'
@@ -529,6 +532,7 @@ def render_shell(
     manifest: dict[str, Any],
     field_docs: dict[str, str],
     embedded_assets: dict[str, str] | None = None,
+    html_status: str = "ok",
 ) -> str:
     """Assemble ``report.html``: inline CSS/JS + static L1 + manifest."""
     css = (_PKG_DIR / "app.css").read_text(encoding="utf-8")
@@ -539,6 +543,13 @@ def render_shell(
         f"window.__OVERVIEW__={_json_script(overview_data)};\n"
         f"window.__FIELD_DOCS__={_json_script(field_docs)};\n"
         f"window.__EMBEDDED_ASSETS__={_json_script(embedded_assets) if embedded_assets is not None else 'null'};\n"
+        f"window.__HTML_STATUS__={_json_script(html_status)};\n"
+    )
+    status_cls = "banner-ok" if html_status == "ok" else "banner-warn"
+    status_banner = (
+        f'<div id="html-status-banner" class="banner {status_cls}" data-html-status="{_esc(html_status)}">'
+        f'<strong>{"报告已生成" if html_status == "ok" else "报告生成失败"}</strong>'
+        '</div>'
     )
 
     return "".join([
@@ -546,6 +557,7 @@ def render_shell(
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
         f'<title>{_esc(title)}</title>',
         f'<style>{css}</style></head><body>',
+        status_banner,
         # protocol / capability banners (JS unhides when triggered)
         '<div id="file-banner" class="banner banner-warn hidden">',
         '当前以 <code>file://</code> 协议打开，浏览器禁止按需加载 <code>assets/*.json.gz</code> 明细数据；'

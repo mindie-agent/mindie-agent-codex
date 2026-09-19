@@ -33,13 +33,6 @@ import shlex
 import sys
 
 from pathlib import Path
-for _p in Path(__file__).resolve().parents:
-    if (_p / "domain-lib").is_dir():
-        if str(_p / "domain-lib") not in sys.path:
-            sys.path.insert(0, str(_p / "domain-lib"))
-        break
-else:
-    raise RuntimeError("MindIE domain-lib not found; use the installed plugin")
 from pathlib import Path
 from typing import Any
 

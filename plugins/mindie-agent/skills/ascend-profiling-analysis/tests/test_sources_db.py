@@ -591,21 +591,31 @@ def test_normalize_db_mode_rejects_broken_db(tmp_path: Path) -> None:
     assert "db schema probe failed" in manifest["source_notes"][0]
 
 
-def test_kernel_db_path_picks_newest_by_mtime(tmp_path: Path) -> None:
-    """Multiple exports in one rank dir (re-analyse without cleanup): the
-    collection side validates newest-by-mtime, so analysis must select the
-    same one — never first-by-name."""
+def test_kernel_db_path_refuses_silent_multi_db(tmp_path: Path) -> None:
+    """Multiple exports in one rank dir must not be silently picked."""
     import os
     from ascend_profile.sources import kernel_db_candidates, kernel_db_path
 
-    out = tmp_path / "rank0_x_ascend_pt" / "ASCEND_PROFILER_OUTPUT"
+    rank = tmp_path / "rank0_x_ascend_pt"
+    out = rank / "ASCEND_PROFILER_OUTPUT"
     out.mkdir(parents=True)
-    older = out / "ascend_pytorch_profiler_1.db"  # name sorts LAST
-    newer = out / "ascend_pytorch_profiler_0.db"  # name sorts FIRST
+    older = out / "ascend_pytorch_profiler_1.db"
+    newer = out / "ascend_pytorch_profiler_0.db"
     older.write_bytes(b"old")
     newer.write_bytes(b"new")
     now = 1_700_000_000
     os.utime(newer, (now - 100, now - 100))
-    os.utime(older, (now, now))  # mtime is NEWER on the name-last file
-    assert kernel_db_path(tmp_path / "rank0_x_ascend_pt") == older
-    assert kernel_db_candidates(tmp_path / "rank0_x_ascend_pt")[0] == older
+    os.utime(older, (now, now))
+    assert kernel_db_path(rank) is None
+    assert kernel_db_path(rank, preferred=older) == older
+    assert len(kernel_db_candidates(rank)) == 2
+
+
+def test_normalize_multi_db_without_map_skips_rank(tmp_path: Path) -> None:
+    rank = tmp_path / "rank0_x_ascend_pt" / "ASCEND_PROFILER_OUTPUT"
+    rank.mkdir(parents=True)
+    (rank / "ascend_pytorch_profiler_0.db").write_bytes(b"a")
+    (rank / "ascend_pytorch_profiler_1.db").write_bytes(b"b")
+    _events, manifest = normalize_profile(tmp_path, tmp_path / "out", source="auto")
+    assert manifest["rank_count"] == 0
+    assert any("refusing silent pick" in note for note in manifest["source_notes"])

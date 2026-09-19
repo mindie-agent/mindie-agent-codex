@@ -20,25 +20,36 @@ from __future__ import annotations
 import fnmatch
 import io
 import json
+import os
 import shlex
 import subprocess
 import sys
 
 from pathlib import Path
-for _p in Path(__file__).resolve().parents:
-    if (_p / "domain-lib").is_dir():
-        if str(_p / "domain-lib") not in sys.path:
-            sys.path.insert(0, str(_p / "domain-lib"))
-        break
-else:
-    raise RuntimeError("MindIE domain-lib not found; use the installed plugin")
-import tarfile
-import time
-from pathlib import Path
 from typing import Any, Iterable
 
+def _ensure_plugin_domain_lib() -> None:
+    try:
+        import mindie_state  # noqa: F401
+        return
+    except ImportError:
+        pass
+    plugin_root = Path(__file__).resolve().parents[3]
+    domain = plugin_root / "domain-lib"
+    if domain.is_dir():
+        sys.path.insert(0, str(domain))
+        return
+    raise RuntimeError("MindIE domain-lib not found; use the installed plugin")
+
+
+_ensure_plugin_domain_lib()
+import tarfile
+import tempfile
+import uuid
+import time
+
+import mindie_exec as _mindie_exec  # noqa: E402
 from mindie_state import allocate_run_dir, state_root  # noqa: E402
-from mindie_exec import ssh_argv, ssh_exec, ssh_run_bytes, ssh_stream as remote_ssh_stream  # noqa: E402
 from mindie_receipt import PROGRESS_SENTINEL, progress as envelope_progress  # noqa: E402
 from mindie_target import (  # noqa: E402
     SshEndpoint,
@@ -51,6 +62,11 @@ ANALYSIS_STATE_DIR = state_root() / "profiling-analysis" / "runs"
 
 DEFAULT_REMOTE_WORK_DIR = "/tmp/ascend_profile_framework"
 SSH_CONNECT_TIMEOUT_SECONDS = 15
+DEFAULT_ARTIFACT_PULL_MAX_BYTES = 512 * 1024 * 1024
+DEFAULT_JOB_POLL_INTERVAL_S = 2.0
+JOB_DONE = frozenset({"succeeded", "completed"})
+JOB_FAILED = frozenset({"failed", "error", "timeout", "timed_out", "cancelled", "absent", "lost"})
+LAST_REMOTE_JOB_ID: str | None = None
 # The analysis framework lives next to this file as a sibling package; it is
 # tar-synced to the remote work dir's ``ascend_profile/`` subpath and invoked
 # as ``python3 -m ascend_profile.<stage>`` from that work dir.
@@ -277,15 +293,95 @@ def print_json(data: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Remote command execution
+# Remote command execution through mindie_exec (no copied SSH layer).
 #
-# ``ssh_exec`` is the short multiplexed path. ``ssh_stream`` uses
-# ``Endpoint.for_long_stream`` + ``run_stream``. Tests that need a local
-# stand-in patch ``_ssh_base_cmd``.
+# The shared domain runtime owns admission, request budgets and remote-dev I/O.
+# Short commands return subprocess.CompletedProcess[str]; file content travels
+# exclusively through hash-verified artifact transfer.
 # ---------------------------------------------------------------------------
 
-def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
-    return ssh_argv(endpoint, long_stream=True, connect_timeout_s=SSH_CONNECT_TIMEOUT_SECONDS)
+def ssh_exec(
+    endpoint: SshEndpoint,
+    script: str,
+    *,
+    check: bool = True,
+    timeout: float = 180,
+    connect_timeout: float = SSH_CONNECT_TIMEOUT_SECONDS,
+):
+    return _mindie_exec.ssh_exec(
+        endpoint, script, check=check, timeout=timeout,
+        connect_timeout=connect_timeout,
+    )
+
+
+def run_remote_job(
+    endpoint: SshEndpoint,
+    command: str,
+    *,
+    timeout: int | None,
+    name: str,
+) -> tuple[int, str]:
+    """Launch one remote job and wait until it finishes or the total timeout.
+
+    Never relaunches. Polling is bounded by ``timeout`` seconds.
+    """
+    if timeout is None or int(timeout) <= 0:
+        raise RuntimeError("remote job requires a positive total timeout")
+    start_job = getattr(_mindie_exec, "start_job", None)
+    job_status = getattr(_mindie_exec, "job_status", None)
+    job_stop = getattr(_mindie_exec, "job_stop", None)
+    job_tail = getattr(_mindie_exec, "job_tail", None)
+    if start_job is None or job_status is None:
+        raise RuntimeError(
+            "mindie_exec.start_job and mindie_exec.job_status are required "
+            "for remote analysis; root must wire remote-dev job tools"
+        )
+    deadline = time.monotonic() + int(timeout)
+    try:
+        job_id = start_job(endpoint, command, name=name, timeout=timeout)
+    except Exception as exc:
+        raise RuntimeError(f"remote job launch failed: {exc}") from exc
+    if not job_id:
+        raise RuntimeError("remote job did not return an execution reference")
+    job_id = str(job_id)
+    progress("remote_job", "started", job_id=job_id, timeout_s=int(timeout), name=name)
+    global LAST_REMOTE_JOB_ID
+    LAST_REMOTE_JOB_ID = job_id
+    last_status: dict[str, Any] = {}
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            if job_stop is not None:
+                try:
+                    job_stop(endpoint, job_id, force=True, timeout=10)
+                except Exception:
+                    pass
+            raise TimeoutError(
+                f"remote job {job_id} exceeded {timeout}s total limit"
+            )
+        try:
+            last_status = dict(job_status(endpoint, job_id, timeout=min(15, remaining)) or {})
+        except Exception as exc:
+            raise RuntimeError(f"remote job {job_id} status failed: {exc}") from exc
+        outcome = str(
+            last_status.get("state")
+            or last_status.get("status")
+            or ""
+        ).lower()
+        if outcome in JOB_DONE:
+            return int(last_status.get("exit_code") or last_status.get("returncode") or 0), job_id
+        if outcome in JOB_FAILED:
+            tail = ""
+            if job_tail is not None:
+                try:
+                    tail = str(job_tail(endpoint, job_id, lines=80) or "")[:2000]
+                except Exception:
+                    tail = ""
+            raise RuntimeError(
+                f"remote job {job_id} {outcome}"
+                + (f": {tail}" if tail else "")
+            )
+        time.sleep(min(DEFAULT_JOB_POLL_INTERVAL_S, max(0.2, remaining)))
 
 
 def ssh_stream(
@@ -295,25 +391,18 @@ def ssh_stream(
     forward_prefix: str = "[remote] ",
     timeout: int | None = None,
 ) -> int:
-    """Run a remote command, streaming stdout/stderr to local stderr.
-
-    Returns the remote exit code. Transport, keepalive, and the dual timeout
-    live in ``remote-dev`` ``run_stream``.
-    """
-    return remote_ssh_stream(
-        endpoint,
-        script,
-        forward_prefix=forward_prefix,
-        timeout=timeout,
-        connect_timeout=SSH_CONNECT_TIMEOUT_SECONDS,
-    )
+    """Long remote command via the job reference, not a second SSH stream."""
+    del forward_prefix
+    rc, job_id = run_remote_job(endpoint, script, timeout=timeout, name="ascend-profile")
+    progress("remote_job", "stream finished", job_id=job_id, rc=rc)
+    return rc
 
 
 # ---------------------------------------------------------------------------
 # Directory sync helpers (rsync is not always installed in Ascend containers).
 # Local packing/unpacking uses stdlib tarfile so this module never spawns
 # ``tar`` or ``ssh``. Remote unpack/pack still uses the remote ``tar`` binary
-# through ``ssh_run_bytes``.
+# through bounded commands; bytes move through verified artifacts.
 # ---------------------------------------------------------------------------
 
 def _tar_name_excluded(name: str, patterns: tuple[str, ...]) -> bool:
@@ -342,17 +431,6 @@ def _tar_bytes_from_directory(local_path: Path, extra_excludes: Iterable[str]) -
     return buf.getvalue()
 
 
-def _extract_tar_bytes(data: bytes, local_path: Path) -> None:
-    local_path.mkdir(parents=True, exist_ok=True)
-    if not data:
-        return
-    kwargs: dict[str, Any] = {}
-    if hasattr(tarfile, "data_filter"):
-        kwargs["filter"] = "data"
-    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
-        tf.extractall(local_path, **kwargs)
-
-
 def sync_to_remote(
     endpoint: SshEndpoint,
     local_path: Path,
@@ -360,40 +438,21 @@ def sync_to_remote(
     *,
     extra_excludes: Iterable[str] = ("__pycache__", "*.pyc"),
 ) -> None:
-    """Mirror ``local_path/`` into ``remote_path/`` via in-memory tar + ``run_bytes``.
-
-    Implements --delete by clearing ``remote_path`` first, then unpacking the
-    tarball. Lightweight on purpose: callers pick the smallest subtree they
-    need (typically ``scripts/ascend_profile/``).
-    """
-    if not local_path.exists():
-        raise FileNotFoundError(f"local path does not exist: {local_path}")
+    """Upload an archive through verified artifact transfer to an empty run dir."""
     if not local_path.is_dir():
         raise NotADirectoryError(f"sync source must be a directory: {local_path}")
-
-    progress("parity", "tar local -> remote", src=str(local_path), dst=remote_path)
-
-    # Wipe + recreate the remote directory (mimics rsync --delete).
-    ssh_exec(
-        endpoint,
-        f"rm -rf {shlex.quote(remote_path)} && mkdir -p {shlex.quote(remote_path)}",
-        check=True,
-        timeout=120,
-    )
-
-    archive = _tar_bytes_from_directory(local_path, extra_excludes)
-    result = ssh_run_bytes(
-        endpoint,
-        f"tar -xz -C {shlex.quote(remote_path)}",
-        stdin=archive,
-    )
-    if result.returncode != 0:
-        err = (result.stderr or b"").decode("utf-8", "replace")
-        raise RuntimeError(
-            "remote tar -x failed (rc={rc}): {err}".format(
-                rc=result.returncode, err=err[:1000]
-            )
-        )
+    progress("parity", "upload analysis code", src=str(local_path), dst=remote_path)
+    with tempfile.TemporaryDirectory(prefix="mindie-profile-upload-") as directory:
+        archive = Path(directory) / "code.tgz"
+        archive.write_bytes(_tar_bytes_from_directory(local_path, extra_excludes))
+        remote_tar = f"/tmp/mindie-profile-{uuid.uuid4().hex}.tgz"
+        _mindie_exec.artifact_push(endpoint, str(archive), remote_tar)
+        quoted = shlex.quote(remote_path)
+        # Never erase an existing user's directory to make a sync succeed.
+        ssh_exec(endpoint,
+            f"trap 'rm -f {remote_tar}' EXIT; mkdir -p {quoted} && "
+            f"test -z \"$(find {quoted} -mindepth 1 -maxdepth 1 -print -quit)\" && "
+            f"tar -xzf {remote_tar} -C {quoted}", timeout=120)
 
 
 def sync_from_remote(
@@ -403,46 +462,33 @@ def sync_from_remote(
     *,
     include_paths: Iterable[str] | None = None,
 ) -> None:
-    """Mirror ``remote_path/`` into ``local_path/`` via ``run_bytes`` + tarfile.
-
-    When ``include_paths`` is provided, only those relative paths are tarred
-    on the remote side. Missing paths are silently skipped (some sweep roots
-    are produced even when an analyze stage degrades, and we don't want to
-    fail the whole pull because of one missing optional file).
-    """
+    """Pull a bounded, hash-verified archive without binary terminal output."""
     local_path.mkdir(parents=True, exist_ok=True)
-    progress("artifact_pull", "tar remote -> local", src=remote_path, dst=str(local_path))
-
+    progress("artifact_pull", "download analysis artifacts", src=remote_path, dst=str(local_path))
+    remote_tar = f"/tmp/mindie-profile-{uuid.uuid4().hex}.tgz"
     if include_paths is None:
-        # Pull the whole directory.
-        remote_pack = f"cd {shlex.quote(remote_path)} && tar -cz ."
+        selection = f"tar -czf {remote_tar} ."
     else:
-        # Build a remote bash snippet that tars only the existing requested
-        # paths. Paths that do not exist remotely are skipped with a warning
-        # to stderr (which we forward via ssh stderr).
-        existing = " ".join(shlex.quote(p) for p in include_paths)
-        remote_pack = (
-            f"cd {shlex.quote(remote_path)} && "
-            f"present=(); for p in {existing}; do "
-            f"  if [ -e \"$p\" ]; then present+=(\"$p\"); else "
-            f"    echo \"skip missing: $p\" 1>&2; fi; "
-            f"done; "
-            f"if [ ${{#present[@]}} -eq 0 ]; then exit 0; fi; "
-            f"tar -cz \"${{present[@]}}\""
+        names = tuple(include_paths)
+        if any(Path(p).is_absolute() or ".." in Path(p).parts for p in names):
+            raise ValueError("artifact selections must be relative paths within the run")
+        args = " ".join(shlex.quote(p) for p in names)
+        selection = (
+            f"present=(); for p in {args}; do "
+            'if [ -e "$p" ]; then present+=("$p"); fi; done; '
+            f'tar -czf {remote_tar} --files-from /dev/null "${{present[@]}}"'
         )
-
-    result = ssh_run_bytes(endpoint, remote_pack)
-    if result.returncode != 0:
-        err = (result.stderr or b"").decode("utf-8", "replace")
-        raise RuntimeError(
-            "remote tar -c failed (rc={rc}): {err}".format(
-                rc=result.returncode, err=err[:1000]
-            )
-        )
+    ssh_exec(endpoint, f"cd {shlex.quote(remote_path)} && {selection}", timeout=120)
     try:
-        _extract_tar_bytes(result.stdout or b"", local_path)
-    except tarfile.TarError as exc:
-        raise RuntimeError(f"local tarfile extract failed: {exc}") from exc
+        with tempfile.TemporaryDirectory(prefix="mindie-profile-download-") as directory:
+            _mindie_exec.artifact_pull(endpoint, remote_tar, directory)
+            archive = Path(directory) / Path(remote_tar).name
+            if not archive.is_file():
+                raise RuntimeError("verified archive was not materialized")
+            with tarfile.open(archive, mode="r:gz") as tf:
+                tf.extractall(local_path, filter="data")
+    finally:
+        ssh_exec(endpoint, f"rm -f {remote_tar}", check=False, timeout=15)
 
 
 # ---------------------------------------------------------------------------
@@ -696,9 +742,36 @@ def stream_remote_command(
     ``fail_phase`` failure JSON (exit 4) and returns ``(None, code)``.
     """
     try:
-        return ssh_stream(endpoint, cmd, forward_prefix=forward_prefix, timeout=timeout), None
+        rc, job_id = run_remote_job(
+            endpoint, cmd, timeout=timeout, name=str(fail_extra.get("job_name") or fail_phase)
+        )
+        global LAST_REMOTE_JOB_ID
+        LAST_REMOTE_JOB_ID = job_id
+        progress("remote_job", "finished", job_id=job_id, rc=rc, phase=fail_phase)
+        return rc, None
     except TimeoutError as exc:
         return None, fail_return(fail_phase, exc, **fail_extra)
+    except RuntimeError as exc:
+        return None, fail_return(fail_phase, exc, **fail_extra)
+
+
+def _remote_bytes(endpoint: SshEndpoint, remote_path: str) -> int:
+    listing = ssh_exec(
+        endpoint,
+        f"du -sb {quote_remote(remote_path)} 2>/dev/null | awk '{{print $1}}'",
+        check=False,
+        timeout=60,
+    )
+    text = str(listing.stdout or "").strip().splitlines()
+    if listing.returncode or not text:
+        raise RuntimeError("could not determine remote artifact size; pull not started")
+    try:
+        size = int(text[0].split()[0])
+    except ValueError as exc:
+        raise RuntimeError("invalid remote artifact size; pull not started") from exc
+    if size < 0:
+        raise RuntimeError("invalid remote artifact size; pull not started")
+    return size
 
 
 def pull_artifacts(
@@ -708,12 +781,19 @@ def pull_artifacts(
     *,
     keep_remote_output: bool,
     include_paths: Iterable[str],
+    max_bytes: int = DEFAULT_ARTIFACT_PULL_MAX_BYTES,
 ) -> None:
     """Pull artifacts back to the local run dir.
 
     Raises RuntimeError; callers convert with ``fail_return("artifact_pull",
-    ...)`` (exit 6).
+    ...)`` (exit 6). Refuses a pull larger than ``max_bytes``.
     """
+    size = _remote_bytes(endpoint, remote_output_dir)
+    if size > max_bytes:
+        raise RuntimeError(
+            f"remote output {remote_output_dir} is {size} bytes, over the "
+            f"{max_bytes} byte pull cap; use --no-pull or raise the cap"
+        )
     if keep_remote_output:
         sync_from_remote(endpoint, remote_output_dir, run_dir)
     else:

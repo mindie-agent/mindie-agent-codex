@@ -80,9 +80,32 @@ def _probe_summary(probe: Mapping[str, Any]) -> str:
     return "missing " + ", ".join(f"{table}({','.join(cols)})" for table, cols in sorted(missing.items()))
 
 
+def _preferred_db_for_rank(
+    rank_dir: Path,
+    rank_id: str,
+    rank_db_map: Mapping[str, str] | None,
+) -> Path | None:
+    if not rank_db_map:
+        return None
+    keys = (
+        str(rank_dir),
+        str(rank_dir.resolve()),
+        rank_dir.name,
+        rank_id,
+    )
+    for key in keys:
+        value = rank_db_map.get(key)
+        if value:
+            return Path(value)
+    return None
+
+
 def _resolve_rank_source(
     rank_dir: Path,
     mode: str,
+    *,
+    rank_id: str = "",
+    rank_db_map: Mapping[str, str] | None = None,
 ) -> tuple[Path | None, Path | None, str | None, str | None]:
     """Pick the kernel event source for one rank directory.
 
@@ -93,25 +116,35 @@ def _resolve_rank_source(
 
     ``auto`` prefers the profiler db whenever it exists and passes the
     schema probe (fail-closed), and falls back to kernel_details.csv.
+    Multiple dbs without a manifest/map path are refused, not guessed.
     """
 
     kernel_csv = kernel_details_path(rank_dir)
-    kernel_db = kernel_db_path(rank_dir)
-    # Multiple exports in one rank dir: say so rather than silently picking.
+    preferred = _preferred_db_for_rank(rank_dir, rank_id, rank_db_map)
+    candidates = kernel_db_candidates(rank_dir)
+    kernel_db = kernel_db_path(rank_dir, preferred=preferred)
     multi_db_note = None
-    if kernel_db is not None:
-        n_dbs = len(kernel_db_candidates(rank_dir))
-        if n_dbs > 1:
-            multi_db_note = (
-                f"{n_dbs} profiler dbs in rank dir; using newest by mtime: {kernel_db.name}"
-            )
+    if preferred is not None and kernel_db is None:
+        multi_db_note = f"manifest db not found in rank dir: {preferred}"
+    elif preferred is None and len(candidates) > 1:
+        names = ", ".join(path.name for path in candidates)
+        multi_db_note = (
+            f"{len(candidates)} profiler dbs in rank dir ({names}); "
+            "refusing silent pick — pass --rank-db-map from the collection manifest"
+        )
+        kernel_db = None
+    elif preferred is not None:
+        multi_db_note = f"using collection manifest db: {kernel_db.name if kernel_db else preferred.name}"
+    if mode != "csv" and ((preferred is not None and kernel_db is None)
+                           or (preferred is None and len(candidates) > 1)):
+        return kernel_csv, None, None, multi_db_note
     if mode == "csv":
         if kernel_csv is None:
             return kernel_csv, kernel_db, None, "no kernel_details.csv found (--source csv)"
         return kernel_csv, kernel_db, SOURCE_KIND_CSV, multi_db_note
     if mode == "db":
         if kernel_db is None:
-            return kernel_csv, kernel_db, None, "no ascend_pytorch_profiler_*.db found (--source db)"
+            return kernel_csv, kernel_db, None, multi_db_note or "no ascend_pytorch_profiler_*.db found (--source db)"
         probe = probe_db_schema(kernel_db)
         if not probe["ok"]:
             return kernel_csv, kernel_db, None, f"db schema probe failed: {_probe_summary(probe)}"
@@ -134,8 +167,8 @@ def _resolve_rank_source(
             return kernel_csv, kernel_db, SOURCE_KIND_CSV, note + "; fell back to kernel_details.csv"
         return kernel_csv, kernel_db, None, note + "; no kernel_details.csv fallback"
     if kernel_csv is not None:
-        return kernel_csv, kernel_db, SOURCE_KIND_CSV, None
-    return kernel_csv, kernel_db, None, None
+        return kernel_csv, kernel_db, SOURCE_KIND_CSV, multi_db_note
+    return kernel_csv, kernel_db, None, multi_db_note
 
 
 EVENT_FIELDNAMES = [
@@ -275,6 +308,7 @@ def normalize_profile(
     hash_sources: bool = False,
     write_jsonl: bool = False,
     source: str = "auto",
+    rank_db_map: Mapping[str, str] | None = None,
 ) -> tuple[list[NormalizedEvent], dict[str, Any]]:
     """Normalize raw profiling files; return ``(events, manifest)``.
 
@@ -310,7 +344,9 @@ def normalize_profile(
         jsonl_handle = jsonl_path.open("w", encoding="utf-8") if write_jsonl else None
         for ordinal, rank_dir in enumerate(rank_dirs):
             rank_id = infer_rank_id(rank_dir, ordinal)
-            kernel_csv, kernel_db, source_kind, source_note = _resolve_rank_source(rank_dir, source_mode)
+            kernel_csv, kernel_db, source_kind, source_note = _resolve_rank_source(
+                rank_dir, source_mode, rank_id=rank_id, rank_db_map=rank_db_map
+            )
             if source_note:
                 source_notes.append(f"{rank_id}: {source_note}")
             if source_kind is None:
@@ -500,7 +536,20 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
         help="kernel event input: auto = profiler db when present and probe-clean, else kernel_details.csv",
     )
+    parser.add_argument(
+        "--rank-db-map",
+        help="JSON object mapping rank dir / rank_id / basename to an explicit profiler db path",
+    )
     return parser
+
+
+def load_rank_db_map(path: str | None) -> dict[str, str] | None:
+    if not path:
+        return None
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("--rank-db-map must be a JSON object")
+    return {str(key): str(value) for key, value in data.items() if value}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -511,6 +560,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         hash_sources=bool(args.hash_sources),
         write_jsonl=bool(args.write_jsonl),
         source=str(args.source),
+        rank_db_map=load_rank_db_map(args.rank_db_map),
     )
     print(
         {

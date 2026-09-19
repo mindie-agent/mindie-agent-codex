@@ -11,68 +11,82 @@ Execution target decoding is reused from serving; remote-dev owns SSH primitives
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import json
 import subprocess
 import sys
 
 from pathlib import Path
-for _p in Path(__file__).resolve().parents:
-    if (_p / "domain-lib").is_dir():
-        if str(_p / "domain-lib") not in sys.path:
-            sys.path.insert(0, str(_p / "domain-lib"))
-        break
-else:
+from types import SimpleNamespace
+from typing import Any
+
+def _ensure_plugin_domain_lib() -> None:
+    try:
+        import mindie_state  # noqa: F401
+        return
+    except ImportError:
+        pass
+    plugin_root = Path(__file__).resolve().parents[3]
+    domain = plugin_root / "domain-lib"
+    if domain.is_dir():
+        sys.path.insert(0, str(domain))
+        return
     raise RuntimeError("MindIE domain-lib not found; use the installed plugin")
+
+
+_ensure_plugin_domain_lib()
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
 from dataclasses import dataclass
-from typing import Any
 
 ROOT = Path.cwd()  # the user's business checkout
 SERVING_SCRIPTS = Path(__file__).resolve().parents[2] / "vllm-ascend-serving" / "scripts"
 
 from mindie_receipt import progress as envelope_progress  # noqa: E402
+from mindie_state import allocate_run_dir, safe_run_token, state_root  # noqa: E402
+from mindie_exec import open_local_forward, require_transport  # noqa: E402
+import mindie_exec as _mindie_exec  # noqa: E402
+from mindie_target import SshEndpoint, ascend_env_preamble, ssh_endpoint_from_mapping  # noqa: E402
+
 
 def _collection_state_dir():
     return state_root() / "ascend-profiling-collection" / "runs"
 
 
-# ---------------------------------------------------------------------------
-# Lazy import of serving _common (single source of truth for SSH + inventory)
-# ---------------------------------------------------------------------------
+def ssh_exec(endpoint, script: str, *, check: bool = True, timeout: float | None = 180):
+    """Short remote command; always expose .returncode/.stdout/.stderr."""
+    try:
+        raw = _mindie_exec.ssh_exec(endpoint, script, check=check, timeout=timeout)
+    except Exception as exc:
+        remote_error = getattr(_mindie_exec, "RemoteExecutionError", RuntimeError)
+        if check or not isinstance(exc, remote_error):
+            raise
+        return SimpleNamespace(returncode=1, stdout="", stderr=str(exc))
+    if hasattr(raw, "returncode") and hasattr(raw, "stdout"):
+        return raw
+    if isinstance(raw, (bytes, bytearray)):
+        return SimpleNamespace(returncode=0, stdout=raw.decode("utf-8", "replace"), stderr="")
+    return SimpleNamespace(returncode=0, stdout="" if raw is None else str(raw), stderr="")
 
 
-def _load_serving_common():
-    """Load the serving skill's _common.py without polluting sys.path.
-
-    We import it as ``mindie_profcoll_serving_common`` so it does not collide
-    with this skill's own ``_common`` module name.
-    """
-    module_name = "mindie_profcoll_serving_common"
-    if module_name in sys.modules:
-        return sys.modules[module_name]
-    src = SERVING_SCRIPTS / "_serving_common.py"
-    spec = importlib.util.spec_from_file_location(module_name, src)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"failed to load serving common helpers from {src}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
+def endpoint_from_reply(reply: dict[str, Any]) -> SshEndpoint:
+    target = reply.get("target") if isinstance(reply.get("target"), dict) else {}
+    endpoint = target.get("endpoint") if isinstance(target.get("endpoint"), dict) else reply.get("endpoint")
+    if not isinstance(endpoint, dict) or not endpoint.get("host"):
+        raise RuntimeError("coordinator reply has no ordinary endpoint")
+    return ssh_endpoint_from_mapping(endpoint)
 
 
-SERVING = _load_serving_common()
-# Loading serving common put LIB_DIR on sys.path.
-from mindie_state import allocate_run_dir, safe_run_token, state_root  # noqa: E402
-from mindie_exec import open_local_forward, require_transport  # noqa: E402
-from mindie_target import ascend_env_preamble  # noqa: E402
-
-SshEndpoint = SERVING.SshEndpoint
-ssh_exec = SERVING.ssh_exec
-endpoint_from_reply = SERVING.endpoint_from_reply
-service_port_of = SERVING.service_port_of
+def service_port_of(reply: dict[str, Any]) -> int | None:
+    port = reply.get("service_port")
+    if port in (None, ""):
+        target = reply.get("target") if isinstance(reply.get("target"), dict) else {}
+        port = target.get("service_port")
+        env = target.get("environment") if isinstance(target.get("environment"), dict) else {}
+        if port in (None, "") and env.get("MINDIE_SERVICE_PORT"):
+            port = env["MINDIE_SERVICE_PORT"]
+    if port in (None, ""):
+        return None
+    return int(port)
 
 
 @dataclass
@@ -157,7 +171,10 @@ def unique_collection_run_dir(
     """
     target_token = safe_run_token(session_id or machine or "target")
     tag_token = safe_run_token(tag)
-    return allocate_run_dir("ascend-profiling-collection", token=f"{tag_token}_{target_token}")
+    return allocate_run_dir(
+        _collection_state_dir(),
+        token=f"{tag_token}_{target_token}",
+    )
 
 
 # ---------------------------------------------------------------------------

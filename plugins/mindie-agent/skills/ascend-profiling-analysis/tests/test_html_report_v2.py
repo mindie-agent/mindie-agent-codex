@@ -3,8 +3,7 @@
 Covers: asset completeness/integrity (every manifest-referenced file exists,
 gunzips, parses, and matches its view schema), manifest ↔ shell consistency,
 single-file embedding + threshold refusal, file:// and DecompressionStream
-detection hints, analysis_summary.json consumption (with graceful fallback),
-KPI/view-count parity with the legacy renderer, and report.py renderer wiring.
+detection hints, current-evidence validation, explicit single-rank limits, and report.py renderer wiring.
 """
 from __future__ import annotations
 
@@ -380,7 +379,7 @@ def test_layer_validation_fallback_computed(built):
     assert lv["status"] == "ok"
 
 
-def test_analysis_summary_consumed_when_present(tmp_path):
+def test_stale_validation_is_recomputed_and_reference_notes_are_retained(tmp_path):
     root = make_root(tmp_path)
     report_dir = root / "report"
     report_dir.mkdir()
@@ -403,9 +402,10 @@ def test_analysis_summary_consumed_when_present(tmp_path):
     build_html_report_v2(root, out)
     html = out.read_text(encoding="utf-8")
     ov = _boot_var(html, "__OVERVIEW__")
-    assert ov["layer_validation"]["source"] == "analysis_summary"
-    assert ov["layer_validation"]["status"] == "degraded"
-    assert ov["layer_validation"]["expected_layers"] == 61
+    assert ov["layer_validation"]["source"] == "computed"
+    assert ov["layer_validation"]["status"] == "ok"
+    assert ov["layer_validation"]["expected_layers"] == 2
+    assert ov["layer_validation"]["per_rank_consistent"] is None
     # knowledge_refs surfaced in the static L1 section
     assert "相关参考" in html
     assert "bubble 排查观察" in html
@@ -448,39 +448,21 @@ def test_single_file_threshold_refusal(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# legacy parity + wiring
+# report evidence and wiring
 # ---------------------------------------------------------------------------
 
 
-def test_legacy_parity_and_unaffected(tmp_path):
+def test_report_assets_and_single_rank_limits(tmp_path):
     root = make_root(tmp_path)
-    v2_out = root / "report" / "report.html"
-    build_html_report_v2(root, v2_out)
-    legacy_out = root / "legacy.html"
-    html_report.build_html_report(root, legacy_out)
-    v2_html = v2_out.read_text(encoding="utf-8")
-    legacy_html = legacy_out.read_text(encoding="utf-8")
-
-    def kpi_value(html_text: str, label: str) -> str:
-        m = re.search(
-            re.escape(label) + r".*?<div class=\"value\"[^>]*>([^<]+)</div>",
-            html_text, flags=re.S)
-        return m.group(1).strip() if m else ""
-
-    # KPI numbers identical
-    assert kpi_value(v2_html, "参与 Rank") == kpi_value(legacy_html, "参与 Rank") == "1"
-    assert kpi_value(v2_html, "Findings") == kpi_value(legacy_html, "Findings") == "2"
-    # step wall average identical
-    assert kpi_value(v2_html, "参与 Rank") and "3.00" in v2_html and "3.00" in legacy_html
-    # L3 view count parity: legacy sections == v2 l3 assets
-    legacy_l3 = len(re.findall(r'class="view" id="view-l3-', legacy_html))
-    manifest = json.loads((v2_out.parent / "assets" / "manifest.json").read_text(encoding="utf-8"))
-    v2_l3 = len([k for k in manifest["assets"] if k.startswith("l3/")])
-    assert v2_l3 == legacy_l3 == 2  # one class, one rep step, two layers
-    # legacy renderer remains a working single-file SPA and writes no assets/
-    assert 'class="view active" id="view-l1"' in legacy_html
-    assert "view-l2-seg_c0" in legacy_html  # legacy covers unclassified steps too
-    assert not (root / "assets").exists()
+    out = root / "report" / "report.html"
+    build_html_report_v2(root, out)
+    rendered = out.read_text(encoding="utf-8")
+    manifest = json.loads((out.parent / "assets" / "manifest.json").read_text())
+    assert len([k for k in manifest["assets"] if k.startswith("l3/")]) == 2
+    assert "单 rank，无法比较" in rendered
+    assert "所有 rank 同步" not in rendered
+    assert "EP balanced" not in rendered
+    assert not hasattr(html_report, "build_html_report")
 
 
 def test_report_parser_renderer_flags():
@@ -488,34 +470,32 @@ def test_report_parser_renderer_flags():
     args = parser.parse_args(["--output", "x"])
     assert args.html_renderer == "v2"
     assert args.html_single_file is False
-    args = parser.parse_args(["--output", "x", "--html-renderer", "legacy", "--html-single-file"])
-    assert args.html_renderer == "legacy"
+    args = parser.parse_args(["--output", "x", "--html-renderer", "v2", "--html-single-file"])
+    assert args.html_renderer == "v2"
     assert args.html_single_file is True
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--output", "x", "--html-renderer", "legacy"])
     with pytest.raises(SystemExit):
         parser.parse_args(["--output", "x", "--html-renderer", "bogus"])
 
 
-def test_render_report_wires_v2_and_legacy(tmp_path):
+def test_render_report_wires_v2_and_skip(tmp_path):
     root = make_root(tmp_path / "v2run")
     manifest = report.render_report(root)
     report_dir = root / "report"
     assert manifest["html_status"] == "ok"
     assert manifest["html_renderer"] == "v2"
-    assert (report_dir / "report.html").is_file()
+    html = (report_dir / "report.html").read_text(encoding="utf-8")
+    assert 'data-html-status="ok"' in html
     assert (report_dir / "assets" / "manifest.json").is_file()
-
-    root2 = make_root(tmp_path / "legacyrun")
-    manifest2 = report.render_report(root2, html_renderer="legacy")
-    assert manifest2["html_status"] == "ok"
-    assert manifest2["html_renderer"] == "legacy"
-    assert manifest2["html_single_file"] is False
-    assert (root2 / "report" / "report.html").is_file()
-    assert not (root2 / "report" / "assets").exists()
 
     root3 = make_root(tmp_path / "skiprun")
     manifest3 = report.render_report(root3, skip_html=True)
     assert manifest3["html_status"] == "skipped"
-    assert manifest3["html_renderer"] == "v2"  # recorded even when skipped
+    assert manifest3["html_renderer"] == "v2"
+    skipped = (root3 / "report" / "report.html").read_text(encoding="utf-8")
+    assert "html_status=skipped" in skipped
+    assert "not a report" in skipped
 
 
 def test_render_report_v2_single_file_flag(tmp_path):

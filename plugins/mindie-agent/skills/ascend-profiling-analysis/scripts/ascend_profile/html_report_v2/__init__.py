@@ -19,14 +19,9 @@ Output layout (assets mode, the default)::
         l3/<step_class_id>/<layer_key>.json.gz   # representative steps only
         timeline/<rank_id>.json.gz
 
-The legacy single-file SPA remains available as ``--html-renderer legacy``
-(``html_report.build_html_report``), untouched.
-
-The report consumes ``report/analysis_summary.json`` when present (layer
-validation + findings knowledge_refs); the file is written *after* the HTML
-stage inside ``render_report``, so first-run renders fall back to computing
-layer validation from layer_segments / segment_manifest with the same
-inputs. Nothing here hard-depends on that file.
+Layer validation is recomputed from the current analysis evidence. Existing
+analysis_summary.json contributes advisory finding references only; it cannot
+override the current capture's layer counts or validation status.
 """
 from __future__ import annotations
 
@@ -34,15 +29,7 @@ import os
 import sys
 
 from pathlib import Path
-for _p in Path(__file__).resolve().parents:
-    if (_p / "domain-lib").is_dir():
-        if str(_p / "domain-lib") not in sys.path:
-            sys.path.insert(0, str(_p / "domain-lib"))
-        break
-else:
-    raise RuntimeError("MindIE domain-lib not found; use the installed plugin")
 from collections import defaultdict
-from pathlib import Path
 from typing import Any
 
 try:
@@ -108,7 +95,7 @@ def build_html_report_v2(
         # representative set or operator cards lose their raw rows.
         print("  WARN: L3 rep-step selection drifted from _raw_rows_needed loader", file=sys.stderr)
 
-    # per-rank step ordering (step_index within rank) — same as legacy L2
+    # Per-rank step ordering (step_index within rank).
     by_rank: dict[str, list] = defaultdict(list)
     for s in b.step_summary:
         by_rank[s["rank_id"]].append(s)
@@ -141,8 +128,7 @@ def build_html_report_v2(
              payloads.build_l2_class_payload(b, cls, plan,
                                              seg_idx_in_rank=seg_idx_in_rank, by_rank=by_rank))
 
-    # Steps without a step_class_id still need an L2 view (the legacy
-    # renderer emits one per step regardless of classification). They share
+    # Steps without a step_class_id still need an L2 view. They share
     # one synthetic bucket; their layer rows route to the top-1 class rep's
     # L3 via the same ``l3_target_for_step`` fallback.
     unclassified = [s for s in b.step_summary if not s.get("step_class_id")]
@@ -203,18 +189,21 @@ def build_html_report_v2(
     if single_file:
         draft = shell.render_shell(
             title=title, overview_html=overview_html, overview_data=overview_js,
-            manifest=manifest, field_docs=hr.FIELD_DOC, embedded_assets=None)
+            manifest=manifest, field_docs=hr.FIELD_DOC, embedded_assets=None,
+            html_status="ok")
         estimated = assets.estimate_single_file_bytes(len(draft.encode("utf-8")), serialized)
         if estimated > single_file_max_bytes:
             raise assets.SingleFileTooLargeError(estimated, single_file_max_bytes)
         html_out = shell.render_shell(
             title=title, overview_html=overview_html, overview_data=overview_js,
             manifest=manifest, field_docs=hr.FIELD_DOC,
-            embedded_assets=assets.embed_assets(serialized))
+            embedded_assets=assets.embed_assets(serialized),
+            html_status="ok")
     else:
         html_out = shell.render_shell(
             title=title, overview_html=overview_html, overview_data=overview_js,
-            manifest=manifest, field_docs=hr.FIELD_DOC, embedded_assets=None)
+            manifest=manifest, field_docs=hr.FIELD_DOC, embedded_assets=None,
+            html_status="ok")
 
     output.write_text(html_out, encoding="utf-8")
     return output.resolve()

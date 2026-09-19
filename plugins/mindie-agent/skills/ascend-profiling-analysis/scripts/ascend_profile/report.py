@@ -1343,72 +1343,68 @@ def render_report(
         sheets = sheet_rows(output_dir, bundle=bundle)
         write_xlsx(report_dir / "report.xlsx", sheets)
 
-    # HTML report (rich, zero-dependency). Three modes:
-    #   * summary  — skip entirely; stub file explains. Used for
-    #                first-stage pipeline debugging where md+xlsx is
-    #                enough and HTML render time would just slow the
-    #                feedback loop.
-    #   * full-raw — render the complete L1/L2/L3 report with raw kernel
-    #                rows attached to operator cards (default).
-    # ``skip_html=True`` forces summary regardless of mode.
-    # Renderer choice (orthogonal to mode):
-    #   * v2     — thin shell + gzipped assets/ + on-demand browser rendering
-    #              (default; scales to multi-million-event captures);
-    #   * legacy — the pre-v2 single-file SPA (kept as a fallback; produces
-    #              very large HTML on big captures).
-    # ``html_single_file`` asks v2 to embed all assets (base64+gzip) into one
-    # HTML file; v2 refuses with a clear error when the estimate exceeds the
-    # single-file threshold.
+    # HTML report (rich, zero-dependency). Two modes:
+    #   * summary  — skip entirely; stub file explains. html_status=skipped.
+    #   * full-raw — html_report_v2 thin shell + gzipped assets (or one file).
+    # ``skip_html=True`` forces summary. html_report.py remains as the shared
+    # metrics/helpers used by v2; it is not a selectable renderer.
     html_path = report_dir / "report.html"
     html_status = "ok"
     html_error: str | None = None
     effective_mode = "summary" if skip_html else report_mode
+    if html_renderer not in (None, "", "v2"):
+        html_status = "error"
+        html_error = f"unsupported html renderer {html_renderer!r}; only v2 is supported"
+        html_renderer = "v2"
 
     if effective_mode == "summary":
         html_status = "skipped"
         html_path.write_text(
             "<!doctype html><meta charset='utf-8'><title>HTML report skipped</title>"
             "<body style='font-family:sans-serif;padding:20px;background:#0d1117;color:#c9d1d9'>"
+            "<p data-html-status='skipped'><strong>html_status=skipped</strong></p>"
             "<h1>HTML report skipped</h1>"
             "<p>This run was invoked with <code>--skip-html</code> or "
-            "<code>--report-mode summary</code>. Use <code>report.md</code> / "
-            "<code>report.xlsx</code> in this directory.</p>",
+            "<code>--report-mode summary</code>. This stub is not a report. "
+            "Use <code>report.md</code> / <code>report.xlsx</code> in this directory.</p>",
             encoding="utf-8",
         )
-    else:
+    elif html_status != "error":
         try:
-            if html_renderer == "legacy":
-                try:
-                    from .html_report import build_html_report
-                except ImportError:  # pragma: no cover
-                    import sys as _sys
-                    _sys.path.insert(0, str(Path(__file__).resolve().parent))
-                    from html_report import build_html_report  # type: ignore[no-redef]
-                build_html_report(output_dir, html_path, events=events)
-            else:
-                try:
-                    from .html_report_v2 import build_html_report_v2
-                except ImportError:  # pragma: no cover
-                    import sys as _sys
-                    _sys.path.insert(0, str(Path(__file__).resolve().parent))
-                    from html_report_v2 import build_html_report_v2  # type: ignore[no-redef]
-                build_html_report_v2(
-                    output_dir,
-                    html_path,
-                    events=events,
-                    single_file=html_single_file,
-                )
+            try:
+                from .html_report_v2 import build_html_report_v2
+            except ImportError:  # pragma: no cover
+                import sys as _sys
+                _sys.path.insert(0, str(Path(__file__).resolve().parent))
+                from html_report_v2 import build_html_report_v2  # type: ignore[no-redef]
+            build_html_report_v2(
+                output_dir,
+                html_path,
+                events=events,
+                single_file=html_single_file,
+            )
         except Exception as exc:  # noqa: BLE001
             html_status = "error"
             html_error = f"{type(exc).__name__}: {exc}"
             html_path.write_text(
                 "<!doctype html><meta charset='utf-8'><title>HTML report failed</title>"
                 "<body style='font-family:sans-serif;padding:20px;background:#0d1117;color:#c9d1d9'>"
+                "<p data-html-status='error'><strong>html_status=error</strong></p>"
                 "<h1>HTML report could not be rendered</h1>"
                 f"<pre style='color:#f85149'>{html_error}</pre>"
-                "<p>Fall back to <code>report.md</code> / <code>report.xlsx</code> in this directory.</p>",
+                "<p>This stub is not a report. Fall back to <code>report.md</code> / "
+                "<code>report.xlsx</code> in this directory.</p>",
                 encoding="utf-8",
             )
+    elif html_error:
+        html_path.write_text(
+            "<!doctype html><meta charset='utf-8'><title>HTML report failed</title>"
+            "<body style='font-family:sans-serif;padding:20px;background:#0d1117;color:#c9d1d9'>"
+            "<p data-html-status='error'><strong>html_status=error</strong></p>"
+            f"<pre style='color:#f85149'>{html_error}</pre>"
+            "<p>This stub is not a report.</p>",
+            encoding="utf-8",
+        )
 
     # Agent-first compact summary (analysis_summary.json). Built after the
     # HTML block so ``html_status`` is final; numbers all come from the same
@@ -1487,14 +1483,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--html-renderer",
-        choices=("v2", "legacy"),
+        choices=("v2",),
         default="v2",
-        help=(
-            "v2 (default): thin-shell report.html + gzipped assets/ loaded "
-            "on demand — scales to multi-million-event captures. "
-            "legacy: the pre-v2 single-file SPA (fallback; very large HTML "
-            "on big captures)."
-        ),
+        help="html_report_v2 thin-shell + gzipped assets (the only renderer).",
     )
     parser.add_argument(
         "--html-single-file",

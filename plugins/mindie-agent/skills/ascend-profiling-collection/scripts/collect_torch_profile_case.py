@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect one torch-profiler case on a workspace-managed remote NPU container.
+"""Collect one torch-profiler case on an explicitly selected remote NPU execution.
 
 This is the single agent-facing entry point for the
 ``ascend-profiling-collection`` skill. It chains together what other skills
@@ -36,13 +36,6 @@ from __future__ import annotations
 import sys
 
 from pathlib import Path
-for _p in Path(__file__).resolve().parents:
-    if (_p / "domain-lib").is_dir():
-        if str(_p / "domain-lib") not in sys.path:
-            sys.path.insert(0, str(_p / "domain-lib"))
-        break
-else:
-    raise RuntimeError("MindIE domain-lib not found; use the installed plugin")
 ROOT = Path.cwd()  # the user's business checkout; no workspace root exists
 from pathlib import Path
 
@@ -84,9 +77,7 @@ DEFAULT_PROFILE_CONTROL_TIMEOUT = 600
 DEFAULT_REQUEST_TIMEOUT = 900
 POST_STOP_FLUSH_SECONDS = 5
 
-VL_DEFAULT_IMAGE = (
-    ROOT / "vllm-ascend" / "tests" / "e2e" / "310p" / "data" / "qwen.png"
-)
+
 
 
 def _failure_payload(message: str) -> dict[str, Any]:
@@ -611,8 +602,7 @@ def build_parser() -> argparse.ArgumentParser:
     # Optional: VL workload
     p.add_argument(
         "--image-path", default=None,
-        help="path to image used for --request-kind vl; defaults to the "
-             "qwen.png test image inside vllm-ascend submodule",
+        help="required local image path when --request-kind vl",
     )
     p.add_argument("--image-height", type=int, default=480,
                    help="resize the image to this pixel height before encoding")
@@ -665,7 +655,14 @@ def main(argv: list[str] | None = None) -> int:
     image_url: str | None = None
     image_meta: dict[str, Any] | None = None
     if args.request_kind == "vl":
-        image_path = Path(args.image_path) if args.image_path else VL_DEFAULT_IMAGE
+        if not args.image_path:
+            print_json({
+                "status": "failed",
+                "error": "--image-path is required for --request-kind vl",
+                "tag": args.tag,
+            })
+            return 2
+        image_path = Path(args.image_path)
         if not image_path.exists():
             print_json({
                 "status": "failed",
@@ -756,7 +753,9 @@ def main(argv: list[str] | None = None) -> int:
         port = int(service_result.get("port") or 0)
         if not port:
             raise RuntimeError("service has no port")
-        cwd = session_target.cwd or "/vllm-workspace"
+        cwd = session_target.cwd
+        if not cwd:
+            raise RuntimeError("selected execution has no working directory")
         profile_root = f"{cwd.rstrip('/')}/{args.torch_profiler_dir}"
         manifest["task_id"] = session_target.task_id
         manifest["session_id"] = session_target.task_id
