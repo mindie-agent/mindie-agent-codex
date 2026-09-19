@@ -75,6 +75,10 @@ class LocalUpdater(Updater):
         if not self.assert_runtime:
             raise RuntimeError("runtime missing")
 
+    def ensure_domain_runtime(self):
+        # Fixture venvs are stubs; the real repair path gets its own test below.
+        return None
+
 
 class AutoUpdateTests(unittest.TestCase):
     def setUp(self):
@@ -89,6 +93,7 @@ class AutoUpdateTests(unittest.TestCase):
         )
         shutil.copy(ROOT / "update-contract.json", self.remote)
         shutil.copy(ROOT / "runtime-requirements.txt", self.remote)
+        shutil.copy(ROOT / "domain-requirements.txt", self.remote)
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.name", "Fixture")
         self.git("config", "user.email", "fixture@example.invalid")
@@ -283,6 +288,28 @@ class AutoUpdateTests(unittest.TestCase):
             timeout=2,
         )
         self.assertEqual(result.returncode, 1)
+
+    def test_domain_runtime_repair_is_bounded_and_observable(self):
+        self.check()
+        revision = self.updater.state["current"]["revision"]
+        source = self.root / "generations" / revision / "source"
+        (source / "domain-requirements.txt").write_text(
+            "mindie-coordinator @ git+https://github.com/mindie-agent/coordinator@0191b81af67d922ede03d10fcc1b192f176a05c6\n"
+        )
+        # A real interpreter without the coordinator package keeps failing.
+        self.updater.state["current"]["python"] = sys.executable
+        atomic(self.updater.state_path, self.updater.state)
+        statuses = []
+        with patch.object(
+            LocalUpdater, "ensure_domain_runtime", Updater.ensure_domain_runtime
+        ):
+            for _ in range(4):
+                self.updater.state["next_check"] = 0
+                statuses.append(self.check()["status"])
+        self.assertEqual(statuses, ["domain_runtime_incomplete"] * 4)
+        self.assertEqual(
+            read(self.updater.state_path)["domain_repairs"][revision], 3
+        )
 
     def test_fetch_deadline_and_network_backoff_do_not_spawn_models(self):
         with patch.object(

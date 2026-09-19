@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Bounded, model-free MindIE updates. Main now; stable GitHub releases later."""
+"""Bounded, model-free MindIE updates. Main now; stable GitHub releases later.
+
+Scheduling has a platform boundary: macOS uses a user LaunchAgent, Windows a
+scheduled task (implemented, not yet verified on real hardware).
+"""
 
 import argparse
 from datetime import datetime, timezone
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -19,7 +22,7 @@ import urllib.request
 
 from bounded_process import run
 from session_gate import Sessions, config_path
-from update_lock import update_lock
+from update_lock import file_lock, update_lock
 
 REPOSITORY = "https://github.com/mindie-agent/mindie-agent-codex.git"
 CONTRACT = dict(
@@ -29,7 +32,25 @@ CONTRACT = dict(
     idle_update_lock=1,
     maintenance_budget=1,
 )
+DOMAIN_REQUIREMENTS = "domain-requirements.txt"
+DOMAIN_SKILLS = (
+    "vllm-ascend-serving",
+    "vllm-ascend-pd-serving",
+    "vllm-ascend-benchmark",
+    "vllm-ascend-performance-regression",
+    "vllm-ascend-correctness-validation",
+    "vllm-ascend-change-validation",
+    "vllm-ascend-distributed-debug",
+    "vllm-ascend-graph-debug",
+    "ascend-operator-debug",
+    "ascend-tensor-dump",
+    "ascend-memory-profiling",
+    "ascend-profiling-collection",
+    "ascend-profiling-analysis",
+    "modelscope",
+)
 LABEL = "org.mindie-agent.plugin-updater"
+WIN_TASK = "MindIE Agent Plugin Updater"
 INTERVAL = 300
 TOTAL_TIMEOUT = 240
 ATTEMPTS = 3
@@ -168,6 +189,9 @@ class Updater:
         ):
             if not (plugin / "scripts" / name).is_file():
                 raise Incompatible("missing bounded runtime entry: " + name)
+        for skill in DOMAIN_SKILLS:
+            if not (plugin / "skills" / skill / "SKILL.md").is_file():
+                raise Incompatible("missing domain skill: " + skill)
         requirements = (source / "runtime-requirements.txt").read_text().splitlines()
         pattern = r"([a-z-]+) @ git\+https://github.com/mindie-agent/(knowledge|remote-dev)@([0-9a-f]{40})(#subdirectory=tools/knowledge-intake)?"
         packages = {}
@@ -189,6 +213,18 @@ class Updater:
             or packages["remote-dev"][0] != "remote-dev"
         ):
             raise Incompatible("invalid runtime package combination")
+        # Domain execution pins live in a separate file so the previous
+        # controller generation (which validates exactly the set above) can
+        # still upgrade to this source. This controller requires it.
+        domain_lines = (source / DOMAIN_REQUIREMENTS).read_text().splitlines()
+        domain_pattern = r"mindie-coordinator @ git\+https://github.com/mindie-agent/coordinator@([0-9a-f]{40})"
+        pins = [
+            re.fullmatch(domain_pattern, line)
+            for line in domain_lines
+            if line.strip() and not line.startswith("#")
+        ]
+        if len(pins) != 1 or not pins[0]:
+            raise Incompatible("domain dependencies require an exact coordinator pin")
 
     def probe_runtime(self, python):
         self.command(
@@ -201,11 +237,14 @@ class Updater:
                         "from mindie_knowledge.loop.activation import SessionAdmission",
                         "from mindie_knowledge.loop.budget import MaintenanceBudget as B",
                         "from mindie_knowledge.loop.transport import Service",
-                        "from mindie_knowledge.loop.cli import STARTUP_TIMEOUT, MAX_STARTUP_PROBES",
+                        "from mindie_knowledge.loop.cli import STARTUP_TIMEOUT, MAX_STARTUP_PROBES, TOOLS",
                         "from remote_dev.mcp.tools import call_tool",
+                        "from mindie_coordinator.task_client import TaskClient",
+                        "from mindie_coordinator.run_manifest import new_manifest",
                         "assert 'session_activation' in inspect.signature(Service).parameters",
                         "assert 0 < B.SESSION_LIMIT <= 6 and 0 < B.HOURLY_LIMIT <= 20 and B.FAILURE_LIMIT <= 3",
                         "assert STARTUP_TIMEOUT <= 5 and MAX_STARTUP_PROBES <= 3",
+                        "assert any(t['name'] == 'knowledge_attach' for t in TOOLS)",
                     ]
                 ),
             ],
@@ -253,6 +292,8 @@ class Updater:
                 python,
                 "-r",
                 source / "runtime-requirements.txt",
+                "-r",
+                source / DOMAIN_REQUIREMENTS,
             ],
             timeout=120,
         )
@@ -543,12 +584,65 @@ class Updater:
 
     def check(self):
         self.root.mkdir(parents=True, exist_ok=True)
-        with (self.root / "checker.lock").open("a") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                return dict(status="already_running")
-            self.state = read(self.state_path, {})
+        try:
+            with file_lock(self.root / "checker.lock", exclusive=True):
+                self.state = read(self.state_path, {})
+                return self._check_locked()
+        except BlockingIOError:
+            return dict(status="already_running")
+
+    def ensure_domain_runtime(self):
+        """Repair a current generation whose venv predates domain-requirements.
+
+        A previous controller generation installs only runtime-requirements.txt;
+        the first check run by this controller tops the same pinned venv up with
+        the domain dependency. Bounded: at most ATTEMPTS repairs per revision.
+        """
+        current = self.state.get("current") or {}
+        python, revision = current.get("python"), current.get("revision")
+        if not python or not revision:
+            return
+        domain = self.root / "generations" / revision / "source" / DOMAIN_REQUIREMENTS
+        if not domain.exists():
+            return
+        try:
+            self.command(
+                [python, "-c", "import mindie_coordinator.task_client"], timeout=15
+            )
+            return
+        except Exception:
+            pass
+        repairs = self.state.setdefault("domain_repairs", {})
+        if repairs.get(revision, 0) >= ATTEMPTS:
+            return self.save(
+                "domain_runtime_incomplete",
+                error="coordinator package missing from the current runtime; repair attempts exhausted",
+            )
+        repairs[revision] = repairs.get(revision, 0) + 1
+        self.save("repairing_domain_runtime", candidate=revision)
+        try:
+            self.command(
+                [
+                    self.settings["uv"],
+                    "pip",
+                    "install",
+                    "--python",
+                    python,
+                    "-r",
+                    domain,
+                ],
+                timeout=120,
+            )
+            self.command(
+                [python, "-c", "import mindie_coordinator.task_client"], timeout=15
+            )
+        except Exception as exc:
+            return self.save(
+                "domain_runtime_incomplete",
+                error=f"domain runtime repair failed: {type(exc).__name__}: {str(exc)[:160]}",
+            )
+
+    def _check_locked(self):
             if self.state.get("next_check", 0) > time.time():
                 return self.state
             try:
@@ -569,6 +663,9 @@ class Updater:
                 check_failures=0, next_check=time.time() + INTERVAL, error=None
             )
             if self.state.get("current", {}).get("revision") == sha:
+                repair = self.ensure_domain_runtime()
+                if repair is not None:
+                    return repair
                 return self.save("up_to_date")
             attempts = self.state.setdefault("attempts", {})
             record = attempts.setdefault(sha, dict(count=0))
@@ -612,9 +709,79 @@ class Updater:
                 )
 
 
+def schedule_enable(updater, launcher, settings_path):
+    """Register the periodic check with the platform scheduler."""
+    if sys.platform == "darwin":
+        plist = Path.home() / "Library/LaunchAgents" / (LABEL + ".plist")
+        plist.parent.mkdir(parents=True, exist_ok=True)
+        content = dict(
+            Label=LABEL,
+            ProgramArguments=[
+                sys.executable,
+                str(launcher),
+                str(settings_path),
+            ],
+            RunAtLoad=True,
+            StartInterval=INTERVAL,
+            ProcessType="Background",
+            ExitTimeOut=5,
+            EnvironmentVariables={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        )
+        with plist.open("wb") as stream:
+            plistlib.dump(content, stream)
+        try:
+            updater.command(
+                ["launchctl", "print", f"gui/{os.getuid()}/{LABEL}"], timeout=5
+            )
+        except RuntimeError:
+            pass
+        else:
+            updater.command(
+                ["launchctl", "bootout", f"gui/{os.getuid()}/{LABEL}"], timeout=10
+            )
+        updater.command(
+            ["launchctl", "bootstrap", f"gui/{os.getuid()}", plist], timeout=10
+        )
+        return str(plist)
+    if os.name == "nt":
+        # Windows (unverified on real hardware): a per-user scheduled task.
+        updater.command(
+            [
+                "schtasks",
+                "/Create",
+                "/TN",
+                WIN_TASK,
+                "/SC",
+                "MINUTE",
+                "/MO",
+                str(INTERVAL // 60),
+                "/TR",
+                f'"{sys.executable}" "{launcher}" "{settings_path}"',
+                "/F",
+            ],
+            timeout=15,
+        )
+        return WIN_TASK
+    raise ValueError("automatic scheduling requires macOS launchd or Windows schtasks")
+
+
+def schedule_disable(updater):
+    """Remove the platform schedule; installed plugin and state stay in place."""
+    if sys.platform == "darwin":
+        updater.command(
+            ["launchctl", "bootout", f"gui/{os.getuid()}/{LABEL}"], timeout=10
+        )
+        (Path.home() / "Library/LaunchAgents" / (LABEL + ".plist")).unlink(
+            missing_ok=True
+        )
+    elif os.name == "nt":
+        # Windows (unverified on real hardware).
+        updater.command(["schtasks", "/Delete", "/TN", WIN_TASK, "/F"], timeout=15)
+    else:
+        raise ValueError("automatic scheduling requires macOS launchd or Windows schtasks")
+
+
 def enable(args):
-    if sys.platform != "darwin":
-        raise ValueError("automatic scheduling currently requires macOS launchd")
     source = args.source_root.expanduser().absolute()
     root = args.root.expanduser().absolute()
     settings_path = args.settings.expanduser().absolute()
@@ -668,38 +835,114 @@ def enable(args):
     temporary_launcher = root / "launcher.next"
     shutil.copy2(Path(__file__).with_name("update_launcher.py"), temporary_launcher)
     os.replace(temporary_launcher, launcher)
-    plist = Path.home() / "Library/LaunchAgents" / (LABEL + ".plist")
-    plist.parent.mkdir(parents=True, exist_ok=True)
-    content = dict(
-        Label=LABEL,
-        ProgramArguments=[
-            sys.executable,
-            str(launcher),
-            str(settings_path),
-        ],
-        RunAtLoad=True,
-        StartInterval=INTERVAL,
-        ProcessType="Background",
-        ExitTimeOut=5,
-        EnvironmentVariables={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
-    )
-    with plist.open("wb") as stream:
-        plistlib.dump(content, stream)
-    try:
-        updater.command(["launchctl", "print", f"gui/{os.getuid()}/{LABEL}"], timeout=5)
-    except RuntimeError:
-        pass
-    else:
-        updater.command(
-            ["launchctl", "bootout", f"gui/{os.getuid()}/{LABEL}"], timeout=10
-        )
-    updater.command(["launchctl", "bootstrap", f"gui/{os.getuid()}", plist], timeout=10)
+    registration = schedule_enable(updater, launcher, settings_path)
     return dict(
         status="enabled",
         channel=args.channel,
         settings=str(settings_path),
-        launch_agent=str(plist),
+        schedule=registration,
     )
+
+
+def uninstall(args):
+    """Remove updater scheduling and updater-owned state, never the live plugin.
+
+    Order: preflight every active reference first (leases, live generation,
+    interrupted transaction); a refusal deletes nothing. Scheduling removal is
+    reported separately from state removal. Retained native caches are never
+    deleted here: loaded tasks may still execute those trusted entrypoints.
+    Rollback/recovery metadata (state.json, transaction.json) is preserved
+    unless --purge runs with no live references.
+    """
+    updater = Updater(args.settings)
+    root = updater.root
+    with file_lock(root / "checker.lock", exclusive=True):
+        # Preflight: refuse while any valid manual lease exists.
+        sessions = Sessions(updater.config)
+        active = 0
+        if sessions.path.exists():
+            db = sqlite3.connect(
+                sessions.path.as_uri() + "?mode=ro", uri=True, timeout=0.1
+            )
+            try:
+                active = db.execute(
+                    "SELECT count(*) FROM leases WHERE enabled=1 AND expires>?",
+                    (time.time(),),
+                ).fetchone()[0]
+            finally:
+                db.close()
+        if active:
+            return dict(
+                status="refused",
+                reason=f"{active} active MindIE session lease(s); deactivate them first",
+                removed=[],
+            )
+        current = updater.state.get("current", {})
+        live = (
+            Path(current["plugin"]).resolve() if current.get("plugin") else None
+        )
+        interrupted = (root / "transaction.json").exists()
+
+        errors = []
+        try:
+            schedule_disable(updater)
+            schedule_note = "schedule removed"
+        except Exception as exc:
+            schedule_note = f"schedule removal failed: {type(exc).__name__}: {exc}"
+            errors.append(schedule_note)
+
+        removed, kept = [], []
+        generations = root / "generations"
+        if generations.exists():
+            for path in sorted(generations.glob("*")):
+                target = (path / "plugin").resolve()
+                if live is not None and target == live:
+                    kept.append(str(path))
+                    continue
+                try:
+                    shutil.rmtree(path)
+                    removed.append(str(path))
+                except OSError as exc:
+                    errors.append(f"cannot remove {path}: {exc}")
+                    kept.append(str(path))
+        for extra in ("controller",):
+            try:
+                shutil.rmtree(root / extra)
+            except OSError as exc:
+                if (root / extra).exists():
+                    errors.append(f"cannot remove {extra}: {exc}")
+        for extra in ("launcher.py", "checker.lock"):
+            (root / extra).unlink(missing_ok=True)
+        purged = False
+        if args.purge:
+            if live is not None:
+                errors.append(
+                    "refusing --purge: the installed plugin still points at "
+                    + str(live)
+                    + "; uninstall the Codex plugin first"
+                )
+            elif interrupted:
+                errors.append(
+                    "refusing --purge: transaction.json holds recovery metadata "
+                    "for an interrupted install; run a check to recover first"
+                )
+            else:
+                shutil.rmtree(root)
+                purged = True
+                args.settings.unlink(missing_ok=True)
+        status = "uninstalled" if not errors else "partial"
+        result = dict(
+            status=status,
+            schedule=schedule_note,
+            removed_generations=removed,
+            kept_generations=kept,
+            retained_caches="preserved (native tasks may still execute them)",
+            recovery_metadata="purged" if purged else "preserved",
+            errors=errors,
+        )
+        if not purged:
+            atomic(updater.state_path, dict(updater.state, status=status, errors=errors or None))
+        return result
 
 
 def main():
@@ -719,6 +962,8 @@ def main():
     sub.add_parser("check")
     sub.add_parser("status")
     sub.add_parser("disable")
+    remove = sub.add_parser("uninstall")
+    remove.add_argument("--purge", action="store_true")
     args = parser.parse_args()
     if args.operation == "enable":
         result = enable(args)
@@ -728,14 +973,10 @@ def main():
             settings=settings, state=read(Path(settings["root"]) / "state.json", {})
         )
     elif args.operation == "disable":
-        updater = Updater(args.settings)
-        updater.command(
-            ["launchctl", "bootout", f"gui/{os.getuid()}/{LABEL}"], timeout=10
-        )
-        (Path.home() / "Library/LaunchAgents" / (LABEL + ".plist")).unlink(
-            missing_ok=True
-        )
+        schedule_disable(Updater(args.settings))
         result = dict(status="disabled")
+    elif args.operation == "uninstall":
+        result = uninstall(args)
     else:
         result = Updater(args.settings).check()
     print(json.dumps(result, indent=2))

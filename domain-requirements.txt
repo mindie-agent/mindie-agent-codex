@@ -1,0 +1,4 @@
+# Domain execution dependency for the migrated vLLM-Ascend skill tools.
+# Installed by the current updater alongside runtime-requirements.txt and by
+# development setup; the previous updater generation does not read this file.
+mindie-coordinator @ git+https://github.com/mindie-agent/coordinator@0191b81af67d922ede03d10fcc1b192f176a05c6
