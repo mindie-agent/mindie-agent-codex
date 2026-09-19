@@ -36,7 +36,7 @@ The output contains:
 
 ```text
 output-dir/
-├── configs/models/vaws_correctness.py
+├── configs/models/mindie_correctness.py
 ├── aisbench-cases.json
 ├── command.json
 └── run.sh

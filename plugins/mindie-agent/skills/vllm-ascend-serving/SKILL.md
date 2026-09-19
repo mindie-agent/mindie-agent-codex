@@ -1,6 +1,6 @@
 ---
 name: vllm-ascend-serving
-description: Start, check, or stop a single-node vLLM Ascend service through coordinator TaskClient. Use for 拉服务 / 看服务状态 / 停掉服务. Do not use for machine bootstrap or generic remote I/O.
+description: "Start, inspect or stop one managed single-node vLLM Ascend service. Prefill/decode disaggregation uses pd-serving."
 ---
 
 # vllm-ascend-serving
@@ -10,6 +10,8 @@ Start, inspect or stop one managed single-node vLLM Ascend service.
 Reuse the native task context and actual business source bindings. Choose model, parallelism and serving options from the request. Resource state and HTTP/models/first-token readiness are separate observations.
 
 ## Agent entry
+
+For managed execution, use the [MindIE entry](../mindie-agent/SKILL.md) to activate this task once and pass its credentials to the CLI. An existing active lease is reused; an expired or paused lease needs another explicit invocation. Local evidence-only reports do not start the service.
 
 Run this Skill's script with the Python interpreter configured for the MindIE plugin (the `python` value in the `MINDIE_AGENT_CONFIG` JSON). Resolve the script by its absolute path under the installed Skill directory; the business checkout stays the working directory. No old checkout adapter, project environment or bootstrap is loaded.
 
@@ -21,10 +23,9 @@ Use serving.py status or serving.py stop with --execution-id or --service. A ser
 
 Start follows preparation and HTTP/models/first-token readiness within
 --health-timeout. Use --no-wait when an immediate execution receipt is wanted.
-After a bounded wait, continue with the same reference. When the MindIE adapter
-is configured, the CLI checks the `MINDIE_SESSION_ID` and `MINDIE_ACTIVATION`
+After a bounded wait, continue with the same reference. The CLI checks the `MINDIE_SESSION_ID` and `MINDIE_ACTIVATION`
 exported by the activation step against the local session gate before any
-remote call; without a configured adapter it runs as a plain development CLI.
+remote call. Missing configuration or activation fails closed.
 
 Stdout is a compact receipt with business facts under `result` and a local
 `record_ref` for the full envelope. `MINDIE_FULL_RECEIPT=1` requests the full

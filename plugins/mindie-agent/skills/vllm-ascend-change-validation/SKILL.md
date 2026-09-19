@@ -1,6 +1,6 @@
 ---
 name: vllm-ascend-change-validation
-description: Produce a vLLM or vllm-ascend validation report from an accessible diff and existing experiment evidence when asked to consolidate results or document their coverage. Ordinary code review, test selection and experimental validation do not require this report.
+description: "Consolidate an accessible vLLM diff and existing experiment evidence into a coverage report when requested. Ordinary reviews, edits and test execution do not need this report."
 ---
 
 # Change validation evidence report

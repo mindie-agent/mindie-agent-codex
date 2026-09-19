@@ -1,6 +1,6 @@
 ---
 name: ascend-memory-profiling
-description: Attribute vLLM serving HBM usage on Ascend to weights, KV cache, HCCL, activations and runtime using measured evidence. Use for 显存归因, 显存 profiling, or 内存各部分拆分. A quick current memory-usage or idle-card lookup uses the fleet monitor; kernel latency analysis uses profiling-analysis.
+description: "Attribute Ascend serving HBM to weights, KV cache, HCCL, activations and runtime from captured evidence. Use for component memory attribution; quick usage checks use the fleet monitor."
 ---
 
 # ascend-memory-profiling
@@ -10,6 +10,8 @@ Attribute serving HBM to fixed overhead, weights, KV cache, HCCL, activations an
 Prefer measured msprof and npu-smi evidence, then startup logs and tensor headers. Header byte sizes are exact; per-device sharding and component labels may be inferred. Model-config estimates are a fallback. Keep residual memory visible instead of forcing categories to balance.
 
 ## Agent entry
+
+For managed execution, use the [MindIE entry](../mindie-agent/SKILL.md) to activate this task once and pass its credentials to the CLI. An existing active lease is reused; an expired or paused lease needs another explicit invocation. Local evidence-only reports do not start the service.
 
 Run this Skill's script with the Python interpreter configured for the MindIE plugin (the `python` value in the `MINDIE_AGENT_CONFIG` JSON). Resolve the script by its absolute path under the installed Skill directory; the business checkout stays the working directory. No old checkout adapter, project environment or bootstrap is loaded.
 

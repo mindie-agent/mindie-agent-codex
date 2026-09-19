@@ -1,6 +1,6 @@
 ---
 name: ascend-tensor-dump
-description: Capture and compare bounded intermediate tensor dumps on Ascend NPU to find the first stage where numbers diverge. Use when output is wrong, non-finite, or differs between two configurations and the divergence must be localized to a stage, layer, rank, or single operator, in eager or graph mode. Do not use for performance profiling, HBM attribution, debug case bookkeeping.
+description: "Capture and compare bounded intermediate tensors to locate the first numerical divergence by stage, layer or rank, including eager and graph executions."
 ---
 
 # Ascend tensor dump

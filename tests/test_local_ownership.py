@@ -140,6 +140,7 @@ class LocalOwnershipTests(unittest.TestCase):
                     os.kill(child, 9)
                 except OSError:
                     pass
+                proc.wait(timeout=3)
                 self.assertTrue(_wait_dead(parent))
                 self.assertTrue(_wait_dead(child))
 

@@ -1,11 +1,11 @@
 ---
 name: modelscope
-description: Download, resume, status-check, and SHA256-verify ModelScope model weights. Use for $modelscope download/status/verify/check, Chinese requests to 下载/续传/补全/查看进度/校验 ModelScope 权重, and tasks that need durable background ModelScope downloads under explicit local directories.
+description: "Download, resume, inspect or SHA256-verify ModelScope weights in an explicit directory. Status requests inspect existing work; download and repair requests may start background workers."
 ---
 
 # ModelScope
 
-Use the bundled manager with `uv run --no-project python` on each platform.
+Use the Python interpreter configured for MindIE to run the bundled manager by its installed absolute path.
 Invoke the scripts by their absolute path under the installed Skill directory
 (`/absolute/plugin/skills/modelscope` below); the business checkout stays the
 working directory. It starts downloads and verification in a background worker
@@ -33,7 +33,7 @@ Represent every model as `MODEL_ID=LOCAL_DIR`.
 For `$modelscope download`, resume, repair-after-approval, or “check and continue if incomplete”, run:
 
 ```bash
-uv run --no-project python "/absolute/plugin/skills/modelscope/scripts/modelscope_auto.py" ensure \
+python "/absolute/plugin/skills/modelscope/scripts/modelscope_auto.py" ensure \
   --model "$MODEL_ID=$LOCAL_DIR" \
   --revision "$REVISION"
 ```
@@ -70,7 +70,7 @@ downloads and verification start only from an explicit user request that
 authorizes that work. For explicit status only:
 
 ```bash
-uv run --no-project python "/absolute/plugin/skills/modelscope/scripts/modelscope_auto.py" status \
+python "/absolute/plugin/skills/modelscope/scripts/modelscope_auto.py" status \
   --model "$MODEL_ID=$LOCAL_DIR" \
   --revision "$REVISION"
 ```
@@ -94,7 +94,7 @@ an inactive worker: a later status call can recover after identity access return
 For explicit verification:
 
 ```bash
-uv run --no-project python "/absolute/plugin/skills/modelscope/scripts/modelscope_auto.py" verify \
+python "/absolute/plugin/skills/modelscope/scripts/modelscope_auto.py" verify \
   --model "$MODEL_ID=$LOCAL_DIR" \
   --revision "$REVISION"
 ```

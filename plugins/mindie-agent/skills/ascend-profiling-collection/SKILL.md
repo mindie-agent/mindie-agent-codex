@@ -1,6 +1,6 @@
 ---
 name: ascend-profiling-collection
-description: Collect one Ascend torch-profiler case end-to-end on a explicitly selected remote NPU container. Starts a profiled vLLM service, brackets a workload with /start_profile and /stop_profile, runs analyse() (db export by default), verifies the per-rank ascend_pytorch_profiler_*.db landed, and writes a manifest the analysis skill can consume. Use for requests like "采集 profiling", "torch profiler 跑一个 case", "采一份 profile 出来", "采 profiling 给我分析". Do not use for pure performance benchmarking, HBM/memory profiling, or for analysing already-collected profiling data (that is the analysis skill's job).
+description: "Collect one torch-profiler workload on a selected Ascend container and return verified per-rank artifacts. Use to capture new profiling data; existing data uses profiling-analysis."
 ---
 
 # ascend-profiling-collection
@@ -14,6 +14,8 @@ not query knowledge before startup or on failure. If related experience would
 help, the Agent can use the knowledge MCP tools independently; this is optional.
 
 ## Agent entry
+
+For managed execution, use the [MindIE entry](../mindie-agent/SKILL.md) to activate this task once and pass its credentials to the CLI. An existing active lease is reused; an expired or paused lease needs another explicit invocation. Local evidence-only reports do not start the service.
 
 Run this Skill's script with the Python interpreter configured for the MindIE plugin. Resolve the script from the installed Skill directory; the business checkout is only the working directory. No old project environment or bootstrap is loaded.
 

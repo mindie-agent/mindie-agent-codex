@@ -1,6 +1,6 @@
 ---
 name: vllm-ascend-correctness-validation
-description: Run and compare vLLM Ascend inference outputs or accuracy metrics across code states, eager/graph modes, or serving configurations. Use for token comparison, numerical regression checks, and AISBench accuracy evaluation. An already reproduced graph, operator or distributed failure uses its debug workflow; ordinary unit tests and code review use native tools.
+description: "Compare vLLM Ascend inference outputs or AISBench accuracy across code states, execution modes or serving configurations. Use for numerical and token regression checks."
 ---
 
 # vllm-ascend-correctness-validation
@@ -10,6 +10,8 @@ Compare inference outputs across code or execution configurations with explicit 
 Select deterministic prompts or token IDs, sampling, model and topology that exercise the change. Token equality and dataset task metrics answer different questions. Declare only the intended varying dimensions with --allowed-difference.
 
 ## Agent entry
+
+For managed execution, use the [MindIE entry](../mindie-agent/SKILL.md) to activate this task once and pass its credentials to the CLI. An existing active lease is reused; an expired or paused lease needs another explicit invocation. Local evidence-only reports do not start the service.
 
 Run this Skill's script with the Python interpreter configured for the MindIE plugin (the `python` value in the `MINDIE_AGENT_CONFIG` JSON). Resolve the script by its absolute path under the installed Skill directory; the business checkout stays the working directory. No old checkout adapter, project environment or bootstrap is loaded.
 

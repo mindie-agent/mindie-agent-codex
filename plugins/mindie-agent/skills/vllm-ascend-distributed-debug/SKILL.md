@@ -1,6 +1,6 @@
 ---
 name: vllm-ascend-distributed-debug
-description: Diagnose vLLM Ascend multi-rank and multi-node startup, rank mapping, process-group, collective, HCCL, Ray, scheduler, connector, and distributed hang failures from structured topology and per-rank evidence. Use when a failure depends on rank count, parallel topology, nodes, collectives, or distributed endpoints. Do not use for graph-only divergence, isolated operator failures, performance benchmarking, or profiler analysis.
+description: "Diagnose vLLM Ascend failures that depend on rank count, nodes, process groups, collectives or distributed endpoints using topology and per-rank evidence."
 ---
 
 # vllm-ascend-distributed-debug
@@ -22,6 +22,5 @@ The config supplies expected_world_size, ranks and optional groups/endpoints. Ev
 Use graph-debug when eager passes and graph fails independent of topology. Performance imbalance with a successful run belongs to profiling-analysis.
 
 Read the relevant detail only when needed:
-
 
 - [Business input example](references/inputs.md)

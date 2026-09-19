@@ -1,6 +1,6 @@
 ---
 name: ascend-operator-debug
-description: Reduce an Ascend failure to one operator and run an explicit candidate callable against a reference over real input cases. Use for operator crashes, unsupported dtype or layout errors, shape-dependent numerical mismatches, or workspace API faults. Do not use for whole-model graph localization, multi-rank failures, performance benchmarking, or profiler analysis.
+description: "Reproduce one Ascend operator failure and compare a candidate callable with a reference. Use for reduced operator crashes, dtype/layout errors or numerical mismatches."
 ---
 
 # ascend-operator-debug
@@ -10,6 +10,8 @@ Reduce a reproduced failure to one operator and compare its actual outputs again
 Keep dtype, shape, physical layout, strides and eager/compile/graph mode explicit in the business cases. Prefer the smallest input that still reproduces the failure. A passing isolated call supports that call only; a model-level fix needs a model rerun.
 
 ## Agent entry
+
+For managed execution, use the [MindIE entry](../mindie-agent/SKILL.md) to activate this task once and pass its credentials to the CLI. An existing active lease is reused; an expired or paused lease needs another explicit invocation. Local evidence-only reports do not start the service.
 
 Run this Skill's script with the Python interpreter configured for the MindIE plugin (the `python` value in the `MINDIE_AGENT_CONFIG` JSON). Resolve the script by its absolute path under the installed Skill directory; the business checkout stays the working directory. No old checkout adapter, project environment or bootstrap is loaded.
 
@@ -31,7 +33,6 @@ report over supplied observations; it does not launch or certify a candidate.
 Use ascend-tensor-dump while the first divergent stage is unknown. Use the Triton skills for a Triton candidate.
 
 Read the relevant detail only when needed:
-
 
 - [Existing-evidence report command](references/command-recipes.md)
 - [Existing-evidence report input example](references/inputs.md)

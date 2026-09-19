@@ -1,6 +1,6 @@
 ---
 name: vllm-ascend-graph-debug
-description: Diagnose vLLM Ascend cudagraph and ACL Graph compile, capture, replay, hang, and graph-versus-eager correctness problems. Use when eager passes but graph mode fails, hangs, or diverges, or when graph/eager intermediate tensors must be aligned. Do not use to plan a correctness matrix, after the failure is reduced to one operator, when eager itself fails, or for performance profiling or HBM attribution.
+description: "Diagnose Ascend graph compile, capture or replay failures and eager-versus-graph divergence. Reduced operator faults use operator-debug."
 ---
 
 # vllm-ascend-graph-debug
@@ -20,5 +20,3 @@ python /absolute/plugin/skills/vllm-ascend-graph-debug/scripts/graph_debug_case.
 Snapshot identity is read from sidecars, or --eager-identity and --graph-identity. The report compares observed identities and samples with finite tolerances, emits the first divergence and a comparability certificate, and retains missing identity as inconclusive. Its conclusion applies to the supplied snapshots.
 
 Use correctness-validation to establish the reproduction, tensor-dump to capture intermediate stages, and operator-debug after reducing to one call.
-
-Read the relevant detail only when needed:
