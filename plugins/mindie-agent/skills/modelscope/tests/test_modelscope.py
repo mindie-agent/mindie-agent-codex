@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 from pathlib import Path
 for _p in Path(__file__).resolve().parents:
@@ -198,21 +199,35 @@ class WorkerIdentityTests(unittest.TestCase):
                     self.assertEqual(pidfile.read_bytes() if pidfile.exists() else None, previous)
 
     def test_failed_posix_launch_cleans_its_owned_process_group(self) -> None:
-        proc = mock.Mock(pid=4242, returncode=None)
-        os_api = mock.Mock(wraps=os)
-        os_api.name = "posix"
-        os_api.killpg = mock.Mock()
-        with (
-            mock.patch.object(auto, "os", os_api),
-            mock.patch.object(auto.signal, "SIGKILL", 9, create=True),
-            mock.patch.object(auto.subprocess, "Popen", return_value=proc) as launch,
-        ):
+        with tempfile.TemporaryDirectory() as tmp:
+            pids = Path(tmp) / "pids"
+            cmd = [
+                sys.executable,
+                "-c",
+                (
+                    "import os, subprocess, sys, time\n"
+                    f"root = {tmp!r}\n"
+                    "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+                    "open(root + '/pids', 'w', encoding='utf-8').write(f'{os.getpid()} {child.pid}')\n"
+                    "time.sleep(30)\n"
+                ),
+            ]
             with self.assertRaisesRegex(RuntimeError, "record failed"):
-                with auto._worker_process(["python", "worker"], env={}, launch_log=None):
+                with auto._worker_process(cmd, env=os.environ.copy(), launch_log=subprocess.DEVNULL) as proc:
+                    deadline = time.monotonic() + 5
+                    while not pids.is_file() and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    self.assertTrue(pids.is_file(), "owned worker did not start")
+                    parent, child = (int(part) for part in pids.read_text(encoding="utf-8").split())
+                    self.assertEqual(proc.pid, parent)
                     raise RuntimeError("record failed")
-        self.assertTrue(launch.call_args.kwargs["start_new_session"])
-        os_api.killpg.assert_called_once_with(proc.pid, 9)
-        proc.wait.assert_called_once_with(timeout=5)
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                if not auto.pid_is_active(parent) and not auto.pid_is_active(child):
+                    break
+                time.sleep(0.02)
+            self.assertFalse(auto.pid_is_active(parent))
+            self.assertFalse(auto.pid_is_active(child))
 
     def test_temporary_identity_failure_preserves_record_and_never_relaunches(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

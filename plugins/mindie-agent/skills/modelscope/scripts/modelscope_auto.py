@@ -9,7 +9,6 @@ import argparse
 from contextlib import contextmanager
 import json
 import os
-import signal
 import subprocess
 import sys
 
@@ -144,16 +143,8 @@ def local_size_for_files(root: Path, files: list[dict[str, Any]]) -> int:
 def pid_is_active(pid: int | None) -> bool:
     if not pid or pid <= 0:
         return False
-    if os.name == "nt":
-        from mindie_exec import pid_alive
-        return pid_alive(pid)
-    try:
-        os.kill(pid, 0)
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+    from mindie_exec import pid_alive
+    return pid_alive(pid)
 
 
 def read_pid(local_dir: Path) -> int | None:
@@ -292,25 +283,12 @@ def build_worker_env(args: argparse.Namespace) -> dict[str, str]:
 @contextmanager
 def _worker_process(cmd: list[str], *, env: dict[str, str], launch_log):
     """Keep a newly launched tree owned until its PID record is saved."""
+    from mindie_exec import owned_process
+
     options = dict(stdin=subprocess.DEVNULL, stdout=launch_log,
                    stderr=subprocess.STDOUT, env=env)
-    if os.name == "nt":
-        from mindie_exec import owned_process
-        with owned_process(cmd, detach_on_success=True, **options) as process:
-            yield process
-    else:
-        process = subprocess.Popen(cmd, start_new_session=True, **options)
-        try:
-            yield process
-        except BaseException:
-            # The unreaped child keeps this process-group identity reserved.
-            if process.returncode is None:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait(timeout=5)
-            raise
+    with owned_process(cmd, detach_on_success=True, **options) as process:
+        yield process
 
 
 @_diagnostic_measured('model.worker_launch')

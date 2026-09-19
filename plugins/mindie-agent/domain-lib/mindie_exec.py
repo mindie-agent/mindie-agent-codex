@@ -535,34 +535,321 @@ def artifact_push(
 
 
 def pid_alive(pid: int) -> bool:
-    if os.name == "posix":
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            return False
+    """True only while *pid* is a live, non-zombie process we can observe."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    if os.name == "nt":
+        return _windows_pid_alive(pid)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
         return True
-    # Windows (unverified on real hardware).
-    result = subprocess.run(
-        ["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True, timeout=10
-    )
-    return str(pid) in result.stdout
+    except OSError:
+        return False
+    state = _posix_stat(pid)
+    return bool(state) and not state.startswith("Z")
+
+
+def process_identity(pid: int) -> dict[str, str] | None:
+    """Observe birth time and argv. A reused PID is a different identity.
+
+    Returns ``{"started": str, "command": str}`` or ``None`` when the process
+    cannot be observed. Callers persist this dict; equality is ownership.
+    """
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return None
+    if os.name == "nt":
+        observed = _windows_identity(pid)
+    elif sys.platform == "darwin":
+        observed = _darwin_identity(pid)
+    else:
+        observed = _linux_identity(pid)
+    if not isinstance(observed, dict):
+        return None
+    started = observed.get("started")
+    command = observed.get("command")
+    if not isinstance(started, str) or not started or not isinstance(command, str) or not command:
+        return None
+    return {"started": started, "command": command}
 
 
 class owned_process:
-    """Context manager: terminate a local child on exit (platform bounded)."""
+    """Start one local argv and own its descendant tree.
 
-    def __init__(self, process):
-        self.process = process
+    Built on remote-dev ``OwnedProcess`` (POSIX process group / Windows Job).
+    On failure or rejected startup the tree is stopped and reaped. Successful
+    exit with ``detach_on_success=True`` leaves the tree running only when a
+    verifiable ``process_identity`` is still observed for the same birth.
+    """
+
+    def __init__(self, argv, *, detach_on_success: bool = False, cwd=None, env=None, **stdio):
+        if isinstance(argv, (str, bytes)) or not argv:
+            raise ValueError("owned_process requires a non-empty argv array")
+        self._argv = list(argv)
+        self._detach = bool(detach_on_success)
+        self._cwd = cwd
+        self._env = env
+        self._stdio = stdio
+        self._owner = None
+        self.process = None
+        self._birth = None
 
     def __enter__(self):
+        from remote_dev.core.local_process import OwnedProcess
+
+        self._owner = OwnedProcess(self._argv, cwd=self._cwd, env=self._env, **self._stdio)
+        self.process = self._owner.process
+        self._birth = process_identity(self.process.pid)
         return self.process
 
-    def __exit__(self, *exc):
-        if self.process.poll() is None:
-            self.process.kill()
+    def __exit__(self, exc_type, *exc):
+        owner = self._owner
+        if owner is None:
+            return False
+        process = owner.process
+        try:
+            if exc_type is None and self._detach:
+                exited = process.poll() is not None
+                observed = None if exited else process_identity(process.pid)
+                if exited:
+                    try:
+                        process.wait(timeout=1)
+                    except Exception:
+                        pass
+                    return False
+                if _usable_identity(observed) and (
+                    self._birth is None or observed == self._birth
+                ):
+                    return False
+            owner.stop()
+        except Exception:
+            try:
+                owner.stop(force=True)
+            except Exception:
+                pass
+            if exc_type is None:
+                raise
         return False
 
 
-def process_identity() -> str:
-    """Stable identity string for one local process (pid-based)."""
-    return f"pid-{os.getpid()}"
+def _usable_identity(value: object) -> bool:
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("started"), str)
+        and bool(value.get("started"))
+        and isinstance(value.get("command"), str)
+        and bool(value.get("command"))
+    )
+
+
+def _posix_stat(pid: int) -> str:
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=1,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.strip().split(None, 1)[0] if result.stdout.strip() else ""
+
+
+def _linux_identity(pid: int) -> dict[str, str] | None:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+        boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+        return None
+    try:
+        fields = stat.rsplit(") ", 1)[1].split()
+        start_ticks = fields[19]
+        state = fields[0]
+    except (IndexError, ValueError):
+        return None
+    if state.startswith("Z"):
+        return None
+    parts = [part.decode("utf-8", "replace") for part in cmdline.split(b"\0") if part]
+    command = " ".join(parts)
+    if not command:
+        return None
+    return {"started": f"{boot}:{start_ticks}", "command": command}
+
+
+def _darwin_identity(pid: int) -> dict[str, str] | None:
+    info = _darwin_bsdinfo(pid)
+    argv = _darwin_argv(pid)
+    if info is None or not argv:
+        return None
+    sec, usec = info
+    return {"started": f"{sec}.{usec}", "command": " ".join(argv)}
+
+
+def _darwin_bsdinfo(pid: int) -> tuple[int, int] | None:
+    import ctypes
+
+    class proc_bsdinfo(ctypes.Structure):
+        _fields_ = [
+            ("pbi_flags", ctypes.c_uint32),
+            ("pbi_status", ctypes.c_uint32),
+            ("pbi_xstatus", ctypes.c_uint32),
+            ("pbi_pid", ctypes.c_uint32),
+            ("pbi_ppid", ctypes.c_uint32),
+            ("pbi_uid", ctypes.c_uint32),
+            ("pbi_gid", ctypes.c_uint32),
+            ("pbi_ruid", ctypes.c_uint32),
+            ("pbi_rgid", ctypes.c_uint32),
+            ("pbi_svuid", ctypes.c_uint32),
+            ("pbi_svgid", ctypes.c_uint32),
+            ("rfu_1", ctypes.c_uint32),
+            ("pbi_comm", ctypes.c_char * 16),
+            ("pbi_name", ctypes.c_char * 32),
+            ("pbi_nfiles", ctypes.c_uint32),
+            ("pbi_pgid", ctypes.c_uint32),
+            ("pbi_pjobc", ctypes.c_uint32),
+            ("e_tdev", ctypes.c_uint32),
+            ("e_tpgid", ctypes.c_uint32),
+            ("pbi_nice", ctypes.c_int32),
+            ("pbi_start_tvsec", ctypes.c_uint64),
+            ("pbi_start_tvusec", ctypes.c_uint64),
+        ]
+
+    try:
+        lib = ctypes.CDLL("/usr/lib/libproc.dylib")
+        lib.proc_pidinfo.argtypes = [
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_uint64,
+            ctypes.c_void_p,
+            ctypes.c_int,
+        ]
+        lib.proc_pidinfo.restype = ctypes.c_int
+        info = proc_bsdinfo()
+        got = lib.proc_pidinfo(int(pid), 3, 0, ctypes.byref(info), ctypes.sizeof(info))
+    except (OSError, AttributeError):
+        return None
+    if got != ctypes.sizeof(info) or int(info.pbi_pid) != int(pid):
+        return None
+    return int(info.pbi_start_tvsec), int(info.pbi_start_tvusec)
+
+
+def _darwin_argv(pid: int) -> list[str] | None:
+    import ctypes
+
+    libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+    mib = (ctypes.c_int * 3)(1, 49, int(pid))  # CTL_KERN, KERN_PROCARGS2
+    size = ctypes.c_size_t()
+    if libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0 or size.value < 4:
+        return None
+    buf = ctypes.create_string_buffer(size.value)
+    if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) != 0:
+        return None
+    raw = bytes(buf.raw[: size.value])
+    argc = int.from_bytes(raw[:4], sys.byteorder)
+    if argc < 1:
+        return None
+    index = raw.find(b"\0", 4)
+    if index < 0:
+        return None
+    index += 1
+    while index < len(raw) and raw[index] == 0:
+        index += 1
+    argv: list[str] = []
+    for _ in range(argc):
+        end = raw.find(b"\0", index)
+        if end < 0:
+            return None
+        argv.append(raw[index:end].decode("utf-8", "replace"))
+        index = end + 1
+    return argv if argv and any(argv) else None
+
+
+def _windows_pid_alive(pid: int) -> bool:
+    # Windows (unverified on real hardware). OpenProcess + STILL_ACTIVE; not tasklist.
+    import ctypes
+    from ctypes import wintypes
+
+    process_query_limited_information = 0x1000
+    synchronize = 0x00100000
+    still_active = 259
+    wait_timeout = 258
+    wait_failed = 0xFFFFFFFF
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    handle = kernel32.OpenProcess(process_query_limited_information | synchronize, False, pid)
+    if not handle:
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        return False
+    try:
+        code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return False
+        if int(code.value) != still_active:
+            return False
+        waited = kernel32.WaitForSingleObject(handle, 0)
+        if waited == wait_failed:
+            return True
+        return waited == wait_timeout
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _windows_identity(pid: int) -> dict[str, str] | None:
+    # Windows (unverified on real hardware): creation FILETIME + image path.
+    import ctypes
+    from ctypes import wintypes
+
+    process_query_limited_information = 0x1000
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetProcessTimes.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME),
+    ]
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+    kernel32.QueryFullProcessImageNameW.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        return None
+    try:
+        created = wintypes.FILETIME()
+        dummy = wintypes.FILETIME()
+        if not kernel32.GetProcessTimes(
+            handle, ctypes.byref(created), ctypes.byref(dummy), ctypes.byref(dummy), ctypes.byref(dummy)
+        ):
+            return None
+        started = str((int(created.dwHighDateTime) << 32) | int(created.dwLowDateTime))
+        size = wintypes.DWORD(32768)
+        image = ctypes.create_unicode_buffer(size.value)
+        if not kernel32.QueryFullProcessImageNameW(handle, 0, image, ctypes.byref(size)):
+            return None
+        command = image.value
+        if not started or not command:
+            return None
+        return {"started": started, "command": command}
+    finally:
+        kernel32.CloseHandle(handle)
