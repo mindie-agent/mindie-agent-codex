@@ -29,9 +29,16 @@ class Gate:
         self.tools = json.loads(CATALOG.read_text())[surface]
         self.connection_id = uuid.uuid4().hex
 
-    def call(self, request, cancel=None):
+    def call(self, request, cancel=None, *, timeout=None):
         # Inactive discovery/calls must not create any local state.
+        # Domain CLI reuses this path: missing config, missing lease, and the
+        # bounded runtime all fail closed. There is no ungated development
+        # bypass around claim/finish or the 65s remote budget.
         try:
+            if not config_path().is_file():
+                raise ValueError(
+                    "MindIE adapter configuration is required; remote execution fails closed"
+                )
             params = request.get("params")
             if not isinstance(params, dict) or not isinstance(
                 params.get("arguments"), dict
@@ -42,13 +49,13 @@ class Gate:
                 args.get("mindie_session_id"), args.get("mindie_activation", "")
             )
             with update_lock(self.sessions.config):
-                return self._call(request, cancel)
+                return self._call(request, cancel, timeout=timeout)
         except Exception as exc:
             return failure(
                 f"{type(exc).__name__}: {str(exc)[:240]}. No automatic retry."
             )
 
-    def _call(self, request, cancel=None):
+    def _call(self, request, cancel=None, timeout=None):
         session = token = None
         admitted = False
         succeeded = False
@@ -96,12 +103,15 @@ class Gate:
                 mindie_session_id=session,
                 mindie_activation=token,
             )
+            bound = (
+                KNOWLEDGE_TIMEOUT if self.surface == "knowledge" else REMOTE_TIMEOUT
+            )
+            if timeout is not None:
+                bound = min(max(0.01, float(timeout)), bound)
             output = run(
                 [config["python"], str(Path(__file__).with_name("runtime_call.py"))],
                 json.dumps(payload),
-                timeout=KNOWLEDGE_TIMEOUT
-                if self.surface == "knowledge"
-                else REMOTE_TIMEOUT,
+                timeout=bound,
                 cancel=cancel,
             )
             result = json.loads(output)

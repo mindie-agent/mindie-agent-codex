@@ -1006,6 +1006,12 @@
           "local_dir": {
             "type": "string"
           },
+          "timeout_ms": {
+            "type": "integer"
+          },
+          "timeout": {
+            "type": "integer"
+          },
           "mindie_session_id": {
             "type": "string",
             "description": "Native Codex session ID from manual activation; not a remote job ID"
@@ -1075,6 +1081,12 @@
           },
           "remote_path": {
             "type": "string"
+          },
+          "timeout_ms": {
+            "type": "integer"
+          },
+          "timeout": {
+            "type": "integer"
           },
           "mindie_session_id": {
             "type": "string",

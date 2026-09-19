@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import shlex
 import sys
+import tempfile
 
 from pathlib import Path
 for _p in Path(__file__).resolve().parents:
@@ -26,7 +27,7 @@ for _p in (str(LIB_DIR),):
         sys.path.insert(0, _p)
 
 from mindie_state import allocate_run_dir  # noqa: E402
-from mindie_exec import ssh_exec, ssh_run_bytes  # noqa: E402
+from mindie_exec import artifact_push, ssh_exec  # noqa: E402
 from mindie_receipt import progress as envelope_progress  # noqa: E402
 from mindie_target import SshEndpoint, ssh_endpoint_from_mapping  # noqa: E402
 from mindie_state import load_serving_state as load_task_serving_state  # noqa: E402
@@ -46,10 +47,14 @@ ENV_PREAMBLE = (
 from mindie_receipt import measured as _diagnostic_measured
 
 def ssh_write_text(endpoint: SshEndpoint, content: str, remote_path: str) -> None:
-    """Write text content to a remote file via stdin (avoids shell quoting issues)."""
-    result = ssh_run_bytes(endpoint, f"cat > {shlex.quote(remote_path)}", stdin=content.encode())
-    if result.returncode != 0:
-        raise RuntimeError(f"ssh_write_text failed (rc={result.returncode}): {result.stderr!r}")
+    """Write a remote text file through artifact_push (hash-verified, not stdin tar)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        local = Path(tmp) / "payload"
+        local.write_text(content, encoding="utf-8")
+        result = artifact_push(endpoint, str(local), remote_path)
+    artifacts = result.get("artifacts")
+    if result.get("outcome") != "success" or not isinstance(artifacts, list):
+        raise RuntimeError(f"ssh_write_text failed: {result.get('summary') or result!r}"[:400])
 
 
 def progress(msg: str, **extra: Any) -> None:

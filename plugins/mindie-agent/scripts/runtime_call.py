@@ -50,11 +50,27 @@ def call(payload):
         args["yield_time_ms"] = min(args["yield_time_ms"], 30000)
     try:
         value = call_tool(name, args)
-        result = value.get("result", {})
+        result = value.get("result", {}) if isinstance(value, dict) else {}
+        details = result.get("error_details") if isinstance(result, dict) else None
+        uncertain = isinstance(result, dict) and (
+            result.get("status") == "submission_uncertain"
+            or (isinstance(details, dict) and details.get("submission_state") == "uncertain")
+        )
+        outcome = result.get("outcome") if isinstance(result, dict) else None
+        # isError is RPC/policy level. A completed remote command with a
+        # non-zero exit_code is still a successful observation (outcome
+        # "failed" + state/status + exit_code). Blocked paths and uncertain
+        # launches are not.
+        is_error = (
+            not isinstance(result, dict)
+            or outcome is None
+            or outcome == "blocked"
+            or uncertain
+        )
         return dict(
             content=[dict(type="text", text=tool_text(value))],
             structuredContent=result,
-            isError=result.get("outcome") not in {"success", "cancelled"},
+            isError=is_error,
         )
     finally:
         close_connections()

@@ -35,6 +35,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 
 from pathlib import Path
 for _p in Path(__file__).resolve().parents:
@@ -53,6 +54,7 @@ from typing import Any
 
 
 from mindie_coordinator.device_inventory import parse_npu_smi_hbm  # noqa: E402
+from mindie_exec import RemoteExecutionError, artifact_pull, artifact_push  # noqa: E402
 
 from _common import (
     ENV_PREAMBLE,
@@ -239,30 +241,24 @@ def collect_msprof_csvs(
     search_root = f"{remote_dir}/msprof_data" if msprof_data_subdir else remote_dir
     prof_device_map = _discover_prof_device_map(ep, search_root)
 
-    r = ssh_exec(ep, f"find {shlex.quote(search_root)} -name '*.csv' -size +100c", check=False)
-    csvs = [f.strip() for f in r.stdout.strip().splitlines() if f.strip()]
     manifest: dict[str, Any] = {}
     csv_device_map: dict[str, list[int]] = {}
+    try:
+        artifact_pull(ep, search_root, str(csv_dir))
+    except RemoteExecutionError as exc:
+        progress(f"WARNING: msprof CSV artifact_pull failed: {exc}")
+        manifest["__prof_device_map__"] = csv_device_map
+        return manifest
 
-    for remote_csv in csvs:
-        basename = Path(remote_csv).name
-        r2 = ssh_exec(ep, f"cat {shlex.quote(remote_csv)}", check=False)
-        if r2.stdout.strip():
-            local_csv = csv_dir / basename
-            if local_csv.exists():
-                stem = local_csv.stem
-                suffix = local_csv.suffix
-                idx = 1
-                while local_csv.exists():
-                    local_csv = csv_dir / f"{stem}_{idx}{suffix}"
-                    idx += 1
-            local_csv.write_text(r2.stdout, encoding="utf-8")
-            manifest[local_csv.name] = str(local_csv.relative_to(local_path))
-
-            for prof_name, devs in prof_device_map.items():
-                if prof_name in remote_csv:
-                    csv_device_map[local_csv.name] = devs
-                    break
+    for local_csv in sorted(csv_dir.rglob("*.csv")):
+        if local_csv.stat().st_size <= 100:
+            continue
+        manifest[local_csv.name] = str(local_csv.relative_to(local_path))
+        remote_hint = str(local_csv.relative_to(csv_dir))
+        for prof_name, devs in prof_device_map.items():
+            if prof_name in remote_hint or prof_name in local_csv.as_posix():
+                csv_device_map[local_csv.name] = devs
+                break
 
     manifest["__prof_device_map__"] = csv_device_map
     return manifest
@@ -270,11 +266,21 @@ def collect_msprof_csvs(
 
 def collect_model_config(ep: SshEndpoint, model_path: str, local_path: Path) -> dict:
     """Fetch model config.json for theoretical weight calculation."""
-    r = ssh_exec(ep, f"cat {shlex.quote(model_path.rstrip('/') + '/config.json')} 2>/dev/null", check=False)
-    if r.stdout.strip():
-        (local_path / "model_config.json").write_text(r.stdout, encoding="utf-8")
+    remote = model_path.rstrip("/") + "/config.json"
+    with tempfile.TemporaryDirectory() as tmp:
         try:
-            return json.loads(r.stdout)
+            artifact_pull(ep, remote, tmp)
+        except RemoteExecutionError:
+            return {}
+        pulled = list(Path(tmp).rglob("*"))
+        files = [path for path in pulled if path.is_file() and path.name != "manifest.json"]
+        if not files:
+            return {}
+        text = files[0].read_text(encoding="utf-8")
+    if text.strip():
+        (local_path / "model_config.json").write_text(text, encoding="utf-8")
+        try:
+            return json.loads(text)
         except json.JSONDecodeError:
             pass
     return {}
@@ -283,9 +289,20 @@ def collect_model_config(ep: SshEndpoint, model_path: str, local_path: Path) -> 
 def collect_weight_manifest(ep: SshEndpoint, python: str, model_path: str, local_path: Path) -> dict:
     """Run weight_inspector.py on remote to extract safetensors tensor metadata."""
     progress("Inspecting model weight files (safetensors headers)...")
-    inspector_src = (Path(__file__).parent / "weight_inspector.py").read_text(encoding="utf-8")
+    inspector = Path(__file__).parent / "weight_inspector.py"
+    remote_inspector = "/tmp/mindie-weight-inspector.py"
+    try:
+        artifact_push(ep, str(inspector), remote_inspector)
+    except RemoteExecutionError as exc:
+        progress(f"WARNING: weight inspector push failed: {exc}")
+        return {}
 
-    r = ssh_exec(ep, f"{shlex.quote(python)} -c {shlex.quote(inspector_src)} {shlex.quote(model_path)}", check=False, timeout=120)
+    r = ssh_exec(
+        ep,
+        f"{shlex.quote(python)} {shlex.quote(remote_inspector)} {shlex.quote(model_path)}",
+        check=False,
+        timeout=120,
+    )
 
     if r.returncode != 0:
         progress(f"WARNING: weight inspector failed: {r.stderr[:500]}")
@@ -371,9 +388,14 @@ def _collect_serving_logs(ep: SshEndpoint, serving_state: dict, local_path: Path
         remote_log = serving_state.get(key, "")
         if not remote_log:
             continue
-        r = ssh_exec(ep, f"cat {shlex.quote(remote_log)} 2>/dev/null", check=False)
-        if r.stdout.strip():
-            combined.append(r.stdout)
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                artifact_pull(ep, remote_log, tmp)
+            except RemoteExecutionError:
+                continue
+            files = [path for path in Path(tmp).rglob("*") if path.is_file() and path.name != "manifest.json"]
+            if files:
+                combined.append(files[0].read_text(encoding="utf-8"))
     full_log = "\n".join(combined)
     if full_log.strip():
         (local_path / "vllm_serve.log").write_text(full_log, encoding="utf-8")
