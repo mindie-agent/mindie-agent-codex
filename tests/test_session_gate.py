@@ -115,15 +115,23 @@ class SessionGateTests(unittest.TestCase):
             json.loads((SCRIPTS.parent / "hooks/hooks.json").read_text())["hooks"],
         )
 
-    def test_activation_requires_native_identity_and_does_not_start_service(self):
+    def test_activation_requires_native_identity_and_binds_once_per_call(self):
         marker = self.runtime_fixture()
         with patch.dict(os.environ, CODEX_THREAD_ID=""):
             self.assertEqual(self.bridge("activate").returncode, 1)
         self.assertFalse(self.sessions.path.exists())
         lease = json.loads(self.bridge("activate").stdout)
         self.assertEqual(lease["mindie_session_id"], "manual-A")
-        self.assertFalse(marker.exists())
-        self.assertEqual(self.activate(), lease)
+        # Activation performs one bounded cold start + authenticated attach;
+        # the fixture runtime records exactly that single attempt.
+        self.assertEqual(marker.read_text().splitlines(), ["attempt"])
+        self.assertEqual(lease.get("capture"), "bound")
+        again = json.loads(self.bridge("activate").stdout)
+        self.assertEqual(
+            {k: again[k] for k in ("mindie_session_id", "mindie_activation", "expires_at")},
+            {k: lease[k] for k in ("mindie_session_id", "mindie_activation", "expires_at")},
+        )
+        self.assertEqual(marker.read_text().splitlines(), ["attempt", "attempt"])
         self.assertEqual(self.sessions.path.stat().st_mode & 0o777, 0o600)
 
     def test_inactive_hooks_create_no_state_or_runtime(self):
@@ -134,7 +142,7 @@ class SessionGateTests(unittest.TestCase):
         result = self.bridge(
             "session-start", dict(hook_event_name="SessionStart", session_id="manual-A")
         )
-        self.assertEqual(json.loads(result.stdout), {})
+        self.assertEqual(result.returncode, 1)  # retired operation, no longer served
         self.assertEqual(set(self.root.iterdir()), before)
         self.assertFalse(marker.exists())
 
@@ -145,7 +153,7 @@ class SessionGateTests(unittest.TestCase):
             dict(jsonrpc="2.0", id=2, method="tools/list"),
         ]
         for script, argv, count in [
-            ("bridge.py", ["mcp"], 3),
+            ("bridge.py", ["mcp"], 4),
             ("remote_bridge.py", [], 11),
         ]:
             result = subprocess.run(

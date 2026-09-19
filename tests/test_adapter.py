@@ -35,7 +35,7 @@ class AdapterTests(unittest.TestCase):
             self.assertLess(time.monotonic() - start, 2)
             self.assertEqual(list(Path(root).iterdir()), [])
 
-    def test_legacy_session_start_is_inert_without_transcript_access(self):
+    def test_retired_session_start_operation_is_rejected_without_state(self):
         with tempfile.TemporaryDirectory() as root:
             config = Path(root) / "config.json"
             config.write_text("{}")
@@ -48,7 +48,7 @@ class AdapterTests(unittest.TestCase):
                 },
                 config,
             )
-            self.assertEqual(json.loads(result.stdout), {})
+            self.assertEqual(result.returncode, 1)
             self.assertEqual(list(Path(root).iterdir()), [config])
 
     def test_worker_uses_fresh_ephemeral_execution_with_hooks_disabled(self):

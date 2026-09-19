@@ -17,7 +17,7 @@ def call(payload):
         from mindie_knowledge.loop.cli import ensure_service
         from mindie_knowledge.loop.transport import rpc
 
-        if name not in {"knowledge_query", "knowledge_explain", "knowledge_use"}:
+        if name not in {"knowledge_attach", "knowledge_query", "knowledge_explain", "knowledge_use"}:
             raise ValueError("unknown knowledge tool")
         connection = ensure_service(config["engine_config"])
         # Never reconnect and resubmit a request with an uncertain outcome.

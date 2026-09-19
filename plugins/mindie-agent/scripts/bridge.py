@@ -12,7 +12,6 @@ from update_lock import update_lock
 
 MAX_HOOK_BYTES = 128 * 1024
 OPERATIONS = {
-    "session-start",
     "stop",
     "mcp",
     "status",
@@ -22,38 +21,62 @@ OPERATIONS = {
 }
 
 
-def hook_event(operation):
+def hook_event():
     raw = sys.stdin.buffer.read(MAX_HOOK_BYTES + 1)
     if len(raw) > MAX_HOOK_BYTES:
         raise ValueError("hook input exceeds limit")
     event = json.loads(raw)
-    expected = "SessionStart" if operation == "session-start" else "Stop"
-    if not isinstance(event, dict) or event.get("hook_event_name") != expected:
+    if not isinstance(event, dict) or event.get("hook_event_name") != "Stop":
         raise ValueError("unexpected hook event")
-    for key in (
-        ("session_id",) if operation == "session-start" else ("session_id", "turn_id")
-    ):
+    for key in ("session_id", "turn_id"):
         if not isinstance(event.get(key), str) or not re.fullmatch(
             r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", event[key]
         ):
             raise ValueError("invalid hook identity")
-    if operation == "stop":
-        summary = event.get("last_assistant_message")
-        if event.get("stop_hook_active", False) is not False:
-            raise ValueError("recursive Stop is not a capture")
-        if not isinstance(summary, str) or not summary.strip() or len(summary) > 32768:
-            raise ValueError("invalid final summary")
-        # Forward only capture fields; never propagate transcripts or other context.
-        return {
-            key: event[key]
-            for key in (
-                "hook_event_name",
-                "session_id",
-                "turn_id",
-                "last_assistant_message",
-            )
-        }
-    return event
+    summary = event.get("last_assistant_message")
+    if event.get("stop_hook_active", False) is not False:
+        raise ValueError("recursive Stop is not a capture")
+    if not isinstance(summary, str) or not summary.strip() or len(summary) > 32768:
+        raise ValueError("invalid final summary")
+    # Forward only capture fields; never propagate transcripts or other context.
+    return {
+        key: event[key]
+        for key in (
+            "hook_event_name",
+            "session_id",
+            "turn_id",
+            "last_assistant_message",
+        )
+    }
+
+
+def bind(lease):
+    """Attach this lease's session to the domain store via one bounded call.
+
+    Uses the same admission-checked runtime path as business calls; the
+    knowledge service records the attach independently of any later query.
+    Returns "bound" or "unbound:<error-type>" without raising.
+    """
+    payload = dict(
+        surface="knowledge",
+        name="knowledge_attach",
+        arguments=dict(session_id=lease["mindie_session_id"]),
+        mindie_session_id=lease["mindie_session_id"],
+        mindie_activation=lease["mindie_activation"],
+    )
+    try:
+        config = json.loads(config_path().read_text())
+        output = run(
+            [config["python"], str(Path(__file__).with_name("runtime_call.py"))],
+            json.dumps(payload),
+            timeout=15,
+        )
+        result = json.loads(output)
+        if isinstance(result, dict) and result.get("isError") is not True:
+            return "bound"
+        return "unbound:service-error"
+    except Exception as exc:
+        return f"unbound:{type(exc).__name__}"
 
 
 def main():
@@ -67,7 +90,13 @@ def main():
         return serve("knowledge")
     if operation in {"activate", "deactivate"}:
         try:
-            print(json.dumps(getattr(Sessions(), operation)()))
+            result = getattr(Sessions(), operation)()
+            if operation == "activate":
+                # One bounded cold start + authenticated domain bind. A failed
+                # bind leaves the lease usable for remote tools but marks
+                # capture unbound; it is never retried in the background.
+                result["capture"] = bind(result)
+            print(json.dumps(result))
         except Exception as exc:
             print(
                 f"MindIE session operation failed: {type(exc).__name__}: {exc}",
@@ -75,17 +104,12 @@ def main():
             )
             raise SystemExit(1)
         return
-    if operation in {"session-start", "stop"}:
+    if operation == "stop":
         try:
-            event = hook_event(operation)
+            event = hook_event()
         except (ValueError, OSError, TypeError, RecursionError):
             print("{}")
             return
-    if operation == "session-start":
-        # Old loaded tasks may still invoke this command. No context injection,
-        # activation, subprocess or service start, even when a config exists.
-        print("{}")
-        return
     try:
         if operation == "stop":
             sessions = Sessions()

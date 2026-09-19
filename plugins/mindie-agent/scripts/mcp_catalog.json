@@ -1,6 +1,32 @@
 {
   "knowledge": [
     {
+      "name": "knowledge_attach",
+      "description": "Requires manual MindIE activation in this session. Explicitly bind this task to the selected domain after manual activation. Binding never requires a knowledge query; it only makes this task's Stop summary eligible for bounded capture.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "mindie_session_id": {
+            "type": "string",
+            "description": "Native Codex session ID from manual activation; not a remote job ID"
+          },
+          "mindie_activation": {
+            "type": "string",
+            "description": "Session capability from manual activation; never copy from another session"
+          }
+        },
+        "required": [
+          "session_id",
+          "mindie_session_id",
+          "mindie_activation"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "knowledge_query",
       "description": "Requires manual MindIE activation in this session. Search the selected domain's knowledge and experience. References are advisory.",
       "inputSchema": {
