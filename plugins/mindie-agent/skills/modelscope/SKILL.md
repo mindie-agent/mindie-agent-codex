@@ -1,12 +1,15 @@
 ---
 name: modelscope
-description: "Download, resume, status-check, and SHA256-verify ModelScope model weights. Use for $modelscope download/status/verify/check, Chinese requests to 下载/续传/补全/查看进度/校验 ModelScope 权重, and tasks that need durable background ModelScope downloads under explicit local directories." Requires prior manual MindIE Agent activation in this task; load on demand, never preemptively.
+description: Download, resume, status-check, and SHA256-verify ModelScope model weights. Use for $modelscope download/status/verify/check, Chinese requests to 下载/续传/补全/查看进度/校验 ModelScope 权重, and tasks that need durable background ModelScope downloads under explicit local directories.
 ---
 
 # ModelScope
 
 Use the bundled manager with `uv run --no-project python` on each platform.
-It starts downloads and verification in a background worker and reports compact status.
+Invoke the scripts by their absolute path under the installed Skill directory
+(`/absolute/plugin/skills/modelscope` below); the business checkout stays the
+working directory. It starts downloads and verification in a background worker
+and reports compact status.
 
 - `scripts/modelscope_auto.py` - status, auto-resume, background download, and post-download verification
 - `scripts/download_from_modelscope.py` - low-level single-model downloader
@@ -30,7 +33,7 @@ Represent every model as `MODEL_ID=LOCAL_DIR`.
 For `$modelscope download`, resume, repair-after-approval, or “check and continue if incomplete”, run:
 
 ```bash
-uv run --no-project python "$SKILL_DIR/scripts/modelscope_auto.py" ensure \
+uv run --no-project python "/absolute/plugin/skills/modelscope/scripts/modelscope_auto.py" ensure \
   --model "$MODEL_ID=$LOCAL_DIR" \
   --revision "$REVISION"
 ```
@@ -51,7 +54,7 @@ The manager writes `download.pid`, `modelscope_sha256.report.json`, `modelscope_
 Pass `--auto-install` when the requested download needs a missing ModelScope SDK.
 It resolves that dependency in an isolated uv environment and records the actual
 SDK version and interpreter in the download log; it does not install into the
-selected workspace environment. Use `--help` for optional concurrency settings.
+business environment. Use `--help` for optional concurrency settings.
 
 Proxy options:
 
@@ -61,10 +64,13 @@ Proxy options:
 
 ## Status
 
-For explicit status only:
+Status is read-only and fully local: it never starts, resumes, or repairs a
+download or verification, and it does not use the knowledge service. Background
+downloads and verification start only from an explicit user request that
+authorizes that work. For explicit status only:
 
 ```bash
-uv run --no-project python "$SKILL_DIR/scripts/modelscope_auto.py" status \
+uv run --no-project python "/absolute/plugin/skills/modelscope/scripts/modelscope_auto.py" status \
   --model "$MODEL_ID=$LOCAL_DIR" \
   --revision "$REVISION"
 ```
@@ -88,7 +94,7 @@ an inactive worker: a later status call can recover after identity access return
 For explicit verification:
 
 ```bash
-uv run --no-project python "$SKILL_DIR/scripts/modelscope_auto.py" verify \
+uv run --no-project python "/absolute/plugin/skills/modelscope/scripts/modelscope_auto.py" verify \
   --model "$MODEL_ID=$LOCAL_DIR" \
   --revision "$REVISION"
 ```

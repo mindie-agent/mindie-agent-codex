@@ -1,6 +1,6 @@
 ---
 name: vllm-ascend-benchmark
-description: Measure throughput and latency of a vLLM online service with a specified workload, including request-rate and concurrency sweeps. Use for 跑 benchmark, 压测, or 测吞吐. Code baseline-versus-candidate comparisons and performance regression decisions use vllm-ascend-performance-regression; accuracy and service lifecycle have separate workflows. Requires prior manual MindIE Agent activation in this task; load on demand, never preemptively.
+description: Measure throughput and latency of a vLLM online service with a specified workload, including request-rate and concurrency sweeps. Use for 跑 benchmark, 压测, or 测吞吐. Code baseline-versus-candidate comparisons and performance regression decisions use vllm-ascend-performance-regression; accuracy and service lifecycle have separate workflows.
 ---
 
 # vllm-ascend-benchmark
@@ -11,10 +11,10 @@ Choose input/output lengths, concurrency, request rate and endpoint for the inte
 
 ## Agent entry
 
-Run from the repository root. The entry reuses the installed platform environment.
+Run this Skill's script with the Python interpreter configured for the MindIE plugin (the `python` value in the `MINDIE_AGENT_CONFIG` JSON). Resolve the script by its absolute path under the installed Skill directory; the business checkout stays the working directory. No old checkout adapter, project environment or bootstrap is loaded.
 
 ```text
-python3 skills/vllm-ascend-benchmark/scripts/bench_run.py --model /models/example --runs 3 --warmup-runs 1
+python /absolute/plugin/skills/vllm-ascend-benchmark/scripts/bench_run.py --model /models/example --runs 3 --warmup-runs 1
 ```
 
 Use --execution-id to measure an existing service, or let the workflow start and clean up its own service. --serve-args and --bench-args forward business options; --preset supplies reusable defaults. The managed interpreter and actual launch observations are recorded with measurements.

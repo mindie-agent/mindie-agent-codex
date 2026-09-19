@@ -1,9 +1,9 @@
 # Agent call
 
-From the repository root:
+Run with the MindIE plugin's configured Python; the script resolves by its absolute path under the installed Skill directory, and the business checkout stays the working directory:
 
 ```text
-python3 skills/vllm-ascend-distributed-debug/scripts/distributed_debug.py --config topology.json --events rank-events.jsonl
+python /absolute/plugin/skills/vllm-ascend-distributed-debug/scripts/distributed_debug.py --config topology.json --events rank-events.jsonl
 ```
 
 The config supplies expected_world_size, ranks and optional groups/endpoints. Event files supply observed facts in capture order. The report checks mappings and structured collective observations; absent events remain capture gaps rather than proof that a rank skipped the collective. No case initialization or event-registration steps are required.

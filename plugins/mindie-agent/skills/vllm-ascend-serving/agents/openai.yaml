@@ -1,0 +1,6 @@
+interface:
+  display_name: "vLLM Ascend Serving"
+  short_description: "Start, inspect, or stop a single-node vLLM Ascend service"
+  default_prompt: "Use $vllm-ascend-serving to start, check, or stop this vLLM Ascend service."
+policy:
+  allow_implicit_invocation: false

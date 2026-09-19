@@ -1,6 +1,6 @@
 ---
 name: vllm-ascend-correctness-validation
-description: Run and compare vLLM Ascend inference outputs or accuracy metrics across code states, eager/graph modes, or serving configurations. Use for token comparison, numerical regression checks, and AISBench accuracy evaluation. An already reproduced graph, operator or distributed failure uses its debug workflow; ordinary unit tests and code review use native tools. Requires prior manual MindIE Agent activation in this task; load on demand, never preemptively.
+description: Run and compare vLLM Ascend inference outputs or accuracy metrics across code states, eager/graph modes, or serving configurations. Use for token comparison, numerical regression checks, and AISBench accuracy evaluation. An already reproduced graph, operator or distributed failure uses its debug workflow; ordinary unit tests and code review use native tools.
 ---
 
 # vllm-ascend-correctness-validation
@@ -11,10 +11,10 @@ Select deterministic prompts or token IDs, sampling, model and topology that exe
 
 ## Agent entry
 
-Run from the repository root. The entry reuses the installed platform environment.
+Run this Skill's script with the Python interpreter configured for the MindIE plugin (the `python` value in the `MINDIE_AGENT_CONFIG` JSON). Resolve the script by its absolute path under the installed Skill directory; the business checkout stays the working directory. No old checkout adapter, project environment or bootstrap is loaded.
 
 ```text
-python3 skills/vllm-ascend-correctness-validation/scripts/correctness_run.py --cases cases.json --baseline baseline.json --candidate candidate.json
+python /absolute/plugin/skills/vllm-ascend-correctness-validation/scripts/correctness_run.py --cases cases.json --baseline baseline.json --candidate candidate.json
 ```
 
 The remote_correctness_harness.py payload captures offline runtime observations from the managed execution. Online/AISBench results use the server execution reference through aisbench_adapter.py. The comparison derives metadata from actual outputs, emits its certificate and report, and reports missing identity as inconclusive.

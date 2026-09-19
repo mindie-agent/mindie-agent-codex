@@ -1,7 +1,7 @@
 # Existing-evidence report input example
 
 This is the optional report configuration for supplied observations. For actual
-execution inputs, use [callable inputs](../../ascend-operator-debug/references/callable-runner.md).
+execution inputs, use the callable-input contract (`references/callable-runner.md` in the `ascend-operator-debug` skill).
 The report generates its own metadata; reuse results from the relevant execution
 or measurement harness.
 

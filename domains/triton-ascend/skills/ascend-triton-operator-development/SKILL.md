@@ -1,6 +1,6 @@
 ---
 name: ascend-triton-operator-development
-description: Develop a first correct Ascend Triton operator from a PyTorch reference or migrate an existing GPU Triton kernel to Ascend, including semantic audit, explicit task contracts, hardware-aware grid and tiling design, implementation, and handoff to correctness validation. Use for new kernel implementation, CUDA/GPU Triton migration, or repairing a candidate that has not yet passed correctness. Do not use for a kernel that already passes all planned cases and only needs performance tuning, for isolated torch_npu or ACLNN debugging, or for model-level graph failures. Requires prior manual MindIE Agent activation in this task; load on demand, never preemptively.
+description: Develop a first correct Ascend Triton operator from a PyTorch reference or migrate an existing GPU Triton kernel to Ascend, including semantic audit, explicit task contracts, hardware-aware grid and tiling design, implementation, and handoff to correctness validation. Use for new kernel implementation, CUDA/GPU Triton migration, or repairing a candidate that has not yet passed correctness. Do not use for a kernel that already passes all planned cases and only needs performance tuning, for isolated torch_npu or ACLNN debugging, or for model-level graph failures.
 ---
 
 # ascend-triton-operator-development
@@ -15,11 +15,10 @@ Run ascend-triton-kernel-validation for the candidate. Continue to optimization 
 
 When a development report is useful, aggregate the implemented candidate and
 its existing validation evidence. `operator.json` configures this report; it is
-not a prerequisite for ordinary implementation work. Run the report from the
-repository root using the installed platform environment.
+not a prerequisite for ordinary implementation work. Run this Skill's script with the Python interpreter configured for the MindIE plugin (the `python` value in the `MINDIE_AGENT_CONFIG` JSON). Resolve the script by its absolute path under the installed Skill directory; the business checkout stays the working directory. No old checkout adapter, project environment or bootstrap is loaded.
 
 ```text
-python3 skills/ascend-triton-operator-development/scripts/triton_development.py --config operator.json --kernel kernel.py --validation-manifest validation/manifest.json
+python /absolute/domain/skills/ascend-triton-operator-development/scripts/triton_development.py --config operator.json --kernel kernel.py --validation-manifest validation/manifest.json
 ```
 
 The business config contains op_name, mode, source, reference, target, cases and tolerances. The report consumes the actual kernel and validation manifest, checking kernel identity and passing case coverage. Optional --semantic-report and --sketch attach useful design artifacts.

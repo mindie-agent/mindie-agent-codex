@@ -1,6 +1,6 @@
 ---
 name: vllm-ascend-change-validation
-description: Produce a vLLM or vllm-ascend validation report from an accessible diff and existing experiment evidence when asked to consolidate results or document their coverage. Ordinary code review, test selection and experimental validation do not require this report. Requires prior manual MindIE Agent activation in this task; load on demand, never preemptively.
+description: Produce a vLLM or vllm-ascend validation report from an accessible diff and existing experiment evidence when asked to consolidate results or document their coverage. Ordinary code review, test selection and experimental validation do not require this report.
 ---
 
 # Change validation evidence report
@@ -16,10 +16,10 @@ Producing a report requires no runtime, task allocation or new experiment.
 
 ## Agent entry
 
-Run from the repository root. The entry reuses the installed platform environment.
+Run this Skill's script with the Python interpreter configured for the MindIE plugin (the `python` value in the `MINDIE_AGENT_CONFIG` JSON). Resolve the script by its absolute path under the installed Skill directory; the business checkout stays the working directory. No old checkout adapter, project environment or bootstrap is loaded.
 
 ```text
-python3 skills/vllm-ascend-change-validation/scripts/change_validation.py --baseline BASE --candidate HEAD --repo-root source --evidence correctness/manifest.json performance/manifest.json
+python /absolute/plugin/skills/vllm-ascend-change-validation/scripts/change_validation.py --baseline BASE --candidate HEAD --repo-root source --evidence correctness/manifest.json performance/manifest.json
 ```
 
 Use `--diff-file` for an already captured diff. The report summarizes changed

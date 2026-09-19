@@ -1,6 +1,6 @@
 ---
 name: ascend-triton-kernel-validation
-description: Run an explicit Ascend Triton wrapper against a reference over real shape, dtype, layout and stride cases, or assess existing validation evidence. Use after migration or implementation changes, before performance claims, or for shape-dependent failures in a Triton candidate. Do not use to generate or optimize the kernel, diagnose a non-Triton operator, or localize a whole-model graph failure. Requires prior manual MindIE Agent activation in this task; load on demand, never preemptively.
+description: Run an explicit Ascend Triton wrapper against a reference over real shape, dtype, layout and stride cases, or assess existing validation evidence. Use after migration or implementation changes, before performance claims, or for shape-dependent failures in a Triton candidate. Do not use to generate or optimize the kernel, diagnose a non-Triton operator, or localize a whole-model graph failure.
 ---
 
 # ascend-triton-kernel-validation
@@ -11,17 +11,17 @@ Select shapes, dtype, layout, strides, scalar options and execution modes from t
 
 ## Agent entry
 
-Run from the repository root. The entry reuses the installed platform environment.
+Run this Skill's script with the Python interpreter configured for the MindIE plugin (the `python` value in the `MINDIE_AGENT_CONFIG` JSON). Resolve the script by its absolute path under the installed Skill directory; the business checkout stays the working directory. No old checkout adapter, project environment or bootstrap is loaded.
 
 ```text
-python3 skills/ascend-triton-kernel-validation/scripts/triton_validation.py run --kernel kernel.py:run --reference reference.py:run --cases cases.py:cases
+python /absolute/domain/skills/ascend-triton-kernel-validation/scripts/triton_validation.py run --kernel kernel.py:run --reference reference.py:run --cases cases.py:cases
 ```
 
 The small runner fixes the three Python files into one owned script and invokes
 their named callables. The case factory constructs actual tensor shapes, strides
 and scalar arguments; the wrapper supplies the Triton launch and any requested
 compile/graph semantics. It does not infer a kernel signature or adapt ModelNew.
-See [callable inputs and execution scope](../ascend-operator-debug/references/callable-runner.md).
+See `references/callable-runner.md` in the `ascend-operator-debug` skill for callable inputs and execution scope.
 
 Existing runner/profiler evidence can be assessed directly. Optional report mode
 keeps `--config validation.json --kernel kernel.py --results case-results.json`.

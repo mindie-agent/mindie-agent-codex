@@ -1,6 +1,6 @@
 ---
 name: ascend-memory-profiling
-description: Attribute vLLM serving HBM usage on Ascend to weights, KV cache, HCCL, activations and runtime using measured evidence. Use for 显存归因, 显存 profiling, or 内存各部分拆分. A quick current memory-usage or idle-card lookup uses the fleet monitor; kernel latency analysis uses profiling-analysis. Requires prior manual MindIE Agent activation in this task; load on demand, never preemptively.
+description: Attribute vLLM serving HBM usage on Ascend to weights, KV cache, HCCL, activations and runtime using measured evidence. Use for 显存归因, 显存 profiling, or 内存各部分拆分. A quick current memory-usage or idle-card lookup uses the fleet monitor; kernel latency analysis uses profiling-analysis.
 ---
 
 # ascend-memory-profiling
@@ -11,11 +11,10 @@ Prefer measured msprof and npu-smi evidence, then startup logs and tensor header
 
 ## Agent entry
 
-Run from the repository root using the platform's Python launcher. The workspace
-selects its installed platform environment automatically.
+Run this Skill's script with the Python interpreter configured for the MindIE plugin (the `python` value in the `MINDIE_AGENT_CONFIG` JSON). Resolve the script by its absolute path under the installed Skill directory; the business checkout stays the working directory. No old checkout adapter, project environment or bootstrap is loaded.
 
 ```text
-python3 skills/ascend-memory-profiling/scripts/mem_collect.py --help
+python /absolute/plugin/skills/ascend-memory-profiling/scripts/mem_collect.py --help
 ```
 
 mem_collect.py accepts the serving workload and captures evidence through the managed service. mem_analyze.py consumes the collection output. Keep collection parameters tied to the user question. Standalone collection embeds its local msprof wrapper in one managed serving execution, forwards the requested serving configuration, stops that execution, and exports only its recorded runtime directory. Missing CSV evidence returns an incomplete result. Attach mode reuses an execution and leaves a live service running; resume requires the same execution ID.

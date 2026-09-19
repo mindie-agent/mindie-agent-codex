@@ -1,6 +1,6 @@
 ---
 name: ascend-triton-kernel-optimization
-description: Optimize a correctness-passed Ascend Triton kernel using paired callable measurements, profiler evidence and hardware reasoning. Use for single-kernel latency or throughput improvement after the required correctness cases pass. Do not use to create the first correct kernel, bypass failed validation, assess whole-model serving regressions, attribute model HBM, or diagnose a non-Triton operator. Requires prior manual MindIE Agent activation in this task; load on demand, never preemptively.
+description: Optimize a correctness-passed Ascend Triton kernel using paired callable measurements, profiler evidence and hardware reasoning. Use for single-kernel latency or throughput improvement after the required correctness cases pass. Do not use to create the first correct kernel, bypass failed validation, assess whole-model serving regressions, attribute model HBM, or diagnose a non-Triton operator.
 ---
 
 # ascend-triton-kernel-optimization
@@ -11,10 +11,10 @@ Choose one bottleneck hypothesis per round. Consider UB live set, physical cores
 
 ## Agent entry
 
-Run from the repository root. The entry reuses the installed platform environment.
+Run this Skill's script with the Python interpreter configured for the MindIE plugin (the `python` value in the `MINDIE_AGENT_CONFIG` JSON). Resolve the script by its absolute path under the installed Skill directory; the business checkout stays the working directory. No old checkout adapter, project environment or bootstrap is loaded.
 
 ```text
-python3 skills/ascend-triton-kernel-optimization/scripts/triton_optimization.py run --kernel kernel.py:run --reference reference.py:run --cases cases.py:cases --warmups 3 --repeats 20
+python /absolute/domain/skills/ascend-triton-kernel-optimization/scripts/triton_optimization.py run --kernel kernel.py:run --reference reference.py:run --cases cases.py:cases --warmups 3 --repeats 20
 ```
 
 This performs one paired measurement of the supplied wrappers in one owned
@@ -23,7 +23,7 @@ each wrapper, alternates pair order, and retains individual synchronized wall
 times separately from first-call compilation. Copying inputs is outside the
 timed region. Results describe callable latency, not isolated device kernel time.
 Noise assessment, the next edit and KEEP/DISCARD remain with the Agent.
-See [callable inputs and scope](../ascend-operator-debug/references/callable-runner.md).
+See `references/callable-runner.md` in the `ascend-operator-debug` skill for callable inputs and scope.
 
 Reuse existing measurements when sufficient. Optional
 `--config optimization.json --results round-results.json` aggregates earlier

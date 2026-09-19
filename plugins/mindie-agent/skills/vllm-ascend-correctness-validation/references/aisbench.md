@@ -12,10 +12,14 @@ The adapter:
 - generates a reusable case file with metric direction and regression thresholds;
 - converts `summary_*.csv` rows into the normalized correctness result contract.
 
+Run the adapter with the MindIE plugin's configured Python; the script resolves
+by its absolute path under the installed Skill directory, and the business
+checkout stays the working directory.
+
 ## Prepare
 
 ```bash
-uv run --no-project python -B skills/vllm-ascend-correctness-validation/scripts/aisbench_adapter.py prepare \
+python -B /absolute/plugin/skills/vllm-ascend-correctness-validation/scripts/aisbench_adapter.py prepare \
   --output-dir .mindie/correctness/aisbench-baseline \
   --host 127.0.0.1 \
   --port 8000 \
@@ -45,7 +49,7 @@ Run `run.sh` only where AISBench is installed and the target service is reachabl
 Select the exact `summary_*.csv` produced by the run:
 
 ```bash
-uv run --no-project python -B skills/vllm-ascend-correctness-validation/scripts/aisbench_adapter.py normalize \
+python -B /absolute/plugin/skills/vllm-ascend-correctness-validation/scripts/aisbench_adapter.py normalize \
   --summary-csv /remote/output/summary/summary_20260725_120000.csv \
   --label baseline \
   --execution-id <owned-server-execution> \

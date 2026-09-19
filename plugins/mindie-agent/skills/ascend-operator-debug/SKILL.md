@@ -1,6 +1,6 @@
 ---
 name: ascend-operator-debug
-description: Reduce an Ascend failure to one operator and run an explicit candidate callable against a reference over real input cases. Use for operator crashes, unsupported dtype or layout errors, shape-dependent numerical mismatches, or workspace API faults. Do not use for whole-model graph localization, multi-rank failures, performance benchmarking, or profiler analysis. Requires prior manual MindIE Agent activation in this task; load on demand, never preemptively.
+description: Reduce an Ascend failure to one operator and run an explicit candidate callable against a reference over real input cases. Use for operator crashes, unsupported dtype or layout errors, shape-dependent numerical mismatches, or workspace API faults. Do not use for whole-model graph localization, multi-rank failures, performance benchmarking, or profiler analysis.
 ---
 
 # ascend-operator-debug
@@ -11,10 +11,10 @@ Keep dtype, shape, physical layout, strides and eager/compile/graph mode explici
 
 ## Agent entry
 
-Run from the repository root. The entry reuses the installed platform environment.
+Run this Skill's script with the Python interpreter configured for the MindIE plugin (the `python` value in the `MINDIE_AGENT_CONFIG` JSON). Resolve the script by its absolute path under the installed Skill directory; the business checkout stays the working directory. No old checkout adapter, project environment or bootstrap is loaded.
 
 ```text
-python3 skills/ascend-operator-debug/scripts/operator_debug.py run --kernel kernel.py:run --reference reference.py:run --cases cases.py:cases
+python /absolute/plugin/skills/ascend-operator-debug/scripts/operator_debug.py run --kernel kernel.py:run --reference reference.py:run --cases cases.py:cases
 ```
 
 The three Python files are fixed into one managed script. `cases(device)` yields

@@ -1,6 +1,6 @@
 ---
 name: ascend-triton-workflow
-description: Consolidate existing Ascend Triton development, correctness and optimization evidence when asked for a report or a summary across stages. Operator development, validation and tuning do not require an aggregate report. Requires prior manual MindIE Agent activation in this task; load on demand, never preemptively.
+description: Consolidate existing Ascend Triton development, correctness and optimization evidence when asked for a report or a summary across stages. Operator development, validation and tuning do not require an aggregate report.
 ---
 
 # Ascend Triton evidence report
@@ -12,10 +12,10 @@ tool links existing observations and does not launch these stages.
 
 ## Agent entry
 
-Run from the repository root. The entry reuses the installed platform environment.
+Run this Skill's script with the Python interpreter configured for the MindIE plugin (the `python` value in the `MINDIE_AGENT_CONFIG` JSON). Resolve the script by its absolute path under the installed Skill directory; the business checkout stays the working directory. No old checkout adapter, project environment or bootstrap is loaded.
 
 ```text
-python3 skills/ascend-triton-workflow/scripts/triton_workflow.py --config operator.json --development development/manifest.json --validation validation/manifest.json
+python /absolute/domain/skills/ascend-triton-workflow/scripts/triton_workflow.py --config operator.json --development development/manifest.json --validation validation/manifest.json
 ```
 
 The config describes the operator and the stages this report should cover.

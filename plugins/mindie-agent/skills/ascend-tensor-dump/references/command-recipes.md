@@ -2,7 +2,9 @@
 
 在实际业务 worktree 中插桩，再通过 coordinator 的 sources 绑定运行。
 显式远端文件操作使用 remote-dev companion。探针与算子回放在管理的 Ascend
-Python 环境中执行；比较命令在持有 dump 文件的环境中执行，本地示例从仓库根目录运行。
+Python 环境中执行；比较命令在持有 dump 文件的环境中执行，使用 MindIE 插件配置的
+Python，脚本用安装目录下的绝对路径。示例中的 `$DUMPS` 是用户显式选择的本地
+dump 目录，先按需 `export DUMPS=<显式目录>`。
 
 ## 1. 装探针
 
@@ -55,7 +57,7 @@ dump_probe.finish()
 
 ```bash
 export DUMP_PROBE=1
-export DUMP_PROBE_DIR=/vllm-workspace/dumps/baseline
+export DUMP_PROBE_DIR=$DUMPS/baseline
 export DUMP_PROBE_RANKS=0
 export DUMP_PROBE_MATCH=1
 # DUMP_PROBE_TENSOR 留空：这一轮不落任何整张量
@@ -83,8 +85,8 @@ curl -s http://127.0.0.1:8000/v1/completions \
 ## 5. 读摘要
 
 ```bash
-python3 skills/ascend-tensor-dump/scripts/dump_compare.py scan \
-  --manifest /vllm-workspace/dumps/baseline/*.json \
+python /absolute/plugin/skills/ascend-tensor-dump/scripts/dump_compare.py scan \
+  --manifest $DUMPS/baseline/*.json \
   --max-abs-limit 1e4
 ```
 
@@ -99,9 +101,9 @@ python3 skills/ascend-tensor-dump/scripts/dump_compare.py scan \
 跑两轮，只改一个变量（graph/eager、特性开关、prefix on/off、baseline/candidate 代码）。
 
 ```bash
-python3 skills/ascend-tensor-dump/scripts/dump_compare.py diff \
-  --left  /vllm-workspace/dumps/eager/cmpl-abc-rank0.json \
-  --right /vllm-workspace/dumps/graph/cmpl-abc-rank0.json
+python /absolute/plugin/skills/ascend-tensor-dump/scripts/dump_compare.py diff \
+  --left  $DUMPS/eager/cmpl-abc-rank0.json \
+  --right $DUMPS/graph/cmpl-abc-rank0.json
 ```
 
 先看 verdict。`COVERAGE_MISMATCH` 表示两侧记录集合不同（`only_in_left` /
@@ -122,7 +124,7 @@ python .../dump_compare.py diff --left a.json --right b.json --fail-on-divergenc
 
 ```bash
 export DUMP_PROBE=1
-export DUMP_PROBE_DIR=/vllm-workspace/dumps/layer23
+export DUMP_PROBE_DIR=$DUMPS/layer23
 export DUMP_PROBE_TENSOR='layers\.23\.self_attn'
 export DUMP_PROBE_ROWS=32
 ```
@@ -134,8 +136,8 @@ export DUMP_PROBE_ROWS=32
 
 ```bash
 python .../dump_compare.py tensors \
-  --left  /vllm-workspace/dumps/eager/cmpl-abc-rank0.pt \
-  --right /vllm-workspace/dumps/graph/cmpl-abc-rank0.pt \
+  --left  $DUMPS/eager/cmpl-abc-rank0.pt \
+  --right $DUMPS/graph/cmpl-abc-rank0.pt \
   --atol 1e-3 --rtol 1e-3
 ```
 
@@ -209,7 +211,7 @@ python -c 'from vllm_ascend.utils import enable_custom_op; print(enable_custom_o
 拉到能跑算子的机器上，先看抓到了什么。同名 stage 每层一次是常态，`--list` 会报出次数和寻址范围：
 
 ```bash
-python replay_op.py --dump /vllm-workspace/dumps/gmm/cmpl-abc-rank0.pt --list
+python replay_op.py --dump $DUMPS/gmm/cmpl-abc-rank0.pt --list
 # {"stages": {"gmm1": {"occurrences": 56, "inputs": [...],
 #                      "addressable_as": "gmm1#0 .. gmm1#55"}}}
 ```
@@ -218,7 +220,7 @@ python replay_op.py --dump /vllm-workspace/dumps/gmm/cmpl-abc-rank0.pt --list
 
 ```bash
 python replay_op.py \
-  --dump /vllm-workspace/dumps/gmm/cmpl-abc-rank0.pt \
+  --dump $DUMPS/gmm/cmpl-abc-rank0.pt \
   --stage gmm1#10 \
   --candidate torch_npu.npu_grouped_matmul \
   --reference my_refs.grouped_matmul_reference \

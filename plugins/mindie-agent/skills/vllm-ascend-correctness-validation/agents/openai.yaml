@@ -4,3 +4,5 @@ interface:
   default_prompt: Use $vllm-ascend-correctness-validation to compare inference outputs
     across code or execution configurations with explicit comparability and numerical
     criteria.
+policy:
+  allow_implicit_invocation: false

@@ -1,9 +1,9 @@
 # Optional report inputs
 
-From the repository root:
+Run with the MindIE plugin's configured Python; the script resolves by its absolute path under the installed Skill directory, and the business checkout stays the working directory:
 
 ```text
-python3 skills/ascend-triton-workflow/scripts/triton_workflow.py --config operator.json --development development/manifest.json --validation validation/manifest.json --optimization optimization/manifest.json
+python /absolute/domain/skills/ascend-triton-workflow/scripts/triton_workflow.py --config operator.json --development development/manifest.json --validation validation/manifest.json --optimization optimization/manifest.json
 ```
 
 Supply the manifests relevant to the configured report scope using

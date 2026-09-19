@@ -1,9 +1,9 @@
 # Report options
 
-From the repository root:
+Run with the MindIE plugin's configured Python; the script resolves by its absolute path under the installed Skill directory, and the business checkout stays the working directory:
 
 ```text
-python3 skills/vllm-ascend-change-validation/scripts/change_validation.py --baseline BASE --candidate HEAD --repo-root source --evidence correctness/manifest.json performance/manifest.json
+python /absolute/plugin/skills/vllm-ascend-change-validation/scripts/change_validation.py --baseline BASE --candidate HEAD --repo-root source --evidence correctness/manifest.json performance/manifest.json
 ```
 
 Use `--diff-file` for an existing diff. The report preserves supplied run outcomes,
