@@ -2,7 +2,10 @@
 """Bounded, model-free MindIE updates. Main now; stable GitHub releases later.
 
 Scheduling has a platform boundary: macOS uses a user LaunchAgent, Windows a
-scheduled task (implemented, not yet verified on real hardware).
+scheduled task (implemented, not yet verified on real hardware). Filesystem
+publishing uses an atomic symlink swap on POSIX; on Windows it uses an
+unprivileged directory junction with a non-atomic swap covered by the
+transaction journal (likewise unverified on real hardware).
 """
 
 import argparse
@@ -85,12 +88,46 @@ def atomic(path, value):
         Path(name).unlink(missing_ok=True)
 
 
+def _remove_link(path):
+    """Remove an updater-owned link (file/dir symlink or junction), never real data."""
+    if not path.is_symlink():
+        if os.name == "nt" and path.is_dir():
+            attributes = os.stat(path, follow_symlinks=False).st_file_attributes
+            if attributes & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT: junction
+                os.rmdir(path)
+                return
+            raise Incompatible(f"refusing to replace real directory: {path}")
+        if not path.exists():
+            return
+    path.unlink()
+
+
 def link(path, target):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".next")
-    temporary.unlink(missing_ok=True)
+    _remove_link(temporary)
+    if os.name == "nt":
+        # Windows (unverified on real hardware): plain users lack
+        # SeCreateSymbolicLinkPrivilege, but a directory junction needs no
+        # privilege. Junctions cannot be atomically replaced, so the stale
+        # link is removed first; the transaction journal re-creates it if the
+        # process dies in between.
+        subprocess.run(
+            ["cmd", "/d", "/c", "mklink", "/J", str(temporary), str(target)],
+            check=True,
+            capture_output=True,
+            timeout=10,
+        )
+        _remove_link(path)
+        os.replace(temporary, path)
+        return
     temporary.symlink_to(target, target_is_directory=True)
     os.replace(temporary, path)
+
+
+def venv_python(venv):
+    """The interpreter uv creates inside a venv, on either platform."""
+    return venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
 class Updater:
@@ -278,7 +315,7 @@ class Updater:
         if self.command(["git", "-C", source, "rev-parse", "HEAD"]).strip() != sha:
             raise ValueError("fetched revision changed")
         self.validate_source(source)
-        python = generation / "venv/bin/python"
+        python = venv_python(generation / "venv")
         uv = self.settings["uv"]
         self.command(
             [uv, "venv", "--python", self.settings["python"], generation / "venv"],

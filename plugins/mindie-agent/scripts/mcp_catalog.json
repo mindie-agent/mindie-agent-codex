@@ -92,7 +92,7 @@
     },
     {
       "name": "knowledge_use",
-      "description": "Requires manual MindIE activation. Record what an experience changed or enabled beyond existing checks, with observed evidence and limits. Citation alone is not benefit; a fresh judge evaluates after Stop.",
+      "description": "Requires manual MindIE activation in this session. Record what an experience changed or enabled beyond existing checks, with observed evidence and limits. Citation alone is not benefit. An independent judge evaluates after this task's Stop hook.",
       "inputSchema": {
         "type": "object",
         "properties": {

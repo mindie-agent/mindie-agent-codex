@@ -3,8 +3,9 @@
 Codex adapter for MindIE Agent's first domain experience loop. The user works in
 the native Codex task; this plugin adds **one entry skill, fourteen migrated
 vLLM-Ascend domain skills, four knowledge tools, and eleven core remote-dev tools**.
-The initial domain is `vllm-ascend`; the retired Triton workspace skills live as a
-separate domain seed under `domains/triton-ascend/` and are not loaded by this plugin.
+The initial domain is `vllm-ascend`; the retired Triton workspace skills live as an
+unsupported, separate domain seed under `domains/triton-ascend/` and are not loaded
+by this plugin.
 
 ```mermaid
 flowchart LR
@@ -61,7 +62,8 @@ this session without touching other tasks. Leases last
 at most 24 hours and are bound to this adapter configuration; renewal requires another
 explicit user invocation. Do not put activation values in reports or other tasks.
 Domain skill CLIs under `plugins/mindie-agent/skills/` run locally against the user's
-business directory; when the adapter is configured they require
+business directory (the entry skill is `plugins/mindie-agent/skills/mindie-agent`,
+invoked as `$mindie-agent`); when the adapter is configured they require
 `MINDIE_SESSION_ID`/`MINDIE_ACTIVATION` exported from the activation step.
 Inspect the existing service without starting it:
 
@@ -137,8 +139,10 @@ cache entrypoints or the generation backing the installed plugin, and keeps
 rollback metadata unless `--purge` runs with no live references. The updater also
 tops up a generation installed by a previous controller with the pinned
 `domain-requirements.txt` runtime (bounded, observable, three attempts per
-revision). Windows scheduling (Task Scheduler), locks and process bounds are
-implemented with standard primitives and marked unverified pending real hardware.
+revision). Windows scheduling (Task Scheduler), locks, process bounds and
+filesystem publishing (an unprivileged directory junction with a journal-covered,
+non-atomic swap in place of the POSIX symlink swap) are implemented with standard
+primitives and marked unverified pending real hardware.
 
 The first managed install can snapshot locally tested safety fixes even when they
 are not yet on main. Remote updates remain pending until those fixes and the matching
@@ -192,7 +196,9 @@ multi-tenant service. Tokens are service credentials, not proof of human identit
   entrypoint, which answers it with empty JSON.
 - Installation, MCP initialize/tools-list and hook receipt never activate a task.
   Discovery reads only a bundled schema file. Every business call requires a
-  session ID and matching local capability from manual activation. The knowledge
+  session ID and matching local capability from manual activation; a missing
+  adapter configuration or a missing/expired lease fails closed (the old
+  no-configuration development bypass is removed). The knowledge
   service also checks admission, so old clients without credentials fail closed.
   Shared runtime configurations opt into this check with `session_activation`.
 - Knowledge calls have a **15-second absolute process deadline**; remote calls

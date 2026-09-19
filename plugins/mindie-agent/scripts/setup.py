@@ -5,8 +5,50 @@ import argparse
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
+
+from bounded_process import run
+
+# The configured interpreter must carry the exact runtime and domain pins;
+# the updater's capability probe covers deeper runtime behavior.
+PROBE_MODULES = (
+    "mindie_knowledge.loop.cli",
+    "knowledge_intake",
+    "remote_dev.mcp.server",
+    "mindie_coordinator.task_client",
+)
+PROBE_TIMEOUT = 15
+
+PROBE_SCRIPT = """
+import importlib
+missing = []
+for name in {modules!r}:
+    try:
+        importlib.import_module(name)
+    except Exception as exc:
+        missing.append(f"{{name}} ({{type(exc).__name__}}: {{exc}})")
+print("MISSING: " + "; ".join(missing) if missing else "OK")
+""".format(modules=list(PROBE_MODULES))
+
+
+def probe_runtime(python):
+    """Fail clearly, before any configuration write, when a pin is missing.
+
+    One bounded child with owned process-group cleanup; no retry. A broken
+    interpreter (timeout/nonzero exit) and a missing module both stop setup.
+    """
+    try:
+        output = run([python, "-c", PROBE_SCRIPT], "", timeout=PROBE_TIMEOUT)
+    except Exception as exc:
+        raise SystemExit(
+            f"knowledge runtime probe failed to run in {python}: "
+            f"{type(exc).__name__}: {str(exc)[:200]}"
+        )
+    if not output.strip().endswith("OK"):
+        raise SystemExit(
+            f"{python} is missing pinned dependencies: {output.strip()}. "
+            "Install runtime-requirements.txt and domain-requirements.txt first."
+        )
 
 
 def write_private(path, value):
@@ -49,14 +91,7 @@ def main():
     args = parser.parse_args()
     python = str(Path(args.knowledge_python).expanduser().absolute())
     # Keep the venv executable path; resolving its symlink loses its site-packages.
-    subprocess.run(
-        [
-            python,
-            "-c",
-            "from mindie_knowledge.loop.cli import main; from remote_dev.mcp import server; import knowledge_intake",
-        ],
-        check=True,
-    )
+    probe_runtime(python)
     import re
 
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args.domain):
