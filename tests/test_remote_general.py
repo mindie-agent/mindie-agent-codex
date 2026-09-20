@@ -88,3 +88,10 @@ class GeneralRemoteTests(unittest.TestCase):
                 self.assertFalse(runtime_call.call({'surface': 'remote', 'remote_session_id': task, 'name': 'remote_job_status', 'arguments': {'job_id': 'job-test-123'}})['isError'])
         self.assertNotEqual(seen[0], seen[1])
         self.assertFalse(self.config.with_suffix('.sessions.sqlite3').exists())
+
+    def test_job_authorization_never_exposed_in_model_result(self):
+        value = {'text': 'running', 'result': {'outcome': 'success', 'job': {'job_id': 'job-own-1', 'authorization': {'token': 'local-test-secret'}}}}
+        with patch.dict(os.environ), patch('remote_dev.mcp.tools.call_tool', return_value=value), patch('remote_dev.core.rpc_transport.close_connections'):
+            result = runtime_call.call({'surface': 'remote', 'remote_session_id': 'task-A', 'name': 'remote_job_status', 'arguments': {'job_id': 'job-own-1'}})
+        self.assertNotIn('local-test-secret', json.dumps(result))
+        self.assertEqual(result['structuredContent']['job']['job_id'], 'job-own-1')

@@ -95,6 +95,11 @@ def remote(payload):
     try:
         value = call_tool(name, args)
         result = value.get("result", {}) if isinstance(value, dict) else {}
+        # Job authorization stays inside remote-dev's task-local store. The
+        # model controls jobs by opaque job_id and must not receive IPC tokens.
+        if isinstance(result, dict) and isinstance(result.get("job"), dict):
+            result = dict(result, job={k: v for k, v in result["job"].items()
+                                      if k != "authorization"})
         details = result.get("error_details") if isinstance(result, dict) else None
         uncertain = isinstance(result, dict) and (
             result.get("status") == "submission_uncertain"
