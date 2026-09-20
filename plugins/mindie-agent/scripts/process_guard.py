@@ -58,7 +58,10 @@ def run_codex(command, prompt):
             # cap by more than one line) and signal the consumer, which aborts
             # and kills the process group, so a flooding producer can neither
             # grow memory nor deadlock cancellation.
-            for line in process.stdout:
+            while True:
+                line = process.stdout.readline(MAX_OUTPUT + 1)
+                if not line:
+                    break
                 total[0] += len(line)
                 if total[0] > MAX_OUTPUT:
                     flooded.append(True)
@@ -68,8 +71,11 @@ def run_codex(command, prompt):
             lines.put(None)
 
         def read_stderr():
-            while process.stderr.read(8192):
-                total[0] += 8192
+            while True:
+                chunk = process.stderr.read(8192)
+                if not chunk:
+                    break
+                total[0] += len(chunk)
                 if total[0] > MAX_OUTPUT:
                     flooded.append(True)
                     return

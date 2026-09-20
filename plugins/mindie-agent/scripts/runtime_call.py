@@ -39,6 +39,15 @@ def call(payload):
         else:
             raise ValueError("unknown knowledge tool")
         connection = ensure_service(config["engine_config"])
+        if name == "knowledge_attach":
+            # Admission is owned by the existing lease; startup needs no
+            # second attach protocol or duplicate session registry.
+            value = rpc(connection, "status", timeout=5)
+            return dict(
+                content=[dict(type="text", text=json.dumps(value, ensure_ascii=False))],
+                structuredContent=value,
+                isError=False,
+            )
         # Never reconnect and resubmit a request with an uncertain outcome.
         value = rpc(
             connection,
