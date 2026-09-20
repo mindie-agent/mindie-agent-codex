@@ -356,8 +356,12 @@ class Updater:
         )
         atomic(manifest_path, manifest)
         # A loaded task keeps an immutable entrypoint even if Codex removes its cache.
-        mcp = read(plugin / ".mcp.json")
         config_value = str(Path(self.config).expanduser().absolute())
+        atomic(
+            plugin / "scripts" / "installation.json",
+            {"adapter_config": config_value},
+        )
+        mcp = read(plugin / ".mcp.json")
         for server in mcp["mcpServers"].values():
             server["command"] = self.settings["python"]
             server["args"][0] = str(plugin / server["args"][0])
@@ -407,7 +411,7 @@ class Updater:
             # command and native user review. Never write the native trust store.
             files = {
                 "bridge.py", "bounded_process.py", "session_gate.py",
-                "sharing.py", "update_lock.py",
+                "sharing.py", "update_lock.py", "installation.json",
             }
             if all(
                 (previous / "scripts" / name).is_file()

@@ -23,9 +23,67 @@ from bounded_process import run
 from update_lock import update_lock
 
 IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
+# Private helper-dispatch pin. Not an operator ambient; ordinary inherited
+# MINDIE_AGENT_CONFIG must not override an installed binding.
+_DISPATCH_CONFIG = "_MINDIE_AGENT_DISPATCH_CONFIG"
+_explicit_config = None
+
+
+def bind_explicit_config(path=None):
+    """Process-local adapter path from `--config`. None clears the override.
+
+    Also pins MINDIE_AGENT_CONFIG for child dispatch. Does not set native
+    task identity.
+    """
+    global _explicit_config
+    if path is None:
+        _explicit_config = None
+        return None
+    resolved = Path(path).expanduser().absolute()
+    _explicit_config = resolved
+    os.environ["MINDIE_AGENT_CONFIG"] = str(resolved)
+    return resolved
+
+
+def _installation_binding():
+    """Packaged sidecar next to this script; missing means unbound source."""
+    path = Path(__file__).resolve().parent / "installation.json"
+    if not path.exists():
+        return None
+    if not path.is_file():
+        raise ValueError("installation config binding is not a file")
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise ValueError("installation config binding is unreadable") from exc
+    if not isinstance(data, dict):
+        raise ValueError("installation config binding is invalid")
+    value = data.get("adapter_config")
+    if not isinstance(value, str) or not os.path.isabs(value):
+        raise ValueError(
+            "installation config binding requires an absolute adapter_config"
+        )
+    return Path(value).expanduser().absolute()
+
+
+def _dispatch_config():
+    if _DISPATCH_CONFIG not in os.environ:
+        return None
+    value = os.environ.get(_DISPATCH_CONFIG)
+    if not isinstance(value, str) or not os.path.isabs(value):
+        raise ValueError("helper dispatch config requires an absolute path")
+    return Path(value).expanduser().absolute()
 
 
 def config_path():
+    if _explicit_config is not None:
+        return Path(_explicit_config)
+    dispatched = _dispatch_config()
+    if dispatched is not None:
+        return dispatched
+    bound = _installation_binding()
+    if bound is not None:
+        return bound
     return (
         Path(
             os.environ.get(
@@ -53,7 +111,9 @@ def generation_env(config=None):
     interpreter's installed knowledge/remote-dev pins.
     """
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
-    env["MINDIE_AGENT_CONFIG"] = str(Path(config or config_path()).absolute())
+    selected = str(Path(config or config_path()).absolute())
+    env["MINDIE_AGENT_CONFIG"] = selected
+    env[_DISPATCH_CONFIG] = selected
     return env
 
 

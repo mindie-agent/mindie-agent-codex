@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
 from auto_update import Updater, atomic, read
-from session_gate import Sessions
+from session_gate import Sessions, bind_explicit_config
 from update_lock import update_lock
 
 
@@ -208,8 +208,10 @@ class AutoUpdateTests(unittest.TestCase):
             ),
         )
         self.updater = LocalUpdater(self.settings)
+        bind_explicit_config(None)
 
     def tearDown(self):
+        bind_explicit_config(None)
         self.temp.cleanup()
 
     def git(self, *args):
@@ -286,11 +288,89 @@ class AutoUpdateTests(unittest.TestCase):
         import bridge as bridge_mod
         from session_gate import config_path as live_config
 
-        with patch.dict(os.environ, {"MINDIE_AGENT_CONFIG": other}, clear=False):
-            rest = bridge_mod._optional_config_prefix(["--config", expected, "stop"])
-            self.assertEqual(rest, ["stop"])
-            self.assertEqual(str(live_config()), expected)
-            self.assertEqual(os.environ["MINDIE_AGENT_CONFIG"], expected)
+        bind_explicit_config(None)
+        try:
+            with patch.dict(os.environ, {"MINDIE_AGENT_CONFIG": other}, clear=False):
+                rest = bridge_mod._optional_config_prefix(["--config", expected, "stop"])
+                self.assertEqual(rest, ["stop"])
+                self.assertEqual(str(live_config()), expected)
+                self.assertEqual(os.environ["MINDIE_AGENT_CONFIG"], expected)
+        finally:
+            bind_explicit_config(None)
+        binding = read(plugin / "scripts/installation.json")
+        self.assertEqual(binding, {"adapter_config": expected})
+
+    def test_generated_bridge_init_binds_installation_config_without_env(self):
+        result = self.check()
+        self.assertEqual(result["status"], "installed")
+        plugin = Path(result["current"]["plugin"])
+        expected = str(self.config.expanduser().absolute())
+        # LocalUpdater intentionally creates a dummy venv. This subprocess
+        # checks actual dispatch, so bind the reviewed test interpreter.
+        adapter = read(self.config)
+        adapter["python"] = sys.executable
+        atomic(self.config, adapter)
+        home = self.base / "clean-home"
+        (home / ".config/mindie-agent").mkdir(parents=True)
+        decoy = home / ".config/mindie-agent/codex.json"
+        decoy.write_text(
+            json.dumps(
+                dict(
+                    python="decoy",
+                    engine_config=str(self.base / "decoy-engine.json"),
+                    admission_path=str(self.base / "decoy.admission.sqlite3"),
+                    runtime_scripts=str(plugin / "scripts"),
+                )
+            )
+        )
+        other = self.base / "other-adapter.json"
+        atomic(
+            other,
+            dict(
+                python=sys.executable,
+                engine_config=str(self.engine),
+                admission_path=str(self.admission),
+                runtime_scripts=str(plugin / "scripts"),
+            ),
+        )
+        env = {
+            "HOME": str(home),
+            "PATH": os.environ.get("PATH", ""),
+            "TMPDIR": str(self.base / "tmp"),
+        }
+        (self.base / "tmp").mkdir(exist_ok=True)
+        bridge = plugin / "scripts/bridge.py"
+        init = subprocess.run(
+            [sys.executable, str(bridge), "init"],
+            text=True,
+            capture_output=True,
+            timeout=15,
+            env=env,
+        )
+        self.assertEqual(init.returncode, 0, init.stderr)
+        payload = json.loads(init.stdout)
+        self.assertEqual(payload["adapter"]["config"], expected)
+        status = subprocess.run(
+            [sys.executable, str(bridge), "status"],
+            text=True,
+            capture_output=True,
+            timeout=15,
+            env={**env, "MINDIE_AGENT_CONFIG": str(decoy)},
+        )
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertEqual(json.loads(status.stdout)["adapter"]["config"], expected)
+        prefixed = subprocess.run(
+            [sys.executable, str(bridge), "--config", str(other), "status"],
+            text=True,
+            capture_output=True,
+            timeout=15,
+            env={**env, "MINDIE_AGENT_CONFIG": str(decoy)},
+        )
+        self.assertEqual(prefixed.returncode, 0, prefixed.stderr)
+        self.assertEqual(
+            json.loads(prefixed.stdout)["adapter"]["config"],
+            str(other.expanduser().absolute()),
+        )
 
     def test_missing_contract_never_replaces_local_safety_fix(self):
         (self.remote / "update-contract.json").unlink()

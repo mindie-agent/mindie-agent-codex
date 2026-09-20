@@ -23,7 +23,13 @@ import threading
 import time
 
 from bounded_process import run
-from session_gate import Sessions, config_path, generation_env, runtime_scripts
+from session_gate import (
+    Sessions,
+    bind_explicit_config,
+    config_path,
+    generation_env,
+    runtime_scripts,
+)
 import sharing
 from update_lock import update_lock
 
@@ -347,15 +353,16 @@ def configure(argv):
 def _optional_config_prefix(argv):
     """Accept `--config PATH` before the operation; leave host identity alone.
 
-    Sets only this process's MINDIE_AGENT_CONFIG. Default invocation without
-    the prefix is unchanged.
+    Sets the process-local explicit override and MINDIE_AGENT_CONFIG for
+    child dispatch. Default invocation without the prefix is unchanged.
+    Native task identity is not set here.
     """
     if len(argv) >= 2 and argv[0] == "--config":
         value = argv[1]
         if not isinstance(value, str) or not os.path.isabs(value):
             print("MindIE --config requires an absolute path", file=sys.stderr)
             raise SystemExit(1)
-        os.environ["MINDIE_AGENT_CONFIG"] = str(Path(value).expanduser().absolute())
+        bind_explicit_config(value)
         return argv[2:]
     return argv
 
