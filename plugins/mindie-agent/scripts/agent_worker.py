@@ -58,7 +58,7 @@ For each genuinely reusable finding return one entry:
 - entry_id: null for a new entry, or the id of an existing draft owned by this task that the new material extends or corrects.
 - title: a specific searchable title, at most 240 characters.
 - summary: a short retrieval-oriented abstract with the key conditions, at most 2048 bytes.
-- conditions: the environment/version/configuration facts that determine applicability, as a list of {"key","value"} objects with unique nonempty keys; state only observed facts.
+- conditions: ONLY observed software versions or source commit IDs, as {"key","value"} objects with unique nonempty keys (key <=128 characters, value <=512 characters); for example torch_version or vllm_ascend_commit. Use [] when unknown. Put all other context in the detailed body: hardware, topology, configuration, shape, random seed, epsilon, device mapping, tolerances and applicability limits. Preserve those details there; do not duplicate them in this header or infer versions. One observed version or passing case does not establish universal compatibility or tolerances.
 - content: for a new entry, the detailed case body: problem and background, failed attempts and why they failed, the correction steps, necessary commands or code fragments, observed results, unverified parts and applicability limits. Preserve the relationship between failure, correction and outcome; do not compress a failure process into one conclusion. For an update to an existing draft, a self-contained appended observation or correction: state "previously concluded X, later observed Y, therefore Z" rather than pointing at earlier sections; never restate or replace the existing body, and never drop earlier failures or limits because this round did not mention them.
 - sources: public references only.
 For an update, title/summary/conditions/sources describe the CURRENT conclusion; preserve any superseded claim only in the appended body with an explicit correction. A clipped tool result or an assistant's claim alone is not independently verified evidence: name its source and limitations. Keep exact public identifiers, commands, code, numbers and failure conditions when available. Do not add a failed attempt, command or validation result that is absent from the material. Coverage gaps mean unknown, never inferred success. Avoid drafting speculative intermediate hypotheses as established guidance; an unfinished investigation may produce zero entries. Related material should extend an existing task-owned entry instead of creating parallel duplicates.
@@ -79,11 +79,13 @@ def convert_conditions(pairs):
         if not isinstance(pair, dict) or set(pair) != {"key", "value"}:
             raise ValueError("invalid organized entry conditions")
         key, value = pair["key"], pair["value"]
-        if not isinstance(key, str) or not key.strip() or len(key) > 256:
+        if (not isinstance(key, str) or not key.strip()
+                or key != key.strip() or len(key) > 128):
             raise ValueError("invalid organized entry condition key")
         if key in conditions:
             raise ValueError("duplicate organized entry condition key")
-        if not isinstance(value, str) or len(value.encode()) > 2048:
+        if (not isinstance(value, str) or not value.strip()
+                or value != value.strip() or len(value) > 512):
             raise ValueError("invalid organized entry condition value")
         conditions[key] = value
     return conditions

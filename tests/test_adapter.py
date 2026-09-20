@@ -114,7 +114,11 @@ class AdapterTests(unittest.TestCase):
         for pairs in (
             [{"key": "a", "value": "1"}, {"key": "a", "value": "2"}],  # duplicate
             [{"key": "  ", "value": "1"}],  # empty key
-            [{"key": "a", "value": "x" * 2049}],  # oversized value
+            [{"key": "a", "value": "x" * 513}],  # core value limit
+            [{"key": "a" * 129, "value": "v"}],  # core key limit
+            [{"key": "a", "value": ""}],  # empty value
+            [{"key": " a", "value": "v"}],  # noncanonical key
+            [{"key": "a", "value": "v "}],  # noncanonical value
             [{"key": "a"}],  # malformed pair
         ):
             with self.subTest(pairs=pairs), self.assertRaises(ValueError):
