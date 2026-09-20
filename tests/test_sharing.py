@@ -241,14 +241,14 @@ class CommandTests(SharingFixture):
         settings = sharing.validate(json.loads(self.community.read_text()))
         self.assertTrue(settings["enabled"])
         self.assertEqual(self.community.stat().st_mode & 0o777, 0o600)
-        # Disable keeps settings, bumps generation, and the cancel notify is
-        # bounded (no service runs here, so it reports unavailable quickly).
+        # Disable keeps settings and bumps the generation; the generation
+        # change itself is the core-observed cancellation signal.
         started = time.monotonic()
         disabled = json.loads(self.bridge("sharing-disable").stdout)
         self.assertLess(time.monotonic() - started, 8)
         self.assertEqual(disabled["status"], "disabled")
         self.assertNotEqual(disabled["generation"], first)
-        self.assertTrue(disabled["cancel_notify"].startswith("notify-unavailable"))
+        self.assertIn("rereads this generation", disabled["cancel"])
         settings = sharing.validate(json.loads(self.community.read_text()))
         self.assertFalse(settings["enabled"])
         self.assertIsNone(settings["enabled_at"])

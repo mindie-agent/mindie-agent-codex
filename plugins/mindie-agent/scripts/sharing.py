@@ -199,32 +199,6 @@ def set_enabled(enable, config_file=None):
         return settings
 
 
-def cancel_notify(config_file=None, timeout=2.0):
-    """Bounded cancel notification to a RUNNING local service; never starts one.
-
-    Uses the same operator path as service_control: a missing service is a
-    no-op, not an error. The knowledge core applies its own bounded cleanup
-    for queued maintenance, batch timers and pending outbound batches.
-    """
-    import subprocess  # local import: bridge startup stays lean
-
-    config_file = Path(config_file or config_path())
-    config = json.loads(config_file.read_text())
-    control = Path(__file__).with_name("service_control.py")
-    try:
-        completed = subprocess.run(
-            [config["python"], str(control), "sharing-cancel"],
-            capture_output=True,
-            text=True,
-            timeout=max(0.1, timeout + 1.0),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return "notify-unavailable:" + type(exc).__name__
-    if completed.returncode:
-        return "notify-unavailable:no-running-service"
-    return "notified"
-
-
 def status(config_file=None):
     """Read-only sharing status; initializes no service, model or database."""
     config_file = Path(config_file or config_path())

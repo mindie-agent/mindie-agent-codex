@@ -53,8 +53,17 @@ def run_codex(command, prompt):
         flooded = []
 
         def read_stdout():
+            # In-memory accumulation stays below MAX_OUTPUT: once the cap is
+            # exceeded we stop queueing lines (the queue can never outgrow the
+            # cap by more than one line) and signal the consumer, which aborts
+            # and kills the process group, so a flooding producer can neither
+            # grow memory nor deadlock cancellation.
             for line in process.stdout:
                 total[0] += len(line)
+                if total[0] > MAX_OUTPUT:
+                    flooded.append(True)
+                    lines.put(None)
+                    return
                 lines.put(line)
             lines.put(None)
 
@@ -103,6 +112,8 @@ def run_codex(command, prompt):
                         break
                     continue
                 if line is None:
+                    if flooded:
+                        raise ValueError("Codex maintenance output exceeds limit")
                     break
                 if line.strip():
                     check_line(line)

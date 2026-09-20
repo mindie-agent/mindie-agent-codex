@@ -182,13 +182,12 @@ def sharing_operation(operation):
             note="only newly authorized material is captured; no backfill",
         )
     settings = sharing.set_enabled(False)
-    notify = sharing.cancel_notify()
     return dict(
         status="disabled",
         generation=settings["generation"],
-        cancel_notify=notify,
-        note="queued capture/organization in this scope is cancelled by the "
-        "running service; drafts and published data are kept",
+        cancel="the running service rereads this generation on its bounded "
+        "idle tick and cancels matching queued capture/organization/outbound "
+        "work (core-owned); drafts and published data are kept",
     )
 
 

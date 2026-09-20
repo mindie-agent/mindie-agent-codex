@@ -706,12 +706,14 @@ class Updater:
             ],
             timeout=KNOWLEDGE_TIMEOUT,
         )
-        result = json.loads(output) if output.strip() else {}
+        # Actual core surface: `sync` prints one JSON list of per-feed results.
+        result = json.loads(output) if output.strip() else []
+        if not isinstance(result, list):
+            raise ValueError("unexpected knowledge sync result shape")
         self.save(
             self.state.get("status", "unknown"),
-            knowledge_status=result.get("status", "ok")
-            if isinstance(result, dict)
-            else "ok",
+            knowledge_status="ok",
+            knowledge_feeds=len(result),
             knowledge_error=None,
             knowledge_checked_at=time.time(),
         )

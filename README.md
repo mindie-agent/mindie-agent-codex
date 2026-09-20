@@ -257,13 +257,10 @@ removed). Current-architecture acceptance is owned by root and tracked in
 python3 -m unittest discover -s tests -p 'test_*.py'
 # With the pinned/patched runtime interpreter, regenerate then compare the catalog:
 .venv/bin/python plugins/mindie-agent/scripts/export_catalog.py
-# Opt-in: actual model calls, native hooks/MCP, three independent service roots.
-.venv/bin/python tests/live_acceptance.py --output .local/acceptance/run-1
 ```
 
-`tests/live_acceptance.py` targets the previous judge/upstream design and is
-retained as historical reference only; root owns current acceptance. Local raw
-logs are ignored by Git.
+Current-architecture acceptance is owned by root; no in-repo model harness
+remains. Local raw logs are ignored by Git.
 
 ## Codex integration references
 

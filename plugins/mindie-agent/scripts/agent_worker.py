@@ -31,14 +31,19 @@ def object_schema(properties):
 
 
 STRING = {"type": "string"}
+# The native strict output-schema path rejects an open-ended conditions object
+# (HTTP 400 invalid_json_schema, real gpt-5.6-luna/max attempt 04:19 UTC). On
+# the wire conditions are a bounded array of strictly shaped key/value pairs;
+# the worker converts them deterministically to the core ABI dict below.
+CONDITION_PAIR = object_schema({"key": STRING, "value": STRING})
 ENTRY_SCHEMA = object_schema(
     {
         "entry_id": {"type": ["string", "null"], "maxLength": 256},
         "title": {"type": "string", "maxLength": 240},
         "summary": {"type": "string", "maxLength": 2048},
-        "conditions": dict(type="object", additionalProperties=STRING),
+        "conditions": {"type": "array", "maxItems": 64, "items": CONDITION_PAIR},
         "content": STRING,
-        "sources": {"type": "array", "items": STRING},
+        "sources": {"type": "array", "maxItems": 16, "items": STRING},
     }
 )
 SCHEMAS = {
@@ -53,11 +58,34 @@ For each genuinely reusable finding return one entry:
 - entry_id: null for a new entry, or the id of an existing draft owned by this task that the new material extends or corrects.
 - title: a specific searchable title, at most 240 characters.
 - summary: a short retrieval-oriented abstract with the key conditions, at most 2048 bytes.
-- conditions: environment/version/configuration facts that determine applicability, as key-value strings; state only observed facts.
+- conditions: the environment/version/configuration facts that determine applicability, as a list of {"key","value"} objects with unique nonempty keys; state only observed facts.
 - content: for a new entry, the detailed case body: problem and background, failed attempts and why they failed, the correction steps, necessary commands or code fragments, observed results, unverified parts and applicability limits. Preserve the relationship between failure, correction and outcome; do not compress a failure process into one conclusion. For an update to an existing draft, a self-contained appended observation or correction: state "previously concluded X, later observed Y, therefore Z" rather than pointing at earlier sections; never restate or replace the existing body, and never drop earlier failures or limits because this round did not mention them.
 - sources: public references only.
 Preserve conditions and uncertainty; missing environment versions, artifacts or results stay missing — never fabricate them. Remove private paths, host addresses, credentials and personal identifiers; retain useful public technical names. Return an empty list for generic chat, unsupported claims, or material with no reusable content; do not invent knowledge to fill entries. Return only JSON matching the schema.""",
 }
+
+
+def convert_conditions(pairs):
+    """Wire array of {key,value} pairs -> core ABI conditions dict.
+
+    Deterministic validation only; malformed pairs reject the whole result
+    and are never repaired or retried through the model.
+    """
+    if not isinstance(pairs, list) or len(pairs) > 64:
+        raise ValueError("invalid organized entry conditions")
+    conditions = {}
+    for pair in pairs:
+        if not isinstance(pair, dict) or set(pair) != {"key", "value"}:
+            raise ValueError("invalid organized entry conditions")
+        key, value = pair["key"], pair["value"]
+        if not isinstance(key, str) or not key.strip() or len(key) > 256:
+            raise ValueError("invalid organized entry condition key")
+        if key in conditions:
+            raise ValueError("duplicate organized entry condition key")
+        if not isinstance(value, str) or len(value.encode()) > 2048:
+            raise ValueError("invalid organized entry condition value")
+        conditions[key] = value
+    return conditions
 
 
 def check_entry(entry):
@@ -74,17 +102,7 @@ def check_entry(entry):
     summary = entry["summary"]
     if not isinstance(summary, str) or len(summary.encode()) > 2048:
         raise ValueError("organized entry summary exceeds limit")
-    conditions = entry["conditions"]
-    if not isinstance(conditions, dict) or len(conditions) > 64:
-        raise ValueError("invalid organized entry conditions")
-    for key, value in conditions.items():
-        if (
-            not isinstance(key, str)
-            or not isinstance(value, str)
-            or len(key) > 256
-            or len(value.encode()) > 2048
-        ):
-            raise ValueError("invalid organized entry conditions")
+    entry["conditions"] = convert_conditions(entry["conditions"])
     content = entry["content"]
     # Detailed bodies are wanted; the 32 KiB structured-result envelope is the
     # only size cap, so no tiny prose limit rejects real failure detail here.

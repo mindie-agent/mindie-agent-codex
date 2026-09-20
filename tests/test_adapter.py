@@ -73,7 +73,7 @@ class AdapterTests(unittest.TestCase):
                                 entry_id=None,
                                 title="Container logical device numbering",
                                 summary="Map device by logical index inside containers",
-                                conditions={"runtime": "container"},
+                                conditions=[{"key": "runtime", "value": "container"}],
                                 content="The host maps physical device 8; inside the "
                                 "container logical numbering starts at 0. The original "
                                 "run failed requesting device 8; selecting logical "
@@ -96,10 +96,36 @@ class AdapterTests(unittest.TestCase):
                     "existing_drafts": [],
                 }
             )
-        self.assertIsNone(result["entries"][0]["entry_id"])
+        entry = result["entries"][0]
+        self.assertIsNone(entry["entry_id"])
+        # Wire pairs are converted to the core ABI conditions dict.
+        self.assertEqual(entry["conditions"], {"runtime": "container"})
         # The retired judge role is not served under any name.
         with self.assertRaises(ValueError):
             worker.run({"role": "judge", "outcome": "untrusted material"})
+
+    def test_worker_conditions_wire_mapping_is_strictly_validated(self):
+        spec = importlib.util.spec_from_file_location(
+            "agent_worker", SCRIPTS / "agent_worker.py"
+        )
+        worker = importlib.util.module_from_spec(spec)
+        with patch.object(sys, "path", [str(SCRIPTS), *sys.path]):
+            spec.loader.exec_module(worker)
+        for pairs in (
+            [{"key": "a", "value": "1"}, {"key": "a", "value": "2"}],  # duplicate
+            [{"key": "  ", "value": "1"}],  # empty key
+            [{"key": "a", "value": "x" * 2049}],  # oversized value
+            [{"key": "a"}],  # malformed pair
+        ):
+            with self.subTest(pairs=pairs), self.assertRaises(ValueError):
+                worker.convert_conditions(pairs)
+        self.assertEqual(
+            worker.convert_conditions([{"key": "k", "value": "v"}]), {"k": "v"}
+        )
+        # The native strict wire schema has no open-ended objects anywhere.
+        text_schema = json.dumps(worker.SCHEMAS["organize"])
+        self.assertNotIn('"additionalProperties": {"type": "string"}', text_schema)
+        self.assertIn('"items"', text_schema)
 
 
 if __name__ == "__main__":
