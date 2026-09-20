@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import sys
 import time
 
@@ -107,7 +108,7 @@ def community_settings(args, parser):
     settings = dict(
         schema=sharing.SCHEMA,
         enabled=True,
-        generation="1",
+        generation=secrets.token_hex(16),
         enabled_at=time.time(),
         repository=args.community_repository,
         branch=args.community_branch or "main",
