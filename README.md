@@ -1,11 +1,12 @@
 # MindIE Agent · Codex
 
-Codex adapter for MindIE Agent's first domain experience loop. The user works in
-the native Codex task; this plugin adds **one entry skill, fourteen migrated
-vLLM-Ascend domain skills, four knowledge tools, and eleven core remote-dev tools**.
-The initial domain is `vllm-ascend`; the retired Triton workspace skills live as an
-unsupported, separate domain seed under `domains/triton-ascend/` and are not loaded
-by this plugin.
+Codex adapter for MindIE Agent's domain experience loop. The user works in the
+native Codex task; this plugin adds **one explicit entry skill, three knowledge
+tools (query/explain/optional feedback), and eleven core remote-dev tools**.
+The initial domain is `vllm-ascend`. The old bundled domain skill directories and
+the unsupported `domains/triton-ascend` seed were removed outright; useful
+capabilities return later through the new publishing path, and the deferred
+profiling-analysis skill is untouched in place.
 
 ```mermaid
 flowchart LR
@@ -51,19 +52,23 @@ Review and trust this plugin's Stop hook in Codex, then start a new task. Instal
 does not automatically grant hook trust. This development release does not change
 user hook trust or other installed plugins. In the task, use `$mindie-agent` for
 a vLLM-Ascend request and authorize the plugin's tools through Codex. Implicit skill
-invocation is disabled. The manually invoked skill runs `bridge.py activate` using
-native `CODEX_THREAD_ID`, then passes the returned session ID and activation capability
-to every knowledge and remote MCP call. A query cannot activate a session.
+invocation is disabled and the entry is explicit-only. The manually invoked skill runs
+`bridge.py activate` using native `CODEX_THREAD_ID`. Public MCP calls carry no
+identity arguments: the host binds each tools/call to its task through Codex turn
+metadata, and other tasks or older hosts fail closed. The returned session ID and
+activation capability are used only by private bridge/domain subprocesses, never by
+the model in public MCP arguments. A query cannot activate a session.
 Activation performs one bounded cold start plus an authenticated domain bind
 (`capture: bound`), so Stop capture never depends on issuing a knowledge query;
 `knowledge_query` itself is strictly on demand. `bridge.py deactivate` revokes
 this session without touching other tasks. Leases last
 at most 24 hours and are bound to this adapter configuration; renewal requires another
 explicit user invocation. Do not put activation values in reports or other tasks.
-Domain skill CLIs under `plugins/mindie-agent/skills/` run locally against the user's
-business directory (the entry skill is `plugins/mindie-agent/skills/mindie-agent`,
-invoked as `$mindie-agent`); when the adapter is configured they require
-`MINDIE_SESSION_ID`/`MINDIE_ACTIVATION` exported from the activation step.
+The entry skill is `plugins/mindie-agent/skills/mindie-agent`, invoked explicitly
+as `$mindie-agent`. Shared domain CLI helpers under `plugins/mindie-agent/domain-lib/`
+run locally against the user's business directory; when the adapter is configured they
+require `MINDIE_SESSION_ID`/`MINDIE_ACTIVATION` exported from the activation step
+(internal subprocess admission, unchanged by the public MCP identity binding).
 Inspect the existing service without starting it:
 
 ```sh

@@ -1,6 +1,0 @@
-interface:
-  display_name: "vLLM Ascend Benchmark"
-  short_description: "Measure throughput and latency of a vLLM Ascend service"
-  default_prompt: "Use $vllm-ascend-benchmark to measure this service's throughput and latency under the specified workload."
-policy:
-  allow_implicit_invocation: false

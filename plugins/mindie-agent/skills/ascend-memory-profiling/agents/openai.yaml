@@ -1,6 +1,0 @@
-interface:
-  display_name: "Ascend Memory Profiling"
-  short_description: "Attribute vLLM serving HBM usage on Ascend"
-  default_prompt: "Use $ascend-memory-profiling to attribute this service's HBM usage to weights, KV cache, HCCL, activations and runtime."
-policy:
-  allow_implicit_invocation: false

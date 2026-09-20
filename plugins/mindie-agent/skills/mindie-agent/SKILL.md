@@ -59,10 +59,11 @@ no transcript reading, no drafts, no background model work. Manage it with
 cancels pending capture in its scope without deleting drafts, and re-enabling
 only processes newly authorized material.
 
-Domain skills under `../` are read on demand after activation. Their CLI tools
-bind the user's current business directory and take explicit remote targets.
-Reading a skill never starts a service, a remote job or a model call. Routing:
-[domain skills](references/domain-skills.md).
+There are no bundled per-task domain skills in this release; use the
+`mindie-remote-dev` tools directly for the remote NPU environment. Shared
+domain CLI helpers take explicit remote targets, and reading any reference
+never starts a service, a remote job or a model call. Details:
+[domain tooling](references/domain-skills.md).
 
 Keep conclusions and validation limits in the normal final response. When
 sharing is enabled, the Stop hook forwards the transcript location and a

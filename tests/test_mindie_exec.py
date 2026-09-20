@@ -393,12 +393,6 @@ class MindieExecTests(unittest.TestCase):
         self.assertTrue(result["isError"])
         run.assert_not_called()
 
-    def test_triton_snapshot_no_longer_ships_exec(self):
-        snapshot = ROOT / "domains/triton-ascend/domain-lib/mindie_exec.py"
-        marker = ROOT / "domains/triton-ascend/domain-lib/DOMAIN-SPLIT.md"
-        self.assertFalse(snapshot.exists())
-        self.assertIn("mindie_exec.py", marker.read_text())
-
 
 if __name__ == "__main__":
     unittest.main()
