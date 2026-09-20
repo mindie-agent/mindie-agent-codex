@@ -679,7 +679,7 @@ class Updater:
                     error=None,
                     current=candidate,
                     candidate=candidate["revision"],
-                    activation="new task required; changed hooks require native trust review",
+                    activation="task authorization preserved; refreshed host definitions load in new tasks; changed hooks require native trust review",
                 )
                 (self.root / "transaction.json").unlink()
                 return result
