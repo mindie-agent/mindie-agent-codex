@@ -4,7 +4,8 @@ Read this when activation state, capture, quotas or hook behavior matter for
 the task at hand.
 
 - The lease lasts at most 24 hours for this session/configuration. Three
-  consecutive failed knowledge MCP calls pause this session. Expired or paused
+  consecutive knowledge runtime failures pause this session; a rejected
+  read argument or reference is a correctable input error, not a runtime failure. Expired or paused
   activation requires another explicit user invocation; it is never renewed
   automatically.
 - Deactivation prevents new knowledge calls and captures; already admitted work remains
@@ -19,8 +20,9 @@ the task at hand.
   Codex session ID.
 - Knowledge MCP calls have a 15-second outer deadline; remote calls have 65
   seconds. Each business call has one attempt and zero automatic retries. A
-  timed-out remote mutation may already have executed: inspect its original
-  job only if the user asks.
+  timed-out remote mutation may already have executed: inspect the original
+  job or receipt as needed to finish the authorized task. A status read does
+  not repeat the mutation; do not blindly resubmit it.
 - Background model work is bounded by durable call quotas and a failure
   circuit breaker. A failed or interrupted maintenance item is never replayed
   automatically, including after a restart. Never repair missing hooks by

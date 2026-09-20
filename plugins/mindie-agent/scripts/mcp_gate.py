@@ -303,6 +303,7 @@ class Gate:
         token = None
         admitted = False
         succeeded = False
+        neutral = False
         try:
             name, args = self._tool_args(request)
             lease = self.sessions.check(session)
@@ -337,12 +338,24 @@ class Gate:
             ):
                 raise ValueError("Invalid MindIE runtime response")
             succeeded = result.get("isError") is not True
+            # A deterministic pre-execution read rejection is caller feedback,
+            # not a runtime failure: it neither consumes nor resets the failure
+            # circuit. The trusted runtime alone emits this disposition, only
+            # for query/explain validation; caller input cannot select it, and
+            # mutations stay on the conservative failure path.
+            neutral = (
+                not succeeded
+                and name in {"knowledge_query", "knowledge_explain"}
+                and isinstance(result.get("structuredContent"), dict)
+                and result["structuredContent"].get("code") == "read_rejected"
+                and result["structuredContent"].get("execution") == "not_started"
+            )
             return result
         except Exception as exc:
             # No traceback, credentials, model wakeup, reconnect loop or replay.
             return call_failure(exc)
         finally:
-            if admitted:
+            if admitted and not neutral:
                 try:
                     self.sessions.finish(session, token, succeeded)
                 except Exception:

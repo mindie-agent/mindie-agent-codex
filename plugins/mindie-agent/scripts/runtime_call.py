@@ -29,7 +29,7 @@ def call(payload):
     if payload["surface"] != "knowledge":
         raise ValueError("unknown plugin surface")
     from mindie_knowledge.loop.cli import ensure_service
-    from mindie_knowledge.loop.transport import rpc
+    from mindie_knowledge.loop.transport import RequestRejected, rpc
 
     if name in knowledge_names():
         pass
@@ -60,15 +60,21 @@ def call(payload):
             dict(args, _session_id=session, _activation=payload["mindie_activation"]),
             timeout=5,
         )
-    except ValueError as exc:
+    except RequestRejected as exc:
         if name not in {"knowledge_query", "knowledge_explain"}:
             raise
-        # A rejected read is not an uncertain mutation. Keep the service's
-        # bounded validation reason so the caller can understand a bad ref.
+        # A rejected read never started execution and is not an uncertain
+        # mutation. Keep the service's bounded validation reason so the caller
+        # can understand a bad ref. The explicit not_started disposition tells
+        # the gate this is caller feedback, not a runtime failure: it must not
+        # consume the failure circuit. isError stays True for the caller.
         message = f"Knowledge read rejected: {str(exc)[:240]}. No corpus change; no automatic retry."
         return dict(content=[dict(type="text", text=message)],
-                    structuredContent=dict(code="read_rejected", message=message,
-                                           automatic_retry=False), isError=True)
+                    structuredContent=dict(code="read_rejected",
+                                           execution="not_started",
+                                           message=message,
+                                           automatic_retry=False),
+                    isError=True)
     return dict(
         content=[dict(type="text", text=json.dumps(value, ensure_ascii=False))],
         structuredContent=value,
