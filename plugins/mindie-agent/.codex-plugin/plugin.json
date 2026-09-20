@@ -1,6 +1,6 @@
 {
   "name": "mindie-agent",
-  "version": "0.1.0+codex.20260918045451",
+  "version": "0.1.0+codex.20260919024030",
   "description": "Domain knowledge and experience feedback for Ascend development",
   "author": {
     "name": "MindIE Agent contributors"
@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "MindIE Agent",
     "shortDescription": "Ascend domain knowledge and experience.",
-    "longDescription": "One domain entry skill, local knowledge and remote-dev tools, session-summary capture and independent usefulness judging.",
+    "longDescription": "One domain entry skill, local knowledge and remote-dev tools, community-gated experience capture and optional feedback.",
     "developerName": "MindIE Agent contributors",
     "category": "Productivity",
     "capabilities": [],

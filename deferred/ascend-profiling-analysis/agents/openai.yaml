@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ascend Profiling Analysis"
+policy:
+  allow_implicit_invocation: false

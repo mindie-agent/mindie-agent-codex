@@ -35,40 +35,116 @@ class AdapterTests(unittest.TestCase):
             self.assertLess(time.monotonic() - start, 2)
             self.assertEqual(list(Path(root).iterdir()), [])
 
-    def test_session_id_passed_exactly_and_no_transcript_read(self):
+    def test_retired_session_start_operation_is_rejected_without_state(self):
         with tempfile.TemporaryDirectory() as root:
             config = Path(root) / "config.json"
             config.write_text("{}")
             result = self.bridge(
                 "session-start",
-                {"session_id": "exact-test-id", "transcript_path": "/missing/private"},
+                {
+                    "hook_event_name": "SessionStart",
+                    "session_id": "exact-test-id",
+                    "transcript_path": "/missing/private",
+                },
                 config,
             )
-            context = json.loads(result.stdout)["hookSpecificOutput"][
-                "additionalContext"
-            ]
-            self.assertIn("session_id=exact-test-id", context)
-            self.assertNotIn("/missing/private", context)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(list(Path(root).iterdir()), [config])
 
     def test_worker_uses_fresh_ephemeral_execution_with_hooks_disabled(self):
         spec = importlib.util.spec_from_file_location(
             "agent_worker", SCRIPTS / "agent_worker.py"
         )
         worker = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(worker)
+        with patch.object(sys, "path", [str(SCRIPTS), *sys.path]):
+            spec.loader.exec_module(worker)
 
-        def fake_run(command, **kwargs):
+        def fake_run(command, prompt):
             self.assertIn("--ephemeral", command)
             self.assertIn("--ignore-user-config", command)
             self.assertIn("features.hooks=false", command)
-            self.assertIn("untrusted task data", kwargs["input"])
+            self.assertIn("untrusted task data", prompt)
             output = Path(command[command.index("--output-last-message") + 1])
-            output.write_text('{"verdict":"unknown","reason":"No actual use evidence"}')
+            output.write_text(
+                json.dumps(
+                    dict(
+                        entries=[
+                            dict(
+                                entry_id=None,
+                                title="Container logical device numbering",
+                                summary="Map device by logical index inside containers",
+                                conditions=[{"key": "torch_npu_version", "value": "2.10.0.post2"}],
+                                content="The host maps physical device 8; inside the "
+                                "container logical numbering starts at 0. The original "
+                                "run failed requesting device 8; selecting logical "
+                                "device 0 made the device visible.",
+                            )
+                        ]
+                    )
+                )
+            )
             return subprocess.CompletedProcess(command, 0, stdout="")
 
-        with patch.object(worker.subprocess, "run", fake_run):
-            result = worker.run({"role": "judge", "outcome": "untrusted material"})
-        self.assertEqual(result["verdict"], "unknown")
+        with patch.object(worker, "run_codex", fake_run):
+            result = worker.run(
+                {
+                    "role": "organize",
+                    "domain": "vllm-ascend",
+                    "increment": "untrusted material",
+                    "coverage": {},
+                    "existing_drafts": [],
+                }
+            )
+        entry = result["entries"][0]
+        self.assertIsNone(entry["entry_id"])
+        # Wire pairs are converted to the core ABI conditions dict.
+        self.assertEqual(entry["conditions"], {"torch_npu_version": "2.10.0.post2"})
+        # The retired judge role is not served under any name.
+        with self.assertRaises(ValueError):
+            worker.run({"role": "judge", "outcome": "untrusted material"})
+
+    def test_worker_conditions_wire_mapping_is_strictly_validated(self):
+        spec = importlib.util.spec_from_file_location(
+            "agent_worker", SCRIPTS / "agent_worker.py"
+        )
+        worker = importlib.util.module_from_spec(spec)
+        with patch.object(sys, "path", [str(SCRIPTS), *sys.path]):
+            spec.loader.exec_module(worker)
+        for pairs in (
+            [{"key": "a", "value": "1"}, {"key": "a", "value": "2"}],  # duplicate
+            [{"key": "  ", "value": "1"}],  # empty key
+            [{"key": "a", "value": "x" * 513}],  # core value limit
+            [{"key": "a" * 129, "value": "v"}],  # core key limit
+            [{"key": "a", "value": ""}],  # empty value
+            [{"key": " a", "value": "v"}],  # noncanonical key
+            [{"key": "a", "value": "v "}],  # noncanonical value
+            [{"key": "a"}],  # malformed pair
+        ):
+            with self.subTest(pairs=pairs), self.assertRaises(ValueError):
+                worker.convert_conditions(pairs)
+        self.assertEqual(
+            worker.convert_conditions([{"key": "k", "value": "v"}]), {"k": "v"}
+        )
+        # The native strict wire schema has no open-ended objects anywhere.
+        text_schema = json.dumps(worker.SCHEMAS["organize"])
+        self.assertNotIn('"additionalProperties": {"type": "string"}', text_schema)
+        self.assertIn('"items"', text_schema)
+
+    def test_worker_preserves_existing_title_and_requires_new_title(self):
+        spec = importlib.util.spec_from_file_location(
+            "agent_worker", SCRIPTS / "agent_worker.py"
+        )
+        worker = importlib.util.module_from_spec(spec)
+        with patch.object(sys, "path", [str(SCRIPTS), *sys.path]):
+            spec.loader.exec_module(worker)
+        entry = dict(entry_id="a" * 64, title=None, summary="Later observation",
+                     conditions=[], content="Later evidence corrects the earlier conclusion.")
+        worker.check_entry(entry)
+        self.assertIsNone(entry["title"])
+        with self.assertRaises(ValueError):
+            worker.check_entry(dict(entry, entry_id=None, conditions=[]))
+        with self.assertRaises(ValueError):
+            worker.check_entry(dict(entry, sources=[], conditions=[]))
 
 
 if __name__ == "__main__":
