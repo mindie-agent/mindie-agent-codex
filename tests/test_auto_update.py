@@ -325,6 +325,16 @@ class AutoUpdateTests(unittest.TestCase):
         ):
             self.assertEqual(self.updater.resolve(), self.sha)
 
+    def test_remote_only_update_retains_identical_stop_command(self):
+        first = self.check()
+        before = read(Path(first["current"]["plugin"]) / "hooks/hooks.json")
+        remote = self.remote / "plugins/mindie-agent/scripts/remote_bridge.py"
+        remote.write_text(remote.read_text() + "\n# Remote-only revision\n")
+        self.commit("remote-only")
+        second = self.check()
+        self.assertEqual(second["status"], "installed")
+        self.assertEqual(read(Path(second["current"]["plugin"]) / "hooks/hooks.json"), before)
+
     def test_uncoordinated_caches_are_retained_untouched(self):
         # No compatibility shim: cached entrypoints of loaded tasks keep their
         # exact bytes; the updater only retains/restores them across switches.

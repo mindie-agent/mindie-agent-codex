@@ -404,17 +404,20 @@ class Updater:
         previous = self.state.get("current", {}).get("plugin")
         if previous:
             previous = Path(previous)
-            # Pure updater changes leave the reviewed hook executable unchanged.
-            # Retain its immutable command instead of changing a path needlessly.
-            ignored = {"auto_update.py", "update_launcher.py"}
+            # Preserve the immutable reviewed Stop executable only when its
+            # complete local execution dependency set is byte-identical.
+            # bridge.py's `stop` branch imports these four helpers and delegates
+            # to the configured runtime; remote MCP and organizer code are not
+            # loaded by that branch. Any change to bridge.py (including a new
+            # import), any helper change, or a missing file requires a new hook
+            # command and native user review. Never write the native trust store.
             files = {
-                p.name for p in (plugin / "scripts").iterdir() if p.is_file()
-            } - ignored
-            old_files = {
-                p.name for p in (previous / "scripts").iterdir() if p.is_file()
-            } - ignored
-            if files == old_files and all(
-                (plugin / "scripts" / name).read_bytes()
+                "bridge.py", "bounded_process.py", "session_gate.py",
+                "sharing.py", "update_lock.py",
+            }
+            if all(
+                (previous / "scripts" / name).is_file()
+                and (plugin / "scripts" / name).read_bytes()
                 == (previous / "scripts" / name).read_bytes()
                 for name in files
             ):
