@@ -12,6 +12,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
 sys.path.insert(0, str(SCRIPTS))
 import mcp_gate
 import runtime_call
+from mindie_knowledge.loop.transport import RequestRejected
 
 
 class GeneralRemoteTests(unittest.TestCase):
@@ -115,13 +116,25 @@ class GeneralRemoteTests(unittest.TestCase):
                    'name': 'knowledge_explain'}
         with patch.object(runtime_call.Sessions, 'resolve', return_value={'session': 'task-A'}), \
              patch('mindie_knowledge.loop.cli.ensure_service', return_value={}), \
-             patch('mindie_knowledge.loop.transport.rpc', side_effect=ValueError('ambiguous reference')) as rpc:
+             patch('mindie_knowledge.loop.transport.rpc', side_effect=RequestRejected('ambiguous reference')) as rpc:
             result = runtime_call.call(payload)
             self.assertTrue(result['isError'])
             self.assertEqual(result['structuredContent']['code'], 'read_rejected')
+            self.assertEqual(result['structuredContent']['execution'], 'not_started')
             self.assertIn('ambiguous reference', result['structuredContent']['message'])
             self.assertFalse(result['structuredContent']['automatic_retry'])
             rpc.assert_called_once()
             with self.assertRaises(ValueError):
                 runtime_call.call(dict(payload, name='knowledge_feedback'))
             self.assertEqual(rpc.call_count, 2)
+
+
+    def test_wire_failure_is_not_an_input_rejection(self):
+        payload = {'surface': 'knowledge', 'mindie_activation': 'test-token',
+                   'mindie_session_id': 'task-A', 'arguments': {},
+                   'name': 'knowledge_explain'}
+        with patch.object(runtime_call.Sessions, 'resolve', return_value={'session': 'task-A'}), \
+             patch('mindie_knowledge.loop.cli.ensure_service', return_value={}), \
+             patch('mindie_knowledge.loop.transport.rpc', side_effect=ValueError('response exceeds limit')):
+            with self.assertRaisesRegex(ValueError, 'response exceeds'):
+                runtime_call.call(payload)

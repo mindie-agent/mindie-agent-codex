@@ -277,6 +277,71 @@ class SessionGateTests(unittest.TestCase):
             self.assertEqual(payload["remote_session_id"], "manual-A")
             self.assertEqual(run.call_args.kwargs["timeout"], 65)
 
+    def test_rejected_reads_do_not_consume_the_failure_circuit(self):
+        lease = self.activate()
+        gate = mcp_gate.Gate("knowledge")
+        rejected = json.dumps(
+            dict(
+                content=[dict(type="text", text="Knowledge read rejected: unknown reference")],
+                structuredContent=dict(
+                    code="read_rejected", execution="not_started",
+                    message="rejected", automatic_retry=False,
+                ),
+                isError=True,
+            )
+        )
+        with patch.object(mcp_gate, "run", return_value=rejected) as run:
+            for i in range(3):
+                result = gate.call(
+                    self.request(lease, ident=100 + i, name="knowledge_explain", ref="bad-ref")
+                )
+                # Caller feedback is preserved: the model still sees the error.
+                self.assertTrue(result["isError"])
+                self.assertEqual(result["structuredContent"]["code"], "read_rejected")
+            self.assertEqual(run.call_count, 3)  # dispatch never circuit-paused
+        with sqlite3.connect(self.sessions.path) as db:
+            failures = db.execute(
+                "SELECT failures FROM leases WHERE session='manual-A'"
+            ).fetchone()[0]
+        self.assertEqual(failures, 0)  # the circuit is neither consumed nor reset
+        # A valid read still works on the same lease afterwards.
+        with patch.object(mcp_gate, "run", return_value='{"content":[],"isError":false}'):
+            self.assertFalse(gate.call(self.request(lease, ident=200))["isError"])
+        # Actual runtime errors still consume the circuit and pause the lease.
+        with patch.object(mcp_gate, "run", side_effect=TimeoutError("stalled")):
+            for i in range(3):
+                self.assertTrue(gate.call(self.request(lease, ident=300 + i))["isError"])
+        with patch.object(mcp_gate, "run") as run:
+            self.assertTrue(gate.call(self.request(lease, ident=400))["isError"])
+            run.assert_not_called()
+
+    def test_not_started_disposition_is_not_honored_for_mutations(self):
+        lease = self.activate()
+        gate = mcp_gate.Gate("knowledge")
+        forged = json.dumps(
+            dict(
+                content=[dict(type="text", text="failure")],
+                structuredContent=dict(code="read_rejected", execution="not_started"),
+                isError=True,
+            )
+        )
+        # Even a runtime-shaped not_started disposition only exempts
+        # query/explain reads; mutations keep consuming the failure circuit.
+        with patch.object(mcp_gate, "run", return_value=forged):
+            for i in range(3):
+                result = gate.call(
+                    self.request(
+                        lease, ident=i, name="knowledge_feedback", ref="x", rating="up"
+                    )
+                )
+                self.assertTrue(result["isError"])
+        with patch.object(mcp_gate, "run") as run:
+            result = gate.call(
+                self.request(lease, ident=9, name="knowledge_feedback", ref="x", rating="up")
+            )
+            self.assertTrue(result["isError"])
+            run.assert_not_called()
+
     def test_consecutive_failure_circuit_is_per_session_and_explicitly_reset(self):
         a, b = self.activate(), self.activate("manual-B")
         gate = mcp_gate.Gate("knowledge")

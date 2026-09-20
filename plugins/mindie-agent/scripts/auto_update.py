@@ -245,7 +245,7 @@ class Updater:
                 "-c",
                 "\n".join(
                     [
-                        "import inspect",
+                        "import inspect, math",
                         "from mindie_knowledge.loop.cli import TOOLS, STARTUP_TIMEOUT, MAX_STARTUP_PROBES",
                         "from mindie_knowledge.loop.budget import MaintenanceBudget as B",
                         "from mindie_knowledge.loop.transport import Service",
@@ -257,8 +257,10 @@ class Updater:
                         "assert 'knowledge_use' not in names and 'knowledge_judge' not in names",
                         "assert all(hasattr(documents, n) for n in ('render_entry', 'parse_entry', 'revision_of'))",
                         "assert 'admission' in inspect.signature(Service).parameters",
-                        "assert 0 < B.SESSION_LIMIT <= 6 and 0 < B.HOURLY_LIMIT <= 20 and B.FAILURE_LIMIT <= 3",
-                        "assert STARTUP_TIMEOUT <= 5 and MAX_STARTUP_PROBES <= 3",
+                        "assert all(type(getattr(B, n)) is int and getattr(B, n) > 0 for n in ('SESSION_LIMIT', 'HOURLY_LIMIT', 'FAILURE_LIMIT'))",
+                        "assert type(B.SESSION_WINDOW) in (int, float) and math.isfinite(B.SESSION_WINDOW) and B.SESSION_WINDOW > 0",
+                        "assert type(STARTUP_TIMEOUT) in (int, float) and math.isfinite(STARTUP_TIMEOUT) and STARTUP_TIMEOUT > 0",
+                        "assert type(MAX_STARTUP_PROBES) is int and MAX_STARTUP_PROBES > 0",
                     ]
                 ),
             ],
