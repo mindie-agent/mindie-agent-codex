@@ -81,7 +81,6 @@ def community_settings(args, parser):
             "community_project_root",
             "community_account",
             "community_fork",
-            "community_bot",
             "community_visibility",
         )
     )
@@ -119,8 +118,6 @@ def community_settings(args, parser):
         value = getattr(args, "community_" + key)
         if value:
             settings[key] = value
-    if args.community_bot:
-        settings["bot"] = {"account": args.community_bot}
     settings["visibility"] = args.community_visibility
     try:
         return sharing.validate(settings)
@@ -167,7 +164,6 @@ def main():
         metavar="OWNER/REPO",
         help="Contributor-controlled fork for contribution branches",
     )
-    parser.add_argument("--community-bot", help="Approved review bot target")
     parser.add_argument(
         "--community-visibility",
         choices=["public"],

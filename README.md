@@ -179,7 +179,8 @@ account and public visibility; `bridge.py sharing-enable|sharing-disable|sharing
 toggles it later. While sharing is off, the Stop hook captures nothing: no transcript
 reading, no drafts, no worker, no model. While it is on, filtered, scanned experience
 batches are contributed to the configured GitHub content repository as pull requests;
-merging belongs to the maintainer-authorized review bot. **Raw transcripts, local
+merging belongs to the existing external Grok Bot application. The plugin does not
+install a Grok CLI reviewer or repository automation service. **Raw transcripts, local
 paths and capture logs are never part of a contribution.** The organizer uses the
 user's authenticated Codex service and consumes model usage; PR assembly, voting
 records and feed sync use no model calls.
