@@ -1,5 +1,5 @@
 # Reviewed development implementation; pin a commit until the first release.
 # The updater validates this set; domain execution dependencies are pinned
 # independently in domain-requirements.txt.
-mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@c69be70dd9e34012862faafc1ded86bb4cbe7604
+mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@18e89ac8908ea946721ee1947f5d13b129a752ca
 remote-dev @ git+https://github.com/mindie-agent/remote-dev@13301ef7f52b53ffca0a6702a8a3c18f2edfcd52
