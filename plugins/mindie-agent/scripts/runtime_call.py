@@ -5,7 +5,8 @@ import os
 from pathlib import Path
 import sys
 
-from session_gate import Sessions, config_path
+from mcp_gate import remote_state_dir
+from session_gate import IDENTITY, Sessions, config_path
 
 
 def knowledge_names():
@@ -14,6 +15,8 @@ def knowledge_names():
 
 
 def call(payload):
+    if payload["surface"] == "remote":
+        return remote(payload)
     # The internal activation token resolves the owning lease again inside the
     # runtime; it must agree with the gate-bound session, and no
     # caller-supplied identity is ever trusted on its own.
@@ -23,56 +26,69 @@ def call(payload):
         raise ValueError("MindIE runtime identity mismatch")
     config = json.loads(config_path().read_text())
     args, name = payload["arguments"], payload["name"]
-    if payload["surface"] == "knowledge":
-        from mindie_knowledge.loop.cli import ensure_service
-        from mindie_knowledge.loop.transport import rpc
+    if payload["surface"] != "knowledge":
+        raise ValueError("unknown plugin surface")
+    from mindie_knowledge.loop.cli import ensure_service
+    from mindie_knowledge.loop.transport import rpc
 
-        if name in knowledge_names():
-            pass
-        elif name == "knowledge_attach" and payload.get("internal") is True:
-            # Internal activation-time bind only; never a front-stage tool.
-            # Sharing off must not cold-start collection through this path.
-            import sharing
+    if name in knowledge_names():
+        pass
+    elif name == "knowledge_attach" and payload.get("internal") is True:
+        # Internal activation-time bind only; never a front-stage tool.
+        # Sharing off must not cold-start collection through this path.
+        import sharing
 
-            if not sharing.capture_allowed(lease, None):
-                raise ValueError("knowledge attach requires enabled community sharing")
-        else:
-            raise ValueError("unknown knowledge tool")
-        connection = ensure_service(config["engine_config"])
-        if name == "knowledge_attach":
-            # Admission is owned by the existing lease; startup needs no
-            # second attach protocol or duplicate session registry.
-            value = rpc(connection, "status", timeout=5)
-            return dict(
-                content=[dict(type="text", text=json.dumps(value, ensure_ascii=False))],
-                structuredContent=value,
-                isError=False,
-            )
-        # Never reconnect and resubmit a request with an uncertain outcome.
-        value = rpc(
-            connection,
-            name.removeprefix("knowledge_"),
-            dict(args, _session_id=session, _activation=payload["mindie_activation"]),
-            timeout=5,
-        )
+        if not sharing.capture_allowed(lease, None):
+            raise ValueError("knowledge attach requires enabled community sharing")
+    else:
+        raise ValueError("unknown knowledge tool")
+    connection = ensure_service(config["engine_config"])
+    if name == "knowledge_attach":
+        # Admission is owned by the existing lease; startup needs no
+        # second attach protocol or duplicate session registry.
+        value = rpc(connection, "status", timeout=5)
         return dict(
             content=[dict(type="text", text=json.dumps(value, ensure_ascii=False))],
             structuredContent=value,
             isError=False,
         )
-    if payload["surface"] != "remote":
-        raise ValueError("unknown plugin surface")
+    # Never reconnect and resubmit a request with an uncertain outcome.
+    value = rpc(
+        connection,
+        name.removeprefix("knowledge_"),
+        dict(args, _session_id=session, _activation=payload["mindie_activation"]),
+        timeout=5,
+    )
+    return dict(
+        content=[dict(type="text", text=json.dumps(value, ensure_ascii=False))],
+        structuredContent=value,
+        isError=False,
+    )
+
+
+def remote(payload):
+    """General remote dispatch: gate-bound native task identity, no lease.
+
+    The gate derived remote_session_id from verified host metadata; it is
+    revalidated here and reaches remote-dev's REMOTE_DEV_SESSION_ID so one
+    task cannot operate on another task's jobs. State lives in the
+    independent remote state dir; the knowledge engine config/root and any
+    activation bearer are never read on this path.
+    """
+    session = payload.get("remote_session_id")
+    if not isinstance(session, str) or not IDENTITY.fullmatch(session):
+        raise ValueError("MindIE remote runtime identity mismatch")
+    name = payload["name"]
     catalog = json.loads(Path(__file__).with_name("mcp_catalog.json").read_text())
     if name not in {tool["name"] for tool in catalog["remote"]}:
         raise ValueError("unknown remote tool")
-    engine = json.loads(Path(config["engine_config"]).read_text())
-    os.environ["REMOTE_DEV_STATE_DIR"] = str(Path(engine["root"]) / "remote-dev")
-    os.environ["REMOTE_DEV_SESSION_ID"] = "mindie-" + session
+    os.environ["REMOTE_DEV_STATE_DIR"] = str(remote_state_dir() / "runtime" / session)
+    os.environ["REMOTE_DEV_SESSION_ID"] = "codex-task-" + session
     from remote_dev.mcp.tools import call_tool
     from remote_dev.core.rpc_transport import close_connections
     from remote_dev.mcp.server import tool_text
 
-    args = dict(args)
+    args = dict(payload["arguments"])
     args["connect_timeout_ms"] = min(args.get("connect_timeout_ms", 10000), 10000)
     if "yield_time_ms" in args:
         args["yield_time_ms"] = min(args["yield_time_ms"], 30000)

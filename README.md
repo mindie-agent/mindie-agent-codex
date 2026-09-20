@@ -31,7 +31,7 @@ Codex, knowledge, capture and organization run on the user's local side.
 The remote server supplies the NPU execution environment. The plugin reuses
 remote-dev's SSH transport, endpoint/container semantics, owned jobs and artifact
 hash verification. Its admission wrapper exposes generated upstream schemas for the core read/write/search/patch,
-shell/job and artifact tools. It loads the remote implementation only after session admission;
+shell/job and artifact tools. Remote tools load on demand in every native task without MindIE activation;
 `export_catalog.py` regenerates the discovery snapshot from the pinned runtime.
 It does not provision a remote knowledge server or copy Codex credentials remotely.
 
@@ -42,7 +42,7 @@ The runtime requirements pin the knowledge implementation to a reviewed commit:
 
 ```sh
 uv venv --python 3.11 .venv
-uv pip install --python .venv/bin/python -r runtime-requirements.txt -r domain-requirements.txt
+uv pip install --python .venv/bin/python -r runtime-requirements.txt
 python3 plugins/mindie-agent/scripts/setup.py --knowledge-python "$PWD/.venv/bin/python"
 codex plugin marketplace add "$PWD"
 codex plugin add mindie-agent@mindie-agent
@@ -55,21 +55,17 @@ a vLLM-Ascend request and authorize the plugin's tools through Codex. Implicit s
 invocation is disabled and the entry is explicit-only. The manually invoked skill runs
 `bridge.py activate` using native `CODEX_THREAD_ID`. Public MCP calls carry no
 identity arguments: the host binds each tools/call to its task through Codex turn
-metadata, and other tasks or older hosts fail closed. The returned session ID and
+metadata. Knowledge calls from unactivated tasks and calls from older hosts without metadata fail closed. The returned session ID and
 activation capability are used only by private bridge/domain subprocesses, never by
 the model in public MCP arguments. A query cannot activate a session.
-Activation performs one bounded cold start plus an authenticated domain bind
+With sharing enabled, activation performs one bounded cold start plus an authenticated domain bind
 (`capture: bound`), so Stop capture never depends on issuing a knowledge query;
 `knowledge_query` itself is strictly on demand. `bridge.py deactivate` revokes
 this session without touching other tasks. Leases last
 at most 24 hours and are bound to this adapter configuration; renewal requires another
 explicit user invocation. Do not put activation values in reports or other tasks.
 The entry skill is `plugins/mindie-agent/skills/mindie-agent`, invoked explicitly
-as `$mindie-agent`. Shared domain CLI helpers under `plugins/mindie-agent/domain-lib/`
-run locally against the user's business directory; when the adapter is configured they
-require `MINDIE_SESSION_ID`/`MINDIE_ACTIVATION` exported from the activation step
-(internal subprocess admission, unchanged by the public MCP identity binding).
-Inspect the existing service without starting it:
+as `$mindie-agent`. Remote tools need no domain CLI wrappers or coordinator dependency.
 
 ```sh
 python3 plugins/mindie-agent/scripts/bridge.py status
@@ -140,10 +136,7 @@ python3 ~/.local/share/mindie-agent/updates/controller/auto_update.py disable
 `auto_update.py uninstall` removes scheduling and updater-owned state after
 preflighting active leases and live references; it never deletes retained native
 cache entrypoints or the generation backing the installed plugin, and keeps
-rollback metadata unless `--purge` runs with no live references. The updater also
-tops up a generation installed by a previous controller with the pinned
-`domain-requirements.txt` runtime (bounded, observable, three attempts per
-revision). Windows scheduling (Task Scheduler), locks, process bounds and
+rollback metadata unless `--purge` runs with no live references. Windows scheduling (Task Scheduler), locks, process bounds and
 filesystem publishing (an unprivileged directory junction with a journal-covered,
 non-atomic swap in place of the POSIX symlink swap) are implemented with standard
 primitives and marked unverified pending real hardware.
@@ -197,11 +190,12 @@ records and feed sync use no model calls.
   from pre-contract versions are kept callable only through the inert retired
   entrypoint, which answers it with empty JSON.
 - Installation, MCP initialize/tools-list and hook receipt never activate a task.
-  Discovery reads only a bundled schema file. Every business call requires a
-  session ID and matching local capability from manual activation; a missing
-  adapter configuration or a missing/expired lease fails closed (the old
-  no-configuration development bypass is removed). The knowledge
-  service also checks admission, so old clients without credentials fail closed.
+  Discovery reads only a bundled schema file. Knowledge calls require the native
+  task's manually activated lease, and the knowledge service checks admission.
+  Remote tools are available in all native tasks without activation; they read
+  adapter configuration only to locate the interpreter, and create no knowledge
+  service, capture state or lease. Remote jobs and receipts have separate
+  task-local state. Missing runtime configuration or native identity fails closed.
   Shared runtime configurations opt into this check with `session_activation`.
 - Knowledge calls have a **15-second absolute process deadline**; remote calls
   have **65 seconds**. Each submitted business request gets **one attempt, zero
@@ -212,13 +206,15 @@ records and feed sync use no model calls.
   remote job API; a local timeout does not prove the remote operation was cancelled.
 - MCP input is capped at 128 KiB and process output at 1 MiB. Four calls can be
   admitted concurrently per connection, with no pending execution queue. Duplicate
-  request IDs are refused (up to 4,096 tracked IDs per connection); cancellation and
+  request IDs are refused (knowledge: up to 4,096 per connection; remote: durable
+  native-turn/request keys without eviction or a lifetime call cap); cancellation and
   disconnect kill owned local process groups. Transport discovery itself may be
   loaded by Codex before invocation; this is not a claim of zero shim processes.
-- Three consecutive failed MCP calls pause **that session**. A later in-flight
+- Three consecutive failed calls pause **that task and surface**. A later in-flight
   success cannot unpause it. Another explicit user invocation may issue a new
   capability; it does not reset hook attempt history or maintenance budgets.
-  Deactivation stops new calls/captures and queued maintenance admission; an
+  Remote pause recovery is an explicit native `remote_bridge.py recover` call.
+  Deactivation stops new knowledge calls/captures and queued maintenance admission; an
   already admitted operation remains bounded by its deadline.
 - Status and shutdown have a 5-second outer deadline and never start a service.
   No failure triggers a repair task, new model turn, or automatic activation.

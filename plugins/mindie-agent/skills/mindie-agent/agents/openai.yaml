@@ -1,6 +1,6 @@
 interface:
   display_name: "MindIE Agent"
-  short_description: "Manually activate domain tools for this Codex session"
+  short_description: "Manually enable knowledge and optional community sharing"
   default_prompt: "Use $mindie-agent for this vLLM-Ascend task."
 policy:
   allow_implicit_invocation: false

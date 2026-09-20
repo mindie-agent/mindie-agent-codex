@@ -41,11 +41,11 @@ class SetupTests(unittest.TestCase):
             result = run_setup(python, "--config", config, "--root", base / "data")
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("missing pinned dependencies", result.stderr + result.stdout)
-            self.assertIn("mindie_coordinator", result.stderr + result.stdout)
+            self.assertIn("remote_dev", result.stderr + result.stdout)
             # Nothing may be written when the probe fails.
             self.assertEqual(list(base.iterdir()), [bare])
 
-    def test_probe_includes_runtime_and_domain_packages(self):
+    def test_probe_includes_runtime_packages(self):
         self.assertEqual(
             set(setup_script.PROBE_MODULES),
             {
@@ -53,7 +53,6 @@ class SetupTests(unittest.TestCase):
                 "mindie_knowledge.loop.documents",
                 "mindie_knowledge.loop.transcript",
                 "remote_dev.mcp.server",
-                "mindie_coordinator.task_client",
             },
         )
         self.assertGreater(setup_script.PROBE_TIMEOUT, 0)

@@ -20,7 +20,7 @@ import time
 from bounded_process import run
 import sharing
 
-# The configured interpreter must carry the exact runtime and domain pins,
+# The configured interpreter must carry the exact runtime pins,
 # matching the actual new package APIs; the updater's capability probe covers
 # deeper runtime behavior.
 PROBE_MODULES = (
@@ -28,7 +28,6 @@ PROBE_MODULES = (
     "mindie_knowledge.loop.documents",
     "mindie_knowledge.loop.transcript",
     "remote_dev.mcp.server",
-    "mindie_coordinator.task_client",
 )
 PROBE_TIMEOUT = 15
 
@@ -60,7 +59,7 @@ def probe_runtime(python):
     if not output.strip().endswith("OK"):
         raise SystemExit(
             f"{python} is missing pinned dependencies: {output.strip()}. "
-            "Install runtime-requirements.txt and domain-requirements.txt first."
+            "Install runtime-requirements.txt first."
         )
 
 

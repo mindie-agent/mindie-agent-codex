@@ -95,7 +95,7 @@
   "remote": [
     {
       "name": "remote_read",
-      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Read a remote file with native Read-like pagination and a read ledger.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Read a remote file with native Read-like pagination and a read ledger.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -190,7 +190,7 @@
     },
     {
       "name": "remote_write",
-      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Write a remote file with overwrite support and optional read-ledger concurrency checks.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Write a remote file with overwrite support and optional read-ledger concurrency checks.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -273,7 +273,7 @@
     },
     {
       "name": "remote_bash",
-      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Run a remote shell command with Bash-like semantics, logs, preview, and automatic yield, writable stdin and optional PTY.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Run a remote shell command with Bash-like semantics, logs, preview, and automatic yield, writable stdin and optional PTY.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -374,7 +374,7 @@
     },
     {
       "name": "remote_grep",
-      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Search remote files with rg-compatible semantics and a grep -E (POSIX ERE) fallback.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Search remote files with rg-compatible semantics and a grep -E (POSIX ERE) fallback.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -515,7 +515,7 @@
     },
     {
       "name": "remote_apply_patch",
-      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Apply a Codex apply_patch payload or unified diff on a remote endpoint.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Apply a Codex apply_patch payload or unified diff on a remote endpoint.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -584,7 +584,7 @@
     },
     {
       "name": "remote_job_status",
-      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Check a remote background job through the shared process supervisor.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Check a remote background job through the shared process supervisor.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -649,7 +649,7 @@
     },
     {
       "name": "remote_job_tail",
-      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Tail remote background job logs through the shared process supervisor.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Tail remote background job logs through the shared process supervisor.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -726,7 +726,7 @@
     },
     {
       "name": "remote_job_stop",
-      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Stop a remote background job through the shared process supervisor.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Stop a remote background job through the shared process supervisor.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -794,7 +794,7 @@
     },
     {
       "name": "remote_job_stdin",
-      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Write to a remote session's stdin (Codex write_stdin habit), with optional EOF and output polling.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Write to a remote session's stdin (Codex write_stdin habit), with optional EOF and output polling.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -875,7 +875,7 @@
     },
     {
       "name": "remote_artifact_pull",
-      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Pull a remote artifact through SSH streaming with hash verification.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Pull a remote artifact through SSH streaming with hash verification.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -947,7 +947,7 @@
     },
     {
       "name": "remote_artifact_push",
-      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Push a local artifact through SSH streaming with hash verification.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Push a local artifact through SSH streaming with hash verification.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,

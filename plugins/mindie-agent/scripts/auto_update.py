@@ -36,7 +36,6 @@ CONTRACT = dict(
     idle_update_lock=1,
     maintenance_budget=1,
 )
-DOMAIN_REQUIREMENTS = "domain-requirements.txt"
 LABEL = "org.mindie-agent.plugin-updater"
 WIN_TASK = "MindIE Agent Plugin Updater"
 INTERVAL = 300
@@ -233,16 +232,6 @@ class Updater:
             or packages["remote-dev"][0] != "remote-dev"
         ):
             raise Incompatible("invalid runtime package combination")
-        # Domain execution dependencies are pinned separately from the core.
-        domain_lines = (source / DOMAIN_REQUIREMENTS).read_text().splitlines()
-        domain_pattern = r"mindie-coordinator @ git\+https://github.com/mindie-agent/coordinator@([0-9a-f]{40})"
-        pins = [
-            re.fullmatch(domain_pattern, line)
-            for line in domain_lines
-            if line.strip() and not line.startswith("#")
-        ]
-        if len(pins) != 1 or not pins[0]:
-            raise Incompatible("domain dependencies require an exact coordinator pin")
 
     def probe_runtime(self, python):
         # The probe must match the actual new package APIs (community sharing
@@ -263,7 +252,6 @@ class Updater:
                         "from mindie_knowledge.loop import documents, transcript",
                         "from mindie_knowledge.community import submit_batch, reconcile_batch",
                         "from remote_dev.mcp.tools import call_tool",
-                        "from mindie_coordinator.task_client import TaskClient",
                         "names = {t['name'] for t in TOOLS}",
                         "assert {'knowledge_query', 'knowledge_explain', 'knowledge_feedback'} <= names",
                         "assert 'knowledge_use' not in names and 'knowledge_judge' not in names",
@@ -351,8 +339,6 @@ class Updater:
                 python,
                 "-r",
                 source / "runtime-requirements.txt",
-                "-r",
-                source / DOMAIN_REQUIREMENTS,
             ],
             timeout=120,
         )

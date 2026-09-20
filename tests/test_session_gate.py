@@ -34,7 +34,7 @@ class SessionGateTests(unittest.TestCase):
             json.dumps(dict(python=sys.executable, engine_config=str(self.engine)))
         )
         self.environment = patch.dict(
-            os.environ, MINDIE_AGENT_CONFIG=str(self.config), CODEX_THREAD_ID="manual-A"
+            os.environ, MINDIE_AGENT_CONFIG=str(self.config), CODEX_THREAD_ID="manual-A", MINDIE_REMOTE_STATE_DIR=str(self.root / "remote")
         )
         self.environment.start()
         self.sessions = Sessions()
@@ -274,7 +274,7 @@ class SessionGateTests(unittest.TestCase):
             self.assertFalse(mcp_gate.Gate("remote").call(request)["isError"])
             payload = json.loads(run.call_args.args[1])
             self.assertEqual(payload["arguments"]["session_id"], "remote-job-7")
-            self.assertEqual(payload["mindie_session_id"], "manual-A")
+            self.assertEqual(payload["remote_session_id"], "manual-A")
             self.assertEqual(run.call_args.kwargs["timeout"], 65)
 
     def test_consecutive_failure_circuit_is_per_session_and_explicitly_reset(self):

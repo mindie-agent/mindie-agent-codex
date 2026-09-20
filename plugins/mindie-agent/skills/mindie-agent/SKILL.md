@@ -1,6 +1,6 @@
 ---
 name: mindie-agent
-description: Manually activate MindIE Agent knowledge, remote tools and optional community sharing for this Codex session when the user explicitly invokes this skill for a vLLM-Ascend task.
+description: Manually activate MindIE Agent knowledge and optional community sharing for this Codex session when the user explicitly invokes this skill for a vLLM-Ascend task.
 ---
 
 # MindIE Agent
@@ -12,7 +12,7 @@ and separately configured services; cross-domain task routing is not implemented
 Use this entry only when the user explicitly invokes MindIE Agent for the current
 task. Discussing the plugin, reading its source, a relevant repository or an
 unavailable tool is not an invocation. Enter activation exactly once before
-any plugin business call. Mere semantic relevance does not count. Never activate it to repair
+any knowledge call or community capture. Mere semantic relevance does not count. Never activate it to repair
 or bypass a rejected or paused call.
 
 After that explicit invocation, run `python3 ../../scripts/bridge.py activate`,
@@ -22,7 +22,7 @@ reads the shell's `CODEX_THREAD_ID`; do not set or override that variable.
 Activation creates this session's local lease. When community sharing is
 enabled it also performs one bounded cold start plus an authenticated domain
 bind (`capture` is `bound` on success, `disabled` when sharing is off).
-MCP tool calls need no identity arguments: the host binds each call to this
+Knowledge MCP calls need no identity arguments: the host binds each call to this
 task automatically, and calls from any other task or an older host without
 turn metadata fail closed. Activation values belong to internal local IPC;
 do not put them in tool arguments, share them with another task, or include
@@ -57,7 +57,10 @@ cancels pending capture in its scope without deleting drafts, and re-enabling
 only processes newly authorized material.
 
 The old domain Skill catalogue has been removed; profiling analysis remains
-deferred. Use `mindie-remote-dev` tools directly for the remote NPU environment.
+deferred. `mindie-remote-dev` is a general remote tool available on demand in
+every native task, including tasks that have not invoked this Skill. Remote
+calls do not activate MindIE or start knowledge capture. Use it directly for
+remote files, commands, jobs and artifacts.
 Reading a reference never starts a service, a remote job or a model call. Details:
 [domain tooling](references/domain-skills.md).
 

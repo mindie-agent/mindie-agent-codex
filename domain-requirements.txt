@@ -1,3 +1,0 @@
-# Domain execution dependency for the vLLM-Ascend tools.
-# Installed alongside runtime-requirements.txt by setup and the updater.
-mindie-coordinator @ git+https://github.com/mindie-agent/coordinator@0191b81af67d922ede03d10fcc1b192f176a05c6

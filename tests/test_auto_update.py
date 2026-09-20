@@ -149,7 +149,6 @@ class AutoUpdateTests(unittest.TestCase):
         )
         shutil.copy(ROOT / "update-contract.json", self.remote)
         shutil.copy(ROOT / "runtime-requirements.txt", self.remote)
-        shutil.copy(ROOT / "domain-requirements.txt", self.remote)
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.name", "Fixture")
         self.git("config", "user.email", "fixture@example.invalid")

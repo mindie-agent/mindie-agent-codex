@@ -155,12 +155,20 @@ def catalog():
             )
     for tool in result["remote"]:
         tool["annotations"] = REMOTE_MUTATION
+    for tool in result["knowledge"]:
+        tool["description"] = (
+            "Requires manual MindIE activation in this session; the host "
+            "binds task identity per call. " + tool["description"]
+        )
+    for tool in result["remote"]:
+        tool["description"] = (
+            "General remote tool for every native Codex task; no MindIE "
+            "activation needed. The host binds native task identity per call; "
+            "one task cannot reach another task's remote jobs. "
+            + tool["description"]
+        )
     for tools in result.values():
         for tool in tools:
-            tool["description"] = (
-                "Requires manual MindIE activation in this session; the host "
-                "binds task identity per call. " + tool["description"]
-            )
             schema_ = tool["inputSchema"]
             schema_["additionalProperties"] = False
             if schema_.get("description"):

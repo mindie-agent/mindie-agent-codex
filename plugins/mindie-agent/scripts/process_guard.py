@@ -16,7 +16,7 @@ import threading
 import time
 
 MAX_OUTPUT = 128 * 1024
-TIMEOUT = 60
+TIMEOUT = 120
 ALLOWED_ITEMS = {"agent_message", "reasoning"}
 POSIX = os.name == "posix"
 
@@ -144,5 +144,12 @@ def run_codex(command, prompt):
                     timeout=5,
                 )
             process.wait(timeout=1)
-            process.stdout.close()
-            process.stderr.close()
+            # An inherited group's grandchildren can still hold these pipes
+            # until the service kills its group. Closing a buffered stream while
+            # its reader holds the lock can deadlock the worker's own deadline.
+            # Daemon readers end with this short-lived worker; the outer group
+            # owner is responsible for all descendants on every exit path.
+            if not threads[0].is_alive():
+                process.stdout.close()
+            if not threads[1].is_alive():
+                process.stderr.close()

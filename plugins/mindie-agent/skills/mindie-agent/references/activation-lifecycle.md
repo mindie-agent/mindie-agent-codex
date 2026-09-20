@@ -4,10 +4,10 @@ Read this when activation state, capture, quotas or hook behavior matter for
 the task at hand.
 
 - The lease lasts at most 24 hours for this session/configuration. Three
-  consecutive failed MCP calls pause this session. Expired or paused
+  consecutive failed knowledge MCP calls pause this session. Expired or paused
   activation requires another explicit user invocation; it is never renewed
   automatically.
-- Deactivation prevents new calls and captures; already admitted work remains
+- Deactivation prevents new knowledge calls and captures; already admitted work remains
   subject to its existing deadline and call budget.
 - If `capture` comes back `unbound:<reason>`, continue the task normally; the
   Stop capture is skipped. Do not retry the bind in the background — a later
@@ -36,3 +36,10 @@ the task at hand.
   without deleting drafts; re-enabling processes only newly authorized
   material and never backfills the disabled period. Toggling sharing never
   invalidates ordinary activation or read tools.
+
+Remote tools work in every native task without an activation lease. Their
+65-second call deadline, durable no-replay receipts and three-failure pause
+are independent of knowledge activation. Job records are isolated by native
+task. After diagnosing a paused remote task, explicitly run
+`remote_bridge.py recover` from that task to release its pause; recovery never
+replays earlier calls. No background retry or model turn performs recovery.

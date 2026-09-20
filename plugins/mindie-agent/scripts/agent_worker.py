@@ -61,6 +61,7 @@ For each genuinely reusable finding return one entry:
 - conditions: the environment/version/configuration facts that determine applicability, as a list of {"key","value"} objects with unique nonempty keys; state only observed facts.
 - content: for a new entry, the detailed case body: problem and background, failed attempts and why they failed, the correction steps, necessary commands or code fragments, observed results, unverified parts and applicability limits. Preserve the relationship between failure, correction and outcome; do not compress a failure process into one conclusion. For an update to an existing draft, a self-contained appended observation or correction: state "previously concluded X, later observed Y, therefore Z" rather than pointing at earlier sections; never restate or replace the existing body, and never drop earlier failures or limits because this round did not mention them.
 - sources: public references only.
+For an update, title/summary/conditions/sources describe the CURRENT conclusion; preserve any superseded claim only in the appended body with an explicit correction. A clipped tool result or an assistant's claim alone is not independently verified evidence: name its source and limitations. Keep exact public identifiers, commands, code, numbers and failure conditions when available. Do not add a failed attempt, command or validation result that is absent from the material. Coverage gaps mean unknown, never inferred success. Avoid drafting speculative intermediate hypotheses as established guidance; an unfinished investigation may produce zero entries. Related material should extend an existing task-owned entry instead of creating parallel duplicates.
 Preserve conditions and uncertainty; missing environment versions, artifacts or results stay missing — never fabricate them. Remove private paths, host addresses, credentials and personal identifiers; retain useful public technical names. Return an empty list for generic chat, unsupported claims, or material with no reusable content; do not invent knowledge to fill entries. Return only JSON matching the schema.""",
 }
 
@@ -155,6 +156,8 @@ def run(payload, *, model=None, reasoning_effort=None):
             "features.shell_tool=false",
             "-c",
             "features.multi_agent=false",
+            "-c",
+            "features.unbounded_connection_retries=false",
             "-c",
             'web_search="disabled"',
             "--output-schema",
