@@ -53,6 +53,19 @@ class GeneralRemoteTests(unittest.TestCase):
             self.assertFalse(mcp_gate.Gate('remote').call(self.request(11))['isError'])
             self.assertEqual(dispatch.call_count, 1)
 
+    def test_bad_arguments_are_rejected_before_runtime_and_can_be_corrected(self):
+        request = self.request()
+        request['params']['arguments']['invented_key'] = 'x'
+        with patch.object(mcp_gate, 'run', return_value='{"content":[], "isError":false}') as dispatch:
+            gate = mcp_gate.Gate('remote')
+            result = gate.call(request)
+            self.assertEqual(result['structuredContent']['execution'], 'not_started')
+            self.assertFalse(result['structuredContent']['automatic_retry'])
+            dispatch.assert_not_called()
+            request['params']['arguments'].pop('invented_key')
+            self.assertFalse(gate.call(request)['isError'])
+            self.assertEqual(dispatch.call_count, 1)
+
     def test_corrupt_receipts_fail_closed_before_dispatch(self):
         receipts = mcp_gate.RemoteReceipts('task-A')
         receipts.path.parent.mkdir(parents=True)
@@ -95,3 +108,20 @@ class GeneralRemoteTests(unittest.TestCase):
             result = runtime_call.call({'surface': 'remote', 'remote_session_id': 'task-A', 'name': 'remote_job_status', 'arguments': {'job_id': 'job-own-1'}})
         self.assertNotIn('local-test-secret', json.dumps(result))
         self.assertEqual(result['structuredContent']['job']['job_id'], 'job-own-1')
+
+    def test_knowledge_read_rejection_keeps_reason_without_retrying_mutations(self):
+        payload = {'surface': 'knowledge', 'mindie_activation': 'test-token',
+                   'mindie_session_id': 'task-A', 'arguments': {},
+                   'name': 'knowledge_explain'}
+        with patch.object(runtime_call.Sessions, 'resolve', return_value={'session': 'task-A'}), \
+             patch('mindie_knowledge.loop.cli.ensure_service', return_value={}), \
+             patch('mindie_knowledge.loop.transport.rpc', side_effect=ValueError('ambiguous reference')) as rpc:
+            result = runtime_call.call(payload)
+            self.assertTrue(result['isError'])
+            self.assertEqual(result['structuredContent']['code'], 'read_rejected')
+            self.assertIn('ambiguous reference', result['structuredContent']['message'])
+            self.assertFalse(result['structuredContent']['automatic_retry'])
+            rpc.assert_called_once()
+            with self.assertRaises(ValueError):
+                runtime_call.call(dict(payload, name='knowledge_feedback'))
+            self.assertEqual(rpc.call_count, 2)

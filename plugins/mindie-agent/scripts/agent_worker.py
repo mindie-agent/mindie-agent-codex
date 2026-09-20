@@ -39,11 +39,10 @@ CONDITION_PAIR = object_schema({"key": STRING, "value": STRING})
 ENTRY_SCHEMA = object_schema(
     {
         "entry_id": {"type": ["string", "null"], "maxLength": 256},
-        "title": {"type": "string", "maxLength": 240},
+        "title": {"type": ["string", "null"], "maxLength": 240},
         "summary": {"type": "string", "maxLength": 2048},
         "conditions": {"type": "array", "maxItems": 64, "items": CONDITION_PAIR},
         "content": STRING,
-        "sources": {"type": "array", "maxItems": 16, "items": STRING},
     }
 )
 SCHEMAS = {
@@ -56,12 +55,11 @@ PROMPTS = {
 Input fields: domain, increment (filtered new task material), coverage (which regions the increment covers, including gaps), existing_drafts (compact headers and relevant excerpts of this task's current drafts), and optional retrieved refs.
 For each genuinely reusable finding return one entry:
 - entry_id: null for a new entry, or the id of an existing draft owned by this task that the new material extends or corrects.
-- title: a specific searchable title, at most 240 characters.
+- title: a specific searchable title for a new entry, at most 240 characters. For an existing draft normally return null to preserve its title; supply a corrected title only when the old one misstates the finding or its scope. Ordinary appended observations do not require renaming.
 - summary: a short retrieval-oriented abstract with the key conditions, at most 2048 bytes.
 - conditions: ONLY observed software versions or source commit IDs, as {"key","value"} objects with unique nonempty keys (key <=128 characters, value <=512 characters); for example torch_version or vllm_ascend_commit. Use [] when unknown. Put all other context in the detailed body: hardware, topology, configuration, shape, random seed, epsilon, device mapping, tolerances and applicability limits. Preserve those details there; do not duplicate them in this header or infer versions. One observed version or passing case does not establish universal compatibility or tolerances.
 - content: for a new entry, the detailed case body: problem and background, failed attempts and why they failed, the correction steps, necessary commands or code fragments, observed results, unverified parts and applicability limits. Preserve the relationship between failure, correction and outcome; do not compress a failure process into one conclusion. For an update to an existing draft, a self-contained appended observation or correction: state "previously concluded X, later observed Y, therefore Z" rather than pointing at earlier sections; never restate or replace the existing body, and never drop earlier failures or limits because this round did not mention them.
-- sources: public references only.
-For an update, title/summary/conditions/sources describe the CURRENT conclusion; preserve any superseded claim only in the appended body with an explicit correction. A clipped tool result or an assistant's claim alone is not independently verified evidence: name its source and limitations. Keep exact public identifiers, commands, code, numbers and failure conditions when available. Do not add a failed attempt, command or validation result that is absent from the material. Coverage gaps mean unknown, never inferred success. Avoid drafting speculative intermediate hypotheses as established guidance; an unfinished investigation may produce zero entries. Related material should extend an existing task-owned entry instead of creating parallel duplicates.
+Put relevant public documentation, source-code or issue links in the body, next to the claims they support; do not create a separate sources field or expose local transcript locations. For an update, summary and conditions describe the CURRENT conclusion, and title normally stays unchanged; preserve any superseded claim only in the appended body with an explicit correction. A clipped tool result or an assistant's claim alone is not independently verified evidence: name its source and limitations. Keep exact public identifiers, commands, code, numbers and failure conditions when available. Do not add a failed attempt, command or validation result that is absent from the material. Coverage gaps mean unknown, never inferred success. Avoid drafting speculative intermediate hypotheses as established guidance; an unfinished investigation may produce zero entries. Related material should extend an existing task-owned entry instead of creating parallel duplicates.
 Preserve conditions and uncertainty; missing environment versions, artifacts or results stay missing — never fabricate them. Remove private paths, host addresses, credentials and personal identifiers; retain useful public technical names. Return an empty list for generic chat, unsupported claims, or material with no reusable content; do not invent knowledge to fill entries. Return only JSON matching the schema.""",
 }
 
@@ -100,7 +98,9 @@ def check_entry(entry):
     ):
         raise ValueError("invalid organized entry identity")
     title = entry["title"]
-    if not isinstance(title, str) or not 0 < len(title.strip()) <= 240:
+    if title is None and entry_id is not None:
+        pass  # Existing draft keeps its title unless correction is necessary.
+    elif not isinstance(title, str) or not 0 < len(title.strip()) <= 240:
         raise ValueError("organized entry title exceeds limit")
     summary = entry["summary"]
     if not isinstance(summary, str) or len(summary.encode()) > 2048:
@@ -111,12 +111,6 @@ def check_entry(entry):
     # only size cap, so no tiny prose limit rejects real failure detail here.
     if not isinstance(content, str) or not content.strip():
         raise ValueError("organized entry content must not be empty")
-    sources = entry["sources"]
-    if not isinstance(sources, list) or len(sources) > 16:
-        raise ValueError("invalid organized entry sources")
-    for source in sources:
-        if not isinstance(source, str) or not 0 < len(source) <= 1024:
-            raise ValueError("invalid organized entry sources")
 
 
 def run(payload, *, model=None, reasoning_effort=None):

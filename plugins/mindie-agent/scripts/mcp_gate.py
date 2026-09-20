@@ -35,6 +35,22 @@ def failure(message):
     return dict(content=[dict(type="text", text=message)], isError=True)
 
 
+class InvalidToolArguments(ValueError):
+    """Rejected by the declared tool schema before any runtime dispatch."""
+
+
+def call_failure(exc):
+    if isinstance(exc, InvalidToolArguments):
+        message = (f"Request rejected before execution: {str(exc)[:240]}. "
+                   "Correct the arguments once using the tool schema; "
+                   "do not repeat unchanged arguments. No automatic retry.")
+        return dict(failure(message), structuredContent=dict(
+            code="invalid_arguments", execution="not_started",
+            automatic_retry=False, message=message,
+        ))
+    return failure(f"{type(exc).__name__}: {str(exc)[:240]}. No automatic retry.")
+
+
 def remote_state_dir():
     """Independent remote state root under the local user data root.
 
@@ -200,16 +216,14 @@ class Gate:
             with update_lock(self.sessions.config):
                 return self._call(request, session, cancel, timeout=timeout)
         except Exception as exc:
-            return failure(
-                f"{type(exc).__name__}: {str(exc)[:240]}. No automatic retry."
-            )
+            return call_failure(exc)
 
     def _tool_args(self, request):
         params = request.get("params", {})
         name, args = params.get("name"), params.get("arguments")
         tool = next((tool for tool in self.tools if tool["name"] == name), None)
         if not tool or not isinstance(args, dict):
-            raise ValueError("Unknown MindIE tool or invalid arguments")
+            raise InvalidToolArguments("Unknown MindIE tool or invalid arguments")
         args = dict(args)
         schema = tool["inputSchema"]
         unknown = set(args) - set(schema["properties"])
@@ -219,7 +233,7 @@ class Gate:
                 "unknown keys: " + ", ".join(sorted(unknown)) if unknown else "",
                 "missing keys: " + ", ".join(sorted(missing)) if missing else "",
             ] if part)
-            raise ValueError("Invalid MindIE tool arguments (" + detail + ")")
+            raise InvalidToolArguments("Invalid MindIE tool arguments (" + detail + ")")
         return name, args
 
     def _request_identity(self, request):
@@ -277,9 +291,7 @@ class Gate:
             return result
         except Exception as exc:
             # No traceback, credentials, model wakeup, reconnect loop or replay.
-            return failure(
-                f"{type(exc).__name__}: {str(exc)[:240]}. No automatic retry."
-            )
+            return call_failure(exc)
         finally:
             if admitted and receipts is not None:
                 try:
@@ -328,9 +340,7 @@ class Gate:
             return result
         except Exception as exc:
             # No traceback, credentials, model wakeup, reconnect loop or replay.
-            return failure(
-                f"{type(exc).__name__}: {str(exc)[:240]}. No automatic retry."
-            )
+            return call_failure(exc)
         finally:
             if admitted:
                 try:

@@ -74,7 +74,7 @@ KNOWLEDGE_TOOLS = [
         name="knowledge_query",
         description=(
             "Search the selected domain's published knowledge and experience. "
-            "References are advisory; conditions and revision accompany each hit."
+            "Each advisory hit has a short pinned ref, title, summary and known software versions."
         ),
         inputSchema=schema(
             dict(query=STRING, limit={"type": "integer", "minimum": 1, "maximum": 20}),
@@ -85,14 +85,15 @@ KNOWLEDGE_TOOLS = [
     dict(
         name="knowledge_explain",
         description=(
-            "Read the pinned content, source, conditions and status for one "
-            "domain reference; retired entries explain their retirement."
+            "Read a result's detailed case and cited evidence using its exact short ref. "
+            "Normally omit offset and limit; when supplied they count characters, not lines. "
+            "A withdrawn result is explicitly marked as historical."
         ),
         inputSchema=schema(
             dict(
-                ref=STRING,
-                offset={"type": "integer", "minimum": 0},
-                limit={"type": "integer", "minimum": 1},
+                ref={"type": "string", "description": "Copy the pinned ref returned by knowledge_query exactly."},
+                offset={"type": "integer", "minimum": 0, "description": "Character offset; normally omit."},
+                limit={"type": "integer", "minimum": 1, "maximum": 65536, "description": "Maximum characters, not lines; normally omit to read the detailed case."},
             ),
             ["ref"],
         ),

@@ -2,7 +2,7 @@
   "knowledge": [
     {
       "name": "knowledge_query",
-      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Search the selected domain's published knowledge and experience. References are advisory; conditions and revision accompany each hit.",
+      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Search the selected domain's published knowledge and experience. Each advisory hit has a short pinned ref, title, summary and known software versions.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -29,20 +29,24 @@
     },
     {
       "name": "knowledge_explain",
-      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Read the pinned content, source, conditions and status for one domain reference; retired entries explain their retirement.",
+      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Read a result's detailed case and cited evidence using its exact short ref. Normally omit offset and limit; when supplied they count characters, not lines. A withdrawn result is explicitly marked as historical.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "ref": {
-            "type": "string"
+            "type": "string",
+            "description": "Copy the pinned ref returned by knowledge_query exactly."
           },
           "offset": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Character offset; normally omit."
           },
           "limit": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 65536,
+            "description": "Maximum characters, not lines; normally omit to read the detailed case."
           }
         },
         "required": [

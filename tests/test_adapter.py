@@ -73,12 +73,11 @@ class AdapterTests(unittest.TestCase):
                                 entry_id=None,
                                 title="Container logical device numbering",
                                 summary="Map device by logical index inside containers",
-                                conditions=[{"key": "runtime", "value": "container"}],
+                                conditions=[{"key": "torch_npu_version", "value": "2.10.0.post2"}],
                                 content="The host maps physical device 8; inside the "
                                 "container logical numbering starts at 0. The original "
                                 "run failed requesting device 8; selecting logical "
                                 "device 0 made the device visible.",
-                                sources=[],
                             )
                         ]
                     )
@@ -99,7 +98,7 @@ class AdapterTests(unittest.TestCase):
         entry = result["entries"][0]
         self.assertIsNone(entry["entry_id"])
         # Wire pairs are converted to the core ABI conditions dict.
-        self.assertEqual(entry["conditions"], {"runtime": "container"})
+        self.assertEqual(entry["conditions"], {"torch_npu_version": "2.10.0.post2"})
         # The retired judge role is not served under any name.
         with self.assertRaises(ValueError):
             worker.run({"role": "judge", "outcome": "untrusted material"})
@@ -130,6 +129,22 @@ class AdapterTests(unittest.TestCase):
         text_schema = json.dumps(worker.SCHEMAS["organize"])
         self.assertNotIn('"additionalProperties": {"type": "string"}', text_schema)
         self.assertIn('"items"', text_schema)
+
+    def test_worker_preserves_existing_title_and_requires_new_title(self):
+        spec = importlib.util.spec_from_file_location(
+            "agent_worker", SCRIPTS / "agent_worker.py"
+        )
+        worker = importlib.util.module_from_spec(spec)
+        with patch.object(sys, "path", [str(SCRIPTS), *sys.path]):
+            spec.loader.exec_module(worker)
+        entry = dict(entry_id="a" * 64, title=None, summary="Later observation",
+                     conditions=[], content="Later evidence corrects the earlier conclusion.")
+        worker.check_entry(entry)
+        self.assertIsNone(entry["title"])
+        with self.assertRaises(ValueError):
+            worker.check_entry(dict(entry, entry_id=None, conditions=[]))
+        with self.assertRaises(ValueError):
+            worker.check_entry(dict(entry, sources=[], conditions=[]))
 
 
 if __name__ == "__main__":

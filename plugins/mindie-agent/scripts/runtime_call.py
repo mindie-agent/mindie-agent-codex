@@ -53,12 +53,22 @@ def call(payload):
             isError=False,
         )
     # Never reconnect and resubmit a request with an uncertain outcome.
-    value = rpc(
-        connection,
-        name.removeprefix("knowledge_"),
-        dict(args, _session_id=session, _activation=payload["mindie_activation"]),
-        timeout=5,
-    )
+    try:
+        value = rpc(
+            connection,
+            name.removeprefix("knowledge_"),
+            dict(args, _session_id=session, _activation=payload["mindie_activation"]),
+            timeout=5,
+        )
+    except ValueError as exc:
+        if name not in {"knowledge_query", "knowledge_explain"}:
+            raise
+        # A rejected read is not an uncertain mutation. Keep the service's
+        # bounded validation reason so the caller can understand a bad ref.
+        message = f"Knowledge read rejected: {str(exc)[:240]}. No corpus change; no automatic retry."
+        return dict(content=[dict(type="text", text=message)],
+                    structuredContent=dict(code="read_rejected", message=message,
+                                           automatic_retry=False), isError=True)
     return dict(
         content=[dict(type="text", text=json.dumps(value, ensure_ascii=False))],
         structuredContent=value,
