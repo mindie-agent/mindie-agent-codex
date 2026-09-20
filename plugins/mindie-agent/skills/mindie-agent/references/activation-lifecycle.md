@@ -1,23 +1,32 @@
 # Activation lifecycle
 
-Read this when activation state, capture, quotas or hook behavior matter for
-the task at hand.
+Read this when activation state, capture, or hook behavior matter for the
+task at hand.
 
-- The lease lasts at most 24 hours for this session/configuration. Three
-  consecutive knowledge runtime failures pause this session; a rejected
-  read argument or reference is a correctable input error, not a runtime failure. Expired or paused
-  activation requires another explicit user invocation; it is never renewed
-  automatically.
-- Deactivation prevents new knowledge calls and captures; already admitted work remains
-  subject to its existing deadline and call budget.
+- Authorization lasts for this native task until the user deactivates it, the
+  failure circuit pauses it (three consecutive knowledge runtime failures), or
+  the project scope actually changes. There is no 24-hour wall-clock expiry and
+  no runtime/config-byte fingerprint: changing sharing or knowledge config
+  bytes does not revoke a grant. A rejected read argument or reference is a
+  correctable input error, not a runtime failure. Paused activation requires
+  explicit `deactivate` then `activate`; `activate` never bypasses the circuit.
+- Deactivation prevents new knowledge calls and captures; already admitted work
+  remains subject to its existing deadline. Attempt identities are preserved so
+  revoke/reactivate never replays old captures. A fresh activation rotates the
+  token and capture boundary.
+- First explicit invocation runs offline `init`/`status` before activate. If
+  sharing is unconfigured, present the three choices once (contribute / read-only
+  / later), with no default yes. After a choice, do not re-ask. Configure
+  sharing with `setup.py configure` or `bridge.py config`; do not reinstall or
+  hand-edit JSON.
 - If `capture` comes back `unbound:<reason>`, continue the task normally; the
   Stop capture is skipped. Do not retry the bind in the background — a later
   explicit re-invocation binds again through the same bounded attempt.
 - MCP calls carry no identity arguments. The host binds each tools/call to
   its native task through turn metadata; a call from another task, or from an
-  older host without that metadata, fails closed. The remote tools' existing
-  `session_id` field is a remote job ID; it must not be replaced with the
-  Codex session ID.
+  older host without that metadata, fails closed. Native identity for
+  activation is `CODEX_THREAD_ID` only. The remote tools' existing `session_id`
+  field is a remote job ID; it must not be replaced with the Codex session ID.
 - Knowledge MCP calls have a 15-second outer deadline; remote calls have 65
   seconds. Each business call has one attempt and zero automatic retries. A
   timed-out remote mutation may already have executed: inspect the original
@@ -38,6 +47,10 @@ the task at hand.
   without deleting drafts; re-enabling processes only newly authorized
   material and never backfills the disabled period. Toggling sharing never
   invalidates ordinary activation or read tools.
+- Contribution recovery (inspect / reconcile / retry / compact) is a
+  deterministic core CLI wrapped by `bridge.py contribution-* BATCH`. It does
+  not rerun the organizer, reset a capture cursor or replay failed model
+  attempts. Uncertain writes are inspected, never blindly retried.
 
 Remote tools work in every native task without an activation lease. Their
 65-second call deadline, durable no-replay receipts and three-failure pause
@@ -45,3 +58,8 @@ are independent of knowledge activation. Job records are isolated by native
 task. After diagnosing a paused remote task, explicitly run
 `remote_bridge.py recover` from that task to release its pause; recovery never
 replays earlier calls. No background retry or model turn performs recovery.
+
+Idle task authorizations do not block plugin updates. Updates wait for actual
+in-flight calls and in-flight maintenance/publication, then switch one
+committed generation (interpreter + scripts + transcript parser). Existing
+remote jobs keep their identity. Old cached native entrypoints stay callable.

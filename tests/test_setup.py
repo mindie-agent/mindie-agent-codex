@@ -51,7 +51,7 @@ class SetupTests(unittest.TestCase):
             {
                 "mindie_knowledge.loop.cli",
                 "mindie_knowledge.loop.documents",
-                "mindie_knowledge.loop.transcript",
+                "mindie_knowledge.loop.activation",
                 "remote_dev.mcp.server",
             },
         )
@@ -72,15 +72,60 @@ class SetupTests(unittest.TestCase):
             self.assertEqual((config.stat().st_mode & 0o777), 0o600)
             self.assertEqual((engine.stat().st_mode & 0o777), 0o600)
             value = json.loads(engine.read_text())
+            adapter = json.loads(config.read_text())
             self.assertEqual(value["domain"], "vllm-ascend")
             self.assertTrue(value["agent_command"][1].endswith("agent_worker.py"))
+            self.assertEqual(
+                Path(value["agent_command"][0]).resolve(),
+                Path(sys.executable).resolve(),
+            )
+            self.assertNotIn("session_activation", value)
+            self.assertNotIn("session_activation", adapter)
+            admission = config.with_name("codex.admission.sqlite3")
+            self.assertEqual(value["admission_path"], str(admission))
+            self.assertEqual(adapter["admission_path"], str(admission))
+            self.assertTrue(Path(value["transcript_adapter"]).is_absolute())
+            self.assertTrue(value["transcript_adapter"].endswith("codex_transcript.py"))
+            self.assertEqual(adapter["runtime_scripts"], str(SCRIPTS))
+            self.assertNotIn("sharing_choice", adapter)
             # Community sharing defaults OFF: the pointer exists, the file not.
             community = config.with_name("codex.community.json")
             self.assertEqual(value["community_config"], str(community))
             self.assertFalse(community.exists())
+            self.assertFalse(admission.exists())
             again = run_setup(sys.executable, "--config", config, "--root", base / "data")
             self.assertNotEqual(again.returncode, 0)
             self.assertIn("configuration already exists", again.stderr)
+            # Post-install configure must work even though engine config exists
+            # and must drop the retired session_activation alias.
+            engine_value = json.loads(engine.read_text())
+            engine_value["session_activation"] = str(config)
+            engine.write_text(json.dumps(engine_value))
+            scope = base / "scope"
+            scope.mkdir()
+            configured = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "setup.py"),
+                    "configure",
+                    "--config",
+                    str(config),
+                    "--community-repository",
+                    "mindie-agent/knowledge",
+                    "--community-project-root",
+                    str(scope),
+                    "--community-visibility",
+                    "public",
+                ],
+                text=True,
+                capture_output=True,
+                timeout=30,
+            )
+            self.assertEqual(configured.returncode, 0, configured.stderr)
+            settings = json.loads(community.read_text())
+            self.assertTrue(settings["enabled"])
+            self.assertEqual(json.loads(config.read_text())["sharing_choice"], "contribute")
+            self.assertNotIn("session_activation", json.loads(engine.read_text()))
 
     def test_community_selection_records_settings_and_enables_sharing(self):
         for module in setup_script.PROBE_MODULES:

@@ -1,12 +1,20 @@
-"""One authorized call in the configured interpreter; no request replay."""
+"""One authorized call in the configured interpreter; no request replay.
+
+This module always executes inside one committed runtime generation: when an
+older loaded entrypoint spawns it with a stale interpreter or from a stale
+path, it re-execs the generation-recorded copy under the generation's
+interpreter before touching the payload. Admission checks use the shared
+core store directly (this process is the generation), and the knowledge
+call's outcome accounting (failure circuit, with the read-rejection
+exemption) is recorded here where the trusted disposition is known.
+"""
 
 import json
 import os
 from pathlib import Path
 import sys
 
-from mcp_gate import remote_state_dir
-from session_gate import IDENTITY, Sessions, config_path
+from session_gate import IDENTITY, config_path, generation_env, runtime_scripts
 
 
 def knowledge_names():
@@ -14,26 +22,49 @@ def knowledge_names():
     return {tool["name"] for tool in catalog["knowledge"]}
 
 
+def _admission(config):
+    from mindie_knowledge.loop.activation import Admission
+
+    path = config.get("admission_path")
+    if not isinstance(path, str) or not os.path.isabs(path):
+        raise ValueError("adapter configuration lacks an absolute admission_path")
+    return Admission(path)
+
+
+def resolve_lease(config, token):
+    """The internal activation token resolves to its owning valid lease."""
+    lease = _admission(config).resolve(token)
+    if lease is None:
+        raise ValueError("MindIE activation does not match an active lease")
+    return lease
+
+
+def finish_outcome(config, session, token, succeeded):
+    _admission(config).finish(session, token, succeeded)
+
+
 def call(payload):
     if payload["surface"] == "remote":
         return remote(payload)
+    config = json.loads(config_path().read_text())
     # The internal activation token resolves the owning lease again inside the
     # runtime; it must agree with the gate-bound session, and no
     # caller-supplied identity is ever trusted on its own.
-    lease = Sessions().resolve(payload["mindie_activation"])
+    token = payload["mindie_activation"]
+    lease = resolve_lease(config, token)
     session = lease["session"]
     if session != payload.get("mindie_session_id"):
         raise ValueError("MindIE runtime identity mismatch")
-    config = json.loads(config_path().read_text())
     args, name = payload["arguments"], payload["name"]
     if payload["surface"] != "knowledge":
         raise ValueError("unknown plugin surface")
     from mindie_knowledge.loop.cli import ensure_service
     from mindie_knowledge.loop.transport import RequestRejected, rpc
 
-    if name in knowledge_names():
+    internal = payload.get("internal") is True
+    if name in knowledge_names() and not internal:
         pass
-    elif name == "knowledge_attach" and payload.get("internal") is True:
+    elif name == "knowledge_attach" and internal:
         # Internal activation-time bind only; never a front-stage tool.
         # Sharing off must not cold-start collection through this path.
         import sharing
@@ -53,33 +84,45 @@ def call(payload):
             isError=False,
         )
     # Never reconnect and resubmit a request with an uncertain outcome.
+    succeeded = False
+    neutral = False
     try:
-        value = rpc(
-            connection,
-            name.removeprefix("knowledge_"),
-            dict(args, _session_id=session, _activation=payload["mindie_activation"]),
-            timeout=5,
-        )
-    except RequestRejected as exc:
-        if name not in {"knowledge_query", "knowledge_explain"}:
-            raise
-        # A rejected read never started execution and is not an uncertain
-        # mutation. Keep the service's bounded validation reason so the caller
-        # can understand a bad ref. The explicit not_started disposition tells
-        # the gate this is caller feedback, not a runtime failure: it must not
-        # consume the failure circuit. isError stays True for the caller.
-        message = f"Knowledge read rejected: {str(exc)[:240]}. No corpus change; no automatic retry."
-        return dict(content=[dict(type="text", text=message)],
-                    structuredContent=dict(code="read_rejected",
-                                           execution="not_started",
-                                           message=message,
-                                           automatic_retry=False),
-                    isError=True)
-    return dict(
-        content=[dict(type="text", text=json.dumps(value, ensure_ascii=False))],
-        structuredContent=value,
-        isError=False,
-    )
+        try:
+            value = rpc(
+                connection,
+                name.removeprefix("knowledge_"),
+                dict(args, _session_id=session, _activation=token),
+                timeout=5,
+            )
+            result = dict(
+                content=[dict(type="text", text=json.dumps(value, ensure_ascii=False))],
+                structuredContent=value,
+                isError=False,
+            )
+            succeeded = True
+        except RequestRejected as exc:
+            if name not in {"knowledge_query", "knowledge_explain"}:
+                raise
+            # A rejected read never started execution and is not an uncertain
+            # mutation. Keep the service's bounded validation reason so the
+            # caller can understand a bad ref. The explicit not_started
+            # disposition is caller feedback, not a runtime failure: it must
+            # not consume the failure circuit. isError stays True.
+            neutral = True
+            message = f"Knowledge read rejected: {str(exc)[:240]}. No corpus change; no automatic retry."
+            result = dict(content=[dict(type="text", text=message)],
+                          structuredContent=dict(code="read_rejected",
+                                                 execution="not_started",
+                                                 message=message,
+                                                 automatic_retry=False),
+                          isError=True)
+        return result
+    finally:
+        if not neutral:
+            try:
+                finish_outcome(config, session, token, succeeded)
+            except Exception:
+                pass
 
 
 def remote(payload):
@@ -91,6 +134,8 @@ def remote(payload):
     independent remote state dir; the knowledge engine config/root and any
     activation bearer are never read on this path.
     """
+    from mcp_gate import remote_state_dir
+
     session = payload.get("remote_session_id")
     if not isinstance(session, str) or not IDENTITY.fullmatch(session):
         raise ValueError("MindIE remote runtime identity mismatch")
@@ -144,7 +189,36 @@ def remote(payload):
         close_connections()
 
 
+def redispatch():
+    """Route this call through the one committed generation under its lock.
+
+    The adapter config records (python, runtime_scripts) atomically at every
+    install. An old loaded wrapper that still points at its own cached copy
+    re-execs the recorded generation's copy with the recorded interpreter
+    instead of mixing an old script with a new interpreter or library.
+    """
+    try:
+        config = json.loads(config_path().read_text())
+    except (OSError, ValueError):
+        return  # Unconfigured: run in place and fail closed on the call itself.
+    python, scripts = config.get("python"), config.get("runtime_scripts")
+    if not isinstance(python, str) or not isinstance(scripts, str):
+        return  # Pre-update setup layout: this copy IS the committed runtime.
+    try:
+        target = Path(scripts) / "runtime_call.py"
+        same_script = target.is_file() and target.resolve() == Path(__file__).resolve()
+        same_python = Path(python).resolve() == Path(sys.executable).resolve()
+        if same_script and same_python:
+            return
+        if not target.is_file():
+            return
+        os.execve(python, [python, str(target)], generation_env())
+    except OSError:
+        return  # A stale generation record fails closed in this process.
+
+
 if __name__ == "__main__":
+    redispatch()
     try:
         raw = sys.stdin.buffer.read(128 * 1024 + 1)
         if len(raw) > 128 * 1024:

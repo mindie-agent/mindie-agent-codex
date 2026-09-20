@@ -112,9 +112,11 @@ class GeneralRemoteTests(unittest.TestCase):
 
     def test_knowledge_read_rejection_keeps_reason_without_retrying_mutations(self):
         payload = {'surface': 'knowledge', 'mindie_activation': 'test-token',
-                   'mindie_session_id': 'task-A', 'arguments': {},
+                   'mindie_session_id': 'task-A', 'arguments': {'ref': 'x'},
                    'name': 'knowledge_explain'}
-        with patch.object(runtime_call.Sessions, 'resolve', return_value={'session': 'task-A'}), \
+        finished = []
+        with patch.object(runtime_call, 'resolve_lease', return_value={'session': 'task-A'}), \
+             patch.object(runtime_call, 'finish_outcome', side_effect=lambda *a, **k: finished.append(a[-1])), \
              patch('mindie_knowledge.loop.cli.ensure_service', return_value={}), \
              patch('mindie_knowledge.loop.transport.rpc', side_effect=RequestRejected('ambiguous reference')) as rpc:
             result = runtime_call.call(payload)
@@ -124,17 +126,22 @@ class GeneralRemoteTests(unittest.TestCase):
             self.assertIn('ambiguous reference', result['structuredContent']['message'])
             self.assertFalse(result['structuredContent']['automatic_retry'])
             rpc.assert_called_once()
-            with self.assertRaises(ValueError):
-                runtime_call.call(dict(payload, name='knowledge_feedback'))
+            self.assertEqual(finished, [])
+            with self.assertRaises(RequestRejected):
+                runtime_call.call(dict(payload, name='knowledge_feedback', arguments={'ref': 'x', 'rating': 'up'}))
             self.assertEqual(rpc.call_count, 2)
+            self.assertEqual(finished, [False])
 
 
     def test_wire_failure_is_not_an_input_rejection(self):
         payload = {'surface': 'knowledge', 'mindie_activation': 'test-token',
-                   'mindie_session_id': 'task-A', 'arguments': {},
+                   'mindie_session_id': 'task-A', 'arguments': {'ref': 'x'},
                    'name': 'knowledge_explain'}
-        with patch.object(runtime_call.Sessions, 'resolve', return_value={'session': 'task-A'}), \
+        finished = []
+        with patch.object(runtime_call, 'resolve_lease', return_value={'session': 'task-A'}), \
+             patch.object(runtime_call, 'finish_outcome', side_effect=lambda *a, **k: finished.append(a[-1])), \
              patch('mindie_knowledge.loop.cli.ensure_service', return_value={}), \
              patch('mindie_knowledge.loop.transport.rpc', side_effect=ValueError('response exceeds limit')):
             with self.assertRaisesRegex(ValueError, 'response exceeds'):
                 runtime_call.call(payload)
+        self.assertEqual(finished, [False])

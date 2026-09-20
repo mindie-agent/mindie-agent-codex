@@ -196,7 +196,7 @@ records and feed sync use no model calls.
   adapter configuration only to locate the interpreter, and create no knowledge
   service, capture state or lease. Remote jobs and receipts have separate
   task-local state. Missing runtime configuration or native identity fails closed.
-  Shared runtime configurations opt into this check with `session_activation`.
+  Shared runtime configurations opt into this check with `admission_path`.
 - Knowledge calls have a **15-second absolute process deadline**; remote calls
   have **65 seconds**. Each submitted business request gets **one attempt, zero
   automatic retries**. Knowledge startup spawns once, with a 5-second startup

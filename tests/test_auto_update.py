@@ -5,6 +5,7 @@ import io
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -157,15 +158,25 @@ class AutoUpdateTests(unittest.TestCase):
         self.root.mkdir()
         self.config = self.base / "adapter.json"
         self.engine = self.base / "engine.json"
+        self.admission = self.base / "adapter.admission.sqlite3"
         atomic(
             self.engine,
             dict(
                 root=str(self.base / "data"),
                 domain="test",
                 agent_command=["old-worker"],
+                admission_path=str(self.admission),
             ),
         )
-        atomic(self.config, dict(python=sys.executable, engine_config=str(self.engine)))
+        atomic(
+            self.config,
+            dict(
+                python=sys.executable,
+                engine_config=str(self.engine),
+                admission_path=str(self.admission),
+                runtime_scripts=str(SCRIPTS),
+            ),
+        )
         self.initial = read(self.config)
         self.settings = self.base / "updater.json"
         self.cache = (
@@ -262,18 +273,32 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(read(self.config), self.initial)
         self.assertEqual(self.updater.installs, 0)
 
-    def test_active_session_defers_prepared_update_without_consuming_retries(self):
+    def test_idle_authorization_does_not_block_update(self):
         with patch.dict(os.environ, CODEX_THREAD_ID="fixture-manual"):
             sessions = Sessions(self.config)
             lease = sessions.activate()
-            for _ in range(4):
-                result = self.check()
-                self.assertEqual(result["status"], "waiting_for_idle")
-                sessions.check(lease["mindie_session_id"], lease["mindie_activation"])
-            self.assertEqual(self.updater.builds, 1)
-            self.assertEqual(result["attempts"][self.sha]["count"], 0)
-            sessions.deactivate()
-        self.assertEqual(self.check()["status"], "installed")
+            result = self.check()
+            self.assertEqual(result["status"], "installed")
+            with sqlite3.connect(self.admission) as db:
+                row = db.execute(
+                    "SELECT session, enabled, token FROM leases WHERE session=?",
+                    ("fixture-manual",),
+                ).fetchone()
+            self.assertEqual(row[0], "fixture-manual")
+            self.assertEqual(row[1], 1)
+            self.assertEqual(row[2], lease["mindie_activation"])
+            adapter = read(self.config)
+            engine = read(adapter["engine_config"])
+            self.assertNotIn("session_activation", engine)
+            self.assertTrue(
+                Path(engine["transcript_adapter"]).is_file()
+            )
+            self.assertTrue(engine["transcript_adapter"].endswith("codex_transcript.py"))
+            self.assertTrue(Path(adapter["runtime_scripts"]).is_dir())
+            self.assertEqual(
+                Path(adapter["runtime_scripts"]),
+                Path(result["current"]["plugin"]) / "scripts",
+            )
 
     def test_inflight_call_lock_defers_update_and_activation(self):
         with update_lock(self.config):
@@ -365,42 +390,13 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(self.check()["status"], "attempts_exhausted")
         self.assertGreaterEqual(self.updater.knowledge_calls, 6)
 
-    def test_unreadable_lease_state_defers_switch_and_preserves_store(self):
+    def test_unreadable_admission_bytes_do_not_block_update(self):
         sessions = Sessions(self.config)
         sessions.path.write_text("not a sqlite database")
-        for _ in range(2):
-            result = self.check()
-            self.assertEqual(result["status"], "waiting_for_idle")
-            self.assertIn("lease state unreadable", result["error"])
-        self.assertEqual(sessions.path.read_text(), "not a sqlite database")
-        self.assertEqual(self.updater.installs, 0)
-        self.assertEqual(read(self.config), self.initial)
-
-    def test_dependency_overlay_records_exact_revision_and_dirty_state(self):
-        overlay = self.base / "overlay-core"
-        overlay.mkdir()
-        (overlay / "pyproject.toml").write_text("[project]\nname='overlay'\n")
-        subprocess.run(["git", "-C", overlay, "init", "-q"], check=True)
-        subprocess.run(["git", "-C", overlay, "add", "."], check=True)
-        subprocess.run(
-            ["git", "-C", overlay, "-c", "user.email=t@t", "-c", "user.name=t",
-             "commit", "-qm", "overlay"],
-            check=True,
-        )
-        revision = subprocess.check_output(
-            ["git", "-C", overlay, "rev-parse", "HEAD"], text=True
-        ).strip()
-        (overlay / "local.txt").write_text("uncommitted integration change")
-        settings = read(self.settings)
-        settings["dependency_overlay"] = [str(overlay)]
-        atomic(self.settings, settings)
-        self.updater = LocalUpdater(self.settings)
         result = self.check()
         self.assertEqual(result["status"], "installed")
-        evidence = result["current"]["dependency_overlay"]
-        self.assertEqual(evidence[0]["revision"], revision)
-        self.assertIs(evidence[0]["dirty"], True)
-        self.assertEqual(evidence[0]["path"], str(overlay))
+        self.assertEqual(sessions.path.read_text(), "not a sqlite database")
+        self.assertGreater(self.updater.installs, 0)
 
     def test_install_verifies_native_selection_while_retaining_old_entrypoints(self):
         # Root's macOS scenario: a retained cache from the 20-digit timestamp
@@ -464,6 +460,51 @@ class AutoUpdateTests(unittest.TestCase):
             self.updater.command(
                 [sys.executable, "-c", "raise AssertionError('must not run')"]
             )
+
+
+class UpdateIdleTests(unittest.TestCase):
+    def test_missing_service_is_idle(self):
+        import update_idle
+
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = Path(tmp) / "engine.json"
+            engine.write_text(json.dumps(dict(root=tmp, domain="test")))
+            self.assertTrue(update_idle.idle(dict(engine_config=str(engine))))
+
+    def test_absent_stop_if_idle_fails_closed(self):
+        import update_idle
+
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = Path(tmp) / "engine.json"
+            engine.write_text(json.dumps(dict(root=tmp, domain="test")))
+            with (
+                patch(
+                    "update_idle.connect",
+                    return_value=dict(url="http://127.0.0.1:9", token="t"),
+                ),
+                patch("update_idle.rpc", return_value=dict(status="ok")),
+            ):
+                with self.assertRaises(RuntimeError):
+                    update_idle.idle(dict(engine_config=str(engine)))
+
+    def test_authenticated_idle_result_is_used(self):
+        import update_idle
+
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = Path(tmp) / "engine.json"
+            engine.write_text(json.dumps(dict(root=tmp, domain="test")))
+            with (
+                patch(
+                    "update_idle.connect",
+                    return_value=dict(url="http://127.0.0.1:9", token="t"),
+                ),
+                patch(
+                    "update_idle.rpc",
+                    return_value=dict(idle=True, status="stopping"),
+                ) as rpc,
+            ):
+                self.assertTrue(update_idle.idle(dict(engine_config=str(engine))))
+                self.assertEqual(rpc.call_args.args[1], "stop_if_idle")
 
 
 if __name__ == "__main__":

@@ -32,13 +32,24 @@ class SharingFixture(unittest.TestCase):
         self.config = self.root / "codex.json"
         self.engine = self.root / "engine.json"
         self.community = self.root / "codex.community.json"
-        self.engine.write_text(json.dumps(dict(root=str(self.root / "data"), domain="test")))
+        self.admission = self.root / "codex.admission.sqlite3"
+        self.engine.write_text(
+            json.dumps(
+                dict(
+                    root=str(self.root / "data"),
+                    domain="test",
+                    admission_path=str(self.admission),
+                )
+            )
+        )
         self.config.write_text(
             json.dumps(
                 dict(
                     python=sys.executable,
                     engine_config=str(self.engine),
                     community_config=str(self.community),
+                    admission_path=str(self.admission),
+                    runtime_scripts=str(SCRIPTS),
                 )
             )
         )

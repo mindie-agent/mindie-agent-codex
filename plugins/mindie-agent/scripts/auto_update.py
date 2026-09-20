@@ -17,7 +17,6 @@ import plistlib
 import re
 import shlex
 import shutil
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -25,7 +24,7 @@ import time
 import urllib.request
 
 from bounded_process import run
-from session_gate import Sessions, config_path
+from session_gate import config_path, runtime_scripts
 from update_lock import file_lock, update_lock
 
 REPOSITORY = "https://github.com/mindie-agent/mindie-agent-codex.git"
@@ -35,6 +34,8 @@ CONTRACT = dict(
     bounded_calls=1,
     idle_update_lock=1,
     maintenance_budget=1,
+    admission_path=1,
+    transcript_adapter=1,
 )
 LABEL = "org.mindie-agent.plugin-updater"
 WIN_TASK = "MindIE Agent Plugin Updater"
@@ -133,12 +134,17 @@ class Updater:
         if remaining <= 0:
             raise TimeoutError("update deadline reached")
         # Disable implicit download/transport retries. Each scheduler run gets one attempt.
-        env = dict(
-            os.environ,
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key != "PYTHONPATH"
+        }
+        env.update(
             GIT_TERMINAL_PROMPT="0",
             UV_HTTP_RETRIES="0",
             UV_HTTP_TIMEOUT="20",
             UV_NO_PROGRESS="1",
+            MINDIE_AGENT_CONFIG=str(self.config),
         )
         return run(
             [str(arg) for arg in args], data, timeout=min(timeout, remaining), env=env
@@ -207,13 +213,22 @@ class Updater:
             "update_lock.py",
             "bounded_process.py",
             "runtime_call.py",
+            "admission_ops.py",
+            "codex_transcript.py",
             "agent_worker.py",
             "update_idle.py",
             "auto_update.py",
             "update_launcher.py",
+            "mcp_catalog.json",
         ):
             if not (plugin / "scripts" / name).is_file():
                 raise Incompatible("missing bounded runtime entry: " + name)
+        catalog = read(plugin / "scripts" / "mcp_catalog.json", {})
+        names = {tool.get("name") for tool in catalog.get("knowledge") or []}
+        if not {"knowledge_query", "knowledge_explain", "knowledge_feedback"} <= names:
+            raise Incompatible("adapter knowledge catalogue is incomplete")
+        if "knowledge_use" in names or "knowledge_judge" in names:
+            raise Incompatible("retired knowledge tools are advertised")
         requirements = (source / "runtime-requirements.txt").read_text().splitlines()
         pattern = r"([a-z-]+) @ git\+https://github.com/mindie-agent/(knowledge|remote-dev)@([0-9a-f]{40})"
         packages = {}
@@ -234,11 +249,10 @@ class Updater:
             raise Incompatible("invalid runtime package combination")
 
     def probe_runtime(self, python):
-        # The probe must match the actual new package APIs (community sharing
-        # contract), never the retired judge/authority surface. A candidate
-        # built against old pins fails closed here until the knowledge pin is
-        # republished; the root-owned dependency overlay can overlay local
-        # core sources for integration testing.
+        # The probe must match the actual new package APIs (persistent core
+        # admission, adapter-owned transcript parser, stop_if_idle). Knowledge
+        # tools live in the adapter catalogue, not a retired core TOOLS list.
+        # Production installs only the exact official remote pins.
         self.command(
             [
                 python,
@@ -246,16 +260,21 @@ class Updater:
                 "\n".join(
                     [
                         "import inspect, math",
-                        "from mindie_knowledge.loop.cli import TOOLS, STARTUP_TIMEOUT, MAX_STARTUP_PROBES",
+                        "from mindie_knowledge.loop.cli import STARTUP_TIMEOUT, MAX_STARTUP_PROBES, load_transcript_adapter",
+                        "from mindie_knowledge.loop.activation import Admission",
                         "from mindie_knowledge.loop.budget import MaintenanceBudget as B",
+                        "from mindie_knowledge.loop.engine import Engine",
                         "from mindie_knowledge.loop.transport import Service",
-                        "from mindie_knowledge.loop import documents, transcript",
+                        "from mindie_knowledge.loop import documents",
                         "from mindie_knowledge.community import submit_batch, reconcile_batch",
                         "from remote_dev.mcp.tools import call_tool",
-                        "names = {t['name'] for t in TOOLS}",
-                        "assert {'knowledge_query', 'knowledge_explain', 'knowledge_feedback'} <= names",
-                        "assert 'knowledge_use' not in names and 'knowledge_judge' not in names",
+                        "assert callable(load_transcript_adapter)",
+                        "assert callable(call_tool)",
+                        "assert callable(Engine.stop_if_idle)",
+                        "assert callable(getattr(Service, '_stop_if_idle', None))",
                         "assert all(hasattr(documents, n) for n in ('render_entry', 'parse_entry', 'revision_of'))",
+                        "assert 'path' in inspect.signature(Admission.__init__).parameters",
+                        "assert all(hasattr(Admission, n) for n in ('activate', 'check', 'resolve', 'claim', 'finish', 'deactivate', 'capture_lease', 'active_lease', 'scope_root', 'allows_hash', 'leases'))",
                         "assert 'admission' in inspect.signature(Service).parameters",
                         "assert all(type(getattr(B, n)) is int and getattr(B, n) > 0 for n in ('SESSION_LIMIT', 'HOURLY_LIMIT', 'FAILURE_LIMIT'))",
                         "assert type(B.SESSION_WINDOW) in (int, float) and math.isfinite(B.SESSION_WINDOW) and B.SESSION_WINDOW > 0",
@@ -266,39 +285,6 @@ class Updater:
             ],
             timeout=15,
         )
-
-    def apply_dependency_overlay(self, python):
-        """Root-only integration mechanism: overlay local core sources.
-
-        Production installs never use this (the key is absent from committed
-        settings); exact remote pins stay authoritative. When root records
-        local source directories in the updater settings, they are installed
-        over the pinned requirements and their exact revision/dirty state is
-        captured as integration evidence — never presented as a reproducible
-        remote install.
-        """
-        overlay = self.settings.get("dependency_overlay") or []
-        evidence = []
-        for entry in overlay:
-            source = Path(entry).expanduser().absolute()
-            if not (source / "pyproject.toml").is_file():
-                raise Incompatible(
-                    "dependency overlay entries must be package sources: " + str(source)
-                )
-            revision = self.command(
-                ["git", "-C", source, "rev-parse", "HEAD"], timeout=10
-            ).strip()
-            dirty = bool(
-                self.command(
-                    ["git", "-C", source, "status", "--porcelain"], timeout=10
-                ).strip()
-            )
-            self.command(
-                [self.settings["uv"], "pip", "install", "--python", python, source],
-                timeout=60,
-            )
-            evidence.append(dict(path=str(source), revision=revision, dirty=dirty))
-        return evidence
 
     def prepare(self, sha):
         generation = self.root / "generations" / sha
@@ -344,13 +330,8 @@ class Updater:
             ],
             timeout=120,
         )
-        overlay = self.apply_dependency_overlay(python)
         self.probe_runtime(python)
-        result = self.package(generation, source, python, sha)
-        if overlay:
-            result["dependency_overlay"] = overlay
-            atomic(generation / "prepared.json", result)
-        return result
+        return self.package(generation, source, python, sha)
 
     def package(self, generation, source, python, revision):
         plugin = generation / "plugin"
@@ -432,32 +413,6 @@ class Updater:
         )
         atomic(generation / "prepared.json", result)
         return result
-
-    def active_sessions(self):
-        """Active lease count; None when lease state is unreadable.
-
-        The updater only reads leases to decide switch timing. An unreadable
-        store defers the switch — it never clears leases or guesses that
-        tasks have ended.
-        """
-        sessions = Sessions(self.config)
-        if not sessions.path.exists():
-            return 0
-        try:
-            db = sqlite3.connect(
-                sessions.path.as_uri() + "?mode=ro", uri=True, timeout=0.1
-            )
-        except sqlite3.Error:
-            return None
-        try:
-            return db.execute(
-                "SELECT count(*) FROM leases WHERE enabled=1 AND expires>? AND failures<3 AND fingerprint=?",
-                (time.time(), sessions.fingerprint()),
-            ).fetchone()[0]
-        except sqlite3.Error:
-            return None
-        finally:
-            db.close()
 
     def marketplace(self):
         result = json.loads(
@@ -609,20 +564,20 @@ class Updater:
         journal_path.unlink()
 
     def install(self, candidate):
+        # Actual-idle switching: the exclusive operation lock waits for any
+        # in-flight admitted call (holders of the shared lock), and the idle
+        # probe waits for maintenance and in-flight publication. Idle task
+        # authorizations — enabled leases with no running work — never
+        # block an update; unreadable admission state fails their calls
+        # closed but is not an update concern either.
         with update_lock(self.config, exclusive=True):
-            active = self.active_sessions()
-            if active is None:
-                return self.save(
-                    "waiting_for_idle",
-                    candidate=candidate["revision"],
-                    error="lease state unreadable; switch deferred, leases left untouched",
-                )
-            if active:
-                return self.save("waiting_for_idle", candidate=candidate["revision"])
             adapter = read(self.config)
+            idle_helper = Path(runtime_scripts(adapter)) / "update_idle.py"
+            if not idle_helper.is_file():
+                raise Incompatible("committed generation is missing update_idle.py")
             idle = json.loads(
                 self.command(
-                    [adapter["python"], Path(__file__).with_name("update_idle.py")],
+                    [adapter["python"], idle_helper],
                     data=json.dumps(adapter),
                     timeout=5,
                 )
@@ -686,13 +641,27 @@ class Updater:
                 # back instead of reporting a fake installed state.
                 self.verify_native(candidate["version"])
                 engine = read(adapter["engine_config"])
+                # One committed generation: worker, transcript parser and
+                # interpreter move together; the neutral admission store and
+                # any legacy activation key are adapter-scope, not per
+                # generation. The old session_activation alias is removed
+                # instead of kept as a second name.
+                engine.pop("session_activation", None)
                 engine.update(
                     agent_command=[
                         candidate["python"],
                         str(Path(candidate["plugin"]) / "scripts/agent_worker.py"),
                     ],
-                    session_activation=str(self.config),
+                    transcript_adapter=str(
+                        Path(candidate["plugin"]) / "scripts/codex_transcript.py"
+                    ),
                 )
+                admission_path = engine.get("admission_path")
+                if not isinstance(admission_path, str):
+                    admission_path = str(
+                        self.config.with_name(self.config.stem + ".admission.sqlite3")
+                    )
+                    engine["admission_path"] = admission_path
                 engine_path = Path(candidate["plugin"]).parent / "engine.json"
                 atomic(engine_path, engine)
                 atomic(
@@ -701,6 +670,8 @@ class Updater:
                         adapter,
                         python=candidate["python"],
                         engine_config=str(engine_path),
+                        runtime_scripts=str(Path(candidate["plugin"]) / "scripts"),
+                        admission_path=admission_path,
                     ),
                 )
                 result = self.save(
@@ -736,18 +707,19 @@ class Updater:
         failures are recorded under knowledge_* keys and never mask or cancel
         the plugin check that follows.
         """
-        adapter = read(self.config)
-        output = self.command(
-            [
-                adapter["python"],
-                "-m",
-                "mindie_knowledge.loop.cli",
-                "sync",
-                "--config",
-                adapter["engine_config"],
-            ],
-            timeout=KNOWLEDGE_TIMEOUT,
-        )
+        with update_lock(self.config):
+            adapter = read(self.config)
+            output = self.command(
+                [
+                    adapter["python"],
+                    "-m",
+                    "mindie_knowledge.loop.cli",
+                    "sync",
+                    "--config",
+                    adapter["engine_config"],
+                ],
+                timeout=KNOWLEDGE_TIMEOUT,
+            )
         # Actual core surface: `sync` prints one JSON list of per-feed results.
         result = json.loads(output) if output.strip() else []
         if not isinstance(result, list):
@@ -963,7 +935,7 @@ def enable(args):
         result = updater.install(candidate)
         if result["status"] != "installed":
             raise RuntimeError(
-                "deactivate active MindIE sessions before enabling updater"
+                "wait for in-flight MindIE calls before enabling updater"
             )
     controller = root / "controller"
     shutil.copytree(
@@ -985,34 +957,28 @@ def enable(args):
 def uninstall(args):
     """Remove updater scheduling and updater-owned state, never the live plugin.
 
-    Order: preflight every active reference first (leases, live generation,
-    interrupted transaction); a refusal deletes nothing. Scheduling removal is
-    reported separately from state removal. Retained native caches are never
-    deleted here: loaded tasks may still execute those trusted entrypoints.
-    Rollback/recovery metadata (state.json, transaction.json) is preserved
-    unless --purge runs with no live references.
+    Order: preflight every active reference first (in-flight calls, live
+    generation, interrupted transaction); a refusal deletes nothing. Idle
+    task authorizations do not block uninstall: the neutral admission store
+    is adapter-owned state outside the updater root and is left untouched.
+    Scheduling removal is reported separately from state removal. Retained
+    native caches are never deleted here: loaded tasks may still execute
+    those trusted entrypoints. Rollback/recovery metadata (state.json,
+    transaction.json) is preserved unless --purge runs with no live
+    references.
     """
     updater = Updater(args.settings)
     root = updater.root
     with file_lock(root / "checker.lock", exclusive=True):
-        # Preflight: refuse while any valid manual lease exists.
-        sessions = Sessions(updater.config)
-        active = 0
-        if sessions.path.exists():
-            db = sqlite3.connect(
-                sessions.path.as_uri() + "?mode=ro", uri=True, timeout=0.1
-            )
-            try:
-                active = db.execute(
-                    "SELECT count(*) FROM leases WHERE enabled=1 AND expires>?",
-                    (time.time(),),
-                ).fetchone()[0]
-            finally:
-                db.close()
-        if active:
+        # Preflight: refuse only while an actual call holds the operation
+        # lock; idle authorizations are not active references.
+        try:
+            with update_lock(updater.config, exclusive=True):
+                pass
+        except (BlockingIOError, OSError):
             return dict(
                 status="refused",
-                reason=f"{active} active MindIE session lease(s); deactivate them first",
+                reason="an admitted MindIE call is in flight; retry when idle",
                 removed=[],
             )
         current = updater.state.get("current", {})

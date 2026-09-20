@@ -27,12 +27,17 @@ class SessionGateTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.config = self.root / "codex.json"
         self.engine = self.root / "engine.json"
+        self.admission = self.root / "codex.admission.sqlite3"
         self.engine.write_text(
-            json.dumps(dict(root=str(self.root / "data"), domain="test"))
+            json.dumps(
+                dict(
+                    root=str(self.root / "data"),
+                    domain="test",
+                    admission_path=str(self.admission),
+                )
+            )
         )
-        self.config.write_text(
-            json.dumps(dict(python=sys.executable, engine_config=str(self.engine)))
-        )
+        self.write_config()
         self.environment = patch.dict(
             os.environ, MINDIE_AGENT_CONFIG=str(self.config), CODEX_THREAD_ID="manual-A", MINDIE_REMOTE_STATE_DIR=str(self.root / "remote")
         )
@@ -42,6 +47,17 @@ class SessionGateTests(unittest.TestCase):
     def tearDown(self):
         self.environment.stop()
         self.temp.cleanup()
+
+    def write_config(self, **extra):
+        value = dict(
+            python=sys.executable,
+            engine_config=str(self.engine),
+            admission_path=str(self.admission),
+            runtime_scripts=str(SCRIPTS),
+            community_config=str(self.root / "codex.community.json"),
+        )
+        value.update(extra)
+        self.config.write_text(json.dumps(value))
 
     def activate(self, session="manual-A"):
         # Activation records the authorized project root from the task cwd.
@@ -76,9 +92,12 @@ class SessionGateTests(unittest.TestCase):
 
     def enable_sharing(self, *, enabled=True, roots=None):
         community = self.root / "codex.community.json"
-        config = json.loads(self.config.read_text())
-        config["community_config"] = str(community)
-        self.config.write_text(json.dumps(config))
+        current = json.loads(self.config.read_text())
+        self.write_config(
+            python=current["python"],
+            community_config=str(community),
+            sharing_choice="contribute",
+        )
         community.write_text(
             json.dumps(
                 dict(
@@ -95,9 +114,9 @@ class SessionGateTests(unittest.TestCase):
             )
         )
 
-    def bridge(self, operation, event=None, timeout=3):
+    def bridge(self, operation, event=None, timeout=5, extra=()):
         return subprocess.run(
-            [sys.executable, str(SCRIPTS / "bridge.py"), operation],
+            [sys.executable, str(SCRIPTS / "bridge.py"), operation, *extra],
             input=json.dumps(event or {}),
             text=True,
             capture_output=True,
@@ -106,29 +125,35 @@ class SessionGateTests(unittest.TestCase):
         )
 
     def runtime_fixture(self, *, delay=0, hook=False):
+        """Wrapper interpreter: admission_ops execs the real runtime; calls count.
+
+        Does not use PYTHONPATH to mask the configured interpreter.
+        """
         marker = self.root / "invocations"
-        runner = self.root / "runtime"
-        runner.write_text(
-            f"#!{sys.executable}\nimport sys,time\nfrom pathlib import Path\np=Path({str(marker)!r})\nwith p.open('a') as f: f.write('attempt\\n')\nsys.stdin.read()\ntime.sleep({delay})\nprint('{{}}')\n"
+        wrapper = self.root / "runtime-python"
+        real = sys.executable
+        wrapper.write_text(
+            f"#!{real}\n"
+            "import os, sys, time\n"
+            "from pathlib import Path\n"
+            f"marker = Path({str(marker)!r})\n"
+            "argv = sys.argv[1:]\n"
+            "joined = ' '.join(argv)\n"
+            "op = argv[1] if len(argv) > 1 else ''\n"
+            f"delay = {delay}\n"
+            "if argv and argv[0].endswith('admission_ops.py') and (\n"
+            "    op != 'stop_capture' or delay <= 0\n"
+            "):\n"
+            f"    os.execv({real!r}, [{real!r}, *argv])\n"
+            "if 'mindie_knowledge.loop.settings' in joined:\n"
+            f"    os.execv({real!r}, [{real!r}, *argv])\n"
+            "marker.open('a').write('attempt\\n')\n"
+            "sys.stdin.read()\n"
+            f"time.sleep({delay})\n"
+            "print('{}')\n"
         )
-        runner.chmod(0o755)
-        python = str(runner)
-        if hook:
-            # Use an already installed interpreter for the 1.2s hook boundary.
-            # macOS may delay the first exec of a newly written executable while
-            # assessing it; that is unrelated to the hook delivery protocol.
-            package = self.root / "imports/mindie_knowledge/loop"
-            package.mkdir(parents=True)
-            (package.parent / "__init__.py").touch()
-            (package / "__init__.py").touch()
-            (package / "cli.py").write_text(runner.read_text().split("\n", 1)[1])
-            env = patch.dict(os.environ, PYTHONPATH=str(self.root / "imports"))
-            env.start()
-            self.addCleanup(env.stop)
-            python = sys.executable
-        self.config.write_text(
-            json.dumps(dict(python=python, engine_config=str(self.engine)))
-        )
+        wrapper.chmod(0o755)
+        self.write_config(python=str(wrapper))
         return marker
 
     def event(self, session="manual-A", turn="turn-1", cwd=None):
@@ -150,6 +175,11 @@ class SessionGateTests(unittest.TestCase):
             "SessionStart",
             json.loads((SCRIPTS.parent / "hooks/hooks.json").read_text())["hooks"],
         )
+        skill = (skill / "SKILL.md").read_text()
+        self.assertIn("init", skill)
+        self.assertIn("sharing-choice", skill)
+        self.assertIn("contribution-inspect", skill)
+        self.assertNotIn("SessionStart", skill)
 
     def test_activation_binds_only_when_community_sharing_is_enabled(self):
         marker = self.runtime_fixture()
@@ -164,8 +194,8 @@ class SessionGateTests(unittest.TestCase):
         self.assertFalse(marker.exists())
         again = json.loads(self.bridge("activate").stdout)
         self.assertEqual(
-            {k: again[k] for k in ("mindie_session_id", "mindie_activation", "expires_at")},
-            {k: lease[k] for k in ("mindie_session_id", "mindie_activation", "expires_at")},
+            {k: again[k] for k in ("mindie_session_id", "mindie_activation", "activated_at")},
+            {k: lease[k] for k in ("mindie_session_id", "mindie_activation", "activated_at")},
         )
         self.assertFalse(marker.exists())
         # Enabling sharing admits local collection: one bounded cold start +
@@ -241,7 +271,7 @@ class SessionGateTests(unittest.TestCase):
             }
             self.assertTrue(gate.call(self.request(lease, meta=contradictory))["isError"])
             self.assertTrue(gate.call(self.request(lease, meta={}))["isError"])
-            run.assert_not_called()
+            self.assertEqual(run.call_count, 0)
 
     def test_explain_is_gated_and_query_cannot_implicitly_activate(self):
         with patch.object(mcp_gate, "run") as run:
@@ -250,7 +280,7 @@ class SessionGateTests(unittest.TestCase):
             self.assertTrue(
                 gate.call(self.request(name="knowledge_explain", ref="x"))["isError"]
             )
-            run.assert_not_called()
+            self.assertEqual(run.call_count, 0)
         self.assertFalse(self.sessions.path.exists())
 
     def test_active_call_once_and_replayed_protocol_id_not_dispatched(self):
@@ -299,6 +329,13 @@ class SessionGateTests(unittest.TestCase):
                 self.assertTrue(result["isError"])
                 self.assertEqual(result["structuredContent"]["code"], "read_rejected")
             self.assertEqual(run.call_count, 3)  # dispatch never circuit-paused
+            self.assertTrue(
+                all(
+                    "MINDIE_AGENT_CONFIG" in (c.kwargs.get("env") or {})
+                    and "PYTHONPATH" not in (c.kwargs.get("env") or {})
+                    for c in run.call_args_list
+                )
+            )
         with sqlite3.connect(self.sessions.path) as db:
             failures = db.execute(
                 "SELECT failures FROM leases WHERE session='manual-A'"
@@ -313,34 +350,60 @@ class SessionGateTests(unittest.TestCase):
                 self.assertTrue(gate.call(self.request(lease, ident=300 + i))["isError"])
         with patch.object(mcp_gate, "run") as run:
             self.assertTrue(gate.call(self.request(lease, ident=400))["isError"])
-            run.assert_not_called()
+            self.assertEqual(run.call_count, 0)
 
     def test_not_started_disposition_is_not_honored_for_mutations(self):
+        import runtime_call
+        from mindie_knowledge.loop.transport import RequestRejected
+
         lease = self.activate()
-        gate = mcp_gate.Gate("knowledge")
-        forged = json.dumps(
-            dict(
-                content=[dict(type="text", text="failure")],
-                structuredContent=dict(code="read_rejected", execution="not_started"),
-                isError=True,
-            )
+        finished = []
+
+        def record_finish(config, session, token, succeeded):
+            finished.append(succeeded)
+
+        payload = dict(
+            surface="knowledge",
+            name="knowledge_feedback",
+            arguments=dict(ref="x", rating="up"),
+            mindie_session_id=lease["mindie_session_id"],
+            mindie_activation=lease["mindie_activation"],
         )
-        # Even a runtime-shaped not_started disposition only exempts
-        # query/explain reads; mutations keep consuming the failure circuit.
-        with patch.object(mcp_gate, "run", return_value=forged):
-            for i in range(3):
-                result = gate.call(
-                    self.request(
-                        lease, ident=i, name="knowledge_feedback", ref="x", rating="up"
-                    )
-                )
-                self.assertTrue(result["isError"])
-        with patch.object(mcp_gate, "run") as run:
-            result = gate.call(
-                self.request(lease, ident=9, name="knowledge_feedback", ref="x", rating="up")
-            )
-            self.assertTrue(result["isError"])
-            run.assert_not_called()
+        with (
+            patch.object(
+                runtime_call,
+                "resolve_lease",
+                return_value={"session": lease["mindie_session_id"]},
+            ),
+            patch.object(runtime_call, "finish_outcome", side_effect=record_finish),
+            patch("mindie_knowledge.loop.cli.ensure_service", return_value={}),
+            patch(
+                "mindie_knowledge.loop.transport.rpc",
+                side_effect=RequestRejected("bad ref"),
+            ),
+        ):
+            with self.assertRaises(RequestRejected):
+                runtime_call.call(payload)
+        self.assertEqual(finished, [False])
+        finished.clear()
+        read_payload = dict(payload, name="knowledge_explain")
+        with (
+            patch.object(
+                runtime_call,
+                "resolve_lease",
+                return_value={"session": lease["mindie_session_id"]},
+            ),
+            patch.object(runtime_call, "finish_outcome", side_effect=record_finish),
+            patch("mindie_knowledge.loop.cli.ensure_service", return_value={}),
+            patch(
+                "mindie_knowledge.loop.transport.rpc",
+                side_effect=RequestRejected("bad ref"),
+            ),
+        ):
+            result = runtime_call.call(read_payload)
+        self.assertTrue(result["isError"])
+        self.assertEqual(result["structuredContent"]["execution"], "not_started")
+        self.assertEqual(finished, [])
 
     def test_consecutive_failure_circuit_is_per_session_and_explicitly_reset(self):
         a, b = self.activate(), self.activate("manual-B")
@@ -351,25 +414,33 @@ class SessionGateTests(unittest.TestCase):
             self.assertEqual(run.call_count, 3)
             gate.call(self.request(b, ident=21))
             self.assertEqual(run.call_count, 4)
+            with self.assertRaises(Inactive):
+                self.activate()
+            self.sessions.deactivate()
             renewed = self.activate()
             self.assertNotEqual(a["mindie_activation"], renewed["mindie_activation"])
             gate.call(self.request(renewed, ident=22))
             self.assertEqual(run.call_count, 5)
 
-    def test_deactivation_expiry_and_config_change_reject_before_dispatch(self):
+    def test_deactivation_rejects_and_config_bytes_do_not_revoke(self):
         lease = self.activate()
         self.sessions.deactivate()
         with self.assertRaises(Inactive):
             self.sessions.check(lease["mindie_session_id"], lease["mindie_activation"])
         lease = self.activate()
-        with sqlite3.connect(self.sessions.path) as db:
-            db.execute("UPDATE leases SET expires=0")
-        with self.assertRaises(Inactive):
-            self.sessions.check("manual-A", lease["mindie_activation"])
-        lease = self.activate()
-        self.engine.write_text('{"domain":"changed"}')
-        with self.assertRaises(Inactive):
-            self.sessions.check("manual-A", lease["mindie_activation"])
+        self.engine.write_text(
+            json.dumps(
+                dict(
+                    root=str(self.root / "data"),
+                    domain="changed",
+                    admission_path=str(self.admission),
+                )
+            )
+        )
+        self.assertEqual(
+            self.sessions.check("manual-A", lease["mindie_activation"])["session"],
+            "manual-A",
+        )
 
     def test_parallel_hook_claims_admit_once_across_instances(self):
         self.activate()
@@ -383,17 +454,27 @@ class SessionGateTests(unittest.TestCase):
         self.assertEqual(sum(results), 1)
         self.assertFalse(Sessions().claim("manual-A", "stop", "same-turn"))
 
+    def attempts(self, session="manual-A"):
+        db = sqlite3.connect(self.sessions.path)
+        try:
+            return db.execute(
+                "SELECT count(*) FROM attempts WHERE session=?", (session,)
+            ).fetchone()[0]
+        except sqlite3.Error:
+            return 0
+        finally:
+            db.close()
+
     def test_hook_delivery_is_once_and_not_for_other_sessions(self):
-        marker = self.runtime_fixture(hook=True)
         self.enable_sharing()
         self.activate()
         for event in [self.event("other"), self.event(), self.event()]:
             result = self.bridge("stop", event)
             self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
-        self.assertEqual(marker.read_text().splitlines(), ["attempt"])
+        self.assertEqual(self.attempts(), 1)
+        self.assertEqual(self.attempts("other"), 0)
 
     def test_timed_out_hook_consumes_attempt_and_always_finishes(self):
-        marker = self.runtime_fixture(delay=20, hook=True)
         self.enable_sharing()
         self.activate()
         started = time.monotonic()
@@ -401,6 +482,16 @@ class SessionGateTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 1.9)
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
         self.bridge("stop", self.event())
+        self.assertEqual(self.attempts(), 1)
+
+    def test_slow_capture_helper_is_killed_within_host_budget(self):
+        marker = self.runtime_fixture(delay=20)
+        self.enable_sharing()
+        self.activate()
+        started = time.monotonic()
+        result = self.bridge("stop", self.event(), timeout=3)
+        self.assertLess(time.monotonic() - started, 1.9)
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
         self.assertEqual(marker.read_text().splitlines(), ["attempt"])
 
     def test_corrupt_activation_state_fails_closed(self):
@@ -478,6 +569,85 @@ class SessionGateTests(unittest.TestCase):
             process.wait(timeout=2)
             process.stdout.close()
             process.stderr.close()
+
+    def test_custom_config_helper_does_not_touch_env_default_state(self):
+        decoy = self.root / "decoy-home"
+        decoy.mkdir()
+        default_config = decoy / "codex.json"
+        default_engine = decoy / "engine.json"
+        default_admission = decoy / "codex.admission.sqlite3"
+        default_engine.write_text(
+            json.dumps(dict(root=str(decoy / "data"), domain="decoy"))
+        )
+        default_config.write_text(
+            json.dumps(
+                dict(
+                    python=sys.executable,
+                    engine_config=str(default_engine),
+                    admission_path=str(default_admission),
+                    runtime_scripts=str(SCRIPTS),
+                )
+            )
+        )
+        custom = Sessions(self.config)
+        with (
+            patch.dict(
+                os.environ,
+                MINDIE_AGENT_CONFIG=str(default_config),
+                CODEX_THREAD_ID="custom-task",
+            ),
+            patch.object(Path, "cwd", return_value=self.root),
+        ):
+            lease = custom.activate()
+        self.assertEqual(lease["mindie_session_id"], "custom-task")
+        self.assertTrue(self.admission.is_file())
+        self.assertFalse(default_admission.exists())
+        self.assertEqual(sorted(p.name for p in decoy.iterdir()), ["codex.json", "engine.json"])
+
+    def test_offline_status_and_init_do_not_start_a_service(self):
+        result = self.bridge("status")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["service"]["state"], "not-running")
+        self.assertEqual(
+            payload["first_use"]["choices"], ["contribute", "read-only", "later"]
+        )
+        self.assertFalse((self.root / "data").exists())
+        init = self.bridge("init")
+        self.assertEqual(init.returncode, 0, init.stderr)
+        self.assertEqual(json.loads(init.stdout)["service"]["state"], "not-running")
+        recorded = self.bridge("sharing-choice", extra=["later"])
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        self.assertEqual(json.loads(recorded.stdout)["sharing_choice"], "later")
+        again = json.loads(self.bridge("init").stdout)
+        self.assertIsNone(again["first_use"])
+        self.assertFalse((self.root / "data").exists())
+
+    def test_init_without_config_returns_first_use_choices(self):
+        absent = self.root / "missing-codex.json"
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key != "PYTHONPATH"
+        }
+        env["MINDIE_AGENT_CONFIG"] = str(absent)
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "bridge.py"), "init"],
+            text=True,
+            capture_output=True,
+            timeout=5,
+            env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["configured"])
+        self.assertEqual(
+            payload["first_use"]["choices"], ["contribute", "read-only", "later"]
+        )
+        self.assertIn("setup.py", payload["next"])
+        self.assertEqual(payload["service"]["state"], "not-running")
+        self.assertFalse(absent.exists())
+        self.assertFalse((self.root / "data").exists())
 
 
 if __name__ == "__main__":
