@@ -375,6 +375,11 @@ class Updater:
         manifest = read(manifest_path)
         if manifest["name"] != "mindie-agent":
             raise Incompatible("unexpected plugin name")
+        # Native discovery selects the numerically greatest build metadata
+        # among cached version directories. The fixed-width microsecond UTC
+        # timestamp preserves that numeric width across normal updates. Clock
+        # skew or manually prepared versions can still sort differently, so
+        # install verifies the actual native selection instead of guessing.
         manifest["version"] = (
             manifest["version"].split("+")[0]
             + "+codex."
@@ -492,6 +497,64 @@ class Updater:
             [self.settings["codex"], "plugin", "marketplace", "add", source, "--json"]
         )
 
+    def native_plugin_entry(self):
+        """Actual native inventory entry for mindie-agent@mindie-agent, or None.
+
+        The install JSON receipt is not proof of final state: native discovery
+        scans the version directories under plugins/cache at LIST time and
+        selects the highest (base version, numeric build metadata) directory
+        name, independent of manifest content (verified against codex-cli
+        0.153.4 in an isolated CODEX_HOME). Only a fresh `plugin list` shows
+        what the host actually resolved.
+        """
+        try:
+            result = json.loads(
+                self.command(
+                    [
+                        self.settings["codex"],
+                        "plugin",
+                        "list",
+                        "--json",
+                        "--marketplace",
+                        "mindie-agent",
+                    ],
+                    timeout=20,
+                )
+            )
+        except Exception as exc:
+            raise RuntimeError("native plugin inventory could not be read") from exc
+        if not isinstance(result, dict) or not isinstance(result.get("installed"), list):
+            raise RuntimeError("native plugin inventory has an invalid shape")
+        for entry in result.get("installed", []):
+            if entry.get("pluginId") == "mindie-agent@mindie-agent":
+                return entry
+        return None
+
+    def verify_native(self, version):
+        """Fail unless native inventory resolves exactly this installed version."""
+        entry = self.native_plugin_entry()
+        if (
+            not entry
+            or entry.get("name") != "mindie-agent"
+            or entry.get("enabled") is not True
+            or entry.get("installed") is not True
+            or entry.get("version") != version
+        ):
+            raise RuntimeError(
+                "native plugin selection is "
+                + json.dumps(
+                    None
+                    if not entry
+                    else {
+                        key: entry.get(key)
+                        for key in ("version", "enabled", "installed")
+                    }
+                )
+                + ", expected installed+enabled version "
+                + version
+            )
+        return entry
+
     def preserve_caches(self):
         # Loaded native tasks may still execute cached entrypoints: retain
         # their exact bytes untouched. There is no compatibility shim for
@@ -524,6 +587,7 @@ class Updater:
         journal = read(journal_path)
         if self.state.get("current", {}).get("revision") == journal.get("candidate"):
             self.restore_caches()
+            self.verify_native(self.state["current"]["version"])
             journal_path.unlink()
             return
         if journal.get("recoveries", 0) >= ATTEMPTS:
@@ -547,6 +611,10 @@ class Updater:
                 ]
             )
         self.restore_caches()
+        # Retained caches must not pollute the rollback either: the native
+        # selection after recovery has to be the version the journal restored.
+        if journal.get("marketplace") and journal.get("previous_version"):
+            self.verify_native(journal["previous_version"])
         journal_path.unlink()
 
     def install(self, candidate):
@@ -581,11 +649,13 @@ class Updater:
             market = self.root / "marketplace"
             plugin_link = market / "plugins/mindie-agent"
             self.preserve_caches()
+            previous_native = self.native_plugin_entry()
             journal = dict(
                 adapter=adapter,
                 candidate=candidate["revision"],
                 marketplace=existing["root"] if existing else None,
                 link=str(plugin_link.resolve()) if plugin_link.exists() else None,
+                previous_version=(previous_native or {}).get("version"),
             )
             atomic(self.root / "transaction.json", journal)
             try:
@@ -620,6 +690,10 @@ class Updater:
                     ]
                 )
                 self.restore_caches()
+                # The add receipt is not proof: retained caches compete in
+                # native discovery. Verify the actual resolved version or roll
+                # back instead of reporting a fake installed state.
+                self.verify_native(candidate["version"])
                 engine = read(adapter["engine_config"])
                 engine.update(
                     agent_command=[

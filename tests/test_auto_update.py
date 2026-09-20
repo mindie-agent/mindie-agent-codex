@@ -51,15 +51,26 @@ class LocalUpdater(Updater):
                 )
             elif args[1:3] == ["plugin", "add"]:
                 self.installs += 1
-                cache = (
-                    Path(self.settings["codex_home"])
-                    / "plugins/cache/mindie-agent/mindie-agent"
+                # Simulate the proven native behavior (codex-cli 0.153.4,
+                # isolated CODEX_HOME): add prunes all other version
+                # directories and caches exactly the marketplace version.
+                cache = self.native_cache()
+                for entry in cache.iterdir():
+                    if entry.is_dir():
+                        shutil.rmtree(entry)
+                marketplace = read(self.root / "fixture-marketplace.json")
+                manifest = read(
+                    Path(marketplace["root"])
+                    / "plugins/mindie-agent/.codex-plugin/plugin.json"
                 )
-                shutil.rmtree(cache)
-                cache.mkdir(parents=True)
+                scripts = cache / manifest["version"] / "scripts"
+                scripts.mkdir(parents=True)
+                (scripts / "bridge.py").write_text("cached entrypoint")
                 if self.fail_install:
                     self.fail_install = False  # Rollback CLI succeeds.
                     raise RuntimeError("fixture installation failed")
+            elif args[1:3] == ["plugin", "list"]:
+                return json.dumps(self.native_list())
             return "{}"
         if args[0] == "fixture-uv":
             if args[1] == "venv":
@@ -76,6 +87,46 @@ class LocalUpdater(Updater):
         self.assert_runtime = Path(python).exists()
         if not self.assert_runtime:
             raise RuntimeError("runtime missing")
+
+    def native_cache(self):
+        return (
+            Path(self.settings["codex_home"])
+            / "plugins/cache/mindie-agent/mindie-agent"
+        )
+
+    @staticmethod
+    def native_key(name):
+        # Proven codex-cli 0.153.4 rule: highest base version, then the
+        # numerically greatest build metadata, over cache directory NAMES.
+        base, _, build = name.partition("+")
+        try:
+            base_key = tuple(int(part) for part in base.split("."))
+        except ValueError:
+            base_key = (0,)
+        stamp = build.removeprefix("codex.")
+        return (base_key, int(stamp) if stamp.isdigit() else 0, name)
+
+    def native_list(self):
+        """Simulated list-time discovery over the cache directory names."""
+        cache = self.native_cache()
+        versions = [
+            p.name for p in cache.iterdir()
+            if p.is_dir() and p.name.partition("+")[0].replace(".", "").isdigit()
+        ] if cache.exists() else []
+        installed = []
+        if versions:
+            selected = max(versions, key=self.native_key)
+            installed.append(
+                dict(
+                    pluginId="mindie-agent@mindie-agent",
+                    name="mindie-agent",
+                    marketplaceName="mindie-agent",
+                    version=selected,
+                    installed=True,
+                    enabled=True,
+                )
+            )
+        return dict(installed=installed, available=[])
 
     def check_knowledge(self):
         # The real sync call gets its own isolation tests below; the fixture
@@ -123,6 +174,8 @@ class AutoUpdateTests(unittest.TestCase):
         )
         self.cache.mkdir(parents=True)
         (self.cache / "bridge.py").write_text("retained safe entrypoint")
+        initial_version = read(self.remote / "plugins/mindie-agent/.codex-plugin/plugin.json")["version"]
+        (self.cache.parent.parent / initial_version / "scripts").mkdir(parents=True)
         atomic(
             self.root / "fixture-marketplace.json",
             dict(
@@ -339,6 +392,54 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(evidence[0]["revision"], revision)
         self.assertIs(evidence[0]["dirty"], True)
         self.assertEqual(evidence[0]["path"], str(overlay))
+
+    def test_install_verifies_native_selection_while_retaining_old_entrypoints(self):
+        # Root's macOS scenario: a retained cache from the 20-digit timestamp
+        # era coexists with the candidate. The candidate must win natively AND
+        # the old entrypoint must keep its exact bytes and path.
+        old = self.updater.native_cache() / "0.1.0+codex.20260919061330608250/scripts"
+        old.mkdir(parents=True)
+        (old / "bridge.py").write_text("old loaded-task entrypoint")
+        result = self.check()
+        self.assertEqual(result["status"], "installed")
+        candidate_version = result["current"]["version"]
+        self.assertGreater(
+            int(candidate_version.rsplit(".", 1)[1]), 20260919061330608250
+        )
+        native = self.updater.native_list()["installed"][0]
+        self.assertEqual(native["version"], candidate_version)
+        self.assertTrue(native["installed"] and native["enabled"])
+        retained = self.updater.native_cache() / "0.1.0+codex.20260919061330608250/scripts/bridge.py"
+        self.assertEqual(retained.read_text(), "old loaded-task entrypoint")
+
+    def test_no_fake_installed_when_retained_cache_wins_native_discovery(self):
+        # A candidate whose build metadata sorts BELOW a retained cache (the
+        # exact root failure: 14-digit new vs 20-digit old) must NOT report
+        # installed: readback verification fails and rolls back.
+        old = self.updater.native_cache() / "0.1.0+codex.20260919061330608250/scripts"
+        old.mkdir(parents=True)
+        (old / "bridge.py").write_text("old loaded-task entrypoint")
+        with patch("auto_update.datetime") as clock:
+            clock.now.return_value.strftime.return_value = "20260920055301"
+            result = self.check()
+        self.assertEqual(result["status"], "update_failed")
+        self.assertIn("native plugin selection", result["error"])
+        self.assertNotIn("current", self.updater.state)
+        self.assertEqual(read(self.config), self.initial)
+        self.assertFalse((self.root / "transaction.json").exists())
+        # Rollback leaves the truthful previous native state, not the
+        # rejected candidate masquerading as installed.
+        native = self.updater.native_list()["installed"][0]
+        self.assertEqual(native["version"], "0.1.0+codex.20260919061330608250")
+        self.assertEqual(
+            (self.updater.native_cache() / "0.1.0+codex.20260919061330608250/scripts/bridge.py").read_text(),
+            "old loaded-task entrypoint",
+        )
+        # Bounded: a repeated check consumes attempts, never loops adds.
+        with patch("auto_update.datetime") as clock:
+            clock.now.return_value.strftime.return_value = "20260920055301"
+            result = self.check()
+        self.assertEqual(result["status"], "update_failed")
 
     def test_fetch_deadline_and_network_backoff_do_not_spawn_models(self):
         with patch.object(
