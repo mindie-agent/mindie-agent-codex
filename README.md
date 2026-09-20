@@ -13,13 +13,12 @@ flowchart LR
   A -->|query / explain / actual use| K[Local domain knowledge service]
   A -->|remote-dev over SSH| N[Remote NPU container]
   N -->|real output / verified artifacts| A
-  A -->|Stop: final reply| H[Bounded capture hook]
+  A -->|Stop: transcript location + bounded summary| H[Sharing-gated capture hook]
   H --> O[Fresh organizer]
-  O --> E[Domain experiences]
-  E -->|sanitized, authorized snapshot| B[Independent task B / replica]
-  B -->|application + evidence + outcome| J[Fresh usefulness judge]
-  J --> F[Separate feedback ledger]
-  F -->|next snapshot changes retrieval weight| C[Task C / replica]
+  O --> E[Local experience drafts]
+  E -->|scanned, authorized batch| B[GitHub content repository]
+  B -->|published, versioned entries| C[Other users' local caches]
+  C -.->|optional up/down feedback| B
 ```
 
 This repository owns Codex packaging, hook translation and the fresh Codex
@@ -27,7 +26,7 @@ maintenance runner. Content, retrieval, publication, use identity, feedback and
 distribution belong to the knowledge runtime. This is a new plugin entrypoint;
 it does not install the old workspace bootstrap, updater or VAWS business skill catalog.
 
-Codex, knowledge, capture, organization and judging run on the user's local side.
+Codex, knowledge, capture and organization run on the user's local side.
 The remote server supplies the NPU execution environment. The plugin reuses
 remote-dev's SSH transport, endpoint/container semantics, owned jobs and artifact
 hash verification. Its admission wrapper exposes generated upstream schemas for the core read/write/search/patch,
@@ -153,17 +152,15 @@ knowledge runtime commit pins are published. This does not publish local changes
 | Record | Meaning |
 |---|---|
 | Knowledge | Reference with source, revision and explicit applicability |
-| Experience | Reusable advisory material, including failed attempts; no confidence score or mandatory version |
-| Use | An experience applied in another task, with actual observed evidence |
-| Feedback | A fresh judge's assessment of that use: helpful, unhelpful or unknown |
+| Experience | Reusable advisory material, including failed attempts and their corrections |
+| Feedback | An optional, explicit up/down vote on one entry revision, with an optional one-line reason |
 
-`knowledge_query` and `knowledge_explain` retrieve references. `knowledge_use`
-records actual application; it does not cast a vote. The ordinary final reply
-supplies the use outcome. Repeated use of the same entry in one task contributes
-at most one evaluation. Producer self-use is excluded. Unknown has no weight effect.
+`knowledge_query` and `knowledge_explain` retrieve references; `knowledge_feedback`
+records an optional vote. There is no runtime judge and no mandatory application,
+evidence or outcome report. Silence is never recorded as a vote.
 
-The default vLLM-Ascend setup reads the organization-owned public knowledge feed
-from `mindie-agent/knowledge`, branch `knowledge/vllm-ascend`, every
+The default vLLM-Ascend setup follows the public content repository
+`mindie-agent/knowledge-vllm-ascend`, branch `main`, checked every
 five minutes. It never uses a personal fork as the official source. `--no-public-feed`
 disables this read. The independent reader validates committed export hashes and
 applicability before switching searchable content; errors retain the last valid
@@ -171,17 +168,16 @@ generation. Cases are experiences, topics are versioned knowledge, and maintenan
 diaries are excluded. This is polling; source-repository event monitoring belongs
 to the separately operated Grok maintainer.
 
-Newly collected content stays local by default. `--auto-publish` explicitly authorizes
-sanitized organized entries for distribution. `--upstream CONNECTION_JSON`
-explicitly enables snapshot sync and sharing completed use evidence with that
-trusted service. **Raw hook captures are never part of a snapshot.** Actual
-application/evidence/outcome records are sent to the configured judge service;
-configure only a service authorized to receive them. Organizer and judge use the
-user's authenticated Codex service and consume model usage.
-
-The initial distribution transport connects trusted domain services, including
-local replicas or an operator-managed HTTPS endpoint/tunnel. It is not a public
-multi-tenant service. Tokens are service credentials, not proof of human identity.
+Community sharing is a separate switch from plugin activation and defaults OFF.
+`setup.py --community-*` records the explicitly selected repository, project scope,
+account and public visibility; `bridge.py sharing-enable|sharing-disable|sharing-status`
+toggles it later. While sharing is off, the Stop hook captures nothing: no transcript
+reading, no drafts, no worker, no model. While it is on, filtered, scanned experience
+batches are contributed to the configured GitHub content repository as pull requests;
+merging belongs to the maintainer-authorized review bot. **Raw transcripts, local
+paths and capture logs are never part of a contribution.** The organizer uses the
+user's authenticated Codex service and consumes model usage; PR assembly, voting
+records and feed sync use no model calls.
 
 ## Failure behavior and limits
 
@@ -238,14 +234,14 @@ multi-tenant service. Tokens are service credentials, not proof of human identit
   kill, implemented but not yet verified on real hardware.
 - Stop sends only the current task's final reply, never hidden reasoning or other
   conversations. Missing/offline capture is discarded; there is no offline retry queue.
-- Organizer/judge run outside the interactive task. A failed judge produces no vote
-  and is not automatically retried. Inspect status for failed captures/evaluations.
+- The organizer runs outside the interactive task. A failed organization consumes
+  its input region and is not automatically retried. There is no judge role.
 - Initial retrieval reuses the knowledge package's BM25 index, capped at 10,000
   entries per domain. It does not claim semantic/vector retrieval or large-corpus performance.
-- Feedback adjusts ranking and can withdraw an experience from search while preserving
-  it for inspection. It does not make an experience authoritative knowledge.
-- The first use's evidence and following final reply are immutable for that task/reference.
-  Later human corrections/retractions need a subsequent feedback-revision feature.
+- Feedback is one current up/down vote per task and entry revision, replaceable by
+  the same voter. Downvotes with concrete counterevidence support correction or
+  retirement by the publishing side; retired entries leave ordinary search while old
+  references stay readable. Votes never make an experience authoritative knowledge.
 - This iteration exercises one domain. Native cross-domain task creation/communication,
   other Harness adapters, production distribution and organization/repository renaming
   remain separate work. User-installed skills and tools remain under user control.
@@ -253,9 +249,9 @@ multi-tenant service. Tokens are service credentials, not proof of human identit
 ## Validation
 
 The [real-source and remote NPU acceptance report](docs/real-acceptance-2026-09-18.md)
-records actual Grok publication, local feed ingestion, two independent native
-tasks with 16 NPU operator checks, and feedback propagation into retrieval.
-Grok event delivery remains pending acceptance.
+records the previous design's acceptance run (judge/upstream architecture, since
+removed). Current-architecture acceptance is owned by root and tracked in
+`../reports`.
 
 ```sh
 python3 -m unittest discover -s tests -p 'test_*.py'
@@ -265,11 +261,9 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 .venv/bin/python tests/live_acceptance.py --output .local/acceptance/run-1
 ```
 
-The live test uses a synthetic CPU helper whose package imports unavailable
-`torch_npu`. Task A investigates it; a fresh organizer captures the approach;
-independent task B retrieves and applies it; a fresh judge evaluates the observed
-use; replica C checks the changed retrieval score. It is not an NPU correctness,
-real-user effectiveness or multi-Harness acceptance test. Local raw logs are ignored by Git.
+`tests/live_acceptance.py` targets the previous judge/upstream design and is
+retained as historical reference only; root owns current acceptance. Local raw
+logs are ignored by Git.
 
 ## Codex integration references
 

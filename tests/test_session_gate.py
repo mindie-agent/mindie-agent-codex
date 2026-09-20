@@ -44,21 +44,55 @@ class SessionGateTests(unittest.TestCase):
         self.temp.cleanup()
 
     def activate(self, session="manual-A"):
-        with patch.dict(os.environ, CODEX_THREAD_ID=session):
+        # Activation records the authorized project root from the task cwd.
+        with (
+            patch.dict(os.environ, CODEX_THREAD_ID=session),
+            patch.object(Path, "cwd", return_value=self.root),
+        ):
             return self.sessions.activate()
 
-    def request(self, lease, ident=1, name="knowledge_query", **arguments):
+    def request(self, lease=None, ident=1, name="knowledge_query", meta=..., **arguments):
+        """A tools/call carrying verified host turn metadata (Codex 0.153.4 shape)."""
         arguments = dict(arguments)
         if name == "knowledge_query":
-            arguments.update(query="test", session_id=lease["mindie_session_id"])
-        arguments.update(
-            {k: lease[k] for k in ("mindie_session_id", "mindie_activation")}
-        )
+            arguments.update(query="test")
+        session = (lease or {}).get("mindie_session_id", "manual-A")
+        if meta is ...:
+            meta = {
+                "x-codex-turn-metadata": {
+                    "session_id": session,
+                    "thread_id": session,
+                    "turn_id": "turn-1",
+                    "model": "gpt-5.6-luna",
+                },
+                "threadId": session,
+            }
         return dict(
             jsonrpc="2.0",
             id=ident,
             method="tools/call",
-            params=dict(name=name, arguments=arguments),
+            params=dict(name=name, arguments=arguments, _meta=meta),
+        )
+
+    def enable_sharing(self, *, enabled=True, roots=None):
+        community = self.root / "codex.community.json"
+        config = json.loads(self.config.read_text())
+        config["community_config"] = str(community)
+        self.config.write_text(json.dumps(config))
+        community.write_text(
+            json.dumps(
+                dict(
+                    schema="mindie-community-config/1",
+                    enabled=enabled,
+                    generation="g1",
+                    enabled_at=time.time() if enabled else None,
+                    repository="mindie-agent/knowledge",
+                    branch="main",
+                    project_roots=[str(root) for root in (roots or [self.root])],
+                    idle_seconds=300,
+                    visibility="public",
+                )
+            )
         )
 
     def bridge(self, operation, event=None, timeout=3):
@@ -68,6 +102,7 @@ class SessionGateTests(unittest.TestCase):
             text=True,
             capture_output=True,
             timeout=timeout,
+            cwd=str(self.root),
         )
 
     def runtime_fixture(self, *, delay=0, hook=False):
@@ -96,11 +131,12 @@ class SessionGateTests(unittest.TestCase):
         )
         return marker
 
-    def event(self, session="manual-A", turn="turn-1"):
+    def event(self, session="manual-A", turn="turn-1", cwd=None):
         return dict(
             hook_event_name="Stop",
             session_id=session,
             turn_id=turn,
+            cwd=str(cwd or self.root),
             last_assistant_message="A verified result",
         )
 
@@ -115,23 +151,32 @@ class SessionGateTests(unittest.TestCase):
             json.loads((SCRIPTS.parent / "hooks/hooks.json").read_text())["hooks"],
         )
 
-    def test_activation_requires_native_identity_and_binds_once_per_call(self):
+    def test_activation_binds_only_when_community_sharing_is_enabled(self):
         marker = self.runtime_fixture()
         with patch.dict(os.environ, CODEX_THREAD_ID=""):
             self.assertEqual(self.bridge("activate").returncode, 1)
         self.assertFalse(self.sessions.path.exists())
         lease = json.loads(self.bridge("activate").stdout)
         self.assertEqual(lease["mindie_session_id"], "manual-A")
-        # Activation performs one bounded cold start + authenticated attach;
-        # the fixture runtime records exactly that single attempt.
-        self.assertEqual(marker.read_text().splitlines(), ["attempt"])
-        self.assertEqual(lease.get("capture"), "bound")
+        # Sharing off: ordinary activation only — no cold start, no bind, and
+        # the lease stays fully usable for read tools.
+        self.assertEqual(lease.get("capture"), "disabled")
+        self.assertFalse(marker.exists())
         again = json.loads(self.bridge("activate").stdout)
         self.assertEqual(
             {k: again[k] for k in ("mindie_session_id", "mindie_activation", "expires_at")},
             {k: lease[k] for k in ("mindie_session_id", "mindie_activation", "expires_at")},
         )
+        self.assertFalse(marker.exists())
+        # Enabling sharing admits local collection: one bounded cold start +
+        # authenticated attach per activation call.
+        self.enable_sharing()
+        bound = json.loads(self.bridge("activate").stdout)
+        self.assertEqual(bound.get("capture"), "bound")
+        self.assertEqual(marker.read_text().splitlines(), ["attempt"])
+        bound_again = json.loads(self.bridge("activate").stdout)
         self.assertEqual(marker.read_text().splitlines(), ["attempt", "attempt"])
+        self.assertEqual(bound_again["mindie_activation"], bound["mindie_activation"])
         self.assertEqual(self.sessions.path.stat().st_mode & 0o777, 0o600)
 
     def test_inactive_hooks_create_no_state_or_runtime(self):
@@ -153,7 +198,7 @@ class SessionGateTests(unittest.TestCase):
             dict(jsonrpc="2.0", id=2, method="tools/list"),
         ]
         for script, argv, count in [
-            ("bridge.py", ["mcp"], 4),
+            ("bridge.py", ["mcp"], 3),
             ("remote_bridge.py", [], 11),
         ]:
             result = subprocess.run(
@@ -170,29 +215,40 @@ class SessionGateTests(unittest.TestCase):
         self.assertFalse(absent.with_suffix(".sessions.sqlite3").exists())
         self.assertFalse((self.root / "data").exists())
 
-    def test_inactive_cross_session_and_wrong_capability_never_dispatch(self):
+    def test_inactive_cross_session_and_bad_metadata_never_dispatch(self):
         lease = self.activate()
         gate = mcp_gate.Gate("knowledge")
-        cases = [
-            dict(lease, mindie_session_id="other"),
-            dict(lease, mindie_activation="invalid"),
-        ]
         with patch.object(mcp_gate, "run") as run:
-            for i, credentials in enumerate(cases):
-                self.assertTrue(
-                    gate.call(self.request(credentials, ident=i))["isError"]
-                )
+            # Arguments may not carry or override identity.
+            self.assertTrue(
+                gate.call(self.request(lease, mindie_session_id="manual-A"))["isError"]
+            )
+            self.assertTrue(
+                gate.call(self.request(lease, mindie_activation="x"))["isError"]
+            )
+            # Another task's metadata has no active lease.
+            self.assertTrue(
+                gate.call(self.request(dict(mindie_session_id="other")))["isError"]
+            )
+            # Contradictory and missing metadata fail closed, no fallback.
+            contradictory = {
+                "x-codex-turn-metadata": {
+                    "session_id": "manual-A",
+                    "thread_id": "manual-A",
+                    "turn_id": "t",
+                },
+                "threadId": "other",
+            }
+            self.assertTrue(gate.call(self.request(lease, meta=contradictory))["isError"])
+            self.assertTrue(gate.call(self.request(lease, meta={}))["isError"])
             run.assert_not_called()
 
     def test_explain_is_gated_and_query_cannot_implicitly_activate(self):
-        lease = dict(mindie_session_id="manual-A", mindie_activation="guess")
         with patch.object(mcp_gate, "run") as run:
             gate = mcp_gate.Gate("knowledge")
-            self.assertTrue(gate.call(self.request(lease))["isError"])
+            self.assertTrue(gate.call(self.request())["isError"])
             self.assertTrue(
-                gate.call(self.request(lease, name="knowledge_explain", ref="x"))[
-                    "isError"
-                ]
+                gate.call(self.request(name="knowledge_explain", ref="x"))["isError"]
             )
             run.assert_not_called()
         self.assertFalse(self.sessions.path.exists())
@@ -264,6 +320,7 @@ class SessionGateTests(unittest.TestCase):
 
     def test_hook_delivery_is_once_and_not_for_other_sessions(self):
         marker = self.runtime_fixture(hook=True)
+        self.enable_sharing()
         self.activate()
         for event in [self.event("other"), self.event(), self.event()]:
             result = self.bridge("stop", event)
@@ -272,6 +329,7 @@ class SessionGateTests(unittest.TestCase):
 
     def test_timed_out_hook_consumes_attempt_and_always_finishes(self):
         marker = self.runtime_fixture(delay=20, hook=True)
+        self.enable_sharing()
         self.activate()
         started = time.monotonic()
         result = self.bridge("stop", self.event())

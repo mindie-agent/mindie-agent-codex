@@ -25,6 +25,8 @@ class LocalUpdater(Updater):
     builds = 0
     fail_install = False
     idle = True
+    knowledge_calls = 0
+    fail_knowledge = False
 
     def command(self, args, **kwargs):
         args = [str(arg) for arg in args]
@@ -75,9 +77,12 @@ class LocalUpdater(Updater):
         if not self.assert_runtime:
             raise RuntimeError("runtime missing")
 
-    def ensure_domain_runtime(self):
-        # Fixture venvs are stubs; the real repair path gets its own test below.
-        return None
+    def check_knowledge(self):
+        # The real sync call gets its own isolation tests below; the fixture
+        # records the schedule and can inject a bounded failure.
+        self.knowledge_calls += 1
+        if self.fail_knowledge:
+            raise RuntimeError("fixture knowledge sync failed")
 
 
 class AutoUpdateTests(unittest.TestCase):
@@ -268,53 +273,72 @@ class AutoUpdateTests(unittest.TestCase):
         ):
             self.assertEqual(self.updater.resolve(), self.sha)
 
-    def test_uncoordinated_caches_are_retired_and_originals_preserved(self):
+    def test_uncoordinated_caches_are_retained_untouched(self):
+        # No compatibility shim: cached entrypoints of loaded tasks keep their
+        # exact bytes; the updater only retains/restores them across switches.
         self.check()
-        self.assertIn("retired", (self.cache / "bridge.py").read_text())
-        original = self.root / "legacy-caches-original/old/scripts/bridge.py"
-        self.assertEqual(original.read_text(), "retained safe entrypoint")
-        result = subprocess.run(
-            [sys.executable, str(self.cache / "bridge.py"), "stop"],
-            input="{}",
-            text=True,
-            capture_output=True,
-            timeout=2,
-        )
-        self.assertEqual((result.returncode, result.stdout.strip()), (0, "{}"))
-        result = subprocess.run(
-            [sys.executable, str(self.cache / "bridge.py"), "activate"],
-            text=True,
-            capture_output=True,
-            timeout=2,
-        )
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual((self.cache / "bridge.py").read_text(), "retained safe entrypoint")
+        retained = self.root / "retained-caches/old/scripts/bridge.py"
+        self.assertEqual(retained.read_text(), "retained safe entrypoint")
+        self.assertFalse((self.root / "legacy-caches-original").exists())
 
-    def test_domain_runtime_repair_is_bounded_and_observable(self):
-        self.check()
-        revision = self.updater.state["current"]["revision"]
-        source = self.root / "generations" / revision / "source"
-        (source / "domain-requirements.txt").write_text(
-            "mindie-coordinator @ git+https://github.com/mindie-agent/coordinator@0191b81af67d922ede03d10fcc1b192f176a05c6\n"
+    def test_knowledge_sync_runs_on_every_schedule_and_failure_is_isolated(self):
+        first = self.check()
+        self.assertEqual(first["status"], "installed")
+        self.assertEqual(self.updater.knowledge_calls, 1)
+        # Plugin up to date, attempts exhausted and resolve failures all still
+        # run the knowledge sync: the plugin build never blocks it.
+        self.assertEqual(self.check()["status"], "up_to_date")
+        self.updater.fail_knowledge = True
+        result = self.check()
+        self.assertEqual(result["status"], "up_to_date")
+        self.assertEqual(result["knowledge_status"], "sync_failed")
+        self.assertIn("knowledge_error", result)
+        self.updater.fail_knowledge = False
+        self.remote.joinpath("marker").write_text("new revision")
+        self.commit("failing candidate")
+        for _ in range(3):
+            self.updater.fail_install = True
+            self.assertEqual(self.check()["status"], "update_failed")
+        self.assertEqual(self.check()["status"], "attempts_exhausted")
+        self.assertGreaterEqual(self.updater.knowledge_calls, 6)
+
+    def test_unreadable_lease_state_defers_switch_and_preserves_store(self):
+        sessions = Sessions(self.config)
+        sessions.path.write_text("not a sqlite database")
+        for _ in range(2):
+            result = self.check()
+            self.assertEqual(result["status"], "waiting_for_idle")
+            self.assertIn("lease state unreadable", result["error"])
+        self.assertEqual(sessions.path.read_text(), "not a sqlite database")
+        self.assertEqual(self.updater.installs, 0)
+        self.assertEqual(read(self.config), self.initial)
+
+    def test_dependency_overlay_records_exact_revision_and_dirty_state(self):
+        overlay = self.base / "overlay-core"
+        overlay.mkdir()
+        (overlay / "pyproject.toml").write_text("[project]\nname='overlay'\n")
+        subprocess.run(["git", "-C", overlay, "init", "-q"], check=True)
+        subprocess.run(["git", "-C", overlay, "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", overlay, "-c", "user.email=t@t", "-c", "user.name=t",
+             "commit", "-qm", "overlay"],
+            check=True,
         )
-        # Isolate the missing-dependency environment from the test runner.
-        bare = self.base / "bare-runtime"
-        subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(bare)],
-                       check=True, timeout=15, capture_output=True)
-        self.updater.state["current"]["python"] = str(
-            bare / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-        )
-        atomic(self.updater.state_path, self.updater.state)
-        statuses = []
-        with patch.object(
-            LocalUpdater, "ensure_domain_runtime", Updater.ensure_domain_runtime
-        ):
-            for _ in range(4):
-                self.updater.state["next_check"] = 0
-                statuses.append(self.check()["status"])
-        self.assertEqual(statuses, ["domain_runtime_incomplete"] * 4)
-        self.assertEqual(
-            read(self.updater.state_path)["domain_repairs"][revision], 3
-        )
+        revision = subprocess.check_output(
+            ["git", "-C", overlay, "rev-parse", "HEAD"], text=True
+        ).strip()
+        (overlay / "local.txt").write_text("uncommitted integration change")
+        settings = read(self.settings)
+        settings["dependency_overlay"] = [str(overlay)]
+        atomic(self.settings, settings)
+        self.updater = LocalUpdater(self.settings)
+        result = self.check()
+        self.assertEqual(result["status"], "installed")
+        evidence = result["current"]["dependency_overlay"]
+        self.assertEqual(evidence[0]["revision"], revision)
+        self.assertIs(evidence[0]["dirty"], True)
+        self.assertEqual(evidence[0]["path"], str(overlay))
 
     def test_fetch_deadline_and_network_backoff_do_not_spawn_models(self):
         with patch.object(

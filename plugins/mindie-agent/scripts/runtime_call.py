@@ -8,16 +8,35 @@ import sys
 from session_gate import Sessions, config_path
 
 
+def knowledge_names():
+    catalog = json.loads(Path(__file__).with_name("mcp_catalog.json").read_text())
+    return {tool["name"] for tool in catalog["knowledge"]}
+
+
 def call(payload):
-    session = payload["mindie_session_id"]
-    Sessions().check(session, payload["mindie_activation"])
+    # The internal activation token resolves the owning lease again inside the
+    # runtime; it must agree with the gate-bound session, and no
+    # caller-supplied identity is ever trusted on its own.
+    lease = Sessions().resolve(payload["mindie_activation"])
+    session = lease["session"]
+    if session != payload.get("mindie_session_id"):
+        raise ValueError("MindIE runtime identity mismatch")
     config = json.loads(config_path().read_text())
     args, name = payload["arguments"], payload["name"]
     if payload["surface"] == "knowledge":
         from mindie_knowledge.loop.cli import ensure_service
         from mindie_knowledge.loop.transport import rpc
 
-        if name not in {"knowledge_attach", "knowledge_query", "knowledge_explain", "knowledge_use"}:
+        if name in knowledge_names():
+            pass
+        elif name == "knowledge_attach" and payload.get("internal") is True:
+            # Internal activation-time bind only; never a front-stage tool.
+            # Sharing off must not cold-start collection through this path.
+            import sharing
+
+            if not sharing.capture_allowed(lease, None):
+                raise ValueError("knowledge attach requires enabled community sharing")
+        else:
             raise ValueError("unknown knowledge tool")
         connection = ensure_service(config["engine_config"])
         # Never reconnect and resubmit a request with an uncertain outcome.

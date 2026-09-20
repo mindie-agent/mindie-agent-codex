@@ -5,6 +5,11 @@ that strict contract. Upstream remote-dev permits additional properties for
 consumer-registered endpoint resolvers; this plugin never registers one, so
 the generator drops the resolver boilerplate and pins additionalProperties to
 false instead of asking Gate to ignore unknown keys.
+
+The knowledge surface is the adapter-owned contract (query/explain/optional
+feedback); it is defined here, not imported from the knowledge package, so
+static discovery never depends on the installed runtime version. Internal
+attach/status/capture are not front-stage tools and are never advertised.
 """
 
 import copy
@@ -36,29 +41,104 @@ RESOLVER_BOILERPLATE = (
 # keeps failing closed on an undeclared timeout key (e.g. remote_write).
 TRANSFER_TOOLS = {"remote_artifact_pull", "remote_artifact_push"}
 
-MINDIE_KEYS = {
-    "mindie_session_id": "Native Codex session ID from manual activation; not a remote job ID",
-    "mindie_activation": "Session capability from manual activation; never copy from another session",
-}
+# Truthful MCP annotations: query/explain are pure local reads; feedback is
+# an idempotent write and is never labeled read-only. Remote tools mutate a
+# remote environment and are annotated accordingly.
+READ_ONLY = dict(
+    readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+)
+FEEDBACK_WRITE = dict(
+    readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False
+)
+REMOTE_MUTATION = dict(
+    readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True
+)
+
+STRING = {"type": "string"}
+
+
+def schema(properties, required):
+    return dict(
+        type="object",
+        properties=properties,
+        required=required,
+        additionalProperties=False,
+    )
+
+
+# Ordinary business surface per the sharing contract: on-demand search, read
+# by reference, and optional feedback. No knowledge_use, no judging, no
+# sync-to-authority frontend. Querying is never a prerequisite for capture.
+KNOWLEDGE_TOOLS = [
+    dict(
+        name="knowledge_query",
+        description=(
+            "Search the selected domain's published knowledge and experience. "
+            "References are advisory; conditions and revision accompany each hit."
+        ),
+        inputSchema=schema(
+            dict(query=STRING, limit={"type": "integer", "minimum": 1, "maximum": 20}),
+            ["query"],
+        ),
+        annotations=READ_ONLY,
+    ),
+    dict(
+        name="knowledge_explain",
+        description=(
+            "Read the pinned content, source, conditions and status for one "
+            "domain reference; retired entries explain their retirement."
+        ),
+        inputSchema=schema(
+            dict(
+                ref=STRING,
+                offset={"type": "integer", "minimum": 0},
+                limit={"type": "integer", "minimum": 1},
+            ),
+            ["ref"],
+        ),
+        annotations=READ_ONLY,
+    ),
+    dict(
+        name="knowledge_feedback",
+        description=(
+            "Optional: record one current up/down vote on a reference revision "
+            "with an optional one-line reason. Never required; silence is not a vote."
+        ),
+        inputSchema=schema(
+            dict(
+                ref=STRING,
+                rating={"type": "string", "enum": ["up", "down"]},
+                reason={"type": "string", "maxLength": 1000},
+            ),
+            ["ref", "rating"],
+        ),
+        annotations=FEEDBACK_WRITE,
+    ),
+]
 
 
 def catalog():
-    from mindie_knowledge.loop.cli import TOOLS
-    from remote_dev.mcp.tools import ALIASES, PARAM_ALIASES, TOOL_SCHEMAS, list_tools, selector_fields
+    from remote_dev.mcp.tools import (
+        ALIASES,
+        PARAM_ALIASES,
+        TOOL_SCHEMAS,
+        list_tools,
+        selector_fields,
+    )
 
     result = dict(
-        knowledge=copy.deepcopy(TOOLS),
+        knowledge=copy.deepcopy(KNOWLEDGE_TOOLS),
         remote=[copy.deepcopy(t) for t in list_tools() if t["name"] in REMOTE_TOOLS],
     )
     for tool in result["remote"]:
-        schema = tool["inputSchema"]
+        schema_ = tool["inputSchema"]
         # Preserve call-supported keys the advertised schema may omit.
         canonical = ALIASES[tool["name"]]
         call_properties = TOOL_SCHEMAS[canonical]["properties"]
         if tool["name"] == "remote_job_stop" and "force" in call_properties:
-            schema["properties"].setdefault("force", dict(type="boolean"))
+            schema_["properties"].setdefault("force", dict(type="boolean"))
         if tool["name"] in TRANSFER_TOOLS:
-            schema["properties"].update(
+            schema_["properties"].update(
                 timeout_ms=dict(type="integer"), timeout=dict(type="integer")
             )
         # Every advertised key must be one call_tool would actually accept.
@@ -67,28 +147,26 @@ def catalog():
             | set(PARAM_ALIASES.get(canonical, {}))
             | set(selector_fields())
             | {"timeout", "timeout_ms"}
-            | set(MINDIE_KEYS)
         )
-        extra = set(schema["properties"]) - allowed
+        extra = set(schema_["properties"]) - allowed
         if extra:
             raise ValueError(
                 f"{tool['name']} advertises keys call_tool rejects: {sorted(extra)}"
             )
+    for tool in result["remote"]:
+        tool["annotations"] = REMOTE_MUTATION
     for tools in result.values():
         for tool in tools:
             tool["description"] = (
-                "Requires manual MindIE activation in this session. "
-                + tool["description"]
+                "Requires manual MindIE activation in this session; the host "
+                "binds task identity per call. " + tool["description"]
             )
-            schema = tool["inputSchema"]
-            schema["additionalProperties"] = False
-            if schema.get("description"):
-                schema["description"] = schema["description"].replace(
+            schema_ = tool["inputSchema"]
+            schema_["additionalProperties"] = False
+            if schema_.get("description"):
+                schema_["description"] = schema_["description"].replace(
                     RESOLVER_BOILERPLATE, ""
                 )
-            for key, text in MINDIE_KEYS.items():
-                schema["properties"][key] = dict(type="string", description=text)
-                schema.setdefault("required", []).append(key)
     return result
 
 

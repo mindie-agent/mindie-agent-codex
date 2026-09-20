@@ -65,12 +65,41 @@ class AdapterTests(unittest.TestCase):
             self.assertIn("features.hooks=false", command)
             self.assertIn("untrusted task data", prompt)
             output = Path(command[command.index("--output-last-message") + 1])
-            output.write_text('{"verdict":"unknown","reason":"No actual use evidence"}')
+            output.write_text(
+                json.dumps(
+                    dict(
+                        entries=[
+                            dict(
+                                entry_id=None,
+                                title="Container logical device numbering",
+                                summary="Map device by logical index inside containers",
+                                conditions={"runtime": "container"},
+                                content="The host maps physical device 8; inside the "
+                                "container logical numbering starts at 0. The original "
+                                "run failed requesting device 8; selecting logical "
+                                "device 0 made the device visible.",
+                                sources=[],
+                            )
+                        ]
+                    )
+                )
+            )
             return subprocess.CompletedProcess(command, 0, stdout="")
 
         with patch.object(worker, "run_codex", fake_run):
-            result = worker.run({"role": "judge", "outcome": "untrusted material"})
-        self.assertEqual(result["verdict"], "unknown")
+            result = worker.run(
+                {
+                    "role": "organize",
+                    "domain": "vllm-ascend",
+                    "increment": "untrusted material",
+                    "coverage": {},
+                    "existing_drafts": [],
+                }
+            )
+        self.assertIsNone(result["entries"][0]["entry_id"])
+        # The retired judge role is not served under any name.
+        with self.assertRaises(ValueError):
+            worker.run({"role": "judge", "outcome": "untrusted material"})
 
 
 if __name__ == "__main__":

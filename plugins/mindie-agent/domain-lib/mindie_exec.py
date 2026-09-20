@@ -109,14 +109,14 @@ def _invoke(name: str, args: dict[str, Any], *, timeout: float | None = None) ->
         "id": f"cli-{uuid.uuid4().hex}",
         "params": {
             "name": name,
-            "arguments": {
-                **args,
-                "mindie_session_id": session,
-                "mindie_activation": token,
-            },
+            # No identity keys inside arguments: the CLI admission is checked
+            # against the session gate out of band, like the MCP metadata path.
+            "arguments": dict(args),
         },
     }
-    response = mcp_gate.Gate("remote").call(request, timeout=_local_budget(timeout))
+    response = mcp_gate.Gate("remote").call(
+        request, timeout=_local_budget(timeout), cli_identity=(session, token)
+    )
     result = response.get("structuredContent")
     if not isinstance(result, dict):
         raise RemoteExecutionError(_error_text(response))

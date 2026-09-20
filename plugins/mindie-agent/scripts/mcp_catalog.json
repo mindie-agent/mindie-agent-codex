@@ -1,138 +1,101 @@
 {
   "knowledge": [
     {
-      "name": "knowledge_attach",
-      "description": "Requires manual MindIE activation in this session. Explicitly bind this task to the selected domain after manual activation. Binding never requires a knowledge query; it only makes this task's Stop summary eligible for bounded capture.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "session_id": {
-            "type": "string"
-          },
-          "mindie_session_id": {
-            "type": "string",
-            "description": "Native Codex session ID from manual activation; not a remote job ID"
-          },
-          "mindie_activation": {
-            "type": "string",
-            "description": "Session capability from manual activation; never copy from another session"
-          }
-        },
-        "required": [
-          "session_id",
-          "mindie_session_id",
-          "mindie_activation"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "name": "knowledge_query",
-      "description": "Requires manual MindIE activation in this session. Search the selected domain's knowledge and experience. References are advisory.",
+      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Search the selected domain's published knowledge and experience. References are advisory; conditions and revision accompany each hit.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "query": {
             "type": "string"
           },
-          "session_id": {
-            "type": "string"
-          },
           "limit": {
             "type": "integer",
             "minimum": 1,
             "maximum": 20
-          },
-          "conditions": {
-            "type": "object"
-          },
-          "mindie_session_id": {
-            "type": "string",
-            "description": "Native Codex session ID from manual activation; not a remote job ID"
-          },
-          "mindie_activation": {
-            "type": "string",
-            "description": "Session capability from manual activation; never copy from another session"
           }
         },
         "required": [
-          "query",
-          "session_id",
-          "mindie_session_id",
-          "mindie_activation"
+          "query"
         ],
         "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     },
     {
       "name": "knowledge_explain",
-      "description": "Requires manual MindIE activation in this session. Read the original content, source and conditions for one domain reference.",
+      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Read the pinned content, source, conditions and status for one domain reference; retired entries explain their retirement.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "ref": {
             "type": "string"
           },
-          "mindie_session_id": {
-            "type": "string",
-            "description": "Native Codex session ID from manual activation; not a remote job ID"
+          "offset": {
+            "type": "integer",
+            "minimum": 0
           },
-          "mindie_activation": {
-            "type": "string",
-            "description": "Session capability from manual activation; never copy from another session"
+          "limit": {
+            "type": "integer",
+            "minimum": 1
           }
         },
         "required": [
-          "ref",
-          "mindie_session_id",
-          "mindie_activation"
+          "ref"
         ],
         "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     },
     {
-      "name": "knowledge_use",
-      "description": "Requires manual MindIE activation in this session. Record what an experience changed or enabled beyond existing checks, with observed evidence and limits. Citation alone is not benefit. An independent judge evaluates after this task's Stop hook.",
+      "name": "knowledge_feedback",
+      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Optional: record one current up/down vote on a reference revision with an optional one-line reason. Never required; silence is not a vote.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "ref": {
             "type": "string"
           },
-          "session_id": {
-            "type": "string"
-          },
-          "application": {
-            "type": "string"
-          },
-          "evidence": {
-            "type": "string"
-          },
-          "mindie_session_id": {
+          "rating": {
             "type": "string",
-            "description": "Native Codex session ID from manual activation; not a remote job ID"
+            "enum": [
+              "up",
+              "down"
+            ]
           },
-          "mindie_activation": {
+          "reason": {
             "type": "string",
-            "description": "Session capability from manual activation; never copy from another session"
+            "maxLength": 1000
           }
         },
         "required": [
           "ref",
-          "session_id",
-          "application",
-          "evidence",
-          "mindie_session_id",
-          "mindie_activation"
+          "rating"
         ],
         "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     }
   ],
   "remote": [
     {
       "name": "remote_read",
-      "description": "Requires manual MindIE activation in this session. Read a remote file with native Read-like pagination and a read ledger.",
+      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Read a remote file with native Read-like pagination and a read ledger.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -213,26 +176,21 @@
           },
           "client_context_id": {
             "type": "string"
-          },
-          "mindie_session_id": {
-            "type": "string",
-            "description": "Native Codex session ID from manual activation; not a remote job ID"
-          },
-          "mindie_activation": {
-            "type": "string",
-            "description": "Session capability from manual activation; never copy from another session"
           }
         },
-        "required": [
-          "mindie_session_id",
-          "mindie_activation"
-        ],
+        "required": [],
         "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; the alias path is also accepted (Kimi/Cursor habit). Enforced by the server so alias-only calls pass provider schema validation."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "remote_write",
-      "description": "Requires manual MindIE activation in this session. Write a remote file with overwrite support and optional read-ledger concurrency checks.",
+      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Write a remote file with overwrite support and optional read-ledger concurrency checks.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -299,27 +257,23 @@
           },
           "client_context_id": {
             "type": "string"
-          },
-          "mindie_session_id": {
-            "type": "string",
-            "description": "Native Codex session ID from manual activation; not a remote job ID"
-          },
-          "mindie_activation": {
-            "type": "string",
-            "description": "Session capability from manual activation; never copy from another session"
           }
         },
         "required": [
-          "content",
-          "mindie_session_id",
-          "mindie_activation"
+          "content"
         ],
         "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; the alias path is also accepted. Enforced by the server so alias-only calls pass provider schema validation."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "remote_bash",
-      "description": "Requires manual MindIE activation in this session. Run a remote shell command with Bash-like semantics, logs, preview, and automatic yield, writable stdin and optional PTY.",
+      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Run a remote shell command with Bash-like semantics, logs, preview, and automatic yield, writable stdin and optional PTY.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -406,26 +360,21 @@
             "additionalProperties": {
               "type": "string"
             }
-          },
-          "mindie_session_id": {
-            "type": "string",
-            "description": "Native Codex session ID from manual activation; not a remote job ID"
-          },
-          "mindie_activation": {
-            "type": "string",
-            "description": "Session capability from manual activation; never copy from another session"
           }
         },
-        "required": [
-          "mindie_session_id",
-          "mindie_activation"
-        ],
+        "required": [],
         "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. command is required; the alias cmd is also accepted (Codex habit). Enforced by the server so alias-only calls pass provider schema validation."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "remote_grep",
-      "description": "Requires manual MindIE activation in this session. Search remote files with rg-compatible semantics and a grep -E (POSIX ERE) fallback.",
+      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Search remote files with rg-compatible semantics and a grep -E (POSIX ERE) fallback.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -550,27 +499,23 @@
           "limit": {
             "type": "integer",
             "maximum": 500
-          },
-          "mindie_session_id": {
-            "type": "string",
-            "description": "Native Codex session ID from manual activation; not a remote job ID"
-          },
-          "mindie_activation": {
-            "type": "string",
-            "description": "Session capability from manual activation; never copy from another session"
           }
         },
         "required": [
-          "pattern",
-          "mindie_session_id",
-          "mindie_activation"
+          "pattern"
         ],
         "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "remote_apply_patch",
-      "description": "Requires manual MindIE activation in this session. Apply a Codex apply_patch payload or unified diff on a remote endpoint.",
+      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Apply a Codex apply_patch payload or unified diff on a remote endpoint.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -625,26 +570,21 @@
           },
           "timeout_ms": {
             "type": "integer"
-          },
-          "mindie_session_id": {
-            "type": "string",
-            "description": "Native Codex session ID from manual activation; not a remote job ID"
-          },
-          "mindie_activation": {
-            "type": "string",
-            "description": "Session capability from manual activation; never copy from another session"
           }
         },
-        "required": [
-          "mindie_session_id",
-          "mindie_activation"
-        ],
+        "required": [],
         "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. Provide a non-empty patch or command. If both are provided, patch takes precedence. Missing patch content is rejected by the server."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "remote_job_status",
-      "description": "Requires manual MindIE activation in this session. Check a remote background job through the shared process supervisor.",
+      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Check a remote background job through the shared process supervisor.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -695,26 +635,21 @@
           "session_id": {
             "type": "string",
             "description": "Alias of job_id returned by remote.bash."
-          },
-          "mindie_session_id": {
-            "type": "string",
-            "description": "Native Codex session ID from manual activation; not a remote job ID"
-          },
-          "mindie_activation": {
-            "type": "string",
-            "description": "Session capability from manual activation; never copy from another session"
           }
         },
-        "required": [
-          "mindie_session_id",
-          "mindie_activation"
-        ],
+        "required": [],
         "description": "job_id or session_id is required; checked by the server."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "remote_job_tail",
-      "description": "Requires manual MindIE activation in this session. Tail remote background job logs through the shared process supervisor.",
+      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Tail remote background job logs through the shared process supervisor.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -777,26 +712,21 @@
           "session_id": {
             "type": "string",
             "description": "Alias of job_id returned by remote.bash."
-          },
-          "mindie_session_id": {
-            "type": "string",
-            "description": "Native Codex session ID from manual activation; not a remote job ID"
-          },
-          "mindie_activation": {
-            "type": "string",
-            "description": "Session capability from manual activation; never copy from another session"
           }
         },
-        "required": [
-          "mindie_session_id",
-          "mindie_activation"
-        ],
+        "required": [],
         "description": "job_id or session_id is required; checked by the server."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "remote_job_stop",
-      "description": "Requires manual MindIE activation in this session. Stop a remote background job through the shared process supervisor.",
+      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Stop a remote background job through the shared process supervisor.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -850,26 +780,21 @@
           "session_id": {
             "type": "string",
             "description": "Alias of job_id returned by remote.bash."
-          },
-          "mindie_session_id": {
-            "type": "string",
-            "description": "Native Codex session ID from manual activation; not a remote job ID"
-          },
-          "mindie_activation": {
-            "type": "string",
-            "description": "Session capability from manual activation; never copy from another session"
           }
         },
-        "required": [
-          "mindie_session_id",
-          "mindie_activation"
-        ],
+        "required": [],
         "description": "job_id or session_id is required; checked by the server."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "remote_job_stdin",
-      "description": "Requires manual MindIE activation in this session. Write to a remote session's stdin (Codex write_stdin habit), with optional EOF and output polling.",
+      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Write to a remote session's stdin (Codex write_stdin habit), with optional EOF and output polling.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -936,26 +861,21 @@
           "session_id": {
             "type": "string",
             "description": "Alias of job_id returned by remote.bash."
-          },
-          "mindie_session_id": {
-            "type": "string",
-            "description": "Native Codex session ID from manual activation; not a remote job ID"
-          },
-          "mindie_activation": {
-            "type": "string",
-            "description": "Session capability from manual activation; never copy from another session"
           }
         },
-        "required": [
-          "mindie_session_id",
-          "mindie_activation"
-        ],
+        "required": [],
         "description": "job_id or session_id is required; checked by the server."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "remote_artifact_pull",
-      "description": "Requires manual MindIE activation in this session. Pull a remote artifact through SSH streaming with hash verification.",
+      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Pull a remote artifact through SSH streaming with hash verification.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -1011,27 +931,23 @@
           },
           "timeout": {
             "type": "integer"
-          },
-          "mindie_session_id": {
-            "type": "string",
-            "description": "Native Codex session ID from manual activation; not a remote job ID"
-          },
-          "mindie_activation": {
-            "type": "string",
-            "description": "Session capability from manual activation; never copy from another session"
           }
         },
         "required": [
-          "remote_path",
-          "mindie_session_id",
-          "mindie_activation"
+          "remote_path"
         ],
         "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "remote_artifact_push",
-      "description": "Requires manual MindIE activation in this session. Push a local artifact through SSH streaming with hash verification.",
+      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Push a local artifact through SSH streaming with hash verification.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -1087,23 +1003,19 @@
           },
           "timeout": {
             "type": "integer"
-          },
-          "mindie_session_id": {
-            "type": "string",
-            "description": "Native Codex session ID from manual activation; not a remote job ID"
-          },
-          "mindie_activation": {
-            "type": "string",
-            "description": "Session capability from manual activation; never copy from another session"
           }
         },
         "required": [
           "local_path",
-          "remote_path",
-          "mindie_session_id",
-          "mindie_activation"
+          "remote_path"
         ],
         "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
       }
     }
   ]

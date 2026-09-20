@@ -58,6 +58,11 @@ WIN_TASK = "MindIE Agent Plugin Updater"
 INTERVAL = 300
 TOTAL_TIMEOUT = 240
 ATTEMPTS = 3
+# Knowledge sync is model-free and independently budgeted: it runs inside the
+# same 300 s scheduler slot but before any plugin build work, so a slow or
+# stuck plugin candidate can never starve it. The knowledge core persists its
+# own 30 s/3-attempt per-candidate budget; this is only the outer call bound.
+KNOWLEDGE_TIMEOUT = 45
 
 
 class Incompatible(ValueError):
@@ -222,7 +227,6 @@ class Updater:
             "agent_worker.py",
             "update_idle.py",
             "auto_update.py",
-            "retired_entry.py",
             "update_launcher.py",
         ):
             if not (plugin / "scripts" / name).is_file():
@@ -265,29 +269,69 @@ class Updater:
             raise Incompatible("domain dependencies require an exact coordinator pin")
 
     def probe_runtime(self, python):
+        # The probe must match the actual new package APIs (community sharing
+        # contract), never the retired judge/authority surface. A candidate
+        # built against old pins fails closed here until the knowledge pin is
+        # republished; the root-owned dependency overlay can overlay local
+        # core sources for integration testing.
         self.command(
             [
                 python,
                 "-c",
                 "\n".join(
                     [
-                        "import inspect, knowledge_intake",
-                        "from mindie_knowledge.loop.activation import SessionAdmission",
+                        "import inspect",
+                        "from mindie_knowledge.loop.cli import TOOLS, STARTUP_TIMEOUT, MAX_STARTUP_PROBES",
                         "from mindie_knowledge.loop.budget import MaintenanceBudget as B",
                         "from mindie_knowledge.loop.transport import Service",
-                        "from mindie_knowledge.loop.cli import STARTUP_TIMEOUT, MAX_STARTUP_PROBES, TOOLS",
+                        "from mindie_knowledge.loop import documents, transcript",
                         "from remote_dev.mcp.tools import call_tool",
                         "from mindie_coordinator.task_client import TaskClient",
-                        "from mindie_coordinator.run_manifest import new_manifest",
+                        "names = {t['name'] for t in TOOLS}",
+                        "assert {'knowledge_query', 'knowledge_explain', 'knowledge_feedback'} <= names",
+                        "assert 'knowledge_use' not in names and 'knowledge_judge' not in names",
+                        "assert all(hasattr(documents, n) for n in ('render_entry', 'parse_entry', 'revision_of'))",
                         "assert 'session_activation' in inspect.signature(Service).parameters",
                         "assert 0 < B.SESSION_LIMIT <= 6 and 0 < B.HOURLY_LIMIT <= 20 and B.FAILURE_LIMIT <= 3",
                         "assert STARTUP_TIMEOUT <= 5 and MAX_STARTUP_PROBES <= 3",
-                        "assert any(t['name'] == 'knowledge_attach' for t in TOOLS)",
                     ]
                 ),
             ],
             timeout=15,
         )
+
+    def apply_dependency_overlay(self, python):
+        """Root-only integration mechanism: overlay local core sources.
+
+        Production installs never use this (the key is absent from committed
+        settings); exact remote pins stay authoritative. When root records
+        local source directories in the updater settings, they are installed
+        over the pinned requirements and their exact revision/dirty state is
+        captured as integration evidence — never presented as a reproducible
+        remote install.
+        """
+        overlay = self.settings.get("dependency_overlay") or []
+        evidence = []
+        for entry in overlay:
+            source = Path(entry).expanduser().absolute()
+            if not (source / "pyproject.toml").is_file():
+                raise Incompatible(
+                    "dependency overlay entries must be package sources: " + str(source)
+                )
+            revision = self.command(
+                ["git", "-C", source, "rev-parse", "HEAD"], timeout=10
+            ).strip()
+            dirty = bool(
+                self.command(
+                    ["git", "-C", source, "status", "--porcelain"], timeout=10
+                ).strip()
+            )
+            self.command(
+                [self.settings["uv"], "pip", "install", "--python", python, source],
+                timeout=60,
+            )
+            evidence.append(dict(path=str(source), revision=revision, dirty=dirty))
+        return evidence
 
     def prepare(self, sha):
         generation = self.root / "generations" / sha
@@ -335,8 +379,13 @@ class Updater:
             ],
             timeout=120,
         )
+        overlay = self.apply_dependency_overlay(python)
         self.probe_runtime(python)
-        return self.package(generation, source, python, sha)
+        result = self.package(generation, source, python, sha)
+        if overlay:
+            result["dependency_overlay"] = overlay
+            atomic(generation / "prepared.json", result)
+        return result
 
     def package(self, generation, source, python, revision):
         plugin = generation / "plugin"
@@ -412,15 +461,28 @@ class Updater:
         return result
 
     def active_sessions(self):
+        """Active lease count; None when lease state is unreadable.
+
+        The updater only reads leases to decide switch timing. An unreadable
+        store defers the switch — it never clears leases or guesses that
+        tasks have ended.
+        """
         sessions = Sessions(self.config)
         if not sessions.path.exists():
             return 0
-        db = sqlite3.connect(sessions.path.as_uri() + "?mode=ro", uri=True, timeout=0.1)
+        try:
+            db = sqlite3.connect(
+                sessions.path.as_uri() + "?mode=ro", uri=True, timeout=0.1
+            )
+        except sqlite3.Error:
+            return None
         try:
             return db.execute(
                 "SELECT count(*) FROM leases WHERE enabled=1 AND expires>? AND failures<3 AND fingerprint=?",
                 (time.time(), sessions.fingerprint()),
             ).fetchone()[0]
+        except sqlite3.Error:
+            return None
         finally:
             db.close()
 
@@ -454,6 +516,9 @@ class Updater:
         )
 
     def preserve_caches(self):
+        # Loaded native tasks may still execute cached entrypoints: retain
+        # their exact bytes untouched. There is no compatibility shim for
+        # pre-contract caches — they are kept inert, never rewritten.
         cache = (
             Path(self.settings["codex_home"])
             / "plugins/cache/mindie-agent/mindie-agent"
@@ -462,24 +527,6 @@ class Updater:
         backup.mkdir(exist_ok=True)
         if cache.exists():
             for version in cache.iterdir():
-                if (
-                    version.is_dir()
-                    and not (version / "scripts/update_lock.py").exists()
-                ):
-                    # Pre-contract clients cannot coordinate a switch. Retain their
-                    # paths as inert shims, and keep the original bytes for audit.
-                    original = self.root / "legacy-caches-original" / version.name
-                    if not original.exists():
-                        shutil.copytree(version, original)
-                    for entry in ("bridge.py", "remote_bridge.py"):
-                        target = version / "scripts" / entry
-                        if target.exists():
-                            shutil.copy2(
-                                Path(__file__).with_name("retired_entry.py"), target
-                            )
-                            retained = backup / version.name / "scripts" / entry
-                            if retained.exists():
-                                shutil.copy2(target, retained)
                 if version.is_dir() and not (backup / version.name).exists():
                     shutil.copytree(version, backup / version.name)
 
@@ -527,7 +574,14 @@ class Updater:
 
     def install(self, candidate):
         with update_lock(self.config, exclusive=True):
-            if self.active_sessions():
+            active = self.active_sessions()
+            if active is None:
+                return self.save(
+                    "waiting_for_idle",
+                    candidate=candidate["revision"],
+                    error="lease state unreadable; switch deferred, leases left untouched",
+                )
+            if active:
                 return self.save("waiting_for_idle", candidate=candidate["revision"])
             adapter = read(self.config)
             idle = json.loads(
@@ -631,58 +685,61 @@ class Updater:
         except BlockingIOError:
             return dict(status="already_running")
 
-    def ensure_domain_runtime(self):
-        """Repair a current generation whose venv predates domain-requirements.
+    def check_knowledge(self):
+        """Model-free knowledge sync on the same 300 s schedule.
 
-        A previous controller generation installs only runtime-requirements.txt;
-        the first check run by this controller tops the same pinned venv up with
-        the domain dependency. Bounded: at most ATTEMPTS repairs per revision.
+        Independent of plugin build state and of the community sharing switch:
+        sharing off still receives published updates. One bounded call into the
+        knowledge core, which owns its own per-candidate attempt persistence;
+        failures are recorded under knowledge_* keys and never mask or cancel
+        the plugin check that follows.
         """
-        current = self.state.get("current") or {}
-        python, revision = current.get("python"), current.get("revision")
-        if not python or not revision:
-            return
-        domain = self.root / "generations" / revision / "source" / DOMAIN_REQUIREMENTS
-        if not domain.exists():
-            return
-        try:
-            self.command(
-                [python, "-c", "import mindie_coordinator.task_client"], timeout=15
-            )
-            return
-        except Exception:
-            pass
-        repairs = self.state.setdefault("domain_repairs", {})
-        if repairs.get(revision, 0) >= ATTEMPTS:
-            return self.save(
-                "domain_runtime_incomplete",
-                error="coordinator package missing from the current runtime; repair attempts exhausted",
-            )
-        repairs[revision] = repairs.get(revision, 0) + 1
-        self.save("repairing_domain_runtime", candidate=revision)
-        try:
-            self.command(
-                [
-                    self.settings["uv"],
-                    "pip",
-                    "install",
-                    "--python",
-                    python,
-                    "-r",
-                    domain,
-                ],
-                timeout=120,
-            )
-            self.command(
-                [python, "-c", "import mindie_coordinator.task_client"], timeout=15
-            )
-        except Exception as exc:
-            return self.save(
-                "domain_runtime_incomplete",
-                error=f"domain runtime repair failed: {type(exc).__name__}: {str(exc)[:160]}",
-            )
+        adapter = read(self.config)
+        output = self.command(
+            [
+                adapter["python"],
+                "-m",
+                "mindie_knowledge.loop.cli",
+                "sync",
+                "--config",
+                adapter["engine_config"],
+            ],
+            timeout=KNOWLEDGE_TIMEOUT,
+        )
+        result = json.loads(output) if output.strip() else {}
+        self.save(
+            self.state.get("status", "unknown"),
+            knowledge_status=result.get("status", "ok")
+            if isinstance(result, dict)
+            else "ok",
+            knowledge_error=None,
+            knowledge_checked_at=time.time(),
+        )
 
     def _check_locked(self):
+            knowledge_error = None
+            try:
+                self.check_knowledge()
+            except Exception as exc:
+                knowledge_error = f"{type(exc).__name__}: {str(exc)[:200]}"
+            if knowledge_error:
+                self.save(
+                    self.state.get("status", "unknown"),
+                    knowledge_status="sync_failed",
+                    knowledge_error=knowledge_error,
+                    knowledge_checked_at=time.time(),
+                )
+            try:
+                return self._check_plugin()
+            except Exception as exc:
+                # The plugin check owns its failure states; this guard only
+                # keeps an unexpected crash from hiding the knowledge result.
+                return self.save(
+                    "update_failed",
+                    error=f"{type(exc).__name__}: {str(exc)[:200]}",
+                )
+
+    def _check_plugin(self):
             if self.state.get("next_check", 0) > time.time():
                 return self.state
             try:
@@ -703,9 +760,6 @@ class Updater:
                 check_failures=0, next_check=time.time() + INTERVAL, error=None
             )
             if self.state.get("current", {}).get("revision") == sha:
-                repair = self.ensure_domain_runtime()
-                if repair is not None:
-                    return repair
                 return self.save("up_to_date")
             attempts = self.state.setdefault("attempts", {})
             record = attempts.setdefault(sha, dict(count=0))

@@ -1,4 +1,4 @@
-"""Static discovery plus session-gated, bounded, one-shot runtime calls."""
+"""Static discovery plus host-identity-bound, bounded, one-shot runtime calls."""
 
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
@@ -9,7 +9,7 @@ import threading
 import uuid
 
 from bounded_process import run
-from session_gate import Sessions, config_path
+from session_gate import IDENTITY, Sessions, config_path
 from update_lock import update_lock
 
 MAX_INPUT = 128 * 1024
@@ -22,6 +22,40 @@ def failure(message):
     return dict(content=[dict(type="text", text=message)], isError=True)
 
 
+def native_identity(request):
+    """Bind one tools/call to its native task via verified host metadata.
+
+    Codex delivers tools/call params._meta['x-codex-turn-metadata'] with
+    thread_id/session_id/turn_id, and params._meta.threadId agreeing (root
+    probe, task 01a0bcfa-cd11-7dc1-bfb4-bcd5ee180fd4, Codex 0.153.4). Every
+    call is bound from this metadata; tool arguments never override it.
+    Missing or contradictory metadata fails closed with a clear diagnostic
+    for older hosts — the most recently activated lease is never a fallback.
+    """
+    params = request.get("params")
+    if not isinstance(params, dict) or not isinstance(params.get("arguments"), dict):
+        raise ValueError("Invalid MindIE tool arguments")
+    meta = params.get("_meta")
+    turn = meta.get("x-codex-turn-metadata") if isinstance(meta, dict) else None
+    thread = turn.get("thread_id") if isinstance(turn, dict) else None
+    session = turn.get("session_id") if isinstance(turn, dict) else None
+    plain = meta.get("threadId") if isinstance(meta, dict) else None
+    if not all(isinstance(value, str) and IDENTITY.fullmatch(value)
+               for value in (thread, session, plain) if value is not None):
+        raise ValueError("Invalid native task identity metadata")
+    if thread is None or session is None or plain is None:
+        raise ValueError(
+            "This host does not deliver native task identity metadata; MindIE "
+            "requires a Codex version with turn metadata on tools/call and "
+            "fails closed here — do not retry or supply an identity by hand"
+        )
+    if not (thread == session == plain):
+        raise ValueError(
+            "Contradictory native task identity metadata; call rejected"
+        )
+    return thread
+
+
 class Gate:
     def __init__(self, surface):
         self.surface = surface
@@ -29,7 +63,7 @@ class Gate:
         self.tools = json.loads(CATALOG.read_text())[surface]
         self.connection_id = uuid.uuid4().hex
 
-    def call(self, request, cancel=None, *, timeout=None):
+    def call(self, request, cancel=None, *, timeout=None, cli_identity=None):
         # Inactive discovery/calls must not create any local state.
         # Domain CLI reuses this path: missing config, missing lease, and the
         # bounded runtime all fail closed. There is no ungated development
@@ -39,24 +73,25 @@ class Gate:
                 raise ValueError(
                     "MindIE adapter configuration is required; remote execution fails closed"
                 )
-            params = request.get("params")
-            if not isinstance(params, dict) or not isinstance(
-                params.get("arguments"), dict
-            ):
-                raise ValueError("Invalid MindIE tool arguments")
-            args = params["arguments"]
-            self.sessions.check(
-                args.get("mindie_session_id"), args.get("mindie_activation", "")
-            )
+            if cli_identity is None:
+                session = native_identity(request)
+                # Exactly this native task's lease; identity never comes from
+                # arguments, and never from the most recently active lease.
+                self.sessions.check(session)
+            else:
+                # Domain CLI path: no host metadata exists outside MCP, so the
+                # explicit env-supplied activation is checked directly.
+                session, token = cli_identity
+                self.sessions.check(session, token)
             with update_lock(self.sessions.config):
-                return self._call(request, cancel, timeout=timeout)
+                return self._call(request, session, cancel, timeout=timeout)
         except Exception as exc:
             return failure(
                 f"{type(exc).__name__}: {str(exc)[:240]}. No automatic retry."
             )
 
-    def _call(self, request, cancel=None, timeout=None):
-        session = token = None
+    def _call(self, request, session, cancel=None, timeout=None):
+        token = None
         admitted = False
         succeeded = False
         try:
@@ -66,30 +101,17 @@ class Gate:
             if not tool or not isinstance(args, dict):
                 raise ValueError("Unknown MindIE tool or invalid arguments")
             args = dict(args)
-            session = args.pop("mindie_session_id", None)
-            token = args.pop("mindie_activation", None)
-            if not isinstance(token, str) or not token:
-                raise ValueError(
-                    "Manual MindIE session activation required; continue without the plugin"
-                )
-            self.sessions.check(session, token)
+            lease = self.sessions.check(session)
+            token = lease["token"]
             schema = tool["inputSchema"]
             unknown = set(args) - set(schema["properties"])
-            missing = set(schema["required"]) - {"mindie_session_id", "mindie_activation"} - set(args)
+            missing = set(schema["required"]) - set(args)
             if unknown or missing:
                 detail = "; ".join(part for part in [
                     "unknown keys: " + ", ".join(sorted(unknown)) if unknown else "",
                     "missing keys: " + ", ".join(sorted(missing)) if missing else "",
                 ] if part)
                 raise ValueError("Invalid MindIE tool arguments (" + detail + ")")
-            if (
-                self.surface == "knowledge"
-                and "session_id" in args
-                and args["session_id"] != session
-            ):
-                raise ValueError(
-                    "Knowledge session does not match the manual activation"
-                )
             identity = hashlib.sha256(
                 json.dumps(request.get("id"), sort_keys=True).encode()
             ).hexdigest()

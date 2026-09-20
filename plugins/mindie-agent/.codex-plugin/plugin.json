@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "MindIE Agent",
     "shortDescription": "Ascend domain knowledge and experience.",
-    "longDescription": "One domain entry skill, local knowledge and remote-dev tools, session-summary capture and independent usefulness judging.",
+    "longDescription": "One domain entry skill, local knowledge and remote-dev tools, community-gated experience capture and optional feedback.",
     "developerName": "MindIE Agent contributors",
     "category": "Productivity",
     "capabilities": [],
