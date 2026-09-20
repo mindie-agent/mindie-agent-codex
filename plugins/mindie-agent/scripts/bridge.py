@@ -344,14 +344,31 @@ def configure(argv):
     return json.loads(output) if output.strip() else dict(status="configured")
 
 
+def _optional_config_prefix(argv):
+    """Accept `--config PATH` before the operation; leave host identity alone.
+
+    Sets only this process's MINDIE_AGENT_CONFIG. Default invocation without
+    the prefix is unchanged.
+    """
+    if len(argv) >= 2 and argv[0] == "--config":
+        value = argv[1]
+        if not isinstance(value, str) or not os.path.isabs(value):
+            print("MindIE --config requires an absolute path", file=sys.stderr)
+            raise SystemExit(1)
+        os.environ["MINDIE_AGENT_CONFIG"] = str(Path(value).expanduser().absolute())
+        return argv[2:]
+    return argv
+
+
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in OPERATIONS | CONTRIBUTION_OPERATIONS:
+    argv = _optional_config_prefix(sys.argv[1:])
+    if not argv or argv[0] not in OPERATIONS | CONTRIBUTION_OPERATIONS:
         print("Unsupported MindIE entry operation", file=sys.stderr)
         raise SystemExit(1)
-    operation = sys.argv[1]
+    operation = argv[0]
     if operation == "config":
         try:
-            print(json.dumps(configure(sys.argv[2:])))
+            print(json.dumps(configure(argv[1:])))
         except Exception as exc:
             print(
                 f"MindIE config failed: {type(exc).__name__}: {exc}",
@@ -360,11 +377,11 @@ def main():
             raise SystemExit(1)
         return
     if operation == "sharing-choice":
-        if len(sys.argv) != 3:
+        if len(argv) != 2:
             print("sharing-choice requires read-only or later", file=sys.stderr)
             raise SystemExit(1)
         try:
-            print(json.dumps(sharing_operation(operation, sys.argv[2])))
+            print(json.dumps(sharing_operation(operation, argv[1])))
         except Exception as exc:
             print(
                 f"MindIE sharing operation failed: {type(exc).__name__}: {exc}",
@@ -373,10 +390,10 @@ def main():
             raise SystemExit(1)
         return
     if operation in CONTRIBUTION_OPERATIONS:
-        if len(sys.argv) != 3:
+        if len(argv) != 2:
             print("contribution operations require --batch id as argv", file=sys.stderr)
             raise SystemExit(1)
-        batch_id = sys.argv[2]
+        batch_id = argv[1]
         if not BATCH.fullmatch(batch_id):
             print("Invalid contribution batch id", file=sys.stderr)
             raise SystemExit(1)
@@ -389,7 +406,7 @@ def main():
             )
             raise SystemExit(1)
         return
-    if len(sys.argv) != 2:
+    if len(argv) != 1:
         print("Unsupported MindIE entry operation", file=sys.stderr)
         raise SystemExit(1)
     if operation == "mcp":

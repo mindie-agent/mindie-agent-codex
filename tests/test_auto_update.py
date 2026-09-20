@@ -263,6 +263,35 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(self.check()["status"], "up_to_date")
         self.assertEqual(self.updater.installs, installs)
 
+    def test_package_binds_installation_config_into_mcp_and_hook(self):
+        result = self.check()
+        self.assertEqual(result["status"], "installed")
+        plugin = Path(result["current"]["plugin"])
+        expected = str(self.config.expanduser().absolute())
+        mcp = read(plugin / ".mcp.json")
+        for name, server in mcp["mcpServers"].items():
+            with self.subTest(server=name):
+                self.assertEqual(server["env"]["MINDIE_AGENT_CONFIG"], expected)
+                self.assertEqual(list(server["env"]), ["MINDIE_AGENT_CONFIG"])
+                self.assertNotIn("env_vars", server)
+        command = read(plugin / "hooks/hooks.json")["hooks"]["Stop"][0]["hooks"][0][
+            "command"
+        ]
+        self.assertIn("--config", command)
+        self.assertIn(expected, command)
+        self.assertIn("stop", command)
+        hook = read(plugin / "hooks/hooks.json")["hooks"]["Stop"][0]["hooks"][0]
+        self.assertEqual(hook["timeout"], 2)
+        other = str(self.base / "other-adapter.json")
+        import bridge as bridge_mod
+        from session_gate import config_path as live_config
+
+        with patch.dict(os.environ, {"MINDIE_AGENT_CONFIG": other}, clear=False):
+            rest = bridge_mod._optional_config_prefix(["--config", expected, "stop"])
+            self.assertEqual(rest, ["stop"])
+            self.assertEqual(str(live_config()), expected)
+            self.assertEqual(os.environ["MINDIE_AGENT_CONFIG"], expected)
+
     def test_missing_contract_never_replaces_local_safety_fix(self):
         (self.remote / "update-contract.json").unlink()
         sha = self.commit("old unsafe main")

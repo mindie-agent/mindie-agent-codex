@@ -357,12 +357,23 @@ class Updater:
         atomic(manifest_path, manifest)
         # A loaded task keeps an immutable entrypoint even if Codex removes its cache.
         mcp = read(plugin / ".mcp.json")
+        config_value = str(Path(self.config).expanduser().absolute())
         for server in mcp["mcpServers"].values():
             server["command"] = self.settings["python"]
             server["args"][0] = str(plugin / server["args"][0])
             server["cwd"] = str(plugin)
+            env = dict(server.get("env") or {})
+            env["MINDIE_AGENT_CONFIG"] = config_value
+            server["env"] = env
+            server.pop("env_vars", None)
         atomic(plugin / ".mcp.json", mcp)
-        argv = [self.settings["python"], str(plugin / "scripts/bridge.py"), "stop"]
+        argv = [
+            self.settings["python"],
+            str(plugin / "scripts/bridge.py"),
+            "--config",
+            config_value,
+            "stop",
+        ]
         if os.name == "nt":
             # Explicit cmd boundary works even if the host uses PowerShell.
             # echo runs after missing executables/paths and masks hook failures.
