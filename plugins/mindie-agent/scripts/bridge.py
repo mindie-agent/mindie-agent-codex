@@ -19,6 +19,8 @@ import os
 from pathlib import Path
 import re
 import sys
+import threading
+import time
 
 from bounded_process import run
 from session_gate import Sessions, config_path, generation_env, runtime_scripts
@@ -51,8 +53,8 @@ CONTRIBUTION_OPERATIONS = {
 }
 IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
 BATCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
-# Native Stop budget is 2s. One remaining helper timeout stays below it so
-# the owned child is killed before the host kills this process.
+# Native Stop budget is 2s. The whole hook (stdin + helper) stays under
+# HOOK_BUDGET so print/exit still fit before the host kills this process.
 HOOK_BUDGET = 1.5
 
 
@@ -64,14 +66,63 @@ def _bounded_path(value, name):
     return value
 
 
-def hook_event():
+def _read_hook_stdin(limit, timeout):
+    """Deadline-bounded raw fd read; never buffered I/O (shutdown can hang).
+
+    Stops at EOF, the byte cap, the deadline, or the first complete JSON
+    value so a held-open pipe cannot consume the helper's remaining time.
+    Windows native select is sockets-only; a daemon os.read thread is the
+    portable bound (code-only on Windows; not natively verified).
+    """
+    remaining = timeout
+    if remaining <= 0:
+        raise TimeoutError("hook stdin deadline exceeded")
+    buf = bytearray()
+    lock = threading.Lock()
+    finished = threading.Event()
+
+    def reader():
+        try:
+            fd = sys.stdin.fileno()
+            while True:
+                with lock:
+                    if len(buf) > limit:
+                        return
+                    room = limit + 1 - len(buf)
+                try:
+                    chunk = os.read(fd, min(8192, room))
+                except (OSError, ValueError):
+                    return
+                if not chunk:
+                    return
+                with lock:
+                    buf.extend(chunk)
+                    if len(buf) > limit:
+                        return
+                    try:
+                        json.loads(bytes(buf))
+                    except ValueError:
+                        continue
+                    return
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=reader, daemon=True)
+    thread.start()
+    finished.wait(timeout=max(0.0, remaining))
+    if not finished.is_set():
+        raise TimeoutError("hook stdin deadline exceeded")
+    with lock:
+        return bytes(buf)
+
+
+def hook_event(raw):
     """Validate one bounded native Stop envelope; whitelist forwarding fields.
 
     A valid transcript event is never rejected for a missing final summary:
     transcript_path alone is enough. The transcript itself is never opened
     here; only its location and the bounded summary cross the boundary.
     """
-    raw = sys.stdin.buffer.read(MAX_HOOK_BYTES + 1)
     if len(raw) > MAX_HOOK_BYTES:
         raise ValueError("hook input exceeds limit")
     event = json.loads(raw)
@@ -183,21 +234,25 @@ def unconfigured_status():
 
 
 def stop():
+    deadline = time.monotonic() + HOOK_BUDGET
     try:
-        event = hook_event()
-    except (ValueError, OSError, TypeError, RecursionError):
-        print("{}")
-        return
-    try:
-        # Cheap default-off: no helper, no lock, no lease DB, no service.
+        # Cheap default-off before stdin: no helper, no lock, no lease DB.
         if sharing.read() is None:
             print("{}")
             return
-        # One remaining helper under the host budget: check, scope, claim,
-        # and core hook forward. Fail-open, no retry.
-        Sessions(op_timeout=HOOK_BUDGET)._op(
-            "stop_capture", {"event": event, "session": event["session_id"]}
+        event = hook_event(
+            _read_hook_stdin(MAX_HOOK_BYTES, deadline - time.monotonic())
         )
+    except (ValueError, OSError, TypeError, RecursionError, TimeoutError):
+        print("{}")
+        return
+    try:
+        # Remaining helper time under the same whole-hook deadline.
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            Sessions(op_timeout=remaining)._op(
+                "stop_capture", {"event": event, "session": event["session_id"]}
+            )
     except Exception:
         # The hook never propagates a failure into the original task.
         pass

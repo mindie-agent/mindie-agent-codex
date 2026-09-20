@@ -1,5 +1,7 @@
 # MindIE Agent · Codex
 
+Design inherits all nine [VAWS / MindIE Agent principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md). Retiring the old runtime does not retire those principles.
+
 Codex adapter for MindIE Agent's domain experience loop. The user works in the
 native Codex task; this plugin adds **one explicit entry skill, three knowledge
 tools (query/explain/optional feedback), and eleven core remote-dev tools**.
