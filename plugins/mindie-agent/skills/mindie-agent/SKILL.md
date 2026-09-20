@@ -11,9 +11,8 @@ and separately configured services; cross-domain task routing is not implemented
 
 Use this entry only when the user explicitly invokes MindIE Agent for the current
 task. Discussing the plugin, reading its source, a relevant repository or an
-unavailable tool is not an invocation. Explicitly invoking one of the domain
-skills counts as the user's request: enter this activation exactly once before
-any business call. Mere semantic relevance does not. Never activate it to repair
+unavailable tool is not an invocation. Enter activation exactly once before
+any plugin business call. Mere semantic relevance does not count. Never activate it to repair
 or bypass a rejected or paused call.
 
 After that explicit invocation, run `python3 ../../scripts/bridge.py activate`,
@@ -25,10 +24,8 @@ enabled it also performs one bounded cold start plus an authenticated domain
 bind (`capture` is `bound` on success, `disabled` when sharing is off).
 MCP tool calls need no identity arguments: the host binds each call to this
 task automatically, and calls from any other task or an older host without
-turn metadata fail closed. Export the returned `mindie_session_id` and
-`mindie_activation` as `MINDIE_SESSION_ID` and `MINDIE_ACTIVATION` only for
-the domain skill CLIs, which check them against the local session gate before
-remote calls. Do not share activation values with another task or include
+turn metadata fail closed. Activation values belong to internal local IPC;
+do not put them in tool arguments, share them with another task, or include
 them in the final response.
 
 Activation is idempotent and bounded. On explicit user disable, run the same
@@ -59,10 +56,9 @@ no transcript reading, no drafts, no background model work. Manage it with
 cancels pending capture in its scope without deleting drafts, and re-enabling
 only processes newly authorized material.
 
-There are no bundled per-task domain skills in this release; use the
-`mindie-remote-dev` tools directly for the remote NPU environment. Shared
-domain CLI helpers take explicit remote targets, and reading any reference
-never starts a service, a remote job or a model call. Details:
+The old domain Skill catalogue has been removed; profiling analysis remains
+deferred. Use `mindie-remote-dev` tools directly for the remote NPU environment.
+Reading a reference never starts a service, a remote job or a model call. Details:
 [domain tooling](references/domain-skills.md).
 
 Keep conclusions and validation limits in the normal final response. When

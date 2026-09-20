@@ -37,22 +37,6 @@ CONTRACT = dict(
     maintenance_budget=1,
 )
 DOMAIN_REQUIREMENTS = "domain-requirements.txt"
-DOMAIN_SKILLS = (
-    "vllm-ascend-serving",
-    "vllm-ascend-pd-serving",
-    "vllm-ascend-benchmark",
-    "vllm-ascend-performance-regression",
-    "vllm-ascend-correctness-validation",
-    "vllm-ascend-change-validation",
-    "vllm-ascend-distributed-debug",
-    "vllm-ascend-graph-debug",
-    "ascend-operator-debug",
-    "ascend-tensor-dump",
-    "ascend-memory-profiling",
-    "ascend-profiling-collection",
-    "ascend-profiling-analysis",
-    "modelscope",
-)
 LABEL = "org.mindie-agent.plugin-updater"
 WIN_TASK = "MindIE Agent Plugin Updater"
 INTERVAL = 300
@@ -231,9 +215,6 @@ class Updater:
         ):
             if not (plugin / "scripts" / name).is_file():
                 raise Incompatible("missing bounded runtime entry: " + name)
-        for skill in DOMAIN_SKILLS:
-            if not (plugin / "skills" / skill / "SKILL.md").is_file():
-                raise Incompatible("missing domain skill: " + skill)
         requirements = (source / "runtime-requirements.txt").read_text().splitlines()
         pattern = r"([a-z-]+) @ git\+https://github.com/mindie-agent/(knowledge|remote-dev)@([0-9a-f]{40})"
         packages = {}
