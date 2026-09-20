@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-import pytest
+import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'))
 from auto_update import Updater
@@ -23,16 +23,16 @@ class Probe(Updater):
         return result.stdout
 
 
-def test_reviewed_positive_bounds_are_not_frozen_at_old_tuning():
-    Probe('B.SESSION_LIMIT=8; B.HOURLY_LIMIT=40; B.FAILURE_LIMIT=4; '
-          'B.SESSION_WINDOW=7200; C.STARTUP_TIMEOUT=9; C.MAX_STARTUP_PROBES=5').probe_runtime(sys.executable)
+class RuntimeCompatibilityTests(unittest.TestCase):
+    def test_reviewed_positive_bounds_are_not_frozen_at_old_tuning(self):
+        Probe('B.SESSION_LIMIT=8; B.HOURLY_LIMIT=40; B.FAILURE_LIMIT=4; '
+              'B.SESSION_WINDOW=7200; C.STARTUP_TIMEOUT=9; C.MAX_STARTUP_PROBES=5').probe_runtime(sys.executable)
 
-
-@pytest.mark.parametrize('tuning', [
-    'B.SESSION_LIMIT=0', 'B.HOURLY_LIMIT=-1', 'B.FAILURE_LIMIT=True',
-    'B.SESSION_WINDOW=float("inf")', 'C.STARTUP_TIMEOUT=float("nan")',
-    'C.MAX_STARTUP_PROBES=0', 'del B.SESSION_LIMIT',
-])
-def test_missing_or_unbounded_safety_contract_still_fails(tuning):
-    with pytest.raises(RuntimeError):
-        Probe(tuning).probe_runtime(sys.executable)
+    def test_missing_or_unbounded_safety_contract_still_fails(self):
+        for tuning in (
+            'B.SESSION_LIMIT=0', 'B.HOURLY_LIMIT=-1', 'B.FAILURE_LIMIT=True',
+            'B.SESSION_WINDOW=float("inf")', 'C.STARTUP_TIMEOUT=float("nan")',
+            'C.MAX_STARTUP_PROBES=0', 'del B.SESSION_LIMIT',
+        ):
+            with self.subTest(tuning=tuning), self.assertRaises(RuntimeError):
+                Probe(tuning).probe_runtime(sys.executable)
