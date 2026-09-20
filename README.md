@@ -276,3 +276,5 @@ Bundled stdio MCP uses a plugin-relative `cwd` and script path: the installed CL
 does not expand `${PLUGIN_ROOT}` in compatibility MCP arguments
 ([upstream report](https://github.com/openai/codex/issues/35762)). Hook commands use
 the supported `${PLUGIN_ROOT}` environment variable.
+
+The deferred profiling-analysis source is retained under `deferred/ascend-profiling-analysis/` outside plugin discovery and packaging. It is not part of this candidate and has not been reviewed or tested in this rewrite.
