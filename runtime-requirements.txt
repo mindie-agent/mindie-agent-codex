@@ -1,6 +1,5 @@
 # Reviewed development implementation; pin a commit until the first release.
-# The updater contract validates exactly this set; domain execution dependencies
-# live in domain-requirements.txt so the previous controller can still upgrade here.
+# The updater validates this set; domain execution dependencies are pinned
+# independently in domain-requirements.txt.
 mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@b87597558cd2460eed0756e9e79e5e39f0c4f476
-knowledge-intake @ git+https://github.com/mindie-agent/knowledge@b87597558cd2460eed0756e9e79e5e39f0c4f476#subdirectory=tools/knowledge-intake
 remote-dev @ git+https://github.com/mindie-agent/remote-dev@13301ef7f52b53ffca0a6702a8a3c18f2edfcd52

@@ -235,7 +235,7 @@ class Updater:
             if not (plugin / "skills" / skill / "SKILL.md").is_file():
                 raise Incompatible("missing domain skill: " + skill)
         requirements = (source / "runtime-requirements.txt").read_text().splitlines()
-        pattern = r"([a-z-]+) @ git\+https://github.com/mindie-agent/(knowledge|remote-dev)@([0-9a-f]{40})(#subdirectory=tools/knowledge-intake)?"
+        pattern = r"([a-z-]+) @ git\+https://github.com/mindie-agent/(knowledge|remote-dev)@([0-9a-f]{40})"
         packages = {}
         for line in requirements:
             if not line.strip() or line.startswith("#"):
@@ -245,19 +245,14 @@ class Updater:
                 raise Incompatible(
                     "runtime dependencies require exact official commit pins"
                 )
-            packages[match[1]] = (match[2], match[3], match[4])
+            packages[match[1]] = (match[2], match[3])
         if (
-            set(packages) != {"mindie-knowledge", "knowledge-intake", "remote-dev"}
+            set(packages) != {"mindie-knowledge", "remote-dev"}
             or packages["mindie-knowledge"][0] != "knowledge"
-            or packages["knowledge-intake"][0] != "knowledge"
-            or packages["mindie-knowledge"][1] != packages["knowledge-intake"][1]
-            or packages["knowledge-intake"][2] != "#subdirectory=tools/knowledge-intake"
             or packages["remote-dev"][0] != "remote-dev"
         ):
             raise Incompatible("invalid runtime package combination")
-        # Domain execution pins live in a separate file so the previous
-        # controller generation (which validates exactly the set above) can
-        # still upgrade to this source. This controller requires it.
+        # Domain execution dependencies are pinned separately from the core.
         domain_lines = (source / DOMAIN_REQUIREMENTS).read_text().splitlines()
         domain_pattern = r"mindie-coordinator @ git\+https://github.com/mindie-agent/coordinator@([0-9a-f]{40})"
         pins = [
@@ -285,13 +280,14 @@ class Updater:
                         "from mindie_knowledge.loop.budget import MaintenanceBudget as B",
                         "from mindie_knowledge.loop.transport import Service",
                         "from mindie_knowledge.loop import documents, transcript",
+                        "from mindie_knowledge.community import submit_batch, reconcile_batch",
                         "from remote_dev.mcp.tools import call_tool",
                         "from mindie_coordinator.task_client import TaskClient",
                         "names = {t['name'] for t in TOOLS}",
                         "assert {'knowledge_query', 'knowledge_explain', 'knowledge_feedback'} <= names",
                         "assert 'knowledge_use' not in names and 'knowledge_judge' not in names",
                         "assert all(hasattr(documents, n) for n in ('render_entry', 'parse_entry', 'revision_of'))",
-                        "assert 'session_activation' in inspect.signature(Service).parameters",
+                        "assert 'admission' in inspect.signature(Service).parameters",
                         "assert 0 < B.SESSION_LIMIT <= 6 and 0 < B.HOURLY_LIMIT <= 20 and B.FAILURE_LIMIT <= 3",
                         "assert STARTUP_TIMEOUT <= 5 and MAX_STARTUP_PROBES <= 3",
                     ]

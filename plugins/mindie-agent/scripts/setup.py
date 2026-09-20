@@ -114,10 +114,12 @@ def community_settings(args, parser):
         project_roots=roots,
         idle_seconds=300,
     )
-    for key in ("fork", "account", "bot"):
+    for key in ("fork", "account"):
         value = getattr(args, "community_" + key)
         if value:
             settings[key] = value
+    if args.community_bot:
+        settings["bot"] = {"account": args.community_bot}
     settings["visibility"] = args.community_visibility
     try:
         return sharing.validate(settings)
