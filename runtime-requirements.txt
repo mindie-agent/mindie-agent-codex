@@ -1,4 +1,4 @@
 # Reviewed development implementation; pin a commit until the first release.
 # The updater validates and installs this complete runtime set.
-mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@e0ee5ac46fe847728b2bf5b0a91f62c83d6ef688
+mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@c0cee958c1543a378606145a9a268fe632604b33
 remote-dev @ git+https://github.com/mindie-agent/remote-dev@13301ef7f52b53ffca0a6702a8a3c18f2edfcd52
