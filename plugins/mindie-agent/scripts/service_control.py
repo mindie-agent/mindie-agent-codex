@@ -10,7 +10,8 @@ import json
 from pathlib import Path
 import sys
 
-from session_gate import config_path
+from admission_ops import native_session
+from session_gate import config_path, runtime_scripts
 import sharing
 
 OPERATIONS = {"status", "shutdown"}
@@ -18,88 +19,67 @@ OPERATIONS = {"status", "shutdown"}
 RECOVERABLE_BATCH = {"failed", "unknown", "needs_review", "unavailable"}
 
 
-def _service_view(engine_config):
-    """Live service status, or an honest not-running view with store summary."""
-    from mindie_knowledge.loop.cli import _open_existing_store, config_at, connect
-    from mindie_knowledge.loop.transport import rpc
-
-    config = config_at(engine_config)
-    try:
-        return dict(state="running", **rpc(connect(config), "status", timeout=1.0))
-    except (OSError, ValueError, RuntimeError):
-        view = dict(state="not-running")
-        store = _open_existing_store(config)
-        if store is not None:
-            try:
-                view["store"] = store.status()
-            finally:
-                store.close()
-        return view
-
-
-def _admission_view(adapter):
-    path = adapter.get("admission_path")
-    if not isinstance(path, str):
-        return dict(configured=False)
-    view = dict(configured=True, path=path)
-    try:
-        from mindie_knowledge.loop.activation import Admission
-
-        view["active_tasks"] = len(Admission(path).leases())
-    except Exception:
-        view["active_tasks"] = None
-        view["detail"] = "admission store unreadable; calls fail closed"
-    return view
-
-
-def _hints(sharing_view, service_view):
-    hints = []
+def _hints(sharing_view, view):
+    hints = list(view["hints"])
     state = sharing_view.get("state")
     if sharing_view.get("first_use"):
         hints.append(sharing.CHOICES.replace("\n", " | "))
-    elif state in {"off", "unconfigured", "malformed"}:
+    elif state in {"off", "disabled", "unconfigured", "malformed"}:
         hints.append(
             "community sharing is not enabled; for the recommended opt-in "
             "contribution run scripts/setup.py configure --community-repository "
             "OWNER/REPO --community-project-root PATH --community-visibility "
             "public, or scripts/bridge.py sharing-choice read-only|later"
         )
-    if service_view.get("state") == "not-running":
-        hints.append(
-            "knowledge service is not running; it starts automatically on the "
-            "first admitted call, no action needed"
-        )
-    budget = service_view.get("maintenance_budget")
-    if isinstance(budget, dict) and budget.get("paused"):
-        hints.append(
-            "maintenance circuit is paused; after fixing the cause resume "
-            "explicitly with: <python> -m mindie_knowledge.loop.cli "
-            "maintenance-resume --config <engine_config>"
-        )
-    outbox = service_view.get("outbox")
-    if not isinstance(outbox, list):
-        store = service_view.get("store")
-        outbox = store.get("outbox") if isinstance(store, dict) else None
-    for row in (outbox or [])[:5]:
-        if isinstance(row, dict) and row.get("status") in RECOVERABLE_BATCH:
+    for row in view["contributions"]:
+        if row.get("status") in RECOVERABLE_BATCH:
             hints.append(
                 f"contribution {row.get('batch_id')} is {row.get('status')}; "
-                "inspect with scripts/bridge.py contribution-inspect "
-                f"{row.get('batch_id')}, then reconcile/retry/compact explicitly"
+                "use its listed inspect command; reconcile unknown writes "
+                "before any explicit retry"
             )
-    if service_view.get("errors"):
-        hints.append(
-            "the service recorded bounded errors; inspect them in the service "
-            "field above before any recovery action"
-        )
     return hints
 
 
 def status():
+    # The bootstrap selected this complete runtime under its generation lock.
+    # Core imports belong here, never in the stdlib bootstrap or Stop path.
+    from mindie_knowledge.loop.diagnostics import snapshot
+
     adapter = json.loads(config_path().read_text())
     engine_config = adapter["engine_config"]
     sharing_view = sharing.status()
-    service_view = _service_view(engine_config)
+    if sharing_view.get("state") in {"malformed", "unconfigured"}:
+        sharing_view["detail"] = "Inspect the configured community settings; capture remains disabled."
+    try:
+        session = native_session()
+    except ValueError:
+        session = None
+    view = snapshot(engine_config, session=session)
+    # Retain the existing state field, never the unscoped RPC/store payload.
+    service_view = dict(view["service"], state=view["service"]["status"])
+    bridge = [adapter["python"], str(Path(runtime_scripts(adapter)) / "bridge.py"),
+              "--config", str(config_path())]
+    commands = dict(status=bridge + ["status"])
+    if view["configuration"].get("status") != "ok":
+        commands["check_engine_json"] = [
+            adapter["python"], "-c",
+            "import json,pathlib,sys; json.loads(pathlib.Path(sys.argv[1]).read_text()); print('JSON syntax valid')",
+            engine_config,
+        ]
+    if view["admission"].get("status") == "paused":
+        commands.update(deactivate=bridge + ["deactivate"], activate=bridge + ["activate"])
+    if view["maintenance"].get("paused"):
+        commands["maintenance_resume"] = [
+            adapter["python"], "-m", "mindie_knowledge.loop.cli",
+            "maintenance-resume", "--config", engine_config,
+        ]
+    inspect = {
+        row["batch_id"]: bridge + ["contribution-inspect", row["batch_id"]]
+        for row in view["contributions"] if row.get("status") in RECOVERABLE_BATCH
+    }
+    if inspect:
+        commands["contribution_inspect"] = inspect
     first_use = sharing_view.get("first_use") or sharing.first_use()
     result = dict(
         adapter=dict(
@@ -108,15 +88,47 @@ def status():
             sharing_choice=adapter.get("sharing_choice"),
         ),
         sharing=sharing_view,
-        admission=_admission_view(adapter),
+        admission=view["admission"],
         service=service_view,
-        recovery=_hints(sharing_view, service_view),
+        configuration=view["configuration"],
+        store=view["store"],
+        maintenance=view["maintenance"],
+        startup=view["startup"],
+        captures=view["captures"],
+        contributions=view["contributions"],
+        recovery=_hints(sharing_view, view),
+        commands=commands,
         first_use=first_use,
     )
     if first_use:
         result["next"] = (
             "Present the three choices to the user and wait; do not default "
             "yes, do not edit JSON, do not reinstall. Then activate."
+        )
+    elif view["admission"].get("status") == "paused":
+        result["next"] = (
+            "Inspect the reported failures and fix the cause before explicit "
+            "deactivate/reactivate. Status does not reset admission or replay work."
+        )
+    elif (view["configuration"].get("status") != "ok"
+          or view["startup"].get("status") in {"failed", "unavailable"}
+          or view["store"].get("status") == "unavailable"
+          or view["admission"].get("status") == "unavailable"):
+        result["next"] = (
+            "Inspect the reported configuration/component stage and error class, "
+            "then run the listed status command. Native shell/SSH or independent "
+            "remote-dev remains available; no reactivation or reinstall is implied."
+        )
+    elif view["admission"].get("status") == "active":
+        result["next"] = (
+            "This native task remains admitted. Inspect any reported component "
+            "failure before recovery; native shell/SSH or independent remote-dev "
+            "work remains available."
+        )
+    elif session is None:
+        result["next"] = (
+            "Task records are omitted without native CODEX_THREAD_ID. Run status "
+            "inside the original native task; no activation was inferred."
         )
     else:
         result["next"] = (

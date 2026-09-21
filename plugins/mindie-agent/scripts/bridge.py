@@ -239,6 +239,88 @@ def unconfigured_status():
     )
 
 
+def _status_failure(state, stage, exc, config_file, selected=None):
+    """Local operator diagnostic; never print helper stderr or config values."""
+    python = selected["python"] if selected else sys.executable
+    scripts = Path(runtime_scripts(selected)) if selected else Path(__file__).parent
+    commands = {
+        "status": [python, str(scripts / "bridge.py"), "--config", str(config_file), "status"],
+        "check_config_json": [
+            sys.executable, "-c",
+            "import json,pathlib,sys; json.loads(pathlib.Path(sys.argv[1]).read_text()); print('JSON syntax valid')",
+            str(config_file),
+        ],
+    }
+    recovery = {
+        "invalid_config": "Inspect the named config and correct its JSON or required absolute runtime paths, then run status. Existing state has not been reinitialized.",
+        "update_busy": "An update holds the generation lock. Let that operation finish, then explicitly run status; installation is not missing.",
+        "helper_failed": "Inspect the selected runtime and the reported helper stage, then explicitly run status. No recovery action was started.",
+    }
+    if selected:
+        commands["check_runtime"] = [
+            python, "-c",
+            "import mindie_knowledge,remote_dev; print('runtime imports available')",
+        ]
+    return dict(
+        status=state,
+        configured=None,
+        config=str(config_file),
+        first_use=None,
+        sharing=dict(state="unknown"),
+        service=dict(state="unknown"),
+        error=dict(stage=stage, type=type(exc).__name__),
+        commands=commands,
+        recovery=[recovery[state]],
+        next="Use the listed status/check commands. Native shell/SSH or separately configured remote-dev remain available without knowledge activation.",
+    )
+
+
+def offline_status():
+    """Distinguish missing installation from unreadable or busy existing state."""
+    deadline = time.monotonic() + 5
+    config_file = config_path()
+    selected = None
+    stage = "config_stat"
+    try:
+        try:
+            config_file.stat()
+        except FileNotFoundError:
+            return unconfigured_status(), 0
+        stage = "update_lock"
+        with update_lock(config_file):
+            stage = "config_read"
+            config = json.loads(config_file.read_text())
+            stage = "config_validate"
+            if not isinstance(config, dict):
+                raise ValueError("adapter config must be an object")
+            for key in ("python", "engine_config"):
+                _bounded_path(config.get(key), key)
+            if "runtime_scripts" in config:
+                _bounded_path(config["runtime_scripts"], "runtime_scripts")
+            selected = config
+            stage = "helper_run"
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("status budget exhausted")
+            output = run(
+                [config["python"], str(Path(runtime_scripts(config)) / "service_control.py"), "status"],
+                "", timeout=remaining, max_output=32768, env=generation_env(config_file),
+            )
+            stage = "helper_response"
+            payload = json.loads(output)
+            if not isinstance(payload, dict):
+                raise ValueError("status response must be an object")
+            return payload, 0
+    except Exception as exc:
+        if stage == "update_lock" and isinstance(exc, BlockingIOError):
+            state = "update_busy"
+        elif stage.startswith("config") or stage == "update_lock":
+            state = "invalid_config"
+        else:
+            state = "helper_failed"
+        return _status_failure(state, stage, exc, config_file, selected), 1
+
+
 def stop():
     deadline = time.monotonic() + HOOK_BUDGET
     try:
@@ -444,30 +526,10 @@ def main():
             raise SystemExit(1)
         return
     if operation in {"init", "status"}:
-        config_file = config_path()
-        if not config_file.is_file():
-            print(json.dumps(unconfigured_status()))
-            return
-        try:
-            with update_lock(config_file):
-                config = json.loads(config_file.read_text())
-                control = [
-                    config["python"],
-                    str(Path(runtime_scripts(config)) / "service_control.py"),
-                    "status",
-                ]
-                print(
-                    run(
-                        control,
-                        "",
-                        timeout=5,
-                        max_output=32768,
-                        env=generation_env(config_file),
-                    ),
-                    end="",
-                )
-        except Exception:
-            print(json.dumps(unconfigured_status()))
+        payload, code = offline_status()
+        print(json.dumps(payload))
+        if code:
+            raise SystemExit(code)
         return
     try:
         config_file = config_path()
