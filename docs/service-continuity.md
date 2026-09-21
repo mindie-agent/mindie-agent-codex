@@ -35,3 +35,17 @@ for Kimi and Claude Code. Those cases use a controlled native-install boundary;
 they establish actual process/endpoint/admission behavior, not native package
 installation or model authentication. Native acceptance is recorded separately.
 Windows real-machine acceptance remains with the maintainer after merge.
+
+A real macOS Codex install of candidate `d60fc415` reused an isolated native
+profile with an existing explicitly admitted task. The operator first established
+an old live service, separately from the test outcome. The reviewed updater
+fetched the local candidate commit, built the official pinned runtime, installed
+through the real Codex CLI and verified the selected native version. In 4.64 s,
+the updater replaced the old service PID/endpoint with the selected generation's
+unfrozen service and reported `service_handoff.status=restored`. Cleanup confirmed
+zero remaining owned daemon processes. No native-install seam, model, manual
+post-update ensure or global configuration change was involved. This proves
+native installation and service continuity; it does not claim new Stop delivery.
+
+Component regression checks: 118 passed and 27 subtests passed. These are
+separate from the native evidence above.
