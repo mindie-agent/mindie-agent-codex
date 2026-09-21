@@ -21,6 +21,22 @@ ALLOWED_ITEMS = {"agent_message", "reasoning"}
 POSIX = os.name == "posix"
 
 
+class OutputLimitExceeded(ValueError):
+    """Stdout/stderr grew past the configured byte bound."""
+
+
+class InvalidResultError(ValueError):
+    """A native JSONL event was not a valid object."""
+
+
+class NativeFailure(RuntimeError):
+    """Native child failed, emitted error/turn.failed, or used a forbidden event."""
+
+
+class NativeStartError(OSError):
+    """The native executable could not be started."""
+
+
 def run_codex(command, prompt):
     # The knowledge service owns one group for worker + Codex + descendants.
     inherited = (
@@ -31,23 +47,26 @@ def run_codex(command, prompt):
     with tempfile.TemporaryFile() as input_file:
         input_file.write(prompt.encode())
         input_file.seek(0)
-        if POSIX:
-            process = subprocess.Popen(
-                command,
-                stdin=input_file,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                start_new_session=not inherited,
-            )
-        else:
-            # Windows (unverified on real hardware).
-            process = subprocess.Popen(
-                command,
-                stdin=input_file,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
-            )
+        try:
+            if POSIX:
+                process = subprocess.Popen(
+                    command,
+                    stdin=input_file,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    start_new_session=not inherited,
+                )
+            else:
+                # Windows (unverified on real hardware).
+                process = subprocess.Popen(
+                    command,
+                    stdin=input_file,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                )
+        except OSError as exc:
+            raise NativeStartError("native executable could not start") from exc
         lines = queue.Queue()
         total = [0]
         flooded = []
@@ -91,23 +110,30 @@ def run_codex(command, prompt):
 
         def check_line(line):
             nonlocal turns
-            event = json.loads(line)
-            if not isinstance(event, dict):
-                raise ValueError("invalid Codex event")
+            try:
+                event = json.loads(line)
+            except ValueError as exc:
+                raise InvalidResultError("invalid Codex event") from exc
+            if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+                raise InvalidResultError("invalid Codex event")
             if event.get("type") in {"error", "turn.failed"}:
-                raise RuntimeError("Codex maintenance failed; no retry")
+                raise NativeFailure("Codex maintenance failed; no retry")
             if event.get("type") == "turn.started":
                 turns += 1
                 if turns > 1:
-                    raise RuntimeError("maintenance attempted another turn")
-            item = event.get("item") or {}
+                    raise NativeFailure("maintenance attempted another turn")
+            item = event.get("item")
+            if item is not None and not isinstance(item, dict):
+                raise InvalidResultError("invalid Codex item")
+            if item and not isinstance(item.get("type"), str):
+                raise InvalidResultError("invalid Codex item type")
             if item and item.get("type") not in ALLOWED_ITEMS:
-                raise RuntimeError("maintenance attempted a tool call")
+                raise NativeFailure("maintenance attempted a tool call")
 
         try:
             while True:
                 if flooded or total[0] > MAX_OUTPUT:
-                    raise ValueError("Codex maintenance output exceeds limit")
+                    raise OutputLimitExceeded("Codex maintenance output exceeds limit")
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError("Codex maintenance deadline exceeded")
@@ -119,13 +145,18 @@ def run_codex(command, prompt):
                     continue
                 if line is None:
                     if flooded:
-                        raise ValueError("Codex maintenance output exceeds limit")
+                        raise OutputLimitExceeded(
+                            "Codex maintenance output exceeds limit"
+                        )
                     break
                 if line.strip():
                     check_line(line)
-            code = process.wait(timeout=max(0.01, deadline - time.monotonic()))
+            try:
+                code = process.wait(timeout=max(0.01, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired as exc:
+                raise TimeoutError("Codex maintenance deadline exceeded") from exc
             if code:
-                raise RuntimeError(f"Codex maintenance exited {code}; no retry")
+                raise NativeFailure("Codex maintenance exited nonzero; no retry")
         finally:
             if inherited:
                 # The service kills this whole group after reading our result/error.

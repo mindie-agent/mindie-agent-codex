@@ -78,7 +78,7 @@ class EntryBoundsTests(unittest.TestCase):
                 + "\ntime.sleep(10)"
             )
             start = time.monotonic()
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(guard.NativeFailure):
                 guard.run_codex([sys.executable, "-c", code], "input")
             self.assertLess(time.monotonic() - start, 2)
 
@@ -102,8 +102,9 @@ class EntryBoundsTests(unittest.TestCase):
             timeout=2,
             env={**os.environ, "MINDIE_CODEX_BIN": "/missing/not-called"},
         )
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("input exceeds", result.stderr)
+        self.assertEqual(result.returncode, 65)
+        self.assertEqual(result.stderr.strip(), "organizer result was invalid")
+        self.assertNotIn("x" * 32, result.stderr)
 
     def test_session_start_is_not_registered(self):
         hooks = json.loads((SCRIPTS.parent / "hooks/hooks.json").read_text())

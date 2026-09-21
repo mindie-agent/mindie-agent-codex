@@ -15,10 +15,28 @@ import subprocess
 import sys
 import tempfile
 
-from process_guard import run_codex
+from process_guard import (
+    InvalidResultError,
+    NativeFailure,
+    NativeStartError,
+    OutputLimitExceeded,
+    run_codex,
+)
 
 MAX_INPUT = 65536
 MAX_RESULT = 32768
+EXIT_UNKNOWN = 2
+_DIAGNOSTICS = {
+    "configuration": "organizer configuration failed",
+    "deadline": "organizer invocation exceeded the deadline",
+    "native": "organizer native invocation failed",
+    "invalid_result": "organizer result was invalid",
+    "output_limit": "organizer output exceeded the bound",
+}
+
+
+class ConfigurationError(ValueError):
+    """Missing/unlaunchable native executable or missing/unsupported role."""
 
 
 def object_schema(properties):
@@ -126,15 +144,17 @@ def check_entry(entry):
 
 
 def run(payload, *, model=None, reasoning_effort=None):
-    if (
-        not isinstance(payload, dict)
-        or len(json.dumps(payload, ensure_ascii=False).encode()) > MAX_INPUT
-    ):
-        raise ValueError("maintenance input exceeds limit or is not an object")
+    if not isinstance(payload, dict):
+        raise InvalidResultError("organizer result was invalid")
+    if len(json.dumps(payload, ensure_ascii=False).encode()) > MAX_INPUT:
+        raise InvalidResultError("organizer result was invalid")
     payload = dict(payload)
-    role = payload.pop("role")
-    if role not in SCHEMAS:
-        raise ValueError("unsupported maintenance role")
+    try:
+        role = payload.pop("role")
+    except KeyError as exc:
+        raise ConfigurationError("organizer configuration failed") from exc
+    if not isinstance(role, str) or role not in SCHEMAS:
+        raise ConfigurationError("organizer configuration failed")
     with tempfile.TemporaryDirectory(prefix="mindie-maintenance-") as directory:
         root = Path(directory)
         schema, output = root / "schema.json", root / "result.json"
@@ -182,23 +202,41 @@ def run(payload, *, model=None, reasoning_effort=None):
                 "-c",
                 "model_reasoning_effort=" + json.dumps(reasoning_effort),
             ]
-        run_codex(command, prompt)
-        with output.open("rb") as stream:
-            raw = stream.read(MAX_RESULT + 1)
+        try:
+            run_codex(command, prompt)
+        except NativeStartError as exc:
+            raise ConfigurationError("organizer configuration failed") from exc
+        try:
+            with output.open("rb") as stream:
+                raw = stream.read(MAX_RESULT + 1)
+        except OSError as exc:
+            raise InvalidResultError("organizer result was invalid") from exc
         if len(raw) > MAX_RESULT:
-            raise ValueError("maintenance result exceeds limit")
-        result = json.loads(raw)
-        if not isinstance(result, dict):
-            raise ValueError("Codex returned no structured result")
-        if (
-            set(result) != {"entries"}
-            or not isinstance(result["entries"], list)
-            or len(result["entries"]) > 3
-        ):
-            raise ValueError("invalid organized entries")
-        for entry in result["entries"]:
-            check_entry(entry)
+            raise OutputLimitExceeded("organizer output exceeded the bound")
+        try:
+            result = json.loads(raw)
+            if not isinstance(result, dict):
+                raise InvalidResultError("organizer result was invalid")
+            if (
+                set(result) != {"entries"}
+                or not isinstance(result["entries"], list)
+                or len(result["entries"]) > 3
+            ):
+                raise InvalidResultError("organizer result was invalid")
+            for entry in result["entries"]:
+                check_entry(entry)
+        except InvalidResultError:
+            raise
+        except (ValueError, TypeError) as exc:
+            raise InvalidResultError("organizer result was invalid") from exc
         return result
+
+
+def _fail(category):
+    print(_DIAGNOSTICS[category], file=sys.stderr)
+    from mindie_knowledge.loop.process import AGENT_ERROR_EXIT_CODES
+
+    raise SystemExit(AGENT_ERROR_EXIT_CODES[category])
 
 
 if __name__ == "__main__":
@@ -211,25 +249,31 @@ if __name__ == "__main__":
     try:
         raw = sys.stdin.buffer.read(MAX_INPUT + 1)
         if len(raw) > MAX_INPUT:
-            raise ValueError("maintenance input exceeds limit")
+            raise InvalidResultError("organizer result was invalid")
+        try:
+            payload = json.loads(raw)
+        except ValueError as exc:
+            raise InvalidResultError("organizer result was invalid") from exc
         print(
             json.dumps(
                 run(
-                    json.loads(raw),
+                    payload,
                     model=args.model,
                     reasoning_effort=args.reasoning_effort,
                 ),
                 ensure_ascii=False,
             )
         )
-    except (
-        KeyError,
-        ValueError,
-        OSError,
-        RuntimeError,
-        TimeoutError,
-        TypeError,
-        subprocess.TimeoutExpired,
-    ) as exc:
-        print(f"MindIE maintenance failed: {exc}", file=sys.stderr)
-        raise SystemExit(1)
+    except ConfigurationError:
+        _fail("configuration")
+    except (TimeoutError, subprocess.TimeoutExpired):
+        _fail("deadline")
+    except OutputLimitExceeded:
+        _fail("output_limit")
+    except InvalidResultError:
+        _fail("invalid_result")
+    except NativeFailure:
+        _fail("native")
+    except Exception:
+        print("organizer failed unexpectedly", file=sys.stderr)
+        raise SystemExit(EXIT_UNKNOWN)
