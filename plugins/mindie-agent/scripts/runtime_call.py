@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import sys
 
+from diagnostic_support import attach, failure, reference
 from session_gate import IDENTITY, config_path, generation_env, runtime_scripts
 
 
@@ -180,11 +181,14 @@ def remote(payload):
             or uncertain
             or (outcome not in {"success", "cancelled"} and not completed_command)
         )
-        return dict(
+        shaped = dict(
             content=[dict(type="text", text=tool_text(value))],
             structuredContent=result,
             isError=is_error,
         )
+        # Trust only a diagnostic the shared remote component already attached.
+        diagnostic = reference(value) or reference(result)
+        return attach(shaped, diagnostic) if diagnostic else shaped
     except Exception as exc:
         # Preserve transport certainty inside the selected runtime. Exception
         # messages and arbitrary remote attributes are not public diagnostics.
@@ -214,8 +218,12 @@ def remote(payload):
             message += f" Original job_id={job}; inspect this job before another submission."
         elif delivery != "not_sent":
             message += " Inspect the original operation before another submission; its outcome may be unknown."
-        return dict(content=[dict(type="text", text=message)],
-                    structuredContent=result, isError=True)
+        shaped = dict(content=[dict(type="text", text=message)],
+                      structuredContent=result, isError=True)
+        # In-process reference set by shared remote-dev; do not record expected
+        # caller, network, permission, nonzero, timeout, or cancel outcomes.
+        diagnostic = reference({"diagnostic": getattr(exc, "mindie_diagnostic", None)})
+        return attach(shaped, diagnostic) if diagnostic else shaped
     finally:
         close_connections()
 
@@ -256,16 +264,29 @@ if __name__ == "__main__":
             raise ValueError("call exceeds limit")
         print(json.dumps(call(json.loads(raw)), ensure_ascii=False))
     except Exception as exc:
-        print(
-            json.dumps(
+        shaped = dict(
+            content=[
                 dict(
-                    content=[
-                        dict(
-                            type="text",
-                            text=f"MindIE {type(exc).__name__}; no retry. Outcome may be unknown.",
-                        )
-                    ],
-                    isError=True,
+                    type="text",
+                    text=f"MindIE {type(exc).__name__}; no retry. Outcome may be unknown.",
                 )
-            )
+            ],
+            isError=True,
         )
+        diagnostic = reference({"diagnostic": getattr(exc, "mindie_diagnostic", None)})
+        # RequestRejected derives ValueError. MaintenanceCancelled may derive
+        # RuntimeError; match the class name statically so discovery does not
+        # import core. ValueError, OSError/TimeoutError, and cancellation stay
+        # expected and are not recorded here.
+        internal = (ImportError, AttributeError, KeyError, TypeError, RuntimeError)
+        if (
+            diagnostic is None
+            and isinstance(exc, internal)
+            and type(exc).__name__ != "MaintenanceCancelled"
+        ):
+            diagnostic = failure(
+                "runtime.dispatch", "dispatch", "internal", exception=exc
+            )
+        if diagnostic:
+            shaped = attach(shaped, diagnostic)
+        print(json.dumps(shaped))

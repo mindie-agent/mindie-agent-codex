@@ -34,6 +34,20 @@ Headless install leaves sharing unconfigured/off. Knowledge retrieval, plugin
 updates and remote tools work with sharing off. Sharing off means no Stop
 capture, transcript reading, draft creation or background model work.
 
+## Local diagnostics
+
+`python3 <bridge.py> reporting-status` reads local faults and reporter state;
+it does not upload or retry anything. Use a returned incident ID to locate the
+original failure and its `record_ref`, then continue the user's task as appropriate.
+
+On first configuration, `diagnostics.choice` describes optional automatic tool
+fault reporting. Offer it separately from community contribution; leaving it
+off does not block the task. Respect an existing choice. If the user enables it,
+run `python3 <bridge.py> reporting-enable`, then the returned `command_line`
+once outside a Hook to prepare the shared reporter. On disable, run
+`python3 <bridge.py> reporting-disable`. Failure to prepare reporting is local
+status, not a reason to replay the user's failed operation.
+
 ## Sharing and recovery
 
 - Status: `python3 <bridge.py> status` or `init` (offline).

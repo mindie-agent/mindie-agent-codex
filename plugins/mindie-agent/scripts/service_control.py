@@ -80,6 +80,16 @@ def status():
     }
     if inspect:
         commands["contribution_inspect"] = inspect
+    # Optional and independent of knowledge consent. Status never ensures.
+    from diagnostic_support import reporting_hint, reporting_status
+
+    commands["reporting_status"] = bridge + ["reporting-status"]
+    commands["reporting_enable"] = bridge + ["reporting-enable"]
+    commands["reporting_disable"] = bridge + ["reporting-disable"]
+    diagnostic_view = reporting_status()
+    diagnostics = dict(reporting=diagnostic_view)
+    if diagnostic_view.get("status") == "not_configured":
+        diagnostics["choice"] = reporting_hint()
     first_use = sharing_view.get("first_use") or sharing.first_use()
     result = dict(
         adapter=dict(
@@ -99,6 +109,7 @@ def status():
         recovery=_hints(sharing_view, view),
         commands=commands,
         first_use=first_use,
+        diagnostics=diagnostics,
     )
     if first_use:
         result["next"] = (

@@ -20,6 +20,8 @@ import threading
 import uuid
 
 from bounded_process import run
+from diagnostic_support import attach as attach_diagnostic
+from diagnostic_support import failure as diagnostic_failure
 from session_gate import IDENTITY, Sessions, config_path, generation_env, runtime_scripts
 from update_lock import update_lock
 
@@ -49,6 +51,22 @@ def call_failure(exc):
             automatic_retry=False, message=message,
         ))
     return failure(f"{type(exc).__name__}: {str(exc)[:240]}. No automatic retry.")
+
+
+def helper_failure(result, diagnostic, stage, category):
+    """Name the local failure boundary without claiming business execution state."""
+    result = attach_diagnostic(result, diagnostic)
+    result["structuredContent"] = dict(
+        component="mindie-agent-codex", stage=stage, code=category,
+        execution="outcome_unconfirmed", automatic_retry=False,
+        diagnostic=result.get("diagnostic", {}),
+    )
+    result["content"].append(dict(
+        type="text",
+        text=f"The local MindIE runtime helper failed at {stage} ({category}). "
+             "The business operation's outcome is unconfirmed; no automatic retry.",
+    ))
+    return result
 
 
 def remote_state_dir():
@@ -240,6 +258,9 @@ class Gate:
         admitted = False
         succeeded = False
         receipts = None
+        stage = "admission"
+        started = time.monotonic()
+        name = None
         try:
             if cli_identity is None:
                 session = native_identity(request)
@@ -273,6 +294,7 @@ class Gate:
                 bound = min(max(0.01, float(timeout)), bound)
             with update_lock(config_path()):
                 config = _adapter_config()
+                stage = "helper_run"
                 output = run(
                     [
                         config["python"],
@@ -283,6 +305,7 @@ class Gate:
                     cancel=cancel,
                     env=generation_env(config_path()),
                 )
+            stage = "helper_response"
             result = json.loads(output)
             if not isinstance(result, dict) or not isinstance(
                 result.get("content"), list
@@ -292,7 +315,25 @@ class Gate:
             return result
         except Exception as exc:
             # No traceback, credentials, model wakeup, reconnect loop or replay.
-            return call_failure(exc)
+            result = call_failure(exc)
+            if stage in ("helper_run", "helper_response") and not (
+                cancel is not None and cancel.is_set()
+            ):
+                if stage == "helper_response":
+                    category = "helper_protocol"
+                elif isinstance(exc, TimeoutError):
+                    category = "helper_timeout"
+                else:
+                    category = "helper_failed"
+                diagnostic = diagnostic_failure(
+                    "mcp." + self.surface + "." + name,
+                    stage,
+                    category,
+                    exception=exc,
+                    elapsed_ms=int((time.monotonic() - started) * 1000),
+                )
+                result = helper_failure(result, diagnostic, stage, category)
+            return result
         finally:
             if admitted and receipts is not None:
                 try:
@@ -302,6 +343,9 @@ class Gate:
 
     def _call(self, request, session, cancel=None, timeout=None):
         token = None
+        stage = "admission"
+        started = time.monotonic()
+        name = None
         try:
             name, args = self._tool_args(request)
             lease = self.sessions.check(session)
@@ -327,6 +371,7 @@ class Gate:
                 # Exactly one committed generation: the recorded interpreter
                 # plus the recorded scripts directory, read in one config load
                 # while the operation lock is held by Gate.call.
+                stage = "helper_run"
                 output = run(
                     [
                         config["python"],
@@ -348,6 +393,7 @@ class Gate:
                 except Exception:
                     pass
                 raise
+            stage = "helper_response"
             result = json.loads(output)
             if not isinstance(result, dict) or not isinstance(
                 result.get("content"), list
@@ -356,7 +402,25 @@ class Gate:
             return result
         except Exception as exc:
             # No traceback, credentials, model wakeup, reconnect loop or replay.
-            return call_failure(exc)
+            result = call_failure(exc)
+            if stage in ("helper_run", "helper_response") and not (
+                cancel is not None and cancel.is_set()
+            ):
+                if stage == "helper_response":
+                    category = "helper_protocol"
+                elif isinstance(exc, TimeoutError):
+                    category = "helper_timeout"
+                else:
+                    category = "helper_failed"
+                diagnostic = diagnostic_failure(
+                    "mcp." + self.surface + "." + name,
+                    stage,
+                    category,
+                    exception=exc,
+                    elapsed_ms=int((time.monotonic() - started) * 1000),
+                )
+                result = helper_failure(result, diagnostic, stage, category)
+            return result
 
 
 def serve(surface):

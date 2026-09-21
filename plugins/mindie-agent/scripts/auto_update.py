@@ -198,7 +198,7 @@ class Updater:
         self.deadline = time.monotonic() + TOTAL_TIMEOUT
         self.command_deadline = self.deadline
 
-    def command(self, args, *, timeout=30, data=""):
+    def command(self, args, *, timeout=30, data="", allowed_returncodes=(0,)):
         remaining = min(self.deadline, self.command_deadline) - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("update deadline reached")
@@ -218,7 +218,8 @@ class Updater:
             MINDIE_CODEX_BIN=self.settings["codex"],
         )
         return run(
-            [str(arg) for arg in args], data, timeout=min(timeout, remaining), env=env
+            [str(arg) for arg in args], data, timeout=min(timeout, remaining), env=env,
+            allowed_returncodes=allowed_returncodes,
         )
 
     def save(self, status, **values):
@@ -435,6 +436,10 @@ class Updater:
             plugin / "scripts" / "installation.json",
             {"adapter_config": config_value},
         )
+        atomic(
+            plugin / "scripts" / "diagnostic-build.json",
+            {"revision": revision, "version": manifest["version"]},
+        )
         mcp = read(plugin / ".mcp.json")
         for server in mcp["mcpServers"].values():
             server["command"] = self.settings["python"]
@@ -478,11 +483,11 @@ class Updater:
             previous = Path(previous)
             # Preserve the immutable reviewed Stop executable only when its
             # complete local execution dependency set is byte-identical.
-            # bridge.py's `stop` branch imports these four helpers and delegates
-            # to the configured runtime; remote MCP and organizer code are not
-            # loaded by that branch. Any change to bridge.py (including a new
-            # import), any helper change, or a missing file requires a new hook
-            # command and native user review. Never write the native trust store.
+            # The stdlib Stop branch imports exactly these helpers. Diagnostic
+            # support is lazy-loaded by status/reporting, not Stop. Capture
+            # diagnostics run inside the selected generation helper. Build
+            # metadata alone must not invalidate an identical Stop command.
+            # A changed executable dependency still requires native review.
             files = {
                 "bridge.py", "bounded_process.py", "session_gate.py",
                 "sharing.py", "update_lock.py", "installation.json",
@@ -822,14 +827,43 @@ class Updater:
                     self.save("installed")
                 self.restore_caches()
 
+    def maintain_diagnostics(self):
+        """One offline maintenance call. Does not install a runtime or report itself."""
+        try:
+            adapter = read(self.config)
+            python = adapter.get("python") if isinstance(adapter, dict) else None
+            if not isinstance(python, str) or not python or not os.path.isfile(python):
+                return {"status": "deferred", "error_type": "missing_runtime"}
+            output = self.command(
+                [python, "-m", "mindie_diagnostics.cli", "reporting", "maintain"],
+                timeout=5,
+                allowed_returncodes=(0, 1),
+            )
+            if len(output.encode()) > 1024 * 1024:
+                return {"status": "unavailable", "error_type": "ValueError"}
+            payload = json.loads(output)
+            if not isinstance(payload, dict):
+                return {"status": "unavailable", "error_type": "ValueError"}
+            return payload
+        except FileNotFoundError:
+            return {"status": "deferred", "error_type": "missing_runtime"}
+        except Exception as exc:
+            return {"status": "unavailable", "error_type": type(exc).__name__}
+
     def check(self):
         self.root.mkdir(parents=True, exist_ok=True)
         try:
             with file_lock(self.root / "checker.lock", exclusive=True):
                 self.state = read(self.state_path, {})
-                return self._check_locked()
+                result = self._check_locked()
         except BlockingIOError:
             return dict(status="already_running")
+        maintenance = self.maintain_diagnostics()
+        try:
+            atomic(self.root / "diagnostics-maintenance.json", maintenance)
+        except Exception:
+            pass
+        return dict(result, diagnostics=maintenance)
 
     def check_knowledge(self):
         """Model-free knowledge sync on the same 300 s schedule.
@@ -883,9 +917,27 @@ class Updater:
             except Exception as exc:
                 # The plugin check owns its failure states; this guard only
                 # keeps an unexpected crash from hiding the knowledge result.
+                diagnostic = None
+                try:
+                    import diagnostic_support
+                    reported = diagnostic_support.failure(
+                        "update", "internal", "internal", exception=exc
+                    )
+                    if isinstance(reported, dict):
+                        diagnostic = {
+                            key: reported[key]
+                            for key in ("incident_id", "logging_failed", "recorded")
+                            if key in reported
+                        }
+                except Exception:
+                    diagnostic = None
+                extra = {}
+                if diagnostic:
+                    extra["diagnostic"] = diagnostic
                 return self.save(
                     "update_failed",
                     error=f"{type(exc).__name__}: {str(exc)[:200]}",
+                    **extra,
                 )
 
     def _check_plugin(self):
