@@ -18,6 +18,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import sys
 import threading
 import time
@@ -289,7 +290,19 @@ def offline_status():
         stage = "update_lock"
         with update_lock(config_file):
             stage = "config_read"
-            config = json.loads(config_file.read_text())
+            # A corrupt config path may be a FIFO/device. Do not wait for a
+            # writer before the bounded helper is even started.
+            fd = os.open(config_file, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise ValueError("adapter config must be a regular file")
+                with os.fdopen(fd, "rb", closefd=False) as stream:
+                    raw = stream.read(64 * 1024 + 1)
+                if len(raw) > 64 * 1024:
+                    raise ValueError("adapter config exceeds bound")
+                config = json.loads(raw)
+            finally:
+                os.close(fd)
             stage = "config_validate"
             if not isinstance(config, dict):
                 raise ValueError("adapter config must be an object")

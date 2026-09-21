@@ -63,6 +63,26 @@ class StatusErrors(unittest.TestCase):
             self.assertEqual(payload["commands"]["status"][1], str(root / "bridge.py"))
             self.assertNotIn("PRIVATE_PROVIDER_MARKER", process.stdout + process.stderr)
 
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "requires POSIX FIFO")
+    def test_fifo_configuration_fails_without_waiting_for_a_writer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "adapter.json"
+            os.mkfifo(path)
+            process, payload = self.call(path)
+            self.assertEqual(process.returncode, 1)
+            self.assertEqual(payload["status"], "invalid_config")
+            self.assertEqual(payload["error"]["stage"], "config_read")
+            self.assertIsNone(payload["first_use"])
+
+    def test_oversized_configuration_is_a_safe_config_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "adapter.json"
+            path.write_text('"' + 'PRIVATE_MARKER' * 6000 + '"')
+            process, payload = self.call(path)
+            self.assertEqual(process.returncode, 1)
+            self.assertEqual(payload["status"], "invalid_config")
+            self.assertNotIn("PRIVATE_MARKER", process.stdout + process.stderr)
+
 
 class ScopedStatus(unittest.TestCase):
     def test_paused_task_records_are_scoped_and_read_only(self):
