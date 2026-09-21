@@ -110,6 +110,34 @@ class GeneralRemoteTests(unittest.TestCase):
         self.assertNotIn('local-test-secret', json.dumps(result))
         self.assertEqual(result['structuredContent']['job']['job_id'], 'job-own-1')
 
+    def test_remote_exception_preserves_safe_transport_certainty(self):
+        from remote_dev.core.errors import RemoteExecutionError
+        cases = [
+            ('connection_unavailable', 'not_sent', True),
+            ('rpc_timeout', 'uncertain', False),
+            ('PRIVATE_ATTRIBUTE_MARKER', 'PRIVATE_ATTRIBUTE_MARKER', True),
+        ]
+        for category, delivery, retryable in cases:
+            error = RemoteExecutionError('PRIVATE_PROVIDER_MARKER', category=category,
+                                         submission_state=delivery, retryable=retryable)
+            with patch.dict(os.environ), patch('remote_dev.mcp.tools.call_tool', side_effect=error), \
+                 patch('remote_dev.core.rpc_transport.close_connections') as close:
+                result = runtime_call.call({
+                    'surface': 'remote', 'remote_session_id': 'task-A',
+                    'name': 'remote_job_status', 'arguments': {'job_id': 'job-own-1'},
+                })
+            self.assertTrue(result['isError'])
+            self.assertNotIn('PRIVATE_', json.dumps(result))
+            payload = result['structuredContent']
+            self.assertEqual(payload['job_id'], 'job-own-1')
+            self.assertFalse(payload['automatic_retry'])
+            self.assertEqual(payload['error_details']['category'],
+                             'internal' if category.startswith('PRIVATE_') else category)
+            self.assertEqual(payload['error_details']['submission_state'],
+                             'unknown' if delivery.startswith('PRIVATE_') else delivery)
+            self.assertEqual(payload['error_details']['retryable'], retryable)
+            close.assert_called_once()
+
     def test_knowledge_read_rejection_keeps_reason_without_retrying_mutations(self):
         payload = {'surface': 'knowledge', 'mindie_activation': 'test-token',
                    'mindie_session_id': 'task-A', 'arguments': {'ref': 'x'},
