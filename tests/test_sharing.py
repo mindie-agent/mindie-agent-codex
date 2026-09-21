@@ -32,13 +32,24 @@ class SharingFixture(unittest.TestCase):
         self.config = self.root / "codex.json"
         self.engine = self.root / "engine.json"
         self.community = self.root / "codex.community.json"
-        self.engine.write_text(json.dumps(dict(root=str(self.root / "data"), domain="test")))
+        self.admission = self.root / "codex.admission.sqlite3"
+        self.engine.write_text(
+            json.dumps(
+                dict(
+                    root=str(self.root / "data"),
+                    domain="test",
+                    admission_path=str(self.admission),
+                )
+            )
+        )
         self.config.write_text(
             json.dumps(
                 dict(
                     python=sys.executable,
                     engine_config=str(self.engine),
                     community_config=str(self.community),
+                    admission_path=str(self.admission),
+                    runtime_scripts=str(SCRIPTS),
                 )
             )
         )
@@ -95,6 +106,32 @@ class SharingFixture(unittest.TestCase):
             capture_output=True,
             timeout=timeout,
         )
+
+    def bridge_stop_held_open(self, payload=None, timeout=3):
+        """Real stop subprocess whose stdin is never closed by the parent."""
+        process = subprocess.Popen(
+            [sys.executable, str(SCRIPTS / "bridge.py"), "stop"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        started = time.monotonic()
+        try:
+            if payload is not None:
+                process.stdin.write(json.dumps(payload).encode())
+                process.stdin.flush()
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
+            self.fail("stop hook exceeded native budget on unclosed stdin")
+        elapsed = time.monotonic() - started
+        stdout = process.stdout.read()
+        stderr = process.stderr.read()
+        process.stdin.close()
+        process.stdout.close()
+        process.stderr.close()
+        return process.returncode, stdout, stderr, elapsed
 
     def attempts(self, session="manual-A"):
         db = sqlite3.connect(self.sessions.path)
@@ -188,6 +225,28 @@ class GateTests(SharingFixture):
         result = self.bridge("stop", self.event())
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
         self.assertEqual(self.attempts(), 0)
+
+    def test_held_open_stdin_still_forwards_once_under_native_budget(self):
+        self.write_sharing()
+        self.activate()
+        payload = self.event(last_assistant_message="Done")
+        code, stdout, _stderr, elapsed = self.bridge_stop_held_open(payload)
+        self.assertEqual((code, json.loads(stdout)), (0, {}))
+        self.assertLess(elapsed, 2.0)
+        self.assertEqual(self.attempts(), 1)
+        code, stdout, _stderr, elapsed = self.bridge_stop_held_open(payload)
+        self.assertEqual((code, json.loads(stdout)), (0, {}))
+        self.assertLess(elapsed, 2.0)
+        self.assertEqual(self.attempts(), 1)
+
+    def test_sharing_off_unclosed_stdin_writes_no_state(self):
+        self.activate()
+        before = self.attempts()
+        code, stdout, _stderr, elapsed = self.bridge_stop_held_open()
+        self.assertEqual((code, json.loads(stdout)), (0, {}))
+        self.assertLess(elapsed, 0.75)
+        self.assertEqual(self.attempts(), before)
+        self.assertFalse(self.community.exists())
 
     def test_lease_without_capture_metadata_fails_closed_for_capture_only(self):
         self.write_sharing()

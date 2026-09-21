@@ -3,5 +3,7 @@
   "session_admission": 1,
   "bounded_calls": 1,
   "idle_update_lock": 1,
-  "maintenance_budget": 1
+  "maintenance_budget": 1,
+  "admission_path": 1,
+  "transcript_adapter": 1
 }

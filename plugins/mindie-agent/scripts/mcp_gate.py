@@ -20,7 +20,7 @@ import threading
 import uuid
 
 from bounded_process import run
-from session_gate import IDENTITY, Sessions, config_path
+from session_gate import IDENTITY, Sessions, config_path, generation_env, runtime_scripts
 from update_lock import update_lock
 
 MAX_INPUT = 128 * 1024
@@ -167,19 +167,14 @@ class RemoteReceipts:
             db.close()
 
 
-def runtime_interpreter():
-    """The installed adapter config is read only to locate the runtime interpreter."""
+def _adapter_config():
     path = config_path()
     if not path.is_file():
         raise ValueError(
             "MindIE adapter configuration is required to locate the runtime "
             "interpreter; remote execution fails closed"
         )
-    config = json.loads(path.read_text())
-    python = config.get("python")
-    if not isinstance(python, str) or not python:
-        raise ValueError("Adapter configuration has no runtime interpreter")
-    return python
+    return json.loads(path.read_text())
 
 
 class Gate:
@@ -276,12 +271,18 @@ class Gate:
             bound = REMOTE_TIMEOUT
             if timeout is not None:
                 bound = min(max(0.01, float(timeout)), bound)
-            output = run(
-                [runtime_interpreter(), str(Path(__file__).with_name("runtime_call.py"))],
-                json.dumps(payload),
-                timeout=bound,
-                cancel=cancel,
-            )
+            with update_lock(config_path()):
+                config = _adapter_config()
+                output = run(
+                    [
+                        config["python"],
+                        str(Path(runtime_scripts(config)) / "runtime_call.py"),
+                    ],
+                    json.dumps(payload),
+                    timeout=bound,
+                    cancel=cancel,
+                    env=generation_env(config_path()),
+                )
             result = json.loads(output)
             if not isinstance(result, dict) or not isinstance(
                 result.get("content"), list
@@ -301,9 +302,6 @@ class Gate:
 
     def _call(self, request, session, cancel=None, timeout=None):
         token = None
-        admitted = False
-        succeeded = False
-        neutral = False
         try:
             name, args = self._tool_args(request)
             lease = self.sessions.check(session)
@@ -312,8 +310,7 @@ class Gate:
                 session, "mcp", self.connection_id + ":" + self._request_identity(request), token
             ):
                 raise ValueError("Duplicate MCP request; not executed again")
-            admitted = True
-            config = json.loads(config_path().read_text())
+            config = json.loads(self.sessions.config.read_text())
             payload = dict(
                 surface=self.surface,
                 name=name,
@@ -326,40 +323,40 @@ class Gate:
             )
             if timeout is not None:
                 bound = min(max(0.01, float(timeout)), bound)
-            output = run(
-                [config["python"], str(Path(__file__).with_name("runtime_call.py"))],
-                json.dumps(payload),
-                timeout=bound,
-                cancel=cancel,
-            )
+            try:
+                # Exactly one committed generation: the recorded interpreter
+                # plus the recorded scripts directory, read in one config load
+                # while the operation lock is held by Gate.call.
+                output = run(
+                    [
+                        config["python"],
+                        str(Path(runtime_scripts(config)) / "runtime_call.py"),
+                    ],
+                    json.dumps(payload),
+                    timeout=bound,
+                    cancel=cancel,
+                    env=generation_env(self.sessions.config),
+                )
+            except Exception:
+                # The generation process never reported an outcome (timeout,
+                # crash, output overflow), so it may be dead before recording
+                # one: the gate feeds the failure circuit from here. A
+                # completed call already recorded its own outcome inside the
+                # generation, including the read-rejection exemption.
+                try:
+                    self.sessions.finish(session, token, False)
+                except Exception:
+                    pass
+                raise
             result = json.loads(output)
             if not isinstance(result, dict) or not isinstance(
                 result.get("content"), list
             ):
                 raise ValueError("Invalid MindIE runtime response")
-            succeeded = result.get("isError") is not True
-            # A deterministic pre-execution read rejection is caller feedback,
-            # not a runtime failure: it neither consumes nor resets the failure
-            # circuit. The trusted runtime alone emits this disposition, only
-            # for query/explain validation; caller input cannot select it, and
-            # mutations stay on the conservative failure path.
-            neutral = (
-                not succeeded
-                and name in {"knowledge_query", "knowledge_explain"}
-                and isinstance(result.get("structuredContent"), dict)
-                and result["structuredContent"].get("code") == "read_rejected"
-                and result["structuredContent"].get("execution") == "not_started"
-            )
             return result
         except Exception as exc:
             # No traceback, credentials, model wakeup, reconnect loop or replay.
             return call_failure(exc)
-        finally:
-            if admitted and not neutral:
-                try:
-                    self.sessions.finish(session, token, succeeded)
-                except Exception:
-                    pass
 
 
 def serve(surface):

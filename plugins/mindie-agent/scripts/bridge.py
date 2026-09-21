@@ -7,6 +7,11 @@ the authorized scope. The sharing gate runs BEFORE any capture claim or
 payload forwarding: sharing off/missing means no capture row, no draft, and
 no service/worker/model startup. The hook never parses transcripts, never
 blocks the original task and never uses exit-2 continuation.
+
+Explicit operator entries also cover unified offline status, service
+shutdown and the deterministic core contribution-recovery operations
+(contribution-inspect/-reconcile/-retry/-compact); none of them starts a
+service, a model or an uncertain write.
 """
 
 import json
@@ -14,9 +19,17 @@ import os
 from pathlib import Path
 import re
 import sys
+import threading
+import time
 
 from bounded_process import run
-from session_gate import Sessions, config_path
+from session_gate import (
+    Sessions,
+    bind_explicit_config,
+    config_path,
+    generation_env,
+    runtime_scripts,
+)
 import sharing
 from update_lock import update_lock
 
@@ -26,14 +39,29 @@ OPERATIONS = {
     "stop",
     "mcp",
     "status",
+    "init",
     "shutdown",
     "activate",
     "deactivate",
+    "config",
     "sharing-enable",
     "sharing-disable",
     "sharing-status",
+    "sharing-choice",
+}
+# Deterministic core recovery surface (documented exact names; each takes one
+# existing contribution batch id and never reruns organizer/model work).
+CONTRIBUTION_OPERATIONS = {
+    "contribution-inspect",
+    "contribution-reconcile",
+    "contribution-retry",
+    "contribution-compact",
 }
 IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
+BATCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+# Native Stop budget is 2s. The whole hook (stdin + helper) stays under
+# HOOK_BUDGET so print/exit still fit before the host kills this process.
+HOOK_BUDGET = 1.5
 
 
 def _bounded_path(value, name):
@@ -44,14 +72,63 @@ def _bounded_path(value, name):
     return value
 
 
-def hook_event():
+def _read_hook_stdin(limit, timeout):
+    """Deadline-bounded raw fd read; never buffered I/O (shutdown can hang).
+
+    Stops at EOF, the byte cap, the deadline, or the first complete JSON
+    value so a held-open pipe cannot consume the helper's remaining time.
+    Windows native select is sockets-only; a daemon os.read thread is the
+    portable bound (code-only on Windows; not natively verified).
+    """
+    remaining = timeout
+    if remaining <= 0:
+        raise TimeoutError("hook stdin deadline exceeded")
+    buf = bytearray()
+    lock = threading.Lock()
+    finished = threading.Event()
+
+    def reader():
+        try:
+            fd = sys.stdin.fileno()
+            while True:
+                with lock:
+                    if len(buf) > limit:
+                        return
+                    room = limit + 1 - len(buf)
+                try:
+                    chunk = os.read(fd, min(8192, room))
+                except (OSError, ValueError):
+                    return
+                if not chunk:
+                    return
+                with lock:
+                    buf.extend(chunk)
+                    if len(buf) > limit:
+                        return
+                    try:
+                        json.loads(bytes(buf))
+                    except ValueError:
+                        continue
+                    return
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=reader, daemon=True)
+    thread.start()
+    finished.wait(timeout=max(0.0, remaining))
+    if not finished.is_set():
+        raise TimeoutError("hook stdin deadline exceeded")
+    with lock:
+        return bytes(buf)
+
+
+def hook_event(raw):
     """Validate one bounded native Stop envelope; whitelist forwarding fields.
 
     A valid transcript event is never rejected for a missing final summary:
     transcript_path alone is enough. The transcript itself is never opened
     here; only its location and the bounded summary cross the boundary.
     """
-    raw = sys.stdin.buffer.read(MAX_HOOK_BYTES + 1)
     if len(raw) > MAX_HOOK_BYTES:
         raise ValueError("hook input exceeds limit")
     event = json.loads(raw)
@@ -105,12 +182,18 @@ def bind(lease):
         mindie_activation=lease["mindie_activation"],
     )
     try:
-        config = json.loads(config_path().read_text())
-        output = run(
-            [config["python"], str(Path(__file__).with_name("runtime_call.py"))],
-            json.dumps(payload),
-            timeout=15,
-        )
+        config_file = config_path()
+        with update_lock(config_file):
+            config = json.loads(config_file.read_text())
+            output = run(
+                [
+                    config["python"],
+                    str(Path(runtime_scripts(config)) / "runtime_call.py"),
+                ],
+                json.dumps(payload),
+                timeout=15,
+                env=generation_env(config_file),
+            )
         result = json.loads(output)
         if isinstance(result, dict) and result.get("isError") is not True:
             return "bound"
@@ -133,46 +216,72 @@ def activate(operation):
     return result
 
 
+def unconfigured_status():
+    """Stdlib-only offline first-use payload. Creates no files or services."""
+    return dict(
+        configured=False,
+        sharing=dict(state="unconfigured"),
+        first_use=dict(
+            state="unconfigured",
+            prompt=sharing.CHOICES,
+            choices=["contribute", "read-only", "later"],
+        ),
+        next=(
+            "Run scripts/setup.py install --knowledge-python PYTHON "
+            "(headless leaves sharing off). Then choose: recommended "
+            "public contribution via setup.py configure "
+            "--community-repository OWNER/REPO --community-project-root PATH "
+            "--community-visibility public; or scripts/bridge.py "
+            "sharing-choice read-only|later. Do not edit JSON or reinstall."
+        ),
+        recovery=[],
+        service=dict(state="not-running"),
+    )
+
+
 def stop():
+    deadline = time.monotonic() + HOOK_BUDGET
     try:
-        event = hook_event()
-    except (ValueError, OSError, TypeError, RecursionError):
+        # Cheap default-off before stdin: no helper, no lock, no lease DB.
+        if sharing.read() is None:
+            print("{}")
+            return
+        event = hook_event(
+            _read_hook_stdin(MAX_HOOK_BYTES, deadline - time.monotonic())
+        )
+    except (ValueError, OSError, TypeError, RecursionError, TimeoutError):
         print("{}")
         return
     try:
-        sessions = Sessions()
-        lease = sessions.check(event["session_id"])
-        # Sharing gate BEFORE any capture claim or payload forwarding.
-        if not sharing.capture_allowed(lease, event["cwd"]):
-            print("{}")
-            return
-        if not sessions.claim(
-            event["session_id"], "stop", event["turn_id"], lease["token"]
-        ):
-            print("{}")
-            return
-        event["mindie_activation"] = lease["token"]
-        config = json.loads(config_path().read_text())
-        command = [
-            config["python"],
-            "-m",
-            "mindie_knowledge.loop.cli",
-            "hook",
-            "--config",
-            config["engine_config"],
-        ]
-        with update_lock(sessions.config):
-            sessions.check(event["session_id"], lease["token"])
-            run(command, json.dumps(event), timeout=1.2, max_output=32768)
+        # Remaining helper time under the same whole-hook deadline.
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            Sessions(op_timeout=remaining)._op(
+                "stop_capture", {"event": event, "session": event["session_id"]}
+            )
     except Exception:
         # The hook never propagates a failure into the original task.
         pass
     print("{}")
 
 
-def sharing_operation(operation):
+def sharing_operation(operation, extra=None):
     if operation == "sharing-status":
         return sharing.status()
+    if operation == "sharing-choice":
+        if extra not in {"read-only", "later"}:
+            raise ValueError(
+                "sharing-choice is read-only or later; contribution uses "
+                "setup.py configure / bridge.py config"
+            )
+        choice = sharing.record_choice(extra)
+        return dict(
+            status="recorded",
+            sharing_choice=choice,
+            sharing="off",
+            note="knowledge retrieval stays available; no capture until "
+            "an explicit later configure",
+        )
     if operation == "sharing-enable":
         settings = sharing.set_enabled(True)
         return dict(
@@ -191,11 +300,122 @@ def sharing_operation(operation):
     )
 
 
+def contribution(operation, batch_id):
+    """Explicit operator recovery for one existing contribution batch.
+
+    Thin wrapper over the deterministic core CLI operations; it starts no
+    service or model, never rebuilds a payload and never replays failed work.
+    """
+    config_file = config_path()
+    with update_lock(config_file):
+        config = json.loads(config_file.read_text())
+        output = run(
+            [
+                config["python"],
+                "-m",
+                "mindie_knowledge.loop.cli",
+                operation,
+                "--config",
+                config["engine_config"],
+                "--batch",
+                batch_id,
+            ],
+            "",
+            timeout=130,
+            max_output=65536,
+            env=generation_env(config_file),
+        )
+    return json.loads(output) if output.strip() else dict(status="no-output")
+
+
+def configure(argv):
+    """Post-install sharing configuration; never refuses an existing engine."""
+    config_file = config_path()
+    with update_lock(config_file):
+        config = json.loads(config_file.read_text())
+        output = run(
+            [
+                config["python"],
+                str(Path(runtime_scripts(config)) / "setup.py"),
+                "configure",
+                "--config",
+                str(config_file),
+                *argv,
+            ],
+            "",
+            timeout=30,
+            max_output=65536,
+            env=generation_env(config_file),
+        )
+    return json.loads(output) if output.strip() else dict(status="configured")
+
+
+def _optional_config_prefix(argv):
+    """Accept `--config PATH` before the operation; leave host identity alone.
+
+    Sets the process-local explicit override and MINDIE_AGENT_CONFIG for
+    child dispatch. Default invocation without the prefix is unchanged.
+    Native task identity is not set here.
+    """
+    if len(argv) >= 2 and argv[0] == "--config":
+        value = argv[1]
+        if not isinstance(value, str) or not os.path.isabs(value):
+            print("MindIE --config requires an absolute path", file=sys.stderr)
+            raise SystemExit(1)
+        bind_explicit_config(value)
+        return argv[2:]
+    return argv
+
+
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in OPERATIONS:
+    argv = _optional_config_prefix(sys.argv[1:])
+    if not argv or argv[0] not in OPERATIONS | CONTRIBUTION_OPERATIONS:
         print("Unsupported MindIE entry operation", file=sys.stderr)
         raise SystemExit(1)
-    operation = sys.argv[1]
+    operation = argv[0]
+    if operation == "config":
+        try:
+            print(json.dumps(configure(argv[1:])))
+        except Exception as exc:
+            print(
+                f"MindIE config failed: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        return
+    if operation == "sharing-choice":
+        if len(argv) != 2:
+            print("sharing-choice requires read-only or later", file=sys.stderr)
+            raise SystemExit(1)
+        try:
+            print(json.dumps(sharing_operation(operation, argv[1])))
+        except Exception as exc:
+            print(
+                f"MindIE sharing operation failed: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        return
+    if operation in CONTRIBUTION_OPERATIONS:
+        if len(argv) != 2:
+            print("contribution operations require --batch id as argv", file=sys.stderr)
+            raise SystemExit(1)
+        batch_id = argv[1]
+        if not BATCH.fullmatch(batch_id):
+            print("Invalid contribution batch id", file=sys.stderr)
+            raise SystemExit(1)
+        try:
+            print(json.dumps(contribution(operation, batch_id)))
+        except Exception as exc:
+            print(
+                f"MindIE contribution recovery failed: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        return
+    if len(argv) != 1:
+        print("Unsupported MindIE entry operation", file=sys.stderr)
+        raise SystemExit(1)
     if operation == "mcp":
         from mcp_gate import serve
 
@@ -223,14 +443,51 @@ def main():
             )
             raise SystemExit(1)
         return
+    if operation in {"init", "status"}:
+        config_file = config_path()
+        if not config_file.is_file():
+            print(json.dumps(unconfigured_status()))
+            return
+        try:
+            with update_lock(config_file):
+                config = json.loads(config_file.read_text())
+                control = [
+                    config["python"],
+                    str(Path(runtime_scripts(config)) / "service_control.py"),
+                    "status",
+                ]
+                print(
+                    run(
+                        control,
+                        "",
+                        timeout=5,
+                        max_output=32768,
+                        env=generation_env(config_file),
+                    ),
+                    end="",
+                )
+        except Exception:
+            print(json.dumps(unconfigured_status()))
+        return
     try:
-        config = json.loads(config_path().read_text())
-        control = [
-            config["python"],
-            str(Path(__file__).with_name("service_control.py")),
-            operation,
-        ]
-        print(run(control, "", timeout=5, max_output=32768), end="")
+        config_file = config_path()
+        with update_lock(config_file):
+            config = json.loads(config_file.read_text())
+            control = [
+                config["python"],
+                str(Path(runtime_scripts(config)) / "service_control.py"),
+                operation,
+            ]
+            print(
+                run(
+                    control,
+                    "",
+                    timeout=5,
+                    max_output=32768,
+                    env=generation_env(config_file),
+                ),
+                end="",
+            )
     except Exception as exc:
         print(
             "MindIE Agent is not configured: "

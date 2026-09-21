@@ -1,23 +1,89 @@
-"""Local, explicitly issued session leases. Discovery never creates state."""
+"""Local, explicitly issued task authorization. Discovery never creates state.
 
-import hashlib
-import hmac
+The lease store itself is owned by the shared knowledge core
+(``mindie_knowledge.loop.activation.Admission``) under the explicit neutral
+``admission_path`` recorded at setup. Authorization persists for the same
+native task until it is revoked, paused by the failure circuit, or its
+project scope actually changes; there is no wall-clock expiry and no
+runtime/config fingerprint.
+
+This wrapper stays free of core imports: it binds the native task identity,
+validates shapes, holds the update lock for every store operation, and
+dispatches into the committed runtime generation (``admission_ops.py`` under
+the configured interpreter), so an old cached entrypoint never mixes an old
+script with a new interpreter or library.
+"""
+
 import json
 import os
 from pathlib import Path
 import re
-import secrets
-import sqlite3
-import time
+
+from bounded_process import run
 from update_lock import update_lock
 
-LEASE_SECONDS = 24 * 60 * 60
-MAX_FAILURES = 3
 IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
+# Private helper-dispatch pin. Not an operator ambient; ordinary inherited
+# MINDIE_AGENT_CONFIG must not override an installed binding.
+_DISPATCH_CONFIG = "_MINDIE_AGENT_DISPATCH_CONFIG"
+_explicit_config = None
 
+
+def bind_explicit_config(path=None):
+    """Process-local adapter path from `--config`. None clears the override.
+
+    Also pins MINDIE_AGENT_CONFIG for child dispatch. Does not set native
+    task identity.
+    """
+    global _explicit_config
+    if path is None:
+        _explicit_config = None
+        return None
+    resolved = Path(path).expanduser().absolute()
+    _explicit_config = resolved
+    os.environ["MINDIE_AGENT_CONFIG"] = str(resolved)
+    return resolved
+
+
+def _installation_binding():
+    """Packaged sidecar next to this script; missing means unbound source."""
+    path = Path(__file__).resolve().parent / "installation.json"
+    if not path.exists():
+        return None
+    if not path.is_file():
+        raise ValueError("installation config binding is not a file")
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise ValueError("installation config binding is unreadable") from exc
+    if not isinstance(data, dict):
+        raise ValueError("installation config binding is invalid")
+    value = data.get("adapter_config")
+    if not isinstance(value, str) or not os.path.isabs(value):
+        raise ValueError(
+            "installation config binding requires an absolute adapter_config"
+        )
+    return Path(value).expanduser().absolute()
+
+
+def _dispatch_config():
+    if _DISPATCH_CONFIG not in os.environ:
+        return None
+    value = os.environ.get(_DISPATCH_CONFIG)
+    if not isinstance(value, str) or not os.path.isabs(value):
+        raise ValueError("helper dispatch config requires an absolute path")
+    return Path(value).expanduser().absolute()
 
 
 def config_path():
+    if _explicit_config is not None:
+        return Path(_explicit_config)
+    dispatched = _dispatch_config()
+    if dispatched is not None:
+        return dispatched
+    bound = _installation_binding()
+    if bound is not None:
+        return bound
     return (
         Path(
             os.environ.get(
@@ -29,206 +95,144 @@ def config_path():
     )
 
 
+def runtime_scripts(config):
+    """Committed generation's scripts dir recorded at install; the wrapper's
+    own directory for a pre-update setup layout."""
+    value = (config or {}).get("runtime_scripts")
+    if isinstance(value, str) and os.path.isabs(value):
+        return value
+    return str(Path(__file__).parent)
+
+
+def generation_env(config=None):
+    """Pin a helper to this adapter config and the committed interpreter.
+
+    PYTHONPATH is omitted so a developer checkout cannot mask the runtime
+    interpreter's installed knowledge/remote-dev pins.
+    """
+    env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    selected = str(Path(config or config_path()).absolute())
+    env["MINDIE_AGENT_CONFIG"] = selected
+    env[_DISPATCH_CONFIG] = selected
+    return env
+
+
 class Inactive(ValueError):
     pass
 
 
 class Sessions:
-    def __init__(self, path=None):
+    def __init__(self, path=None, *, op_timeout=5.0):
         self.config = Path(path or config_path())
-        self.path = self.config.with_suffix(".sessions.sqlite3")
+        self.op_timeout = op_timeout
 
-    def fingerprint(self):
-        # Static runtime bindings only: the community sharing settings file is
-        # deliberately NOT hashed here. Toggling sharing changes that file's
-        # content/generation, which sharing.py rereads independently, and must
-        # never invalidate ordinary activated plugin use.
-        raw = self.config.read_bytes()
-        config = json.loads(raw)
-        engine = Path(config["engine_config"]).read_bytes()
-        return hashlib.sha256(raw + b"\0" + engine).hexdigest()
+    @property
+    def path(self):
+        """Neutral admission SQLite path recorded in the adapter config.
 
-    def connect(self, *, create=False):
-        if not self.path.exists() and not create:
-            raise Inactive(
-                "MindIE is inactive for this session; manual invocation required"
-            )
-        if create and not self.path.exists():
+        Construction does not create the file; activation does.
+        """
+        try:
+            value = json.loads(self.config.read_text()).get("admission_path")
+        except (OSError, ValueError):
+            value = None
+        if isinstance(value, str) and os.path.isabs(value):
+            return Path(value)
+        return self.config.with_name(self.config.stem + ".admission.sqlite3")
+
+    def _config(self):
+        try:
+            config = json.loads(self.config.read_text())
+        except (OSError, ValueError) as exc:
+            raise Inactive(f"MindIE adapter configuration is unreadable: {exc}")
+        python = config.get("python")
+        if not isinstance(python, str) or not python:
+            raise Inactive("MindIE adapter configuration has no runtime interpreter")
+        return config
+
+    def _op(self, operation, payload):
+        """One committed generation (config + scripts + interpreter) under the
+        operation lock. The helper receives the operation argv and the exact
+        config path so a custom Sessions(path=...) never rereads the default
+        or MINDIE_AGENT_CONFIG production state.
+        """
+        with update_lock(self.config):
+            config = self._config()
+            helper = Path(runtime_scripts(config)) / "admission_ops.py"
             try:
-                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-                os.close(fd)
-            except FileExistsError:
-                pass
-        db = sqlite3.connect(self.path.as_uri() + "?mode=rw", uri=True, timeout=0.1)
-        db.row_factory = sqlite3.Row
-        if create:
-            db.executescript("""
-                CREATE TABLE IF NOT EXISTS leases(
-                    session TEXT PRIMARY KEY, token TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL, expires REAL NOT NULL,
-                    enabled INTEGER NOT NULL, failures INTEGER NOT NULL DEFAULT 0,
-                    project_root TEXT, root_session TEXT, activated_at REAL
-                );
-                CREATE TABLE IF NOT EXISTS attempts(
-                    session TEXT NOT NULL, kind TEXT NOT NULL, identity TEXT NOT NULL,
-                    PRIMARY KEY(session, kind, identity)
-                );
-            """)
-        return db
+                output = run(
+                    [config["python"], str(helper), operation, str(self.config)],
+                    json.dumps(payload),
+                    timeout=self.op_timeout,
+                    max_output=32768,
+                    env=generation_env(self.config),
+                )
+                envelope = json.loads(output)
+            except Inactive:
+                raise
+            except Exception as exc:
+                raise Inactive(
+                    f"MindIE admission is unavailable: {type(exc).__name__}: {str(exc)[:160]}"
+                )
+            if not isinstance(envelope, dict) or envelope.get("ok") is not True:
+                detail = (
+                    envelope.get("error", "invalid admission response")
+                    if isinstance(envelope, dict)
+                    else "invalid admission response"
+                )
+                raise Inactive(str(detail)[:240])
+            return envelope["result"]
 
     def activate(self):
-        with update_lock(self.config):
-            return self._activate()
+        """Explicitly authorize this native task; persistent until revoked.
 
-    def _activate(self):
-        # Native shell tools supply this value. Never guess an ID from cwd/history
-        # or accept another session ID as an activation argument. A native
-        # Fork/subagent has its own thread ID and never inherits this lease.
-        session = os.environ.get("CODEX_THREAD_ID", "")
-        if not IDENTITY.fullmatch(session):
-            raise Inactive("Native CODEX_THREAD_ID required for manual activation")
-        fingerprint = self.fingerprint()
-        # Lineage is unknown at activation: the native task itself is the root.
-        # Known inherited Fork/subagent histories are not new collection scopes.
-        root_session = session
-        project_root = Path.cwd().resolve().as_posix()
-        db = self.connect(create=True)
-        try:
-            with db:
-                db.execute("BEGIN IMMEDIATE")
-                row = db.execute(
-                    "SELECT * FROM leases WHERE session=?", (session,)
-                ).fetchone()
-                if (
-                    row
-                    and row["enabled"]
-                    and row["expires"] > time.time()
-                    and row["fingerprint"] == fingerprint
-                    and row["failures"] < MAX_FAILURES
-                ):
-                    token, expires = row["token"], row["expires"]
-                else:
-                    token, expires = (
-                        secrets.token_urlsafe(32),
-                        time.time() + LEASE_SECONDS,
-                    )
-                    db.execute(
-                        "INSERT OR REPLACE INTO leases VALUES(?,?,?,?,1,0,?,?,?)",
-                        (
-                            session,
-                            token,
-                            fingerprint,
-                            expires,
-                            project_root,
-                            root_session,
-                            time.time(),
-                        ),
-                    )
-            return dict(
-                status="active",
-                mindie_session_id=session,
-                mindie_activation=token,
-                expires_at=expires,
-            )
-        finally:
-            db.close()
-
-    def _check(self, db, session, token=None):
-        if not isinstance(session, str) or not IDENTITY.fullmatch(session):
-            raise Inactive("Valid MindIE session identity required")
-        row = db.execute("SELECT * FROM leases WHERE session=?", (session,)).fetchone()
-        if (
-            not row
-            or not row["enabled"]
-            or row["expires"] <= time.time()
-            or row["fingerprint"] != self.fingerprint()
-            or row["failures"] >= MAX_FAILURES
-        ):
-            raise Inactive(
-                "MindIE session inactive, expired or paused; do not activate automatically"
-            )
-        if token is not None and (
-            not isinstance(token, str) or not hmac.compare_digest(row["token"], token)
-        ):
-            raise Inactive("MindIE activation does not belong to this session")
-        return row
+        A healthy repeated activation keeps the same token and original
+        capture boundary; a paused (failure-circuit) task is refused — recovery
+        is an explicit deactivate plus activate. Native identity comes only
+        from CODEX_THREAD_ID inside the helper.
+        """
+        return self._op(
+            "activate", {"project_root": Path.cwd().resolve().as_posix()}
+        )
 
     def check(self, session, token=None):
-        db = self.connect()
-        try:
-            return dict(self._check(db, session, token))
-        finally:
-            db.close()
+        """Active-task check with optional activation token; no state created."""
+        if not isinstance(session, str) or not IDENTITY.fullmatch(session):
+            raise Inactive("Valid MindIE session identity required")
+        return self._op("check", {"session": session, "token": token})
 
     def resolve(self, token):
-        """Resolve a bearer activation token to its owning lease.
+        """Resolve an activation token to its owning valid lease.
 
-        Codex does not expose native task identity to MCP servers, so the
-        per-session activation token remains the checked identity. It is
-        resolved server-side to exactly one lease; the model never supplies a
-        session ID. The most recently activated lease is never used as a
-        fallback identity.
+        Codex does not expose native task identity to arbitrary local
+        processes, so the per-session activation token remains the checked
+        identity on the internal runtime path. It resolves server-side to
+        exactly one lease; the model never supplies a session ID and the most
+        recently activated lease is never a fallback.
         """
         if not isinstance(token, str) or not token:
             raise Inactive(
                 "Manual MindIE session activation required; continue without the plugin"
             )
-        db = self.connect()
-        try:
-            for row in db.execute("SELECT * FROM leases"):
-                if hmac.compare_digest(row["token"], token):
-                    return dict(self._check(db, row["session"], token))
-            raise Inactive(
-                "MindIE activation does not match an active lease; do not activate automatically"
-            )
-        finally:
-            db.close()
+        return self._op("resolve", {"token": token})
 
     def claim(self, session, kind, identity, token=None):
-        """Consume before dispatch. Failure/crash/restart never replays this item."""
-        db = self.connect()
-        try:
-            with db:
-                db.execute("BEGIN IMMEDIATE")
-                self._check(db, session, token)
-                return (
-                    db.execute(
-                        "INSERT OR IGNORE INTO attempts VALUES(?,?,?)",
-                        (session, kind, identity),
-                    ).rowcount
-                    == 1
-                )
-        finally:
-            db.close()
+        """Consume one unique attempt atomically. Failure/crash/restart never
+        replays this item; any repeat returns False."""
+        if not isinstance(session, str) or not IDENTITY.fullmatch(session):
+            raise Inactive("Valid MindIE session identity required")
+        return bool(
+            self._op(
+                "claim",
+                {"session": session, "kind": kind, "identity": identity, "token": token},
+            )["claimed"]
+        )
 
     def finish(self, session, token, succeeded):
-        db = self.connect()
-        try:
-            with db:
-                db.execute(
-                    "UPDATE leases SET failures="
-                    + (
-                        "CASE WHEN failures<3 THEN 0 ELSE failures END"
-                        if succeeded
-                        else "failures+1"
-                    )
-                    + " WHERE session=? AND token=?",
-                    (session, token),
-                )
-        finally:
-            db.close()
+        """Record one call outcome against the task's failure circuit."""
+        self._op(
+            "finish", {"session": session, "token": token, "succeeded": bool(succeeded)}
+        )
 
     def deactivate(self):
-        session = os.environ.get("CODEX_THREAD_ID", "")
-        if not IDENTITY.fullmatch(session):
-            raise Inactive("Native CODEX_THREAD_ID required")
-        if self.path.exists():
-            db = self.connect()
-            try:
-                with db:
-                    db.execute(
-                        "UPDATE leases SET enabled=0 WHERE session=?", (session,)
-                    )
-            finally:
-                db.close()
-        return dict(status="inactive", session_id=session)
+        return self._op("deactivate", {})
