@@ -196,9 +196,10 @@ class Updater:
         self.state_path = self.root / "state.json"
         self.state = read(self.state_path, {})
         self.deadline = time.monotonic() + TOTAL_TIMEOUT
+        self.command_deadline = self.deadline
 
     def command(self, args, *, timeout=30, data=""):
-        remaining = self.deadline - time.monotonic()
+        remaining = min(self.deadline, self.command_deadline) - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("update deadline reached")
         # Disable implicit download/transport retries. Each scheduler run gets one attempt.
@@ -213,6 +214,8 @@ class Updater:
             UV_HTTP_TIMEOUT="20",
             UV_NO_PROGRESS="1",
             MINDIE_AGENT_CONFIG=str(self.config),
+            CODEX_HOME=self.settings["codex_home"],
+            MINDIE_CODEX_BIN=self.settings["codex"],
         )
         return run(
             [str(arg) for arg in args], data, timeout=min(timeout, remaining), env=env
@@ -220,6 +223,9 @@ class Updater:
 
     def save(self, status, **values):
         self.state.update(status=status, checked_at=time.time(), **values)
+        if (self.state.get("service_handoff") or {}).get("status") in {"failed", "pending"}:
+            if status in {"installed", "up_to_date"}:
+                self.state["status"] = "degraded"
         atomic(self.state_path, self.state)
         return self.state
 
@@ -284,7 +290,7 @@ class Updater:
             "admission_ops.py",
             "codex_transcript.py",
             "agent_worker.py",
-            "update_idle.py",
+            "service_handoff.py",
             "auto_update.py",
             "update_launcher.py",
             "mcp_catalog.json",
@@ -646,6 +652,22 @@ class Updater:
             self.verify_native(journal["previous_version"])
         journal_path.unlink()
 
+    def restore_service(self, final_proven):
+        """No lock-recursive launcher; one restore with the actual adapter tuple."""
+        try:
+            if not final_proven:
+                raise RuntimeError("native recovery is unproven")
+            selected = read(self.config)
+            output = self.command(
+                [selected["python"], Path(__file__).with_name("service_handoff.py"),
+                 "restore", selected["engine_config"]], timeout=8)
+            result = json.loads(output)
+            if result.get("status") not in {"restored", "not-needed"}:
+                raise RuntimeError("invalid restoration result")
+        except Exception as exc:
+            result = dict(status="failed", error=type(exc).__name__)
+        self.save(self.state.get("status", "update_failed"), service_handoff=result)
+
     def install(self, candidate):
         # Actual-idle switching: the exclusive operation lock waits for any
         # in-flight admitted call (holders of the shared lock), and the idle
@@ -655,39 +677,56 @@ class Updater:
         # closed but is not an update concern either.
         with update_lock(self.config, exclusive=True):
             adapter = read(self.config)
-            idle_helper = Path(runtime_scripts(adapter)) / "update_idle.py"
+            idle_helper = Path(__file__).with_name("service_handoff.py")
             if not idle_helper.is_file():
-                raise Incompatible("committed generation is missing update_idle.py")
-            idle = json.loads(
-                self.command(
-                    [adapter["python"], idle_helper],
-                    data=json.dumps(adapter),
-                    timeout=5,
+                raise Incompatible("updater is missing service_handoff.py")
+            if self.deadline - time.monotonic() < 43:
+                raise TimeoutError("insufficient time for stop, rollback and restore")
+            previous_handoff = self.state.get("service_handoff")
+            self.save(self.state.get("status", "preparing"), service_handoff=dict(
+                status="pending", error="interrupted-stop-or-restore-needs-attention"))
+            try:
+                idle = json.loads(
+                    self.command(
+                        [adapter["python"], idle_helper, "stop", adapter["engine_config"]],
+                        timeout=5,
+                    )
                 )
-            )
+            except Exception:
+                self.save("update_failed", service_handoff=dict(
+                    status="failed", error="stop-outcome-unconfirmed"))
+                raise RuntimeError("stop outcome unconfirmed; service needs attention") from None
+            if idle.get("service") != "stopped":
+                self.save(self.state.get("status", "preparing"),
+                          service_handoff=previous_handoff)
             if not idle["idle"]:
                 return self.save("waiting_for_idle", candidate=candidate["revision"])
-            existing = self.marketplace()
-            if (
-                existing
-                and existing.get("marketplaceSource", {}).get("sourceType") != "local"
-            ):
-                raise Incompatible(
-                    "only the existing local MindIE marketplace can be migrated"
-                )
-            market = self.root / "marketplace"
-            plugin_link = market / "plugins/mindie-agent"
-            self.preserve_caches()
-            previous_native = self.native_plugin_entry()
-            journal = dict(
-                adapter=adapter,
-                candidate=candidate["revision"],
-                marketplace=existing["root"] if existing else None,
-                link=str(plugin_link.resolve()) if plugin_link.exists() else None,
-                previous_version=(previous_native or {}).get("version"),
-            )
-            atomic(self.root / "transaction.json", journal)
+            stopped = idle.get("service") == "stopped"
+            installed = False
+            final_proven = True  # prior native state, before any install mutation
+            # Leave a bounded rollback + restoration tail inside this check.
+            self.command_deadline = self.deadline - 38
             try:
+                existing = self.marketplace()
+                if (
+                    existing
+                    and existing.get("marketplaceSource", {}).get("sourceType") != "local"
+                ):
+                    raise Incompatible(
+                        "only the existing local MindIE marketplace can be migrated"
+                    )
+                market = self.root / "marketplace"
+                plugin_link = market / "plugins/mindie-agent"
+                self.preserve_caches()
+                previous_native = self.native_plugin_entry()
+                journal = dict(
+                    adapter=adapter,
+                    candidate=candidate["revision"],
+                    marketplace=existing["root"] if existing else None,
+                    link=str(plugin_link.resolve()) if plugin_link.exists() else None,
+                    previous_version=(previous_native or {}).get("version"),
+                )
+                atomic(self.root / "transaction.json", journal)
                 atomic(
                     market / ".agents/plugins/marketplace.json",
                     dict(
@@ -708,6 +747,7 @@ class Updater:
                     ),
                 )
                 link(plugin_link, candidate["plugin"])
+                final_proven = False
                 self.register(market)
                 self.command(
                     [
@@ -757,6 +797,7 @@ class Updater:
                         admission_path=admission_path,
                     ),
                 )
+                final_proven = True
                 result = self.save(
                     "installed",
                     error=None,
@@ -765,11 +806,20 @@ class Updater:
                     activation="task authorization preserved; refreshed host definitions load in new tasks; changed hooks require native trust review",
                 )
                 (self.root / "transaction.json").unlink()
+                installed = True
                 return result
             except Exception:
+                final_proven = False
+                self.command_deadline = self.deadline - 8
                 self.recover()
+                final_proven = True
                 raise
             finally:
+                self.command_deadline = self.deadline
+                if stopped:
+                    self.restore_service(final_proven)
+                if installed:
+                    self.save("installed")
                 self.restore_caches()
 
     def check(self):
@@ -1016,6 +1066,8 @@ def enable(args):
             generation, source, read(updater.config)["python"], generation.name
         )
         result = updater.install(candidate)
+        if result["status"] == "degraded":
+            raise RuntimeError("plugin installed but service restoration needs attention")
         if result["status"] != "installed":
             raise RuntimeError(
                 "wait for in-flight MindIE calls before enabling updater"

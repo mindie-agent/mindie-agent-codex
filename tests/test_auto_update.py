@@ -80,7 +80,7 @@ class LocalUpdater(Updater):
                 runtime.touch()
                 self.builds += 1
             return ""
-        if len(args) > 1 and args[1].endswith("update_idle.py"):
+        if len(args) > 1 and args[1].endswith("service_handoff.py"):
             return json.dumps(dict(idle=self.idle))
         return super().command(args, **kwargs)
 
@@ -573,47 +573,49 @@ class AutoUpdateTests(unittest.TestCase):
 
 class UpdateIdleTests(unittest.TestCase):
     def test_missing_service_is_idle(self):
-        import update_idle
+        import service_handoff
 
         with tempfile.TemporaryDirectory() as tmp:
             engine = Path(tmp) / "engine.json"
             engine.write_text(json.dumps(dict(root=tmp, domain="test")))
-            self.assertTrue(update_idle.idle(dict(engine_config=str(engine))))
+            self.assertTrue(service_handoff.stop(str(engine)))
 
     def test_absent_stop_if_idle_fails_closed(self):
-        import update_idle
+        import service_handoff
 
         with tempfile.TemporaryDirectory() as tmp:
             engine = Path(tmp) / "engine.json"
             engine.write_text(json.dumps(dict(root=tmp, domain="test")))
             with (
                 patch(
-                    "update_idle.connect",
+                    "service_handoff.connect",
                     return_value=dict(url="http://127.0.0.1:9", token="t"),
                 ),
-                patch("update_idle.rpc", return_value=dict(status="ok")),
+                patch("service_handoff.rpc", return_value=dict(status="ok")),
             ):
                 with self.assertRaises(RuntimeError):
-                    update_idle.idle(dict(engine_config=str(engine)))
+                    service_handoff.stop(str(engine))
 
     def test_authenticated_idle_result_is_used(self):
-        import update_idle
+        import service_handoff
 
         with tempfile.TemporaryDirectory() as tmp:
             engine = Path(tmp) / "engine.json"
             engine.write_text(json.dumps(dict(root=tmp, domain="test")))
             with (
                 patch(
-                    "update_idle.connect",
+                    "service_handoff.connect",
                     return_value=dict(url="http://127.0.0.1:9", token="t"),
                 ),
                 patch(
-                    "update_idle.rpc",
-                    return_value=dict(idle=True, status="stopping"),
+                    "service_handoff.rpc",
+                    side_effect=[dict(idle=True, status="stopping"),
+                                 dict(admission_frozen=True), ConnectionRefusedError()],
                 ) as rpc,
             ):
-                self.assertTrue(update_idle.idle(dict(engine_config=str(engine))))
-                self.assertEqual(rpc.call_args.args[1], "stop_if_idle")
+                self.assertTrue(service_handoff.stop(str(engine)))
+                self.assertEqual([c.args[1] for c in rpc.call_args_list],
+                                 ["stop_if_idle", "status", "status"])
 
 
 if __name__ == "__main__":
