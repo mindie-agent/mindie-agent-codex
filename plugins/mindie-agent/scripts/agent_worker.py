@@ -51,16 +51,28 @@ SCHEMAS = {
     ),
 }
 PROMPTS = {
-    "organize": """Organize the filtered increment of one admitted task into zero to three reusable, detailed experience entries for this domain.
-Input fields: domain, increment (filtered new task material), coverage (which regions the increment covers, including gaps), existing_drafts (compact headers and relevant excerpts of this task's current drafts), and optional retrieved refs.
-For each genuinely reusable finding return one entry:
-- entry_id: null for a new entry, or the id of an existing draft owned by this task that the new material extends or corrects.
-- title: a specific searchable title for a new entry, at most 240 characters. For an existing draft normally return null to preserve its title; supply a corrected title only when the old one misstates the finding or its scope. Ordinary appended observations do not require renaming.
-- summary: a short retrieval-oriented abstract with the key conditions, at most 2048 bytes.
-- conditions: ONLY observed software versions or source commit IDs, as {"key","value"} objects with unique nonempty keys (key <=128 characters, value <=512 characters); for example torch_version or vllm_ascend_commit. Use [] when unknown. Put all other context in the detailed body: hardware, topology, configuration, shape, random seed, epsilon, device mapping, tolerances and applicability limits. Preserve those details there; do not duplicate them in this header or infer versions. One observed version or passing case does not establish universal compatibility or tolerances.
-- content: for a new entry, the detailed case body: problem and background, failed attempts and why they failed, the correction steps, necessary commands or code fragments, observed results, unverified parts and applicability limits. Preserve the relationship between failure, correction and outcome; do not compress a failure process into one conclusion. For an update to an existing draft, a self-contained appended observation or correction: state "previously concluded X, later observed Y, therefore Z" rather than pointing at earlier sections; never restate or replace the existing body, and never drop earlier failures or limits because this round did not mention them.
-Put relevant public documentation, source-code or issue links in the body, next to the claims they support; do not create a separate sources field or expose local transcript locations. For an update, summary and conditions describe the CURRENT conclusion, and title normally stays unchanged; preserve any superseded claim only in the appended body with an explicit correction. A clipped tool result or an assistant's claim alone is not independently verified evidence: name its source and limitations. Keep exact public identifiers, commands, code, numbers and failure conditions when available. Do not add a failed attempt, command or validation result that is absent from the material. Coverage gaps mean unknown, never inferred success. Avoid drafting speculative intermediate hypotheses as established guidance; an unfinished investigation may produce zero entries. Related material should extend an existing task-owned entry instead of creating parallel duplicates.
-Preserve conditions and uncertainty; missing environment versions, artifacts or results stay missing — never fabricate them. Remove private paths, host addresses, credentials and personal identifiers; retain useful public technical names. Return an empty list for generic chat, unsupported claims, or material with no reusable content; do not invent knowledge to fill entries. Return only JSON matching the schema.""",
+    "organize": """Organize one admitted task increment into zero to three public experience entries. Experience is a faithful public record of the actual process and observations present in the source. Title and summary are brief neutral search introductions only. Do not extract, summarize, or generalize lessons. Do not add recommendations, inferred causation, universal protocols, invented failure histories, or forced conclusions.
+
+Input fields: domain, increment, coverage, existing_drafts, and optional retrieved refs. An assistant's public claim is a reported claim, not independent verification.
+
+Return only JSON matching the schema, at most three entries. Each entry:
+- entry_id: null for a new entry, or the id of an existing task-owned draft that this increment extends or corrects.
+- title: nonempty searchable title for a new entry, at most 240 characters. For an existing draft return null unless the old title is inaccurate.
+- summary: short retrieval abstract, at most 2048 bytes.
+- conditions: ONLY observed software versions or source commit IDs, as {"key","value"} objects with unique nonempty keys (key <=128 characters, value <=512 characters). Use [] when unknown. Put all other environment, settings, and test values in content. Do not infer versions.
+- content: detailed public case body.
+
+Record only what is present. Preserve necessary commands/code, technical parameters, numeric outputs, public references, and any limits or uncertainty the source states. Omit missing details without adding unknown/unverified checklists. Preserve uncertainty only when stated by the source. Do not infer missing actions, failures, results, or causes.
+
+Distinguish recorded actions, observed results, reported claims, and proposed/changed settings. If the source does not say whether a setting was executed, omit that history; do not invent a run, failure, or non-run.
+
+Do not force a failure-fix-success narrative. Do not synthesize a therefore conclusion. Corrections append the old reported observation and the new reported observation with source attribution as necessary; do not invent an explanation.
+
+For existing task-owned drafts keep stable identity and title unless inaccurate. Append only self-contained newly recorded material or correction; do not repeat or replace the whole prior body. Keep related material together; avoid redundant entries for the same case.
+
+Return an empty list when the increment is only generic chat, plugin activation/configuration bookkeeping, or has no substantive domain or remote-development actions/observations. Do not require successful resolution, a novel/general lesson, or a verified root cause.
+
+Redact secrets, private paths/hosts, personal identifiers, and opaque native task/job IDs; retain useful public technical names and public source links. Do not expose transcript locations. Do not call tools or nested agents.""",
 }
 
 
