@@ -185,6 +185,37 @@ def remote(payload):
             structuredContent=result,
             isError=is_error,
         )
+    except Exception as exc:
+        # Preserve transport certainty inside the selected runtime. Exception
+        # messages and arbitrary remote attributes are not public diagnostics.
+        from remote_dev.core.errors import error_details
+        from remote_dev.core.job_ops import JOB_ID_RE
+
+        raw = error_details(exc)
+        categories = {
+            "internal", "caller", "validation", "permission", "remote_execution",
+            "cancelled", "connection_capacity", "connection_timeout",
+            "connection_unavailable", "rpc_disconnected", "rpc_send", "rpc_timeout",
+            "command_exit", "command_protocol", "command_timeout", "command_cancelled",
+            "remote_worker", "worker_capacity",
+        }
+        category = raw.get("category")
+        category = category if isinstance(category, str) and category in categories else "internal"
+        delivery = raw.get("submission_state")
+        delivery = delivery if delivery in ("not_sent", "acknowledged", "uncertain") else "unknown"
+        details = dict(category=category, submission_state=delivery,
+                       retryable=raw.get("retryable") is True)
+        result = dict(outcome="failed", error_details=details, automatic_retry=False)
+        job = args.get("job_id")
+        if isinstance(job, str) and JOB_ID_RE.fullmatch(job):
+            result["job_id"] = job
+        message = f"Remote {category}; submission={delivery}. No automatic retry."
+        if "job_id" in result:
+            message += f" Original job_id={job}; inspect this job before another submission."
+        elif delivery != "not_sent":
+            message += " Inspect the original operation before another submission; its outcome may be unknown."
+        return dict(content=[dict(type="text", text=message)],
+                    structuredContent=result, isError=True)
     finally:
         close_connections()
 
