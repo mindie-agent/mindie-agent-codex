@@ -84,6 +84,24 @@ The default knowledge source is `mindie-agent/knowledge-vllm-ascend`, branch
 `main`. Feed sync remains available with contribution off and retains the last
 valid data when an update fails. Retrieval results are references, not authority.
 
+## Local diagnostics and optional fault reporting
+
+Tool failures include an incident reference and a concrete local status command.
+The original result, remote job identity and cancellation behavior remain intact.
+`bridge.py reporting-status` reads local faults, authorization and worker health;
+it does not activate knowledge, install a service or retry work.
+
+Automatic Issue reporting is a separate opt-in from community contribution.
+`bridge.py reporting-enable` saves the choice and returns the exact selected
+runtime command to ensure the shared reporter outside the Hook deadline.
+`bridge.py reporting-disable` revokes pending publication. First-use status
+explains this independent choice; no upload is enabled by installation.
+
+The shared reporter uses bounded structured evidence without a model. Business
+nonzero exits, permissions, normal network failures and cancellation are not
+reported as product defects. Existing updater checks perform offline retention
+with reporting off. See the [shared diagnostics contract](https://github.com/mindie-agent/diagnostics).
+
 ## Updates and failures
 
 The macOS LaunchAgent checks the adapter's remote `main` and public knowledge

@@ -69,7 +69,7 @@ class _Cap:
             raise ValueError("MindIE response exceeds output limit; not retried")
 
 
-def _run_posix(process, timeout, max_output, cancel):
+def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,)):
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ, "out")
     selector.register(process.stderr, selectors.EVENT_READ, "err")
@@ -95,7 +95,7 @@ def _run_posix(process, timeout, max_output, cancel):
                 if key.data == "out":
                     output.extend(chunk)
         process.wait(timeout=max(0.01, deadline - time.monotonic()))
-        if process.returncode:
+        if process.returncode not in allowed_returncodes:
             raise RuntimeError("MindIE runtime failed; not retried")
         return output.decode()
     finally:
@@ -106,7 +106,7 @@ def _run_posix(process, timeout, max_output, cancel):
         process.stderr.close()
 
 
-def _run_windows(process, timeout, max_output, cancel):
+def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,)):
     # Windows (unverified on real hardware): reader threads replace selectors.
     deadline = time.monotonic() + timeout
     output = bytearray()
@@ -147,7 +147,7 @@ def _run_windows(process, timeout, max_output, cancel):
         if failure:
             raise failure[0]
         process.wait(timeout=max(0.01, deadline - time.monotonic()))
-        if process.returncode:
+        if process.returncode not in allowed_returncodes:
             raise RuntimeError("MindIE runtime failed; not retried")
         return bytes(output).decode()
     finally:
@@ -159,7 +159,7 @@ def _run_windows(process, timeout, max_output, cancel):
         process.stderr.close()
 
 
-def run(command, data, *, timeout, max_output=1024 * 1024, cancel=None, env=None):
+def run(command, data, *, timeout, max_output=1024 * 1024, cancel=None, env=None, allowed_returncodes=(0,)):
     if cancel is not None and cancel.is_set():
         raise RuntimeError("MindIE request cancelled before execution")
     with tempfile.TemporaryFile() as stream:
@@ -167,5 +167,5 @@ def run(command, data, *, timeout, max_output=1024 * 1024, cancel=None, env=None
         stream.seek(0)
         process = _spawn(command, stream, env)
         if POSIX:
-            return _run_posix(process, timeout, max_output, cancel)
-        return _run_windows(process, timeout, max_output, cancel)
+            return _run_posix(process, timeout, max_output, cancel, allowed_returncodes)
+        return _run_windows(process, timeout, max_output, cancel, allowed_returncodes)

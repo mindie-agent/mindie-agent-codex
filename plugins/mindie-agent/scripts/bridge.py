@@ -49,6 +49,11 @@ OPERATIONS = {
     "sharing-disable",
     "sharing-status",
     "sharing-choice",
+    "reporting-status",
+    "reporting-enable",
+    "reporting-disable",
+    "reporting-ensure",
+    "reporting-maintain",
 }
 # Deterministic core recovery surface (documented exact names; each takes one
 # existing contribution batch id and never reruns organizer/model work).
@@ -237,6 +242,7 @@ def unconfigured_status():
         ),
         recovery=[],
         service=dict(state="not-running"),
+        diagnostics=_reporting_choice(),
     )
 
 
@@ -262,7 +268,7 @@ def _status_failure(state, stage, exc, config_file, selected=None):
             python, "-c",
             "import mindie_knowledge,remote_dev; print('runtime imports available')",
         ]
-    return dict(
+    result = dict(
         status=state,
         configured=None,
         config=str(config_file),
@@ -274,6 +280,19 @@ def _status_failure(state, stage, exc, config_file, selected=None):
         recovery=[recovery[state]],
         next="Use the listed status/check commands. Native shell/SSH or separately configured remote-dev remain available without knowledge activation.",
     )
+    # Config and lock contention are expected. Only a failed status helper
+    # is recorded; a bad response is a protocol failure.
+    if state == "helper_failed" and stage in {"helper_run", "helper_response"}:
+        from diagnostic_support import attach, failure
+
+        category = "helper_protocol" if stage == "helper_response" else "helper_failed"
+        updated = attach(
+            result,
+            failure("status", stage, category, exception=exc),
+        )
+        if isinstance(updated, dict):
+            result = updated
+    return result
 
 
 def offline_status():
@@ -445,6 +464,143 @@ def configure(argv):
     return json.loads(output) if output.strip() else dict(status="configured")
 
 
+def _reporting_choice():
+    """Optional, independent reporting recommendation. Never installs."""
+    from diagnostic_support import reporting_hint, reporting_status
+
+    view = reporting_status()
+    result = dict(reporting=view)
+    if view.get("status") == "not_configured":
+        result["choice"] = reporting_hint()
+    return result
+
+
+def _reporting_unavailable(stage, exc):
+    print(json.dumps(dict(
+        status="unavailable",
+        error=dict(type=type(exc).__name__, stage=stage),
+    )))
+    raise SystemExit(1)
+
+
+def _adapter_python(config_file):
+    """Read the selected interpreter under the generation lock, then release it."""
+    with update_lock(config_file):
+        fd = os.open(config_file, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ValueError("adapter config must be a regular file")
+            with os.fdopen(fd, "rb", closefd=False) as stream:
+                raw = stream.read(64 * 1024 + 1)
+        finally:
+            os.close(fd)
+        if len(raw) > 64 * 1024:
+            raise ValueError("adapter config exceeds bound")
+        config = json.loads(raw)
+        if not isinstance(config, dict):
+            raise ValueError("adapter config must be an object")
+        python = _bounded_path(config.get("python"), "python")
+        scripts = runtime_scripts(config)
+        if "runtime_scripts" in config:
+            _bounded_path(config["runtime_scripts"], "runtime_scripts")
+    return python, scripts
+
+
+def _print_reporting_json(output, stage):
+    try:
+        payload = json.loads(output)
+    except ValueError as exc:
+        _reporting_unavailable(stage, exc)
+    if not isinstance(payload, dict):
+        _reporting_unavailable(stage, ValueError("reporting response must be an object"))
+    print(json.dumps(payload))
+    if payload.get("status") in {"unavailable", "failed", "degraded", "configuration_unavailable", "error"}:
+        raise SystemExit(1)
+
+
+def reporting_operation(operation):
+    """Explicit reporting ops. Enable does not spawn ensure; Stop never calls this."""
+    config_file = config_path()
+    verb = operation.split("-", 1)[1]
+    if verb == "status":
+        stage = "config_read"
+        try:
+            try:
+                config_file.stat()
+            except FileNotFoundError:
+                print(json.dumps(_reporting_choice()["reporting"]))
+                return
+            python, _scripts = _adapter_python(config_file)
+        except BlockingIOError as exc:
+            _reporting_unavailable("update_lock", exc)
+        except Exception:
+            # Unconfigured or malformed adapter: local shim only, no install.
+            print(json.dumps(_reporting_choice()["reporting"]))
+            return
+        stage = "helper_run"
+        try:
+            output = run(
+                [python, "-m", "mindie_diagnostics.cli", "reporting", "status"],
+                "",
+                timeout=3,
+                max_output=65536,
+                allowed_returncodes=(0, 1),
+                env=generation_env(config_file),
+            )
+            _print_reporting_json(output, "helper_response")
+        except SystemExit:
+            raise
+        except Exception as exc:
+            _reporting_unavailable(stage, exc)
+        return
+    if verb in {"enable", "disable"}:
+        stage = "config_read"
+        try:
+            python, scripts = _adapter_python(config_file)
+            stage = "helper_run"
+            output = run(
+                [
+                    python,
+                    "-c",
+                    "import json,sys; sys.path.insert(0, sys.argv[2]); "
+                    "from diagnostic_support import configure_reporting; "
+                    "print(json.dumps(configure_reporting("
+                    "sys.argv[1]=='true', sys.executable)))",
+                    "true" if verb == "enable" else "false",
+                    str(Path(scripts)),
+                ],
+                "",
+                timeout=3,
+                max_output=65536,
+                allowed_returncodes=(0, 1),
+                env=generation_env(config_file),
+            )
+            _print_reporting_json(output, "helper_response")
+        except SystemExit:
+            raise
+        except Exception as exc:
+            _reporting_unavailable(stage, exc)
+        return
+    timeout = 60 if verb == "ensure" else 5
+    stage = "config_read"
+    try:
+        python, _scripts = _adapter_python(config_file)
+        stage = "helper_run"
+        output = run(
+            [python, "-m", "mindie_diagnostics.cli", "reporting", verb],
+            "",
+            timeout=timeout,
+            max_output=65536,
+            allowed_returncodes=(0, 1),
+            env=generation_env(config_file),
+        )
+        _print_reporting_json(output, "helper_response")
+    except SystemExit:
+        raise
+    except Exception as exc:
+        _reporting_unavailable(stage, exc)
+
+
 def _optional_config_prefix(argv):
     """Accept `--config PATH` before the operation; leave host identity alone.
 
@@ -511,6 +667,9 @@ def main():
     if len(argv) != 1:
         print("Unsupported MindIE entry operation", file=sys.stderr)
         raise SystemExit(1)
+    if operation.startswith("reporting-"):
+        reporting_operation(operation)
+        return
     if operation == "mcp":
         from mcp_gate import serve
 
