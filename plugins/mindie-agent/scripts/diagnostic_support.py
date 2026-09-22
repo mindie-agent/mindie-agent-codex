@@ -24,11 +24,12 @@ def _hex(value, length):
     return None
 
 
-def build_metadata():
-    """Read this package's diagnostic-build.json. No subprocess or network."""
+def _read_build_json(path):
+    """Optional bounded regular-file metadata; no pipe reads."""
     fd = None
     try:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "diagnostic-build.json")
+        if path.is_symlink():
+            return {}
         flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
         fd = os.open(path, flags)
         info = os.fstat(fd)
@@ -38,14 +39,7 @@ def build_metadata():
         if len(raw) > 2048:
             return {}
         data = json.loads(raw.decode())
-        if not isinstance(data, dict):
-            return {}
-        revision = _hex(data.get("revision"), 40)
-        version = data.get("version")
-        result = {"revision": revision} if revision else {}
-        if isinstance(version, str) and re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,79}", version):
-            result["version"] = version
-        return result
+        return data if isinstance(data, dict) else {}
     except Exception:
         return {}
     finally:
@@ -54,6 +48,43 @@ def build_metadata():
                 os.close(fd)
             except Exception:
                 pass
+
+
+def _project_build(data):
+    revision = _hex(data.get("revision"), 40)
+    version = data.get("version")
+    result = {"revision": revision} if revision else {}
+    if isinstance(version, str) and re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,79}", version):
+        result["version"] = version
+    return result
+
+
+def build_metadata():
+    """Use this loaded package's stamp or its existing installation receipt.
+
+    A previous updater can install new scripts without knowing about the new
+    stamp. Its manifest and prepared receipt already identify that exact
+    package. Never consult the mutable current-generation pointer or infer a
+    commit from the directory name alone. No writes, subprocess or network.
+    """
+    scripts = Path(os.path.abspath(__file__)).parent
+    result = _project_build(_read_build_json(scripts / "diagnostic-build.json"))
+    if "revision" in result and "version" in result:
+        return result
+    plugin = scripts.parent
+    manifest = _read_build_json(plugin / ".codex-plugin" / "plugin.json")
+    if manifest.get("name") != "mindie-agent":
+        return result
+    version = _project_build(manifest).get("version")
+    if not version or result.get("version", version) != version:
+        return result
+    result.setdefault("version", version)
+    receipt = _read_build_json(plugin.parent / "prepared.json")
+    revision = _hex(receipt.get("revision"), 40)
+    if (revision and receipt.get("plugin") == str(plugin)
+            and receipt.get("version") == version and plugin.parent.name == revision):
+        result.setdefault("revision", revision)
+    return result
 
 
 def _warn():
