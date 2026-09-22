@@ -21,3 +21,16 @@ writer ID. Reporting-status wording was clarified after native observations.
 The changed bridge may require the user to trust the updated native Stop Hook.
 
 Shared actual log, transport, GitHub and macOS service evidence: [diagnostics acceptance](https://github.com/mindie-agent/diagnostics/blob/main/docs/dfx-acceptance-2026-09-22.md). Windows hardware remains unverified.
+
+The actual production updater later installed commit `e02fec04974619cef0cd95b88cda7afb7b7f77ea`
+using its previous packaging code. The three official runtime dependency pins
+were correct, but that previous packager could not create the newly introduced
+`diagnostic-build.json`. The readback failure exposed an upgrade gap rather than
+a successful version-evidence check.
+
+The diagnostic reader now falls back to this loaded package's existing native
+manifest and matching generation receipt. It does not infer a commit from a
+path alone, consult another current generation, write installed files or install
+anything. The candidate reader was run against the actual old-packager artifact
+and recovered its precise commit and native version. Regression checks reject
+an unrelated receipt and preserve version-only evidence in a native cache.
