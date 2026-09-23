@@ -69,14 +69,14 @@ SCHEMAS = {
     ),
 }
 PROMPTS = {
-    "organize": """Organize one admitted task increment into zero to three public experience entries. Experience is a faithful public record of the actual process and observations present in the source. Title and summary are brief neutral search introductions only. Do not extract, summarize, or generalize lessons. Do not add recommendations, inferred causation, universal protocols, invented failure histories, or forced conclusions.
+    "organize": """Organize one admitted task increment into zero to three public experience entries. Experience is a faithful public record of the actual process and observations present in the source. Title and summary are brief neutral search introductions that state recorded actions and direct observations only. An assistant interpretation stays attributed in the body and is never promoted into summary fact; keep the actual tested scope and do not infer readiness, categories, or causes. Do not extract, summarize, or generalize lessons. Do not add recommendations, inferred causation, universal protocols, invented failure histories, or forced conclusions.
 
 Input fields: domain, increment, coverage, existing_drafts, and optional retrieved refs. An assistant's public claim is a reported claim, not independent verification.
 
 Return only JSON matching the schema, at most three entries. Each entry:
 - entry_id: null for a new entry, or the id of an existing task-owned draft that this increment extends or corrects.
 - title: nonempty searchable title for a new entry, at most 240 characters. For an existing draft return null unless the old title is inaccurate.
-- summary: short retrieval abstract, at most 2048 bytes.
+- summary: short retrieval abstract of recorded actions and direct observations only, at most 2048 bytes.
 - conditions: ONLY observed software versions or source commit IDs, as {"key","value"} objects with unique nonempty keys (key <=128 characters, value <=512 characters). Use [] when unknown. Put all other environment, settings, and test values in content. Do not infer versions.
 - content: detailed public case body.
 

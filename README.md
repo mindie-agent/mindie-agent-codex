@@ -14,20 +14,27 @@ Old business Skills and profiling remain deferred.
 ## Install on macOS
 
 Requires Python 3.11+, Git, `uv`, and an authenticated Codex CLI with native
-plugin support. From this repository:
+plugin support. Sign in to Codex, then install from a downloaded copy:
 
 ```sh
-uv venv --python 3.11 .venv
-uv pip install --python .venv/bin/python -r runtime-requirements.txt
-python3 plugins/mindie-agent/scripts/setup.py install --knowledge-python "$PWD/.venv/bin/python"
-python3 plugins/mindie-agent/scripts/auto_update.py enable --source-root "$PWD" --channel main
-python3 plugins/mindie-agent/scripts/auto_update.py status
+git clone https://github.com/mindie-agent/mindie-agent-codex.git
+cd mindie-agent-codex
+MINDIE_DATA="${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent"
+MINDIE_BOOTSTRAP="$MINDIE_DATA/codex-bootstrap/runtime"
+uv venv --python 3.11 "$MINDIE_BOOTSTRAP"
+uv pip install --python "$MINDIE_BOOTSTRAP/bin/python" -r runtime-requirements.txt
+"$MINDIE_BOOTSTRAP/bin/python" plugins/mindie-agent/scripts/setup.py install \
+  --knowledge-python "$MINDIE_BOOTSTRAP/bin/python" --root "$MINDIE_DATA"
+"$MINDIE_BOOTSTRAP/bin/python" plugins/mindie-agent/scripts/auto_update.py enable \
+  --source-root "$PWD" --root "$MINDIE_DATA/updates" --channel main
 ```
 
 Setup writes MindIE-owned configuration and defaults community contribution to
 off. The updater packages the source, installs through the native Codex plugin
 API, verifies the selected version and registers the macOS update schedule.
-Retain the configured initial interpreter until a managed runtime replaces it.
+After both steps succeed, the downloaded repository can be moved or removed.
+Keep the persistent data directory and bootstrap interpreter: the updater and
+retained native entries use them even after a managed runtime is selected.
 The updater never resets or stashes a developer checkout.
 
 Review and trust a changed Stop Hook in the native Codex UI when you want it to
@@ -96,6 +103,12 @@ Automatic Issue reporting is a separate opt-in from community contribution.
 runtime command to ensure the shared reporter outside the Hook deadline.
 `bridge.py reporting-disable` revokes pending publication. First-use status
 explains this independent choice; no upload is enabled by installation.
+Ask the entry Skill to run these commands through the selected installed
+entrypoint. Execute the returned ensure command once outside the Hook, then
+check that the runtime is ready and the worker is healthy. Saving the setting
+alone is not service readiness. `not_configured` describes upload consent;
+it does not mean there are no local logs. The shared setting applies across
+MindIE adapters; disabling it preserves local diagnostics.
 
 The shared reporter uses bounded structured evidence without a model. Business
 nonzero exits, permissions, normal network failures and cancellation are not
@@ -132,10 +145,40 @@ require a user-facing completion checklist. Exact status and recovery guidance
 are available through the entry Skill.
 
 The updater records bounded preparation/install attempts and concrete failure
-reasons. Inspect it with `auto_update.py status`; disable its scheduling with
-`auto_update.py disable`. Current development tracks `main`. Release tracking
+reasons. From any directory, use the retained paths (set the two variables as
+in the installation example in a new shell):
+
+```sh
+"$MINDIE_BOOTSTRAP/bin/python" "$MINDIE_DATA/updates/controller/auto_update.py" \
+  --settings "$HOME/.config/mindie-agent/updater.json" status
+"$MINDIE_BOOTSTRAP/bin/python" "$MINDIE_DATA/updates/launcher.py" \
+  "$HOME/.config/mindie-agent/updater.json"
+```
+
+The second command checks for updates using the committed generation; it takes
+no `check` argument. Current development tracks `main`. Release tracking
 can be selected when a suitable release exists; old business Skill migration
 is not part of this update.
+
+## Stop or uninstall
+
+Task deactivation ends that task's knowledge access. Sharing-disable stops
+contribution for its configured scope; neither removes the plugin nor stops
+model-free updates. To stop automatic updates, use the retained controller:
+
+```sh
+"$MINDIE_BOOTSTRAP/bin/python" "$MINDIE_DATA/updates/controller/auto_update.py" \
+  --settings "$HOME/.config/mindie-agent/updater.json" disable
+```
+
+To remove the updater, run the same command with `uninstall` instead of
+`disable`, then remove MindIE Agent in Codex's Plugins UI. Updater uninstall
+does not uninstall the native plugin. A failed schedule cancellation preserves
+its files and reports failure. Close tasks using the plugin before removal;
+keep retained runtimes, receipts and caches while old entries may use them.
+Do not recursively delete the shared data directory. Removing one adapter does
+not revoke or remove the shared reporter; disable reporting separately only
+when you want that choice to apply to all adapters.
 
 ## Evidence and follow-up
 

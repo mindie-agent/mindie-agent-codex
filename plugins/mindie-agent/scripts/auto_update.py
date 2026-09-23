@@ -828,15 +828,29 @@ class Updater:
                 self.restore_caches()
 
     def maintain_diagnostics(self):
-        """One offline maintenance call. Does not install a runtime or report itself."""
+        """One offline maintenance call plus a bounded handoff request for an
+        already enabled AND healthy-running reporter (--update-running); it
+        never starts a disabled, absent, or crashed service. Does not install
+        a runtime or report itself. The actual JSON result (including an
+        aggregate status=degraded from a failed/conflicting handoff) is
+        returned; exit 1 yields normal JSON via allowed_returncodes=(0, 1).
+        """
         try:
             adapter = read(self.config)
             python = adapter.get("python") if isinstance(adapter, dict) else None
             if not isinstance(python, str) or not python or not os.path.isfile(python):
                 return {"status": "deferred", "error_type": "missing_runtime"}
+            # Pass the REAL remaining window: the CLI's 75s default includes
+            # offline work and skips the upgrade unless a full 60s handoff
+            # plus 1s exit remains; 2s is this parent's exit/startup margin.
+            available = min(75, self.deadline - time.monotonic(),
+                            self.command_deadline - time.monotonic())
+            if available <= 0:
+                return {"status": "deferred", "error_type": "insufficient_budget"}
             output = self.command(
-                [python, "-m", "mindie_diagnostics.cli", "reporting", "maintain"],
-                timeout=5,
+                [python, "-m", "mindie_diagnostics.cli", "reporting", "maintain",
+                 "--update-running", "--budget-seconds", str(max(0, available - 2))],
+                timeout=available,
                 allowed_returncodes=(0, 1),
             )
             if len(output.encode()) > 1024 * 1024:
@@ -1004,6 +1018,78 @@ class Updater:
                 )
 
 
+def _native_run(updater, argv, timeout):
+    """One bounded native scheduler control command with a KNOWN return code.
+
+    bounded_process.run returns stdout only, but scheduler truth needs the
+    returncode (launchctl print exit 113 is positive missing-service
+    evidence; anything else is not absence) and a capped stderr diagnostic.
+    These are fixed small-output OS control commands (launchctl/PowerShell),
+    so a plain bounded subprocess.run suffices. Bounded by the updater's
+    absolute deadline. Returns (returncode, stdout, stderr); raises
+    TimeoutError when the updater budget is spent, subprocess.TimeoutExpired
+    past the bounded deadline, and OSError when the manager executable
+    itself is unavailable.
+    """
+    remaining = min(updater.deadline, updater.command_deadline) - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("update deadline reached")
+    completed = subprocess.run(
+        [str(arg) for arg in argv], stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, errors="replace",
+        timeout=min(timeout, remaining))
+    return completed.returncode, completed.stdout or "", completed.stderr or ""
+
+
+def _launchd_state(updater, label, timeout=5):
+    """Actual launchd state for the exact service target.
+
+    "absent" ONLY on positive missing-service evidence (launchctl print
+    exit 113); permission, manager, and parse failures are "unknown",
+    never absence.
+    """
+    try:
+        code, _, stderr = _native_run(
+            updater, ["launchctl", "print", f"gui/{os.getuid()}/{label}"], timeout)
+    except (OSError, TimeoutError, subprocess.TimeoutExpired) as exc:
+        return "unknown", f"{type(exc).__name__}: {exc}"[:240]
+    if code == 0:
+        return "loaded", ""
+    if code == 113:
+        return "absent", ""
+    return "unknown", (stderr or "").strip()[:240] or f"launchctl print exited {code}"
+
+
+def _task_state(updater, task, timeout=20):
+    """Exact scheduled-task state via structured PowerShell enumeration.
+
+    ErrorAction Stop makes a manager error exit nonzero; a successful
+    enumeration with zero exact TaskPath/TaskName matches proves absence.
+    Localized arbitrary error text is never treated as absence.
+    """
+    escaped = task.replace("'", "''")
+    script = (
+        "$ErrorActionPreference='Stop'; "
+        "$m = @(Get-ScheduledTask -ErrorAction Stop | Where-Object { "
+        f"$_.TaskName -eq '{escaped}' -and $_.TaskPath -eq '\\' }}); "
+        "Write-Output $m.Count"
+    )
+    try:
+        code, stdout, stderr = _native_run(
+            updater,
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            timeout)
+    except (OSError, TimeoutError, subprocess.TimeoutExpired) as exc:
+        return "unknown", f"{type(exc).__name__}: {exc}"[:240]
+    if code != 0:
+        return "unknown", (stderr or "").strip()[:240] or f"powershell exited {code}"
+    try:
+        count = int((stdout or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return "unknown", "unparseable task enumeration"
+    return ("present" if count else "absent"), ""
+
+
 def schedule_enable(updater, launcher, settings_path):
     """Register the periodic check with the platform scheduler."""
     if sys.platform == "darwin":
@@ -1060,20 +1146,98 @@ def schedule_enable(updater, launcher, settings_path):
     raise ValueError("automatic scheduling requires macOS launchd or Windows schtasks")
 
 
-def schedule_disable(updater):
-    """Remove the platform schedule; installed plugin and state stay in place."""
+def schedule_disable(updater, *, label=None, plist_path=None, schedule_root=None,
+                     task=None):
+    """Remove the platform schedule; installed plugin and state stay in place.
+
+    Truthful removal of ONLY this updater's exact owned target: query real
+    scheduler state before any mutation; only positively identified absence
+    (launchctl print exit 113, or a structured PowerShell enumeration with
+    zero exact TaskPath/TaskName matches) is idempotent success. A loaded
+    service gets exactly one bootout/unregister by service target plus a
+    bounded absence readback — never a second mutation; an uncertain
+    removal result can still end in success when the readback proves
+    absence. Permission, manager, and parse failures raise; they are never
+    treated as absence. The plist is unlinked only after absence is
+    established. Public callable defaults are unchanged; the keyword-only
+    explicit label/plist-path/schedule-root/task exist for isolated native
+    acceptance.
+    """
     if sys.platform == "darwin":
-        updater.command(
-            ["launchctl", "bootout", f"gui/{os.getuid()}/{LABEL}"], timeout=10
-        )
-        (Path.home() / "Library/LaunchAgents" / (LABEL + ".plist")).unlink(
-            missing_ok=True
-        )
-    elif os.name == "nt":
+        label = label or LABEL
+        target = f"gui/{os.getuid()}/{label}"
+        state, detail = _launchd_state(updater, label)
+        if state == "unknown":
+            raise RuntimeError(f"launchd state unproven: {detail or 'query failed'}")
+        if state == "loaded":
+            removal_detail = ""
+            try:
+                code, _, stderr = _native_run(
+                    updater, ["launchctl", "bootout", target], 10)
+                if code:
+                    removal_detail = (stderr or "").strip()[:240]
+            except (OSError, TimeoutError, subprocess.TimeoutExpired) as exc:
+                removal_detail = f"{type(exc).__name__}: {exc}"[:240]
+            cutoff = time.monotonic() + 3.0
+            while state != "absent" and time.monotonic() < cutoff:
+                time.sleep(0.2)
+                left = cutoff - time.monotonic()
+                if left <= 0:
+                    break
+                state, detail = _launchd_state(updater, label,
+                                               timeout=min(5.0, left))
+            if state != "absent":
+                problem = "still loaded" if state == "loaded" else "state unknown"
+                info = detail or removal_detail
+                raise RuntimeError(
+                    f"schedule removal unproven: service {problem}"
+                    + (f" ({info})" if info else ""))
+        if plist_path is not None:
+            plist = Path(plist_path).expanduser().absolute()
+        else:
+            root = (Path(schedule_root).expanduser().absolute() if schedule_root
+                    else Path.home() / "Library/LaunchAgents")
+            plist = root / (label + ".plist")
+        plist.unlink(missing_ok=True)
+        return
+    if os.name == "nt":
         # Windows (unverified on real hardware).
-        updater.command(["schtasks", "/Delete", "/TN", WIN_TASK, "/F"], timeout=15)
-    else:
-        raise ValueError("automatic scheduling requires macOS launchd or Windows schtasks")
+        task = task or WIN_TASK
+        state, detail = _task_state(updater, task)
+        if state == "unknown":
+            raise RuntimeError(
+                f"scheduled task state unproven: {detail or 'query failed'}")
+        if state == "present":
+            escaped = task.replace("'", "''")
+            script = (f"Unregister-ScheduledTask -TaskName '{escaped}' "
+                      "-TaskPath '\\' -Confirm:$false -ErrorAction Stop")
+            try:
+                code, _, stderr = _native_run(
+                    updater,
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                     script],
+                    20)
+                if code:
+                    detail = (stderr or "").strip()[:240]
+            except (OSError, TimeoutError, subprocess.TimeoutExpired) as exc:
+                detail = f"{type(exc).__name__}: {exc}"[:240]
+            cutoff = time.monotonic() + 3.0
+            while state != "absent" and time.monotonic() < cutoff:
+                time.sleep(0.2)
+                left = cutoff - time.monotonic()
+                if left <= 0:
+                    break
+                state, query_detail = _task_state(updater, task,
+                                                  timeout=min(10.0, left))
+                if state != "present":
+                    detail = query_detail or detail
+            if state != "absent":
+                problem = "still present" if state == "present" else "state unknown"
+                raise RuntimeError(
+                    f"schedule removal unproven: task {problem}"
+                    + (f" ({detail})" if detail else ""))
+        return
+    raise ValueError("automatic scheduling requires macOS launchd or Windows schtasks")
 
 
 def enable(args):
@@ -1179,8 +1343,23 @@ def uninstall(args):
             schedule_disable(updater)
             schedule_note = "schedule removed"
         except Exception as exc:
+            # The schedule state is unproven: refuse BEFORE any executable
+            # or material removal. Generations, controller, launcher,
+            # config, and recovery metadata stay exactly as they were; no
+            # best-effort continued destruction. The shared reporter is
+            # never touched in any uninstall path.
             schedule_note = f"schedule removal failed: {type(exc).__name__}: {exc}"
-            errors.append(schedule_note)
+            return dict(
+                status="refused",
+                reason="schedule state is unproven; no updater-owned files "
+                       "were removed",
+                schedule=schedule_note,
+                removed_generations=[],
+                kept_generations=[],
+                retained_caches="preserved (native tasks may still execute them)",
+                recovery_metadata="preserved",
+                errors=[schedule_note],
+            )
 
         removed, kept = [], []
         generations = root / "generations"
