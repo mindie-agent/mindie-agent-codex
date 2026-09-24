@@ -469,6 +469,28 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(second["status"], "installed")
         self.assertEqual(read(Path(second["current"]["plugin"]) / "hooks/hooks.json"), before)
 
+    def test_stop_diagnostic_helper_change_selects_new_stop_command(self):
+        first = self.check()
+        previous = Path(first["current"]["plugin"])
+        previous_command = read(previous / "hooks/hooks.json")["hooks"]["Stop"][0][
+            "hooks"
+        ][0]["command"]
+        self.assertIn(str(previous / "scripts/bridge.py"), previous_command)
+        for name in ("diagnostic_support.py", "diagnostic_fallback.py"):
+            path = self.remote / "plugins/mindie-agent/scripts" / name
+            path.write_text(path.read_text() + f"\n# {name} stop behavior\n")
+            self.commit(name)
+            result = self.check()
+            self.assertEqual(result["status"], "installed")
+            plugin = Path(result["current"]["plugin"])
+            command = read(plugin / "hooks/hooks.json")["hooks"]["Stop"][0]["hooks"][
+                0
+            ]["command"]
+            self.assertIn(str(plugin / "scripts/bridge.py"), command)
+            self.assertNotIn(str(previous / "scripts/bridge.py"), command)
+            self.assertNotEqual(command, previous_command)
+            previous, previous_command = plugin, command
+
     def test_uncoordinated_caches_are_retained_untouched(self):
         # No compatibility shim: cached entrypoints of loaded tasks keep their
         # exact bytes; the updater only retains/restores them across switches.

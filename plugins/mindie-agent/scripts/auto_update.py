@@ -483,14 +483,15 @@ class Updater:
             previous = Path(previous)
             # Preserve the immutable reviewed Stop executable only when its
             # complete local execution dependency set is byte-identical.
-            # The stdlib Stop branch imports exactly these helpers. Diagnostic
-            # support is lazy-loaded by status/reporting, not Stop. Capture
-            # diagnostics run inside the selected generation helper. Build
-            # metadata alone must not invalidate an identical Stop command.
+            # Stop imports these helpers, including diagnostic_support via
+            # bridge._record_stop and diagnostic_fallback via its _record.
+            # diagnostic-build.json is metadata and does not change that
+            # logic, so it must not invalidate an identical Stop command.
             # A changed executable dependency still requires native review.
             files = {
                 "bridge.py", "bounded_process.py", "session_gate.py",
                 "sharing.py", "update_lock.py", "installation.json",
+                "diagnostic_support.py", "diagnostic_fallback.py",
             }
             if all(
                 (previous / "scripts" / name).is_file()
