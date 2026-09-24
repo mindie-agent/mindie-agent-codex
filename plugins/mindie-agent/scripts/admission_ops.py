@@ -146,22 +146,29 @@ def operation(name, payload):
         session = event.get("session_id")
         if not isinstance(session, str) or not IDENTITY.fullmatch(session):
             raise ValueError("Valid MindIE session identity required")
-        lease = store.check(session)
+        inspected = store.inspect(session)
+        if inspected.get("status") == "unavailable":
+            return dict(
+                stage="unavailable", reason="admission-unreadable",
+                cause="admission-unreadable",
+            )
+        try:
+            lease = store.check(session)
+        except ValueError:
+            return dict(stage="inert", reason="not-activated")
         import sharing
 
         if not sharing.capture_allowed(lease, event.get("cwd")):
-            return dict(status="skipped")
+            return dict(stage="inert", reason="sharing-disabled")
         turn = event.get("turn_id")
         if not isinstance(turn, str) or not IDENTITY.fullmatch(turn):
             raise ValueError("invalid hook identity")
-        if not store.claim(session, "stop", turn, lease["token"]):
-            return dict(status="duplicate")
-        forwarded = dict(event, mindie_activation=lease["token"])
+        forwarded = dict(event, mindie_activation=lease["token"], harness="codex")
         config = json.loads(config_path().read_text())
         from mindie_knowledge.loop.cli import capture_hook
 
-        capture_hook(config["engine_config"], forwarded)
-        return dict(status="forwarded")
+        result = capture_hook(config["engine_config"], forwarded)
+        return result if isinstance(result, dict) else dict(stage="unavailable", reason="internal")
     raise ValueError("unsupported admission operation")
 
 

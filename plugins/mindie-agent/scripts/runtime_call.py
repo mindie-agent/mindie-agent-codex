@@ -14,6 +14,13 @@ import os
 from pathlib import Path
 import sys
 
+
+def _transient_unavailable(exc):
+    """Connection and deadline failures are not an authorization pause."""
+    return isinstance(exc, (TimeoutError, ConnectionError)) or type(exc).__name__ in {
+        "URLError", "TimeoutExpired",
+    }
+
 from diagnostic_support import attach, failure, reference
 from session_gate import IDENTITY, config_path, generation_env, runtime_scripts
 
@@ -119,6 +126,9 @@ def call(payload):
                           isError=True)
         return result
     finally:
+        pending = sys.exc_info()[1]
+        if pending is not None and _transient_unavailable(pending):
+            neutral = True
         if not neutral:
             try:
                 finish_outcome(config, session, token, succeeded)

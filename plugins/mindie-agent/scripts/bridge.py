@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Codex plugin boundary. Hooks never start a service or persist retry work.
+"""Codex plugin boundary.
 
 The Stop hook path is a no-op unless every capture precondition holds:
-an active lease, community sharing enabled, and the event's native cwd inside
-the authorized scope. The sharing gate runs BEFORE any capture claim or
-payload forwarding: sharing off/missing means no capture row, no draft, and
-no service/worker/model startup. The hook never parses transcripts, never
+an active lease and community sharing enabled. Scope is the lease's project
+root, not the event cwd. Sharing off means no capture row and no wake.
+A passing Stop commits through the shared handoff; it does not claim an
+attempt or report forwarded. The hook never parses transcripts, never
 blocks the original task and never uses exit-2 continuation.
 
 Explicit operator entries also cover unified offline status, service
@@ -25,6 +25,7 @@ import time
 
 from bounded_process import run
 from session_gate import (
+    Inactive,
     Sessions,
     bind_explicit_config,
     config_path,
@@ -150,16 +151,20 @@ def hook_event(raw):
     if transcript is not None:
         transcript = _bounded_path(transcript, "transcript_path")
     summary = event.get("last_assistant_message")
-    if summary is not None and (
-        not isinstance(summary, str) or len(summary) > MAX_SUMMARY
-    ):
+    if summary is not None and not isinstance(summary, str):
         raise ValueError("invalid final summary")
+    if isinstance(summary, str) and len(summary) > MAX_SUMMARY:
+        # The optional summary is not the capture. A transcript reference remains.
+        if transcript is None:
+            raise ValueError("invalid final summary")
+        summary = None
     if isinstance(summary, str) and not summary.strip():
         summary = None
     if transcript is None and summary is None:
         raise ValueError("no transcript or summary to forward")
     forwarded = dict(
         hook_event_name="Stop",
+        identity_kind="turn",
         session_id=event["session_id"],
         turn_id=event["turn_id"],
         cwd=cwd,
@@ -353,6 +358,34 @@ def offline_status():
         return _status_failure(state, stage, exc, config_file, selected), 1
 
 
+def _record_stop(stage, category, exc=None):
+    """Local diagnostic only. No transcript, token, or exception text."""
+    try:
+        from diagnostic_support import failure
+
+        failure(
+            "capture.stop", stage=stage, category=category,
+            exception=exc, reportable=False,
+        )
+    except Exception:
+        pass
+
+
+def _observe_stop(result):
+    if not isinstance(result, dict):
+        _record_stop("handoff", "internal")
+        return
+    stage = result.get("stage")
+    if stage not in {"unavailable", "rejected"}:
+        return
+    reason = result.get("reason")
+    if not isinstance(reason, str) or not reason.replace("-", "").replace("_", "").isalnum():
+        reason = "handoff"
+    if not reason[:1].isalpha():
+        reason = "handoff"
+    _record_stop(stage, reason)
+
+
 def stop():
     deadline = time.monotonic() + HOOK_BUDGET
     try:
@@ -363,19 +396,41 @@ def stop():
         event = hook_event(
             _read_hook_stdin(MAX_HOOK_BYTES, deadline - time.monotonic())
         )
-    except (ValueError, OSError, TypeError, RecursionError, TimeoutError):
+    except ValueError as exc:
+        if str(exc) in {"unexpected hook event", "recursive Stop is not a capture"}:
+            print("{}")
+            return
+        _record_stop("envelope", "invalid_envelope", exc)
+        print("{}")
+        return
+    except TimeoutError as exc:
+        _record_stop("envelope", "timeout", exc)
+        print("{}")
+        return
+    except (OSError, TypeError, RecursionError) as exc:
+        _record_stop("envelope", "invalid_envelope", exc)
         print("{}")
         return
     try:
         # Remaining helper time under the same whole-hook deadline.
         remaining = deadline - time.monotonic()
+        result = None
         if remaining > 0:
-            Sessions(op_timeout=remaining)._op(
+            event["budget_seconds"] = remaining
+            result = Sessions(op_timeout=remaining)._op(
                 "stop_capture", {"event": event, "session": event["session_id"]}
             )
-    except Exception:
+            _observe_stop(result)
+        else:
+            _record_stop("budget", "budget_exhausted")
+    except Inactive as exc:
+        message = str(exc)
+        if message.startswith("MindIE admission is unavailable") or "unreadable" in message:
+            category = "timeout" if "TimeoutError" in message else "unavailable"
+            _record_stop("helper", category, exc)
+    except Exception as exc:
         # The hook never propagates a failure into the original task.
-        pass
+        _record_stop("helper", "unavailable", exc)
     print("{}")
 
 

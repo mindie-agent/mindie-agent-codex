@@ -45,6 +45,7 @@ class SessionGateTests(unittest.TestCase):
         self.sessions = Sessions()
 
     def tearDown(self):
+        subprocess.run(["pkill", "-f", str(self.engine)], check=False)
         self.environment.stop()
         self.temp.cleanup()
 
@@ -98,6 +99,9 @@ class SessionGateTests(unittest.TestCase):
             community_config=str(community),
             sharing_choice="contribute",
         )
+        engine = json.loads(self.engine.read_text())
+        engine["community_config"] = str(community)
+        self.engine.write_text(json.dumps(engine))
         community.write_text(
             json.dumps(
                 dict(
@@ -348,8 +352,14 @@ class SessionGateTests(unittest.TestCase):
         with patch.object(mcp_gate, "run", side_effect=TimeoutError("stalled")):
             for i in range(3):
                 self.assertTrue(gate.call(self.request(lease, ident=300 + i))["isError"])
+        with patch.object(mcp_gate, "run", return_value='{"content":[],"isError":false}') as run:
+            self.assertFalse(gate.call(self.request(lease, ident=400))["isError"])
+            self.assertEqual(run.call_count, 1)
+        with patch.object(mcp_gate, "run", side_effect=ValueError("bad runtime response")):
+            for i in range(3):
+                self.assertTrue(gate.call(self.request(lease, ident=500 + i))["isError"])
         with patch.object(mcp_gate, "run") as run:
-            self.assertTrue(gate.call(self.request(lease, ident=400))["isError"])
+            self.assertTrue(gate.call(self.request(lease, ident=600))["isError"])
             self.assertEqual(run.call_count, 0)
 
     def test_not_started_disposition_is_not_honored_for_mutations(self):
@@ -408,7 +418,7 @@ class SessionGateTests(unittest.TestCase):
     def test_consecutive_failure_circuit_is_per_session_and_explicitly_reset(self):
         a, b = self.activate(), self.activate("manual-B")
         gate = mcp_gate.Gate("knowledge")
-        with patch.object(mcp_gate, "run", side_effect=TimeoutError("stalled")) as run:
+        with patch.object(mcp_gate, "run", side_effect=ValueError("bad runtime response")) as run:
             for i in range(20):
                 self.assertTrue(gate.call(self.request(a, ident=i))["isError"])
             self.assertEqual(run.call_count, 3)
@@ -466,23 +476,45 @@ class SessionGateTests(unittest.TestCase):
             db.close()
 
     def test_hook_delivery_is_once_and_not_for_other_sessions(self):
+        from mindie_knowledge.loop.store import Store
+
         self.enable_sharing()
         self.activate()
+        store = Store(self.root / "data", "test")
+        store.close()
         for event in [self.event("other"), self.event(), self.event()]:
             result = self.bridge("stop", event)
             self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
-        self.assertEqual(self.attempts(), 1)
-        self.assertEqual(self.attempts("other"), 0)
+        db = sqlite3.connect(self.root / "data" / "test" / "store-v3.sqlite3")
+        try:
+            count = db.execute("SELECT count(*) FROM captures").fetchone()[0]
+            other = db.execute(
+                "SELECT count(*) FROM captures WHERE session=?", ("other",)
+            ).fetchone()[0]
+        finally:
+            db.close()
+        self.assertEqual(count, 1)
+        self.assertEqual(other, 0)
+        self.assertEqual(self.attempts(), 0)
 
-    def test_timed_out_hook_consumes_attempt_and_always_finishes(self):
+    def test_repeated_stop_keeps_one_capture_without_burning_a_claim(self):
+        from mindie_knowledge.loop.store import Store
+
         self.enable_sharing()
         self.activate()
+        Store(self.root / "data", "test").close()
         started = time.monotonic()
         result = self.bridge("stop", self.event())
         self.assertLess(time.monotonic() - started, 1.9)
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
         self.bridge("stop", self.event())
-        self.assertEqual(self.attempts(), 1)
+        db = sqlite3.connect(self.root / "data" / "test" / "store-v3.sqlite3")
+        try:
+            count = db.execute("SELECT count(*) FROM captures").fetchone()[0]
+        finally:
+            db.close()
+        self.assertEqual(count, 1)
+        self.assertEqual(self.attempts(), 0)
 
     def test_slow_capture_helper_is_killed_within_host_budget(self):
         marker = self.runtime_fixture(delay=20)

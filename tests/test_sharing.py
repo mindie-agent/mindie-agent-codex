@@ -60,6 +60,7 @@ class SharingFixture(unittest.TestCase):
         self.sessions = Sessions()
 
     def tearDown(self):
+        subprocess.run(["pkill", "-f", str(self.engine)], check=False)
         self.environment.stop()
         self.temp.cleanup()
 
@@ -80,6 +81,25 @@ class SharingFixture(unittest.TestCase):
 
     def write_sharing(self, **overrides):
         self.community.write_text(json.dumps(self.settings(**overrides)))
+        engine = json.loads(self.engine.read_text())
+        engine["community_config"] = str(self.community)
+        self.engine.write_text(json.dumps(engine))
+
+    def prepare_store(self):
+        from mindie_knowledge.loop.store import Store
+
+        store = Store(self.root / "data", "test")
+        store.close()
+
+    def captures(self):
+        path = self.root / "data" / "test" / "store-v3.sqlite3"
+        if not path.is_file():
+            return 0
+        db = sqlite3.connect(path)
+        try:
+            return db.execute("SELECT count(*) FROM captures").fetchone()[0]
+        finally:
+            db.close()
 
     def activate(self):
         with (
@@ -176,13 +196,15 @@ class GateTests(SharingFixture):
         )
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
         self.assertEqual(self.attempts(), 0)
+        self.prepare_store()
         # An absolute event cwd outside the scope does not block capture: the
         # authorized scope is the lease's activation-time project root.
         result = self.bridge(
             "stop", self.event(cwd=str(outside), last_assistant_message="Done")
         )
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
-        self.assertEqual(self.attempts(), 1)
+        self.assertEqual(self.captures(), 1)
+        self.assertEqual(self.attempts(), 0)
         # A lease activated outside the authorized roots captures nothing,
         # even when the event cwd points inside an allowed directory.
         db = sqlite3.connect(self.sessions.path)
@@ -196,18 +218,19 @@ class GateTests(SharingFixture):
             ),
         )
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
-        self.assertEqual(self.attempts(), 1)
+        self.assertEqual(self.captures(), 1)
+        self.assertEqual(self.attempts(), 0)
 
     def test_transcript_event_without_final_summary_is_valid(self):
-        # No final summary, but a transcript location: the event is admitted
-        # (forwarding is proven by the claim row; delivery itself fails open
-        # because no service runs here).
+        # No final summary, but a transcript location: the event is admitted.
         self.write_sharing()
         self.activate()
+        self.prepare_store()
         result = self.bridge("stop", self.event(transcript_path=str(self.scope / "t.jsonl")))
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
-        self.assertEqual(self.attempts(), 1)
-        # The same turn is never claimed twice, and recursion is dropped.
+        self.assertEqual(self.captures(), 1)
+        self.assertEqual(self.attempts(), 0)
+        # The same turn is one row, and recursion is dropped.
         self.bridge("stop", self.event(transcript_path=str(self.scope / "t.jsonl")))
         self.bridge(
             "stop",
@@ -217,7 +240,8 @@ class GateTests(SharingFixture):
                 stop_hook_active=True,
             ),
         )
-        self.assertEqual(self.attempts(), 1)
+        self.assertEqual(self.captures(), 1)
+        self.assertEqual(self.attempts(), 0)
 
     def test_event_without_any_material_is_skipped(self):
         self.write_sharing()
@@ -229,15 +253,17 @@ class GateTests(SharingFixture):
     def test_held_open_stdin_still_forwards_once_under_native_budget(self):
         self.write_sharing()
         self.activate()
+        self.prepare_store()
         payload = self.event(last_assistant_message="Done")
         code, stdout, _stderr, elapsed = self.bridge_stop_held_open(payload)
         self.assertEqual((code, json.loads(stdout)), (0, {}))
         self.assertLess(elapsed, 2.0)
-        self.assertEqual(self.attempts(), 1)
+        self.assertEqual(self.captures(), 1)
+        self.assertEqual(self.attempts(), 0)
         code, stdout, _stderr, elapsed = self.bridge_stop_held_open(payload)
         self.assertEqual((code, json.loads(stdout)), (0, {}))
         self.assertLess(elapsed, 2.0)
-        self.assertEqual(self.attempts(), 1)
+        self.assertEqual(self.captures(), 1)
 
     def test_sharing_off_unclosed_stdin_writes_no_state(self):
         self.activate()

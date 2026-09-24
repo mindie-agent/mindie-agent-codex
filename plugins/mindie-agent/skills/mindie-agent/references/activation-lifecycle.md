@@ -4,7 +4,8 @@ Read this when activation state, capture, or hook behavior matter for the
 task at hand.
 
 - Authorization lasts for this native task until the user deactivates it, the
-  failure circuit pauses it (three consecutive knowledge runtime failures), or
+  failure circuit pauses it (three consecutive authorization or protocol
+  failures, not a stopped connection), or
   the project scope actually changes. There is no 24-hour wall-clock expiry and
   no runtime/config-byte fingerprint: changing sharing or knowledge config
   bytes does not revoke a grant. A rejected read argument or reference is a
@@ -38,11 +39,12 @@ task at hand.
   restoring retired entrypoints or deleting caches still used by active tasks.
 - The Stop hook acts only when community sharing is enabled for the lease's
   authorized project scope. Otherwise it is a no-op: no transcript read, no
-  draft, no worker, no model. When enabled it forwards the transcript location
-  and a bounded final summary to the local background organizer; it never
-  parses transcripts itself and never reads other conversations or hidden
-  reasoning. Unavailable capture is dropped. Inactive or recursive Stop events
-  are dropped; each session/turn is attempted once, including failed delivery.
+  capture row, no worker, no model. When enabled it commits the native
+  session, turn, and transcript location through the shared handoff. An
+  optional over-long final summary is dropped when a transcript reference is
+  present. Success is a durable capture stage, not a claim that the model ran.
+  A refused connection does not pause the lease. The same session and turn
+  commit once. Inactive or recursive Stop events are ignored.
 - Disabling sharing cancels pending capture and organization in its scope
   without deleting drafts; re-enabling processes only newly authorized
   material and never backfills the disabled period. Toggling sharing never

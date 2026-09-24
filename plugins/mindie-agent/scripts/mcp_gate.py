@@ -382,16 +382,17 @@ class Gate:
                     cancel=cancel,
                     env=generation_env(self.sessions.config),
                 )
-            except Exception:
-                # The generation process never reported an outcome (timeout,
-                # crash, output overflow), so it may be dead before recording
-                # one: the gate feeds the failure circuit from here. A
-                # completed call already recorded its own outcome inside the
-                # generation, including the read-rejection exemption.
-                try:
-                    self.sessions.finish(session, token, False)
-                except Exception:
-                    pass
+            except Exception as exc:
+                # A timeout or refused connection is availability, not a
+                # paused grant. Protocol and configuration failures still count.
+                if not (
+                    isinstance(exc, (TimeoutError, ConnectionError))
+                    or type(exc).__name__ in {"URLError", "TimeoutExpired"}
+                ):
+                    try:
+                        self.sessions.finish(session, token, False)
+                    except Exception:
+                        pass
                 raise
             stage = "helper_response"
             result = json.loads(output)
