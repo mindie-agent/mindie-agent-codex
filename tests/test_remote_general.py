@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -21,7 +22,10 @@ class GeneralRemoteTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.config = self.root / 'config.json'
         self.config.write_text(json.dumps({'python': sys.executable, 'engine_config': '/absent/not-read'}))
-        self.env = patch.dict(os.environ, MINDIE_AGENT_CONFIG=str(self.config), MINDIE_REMOTE_STATE_DIR=str(self.root / 'remote'))
+        diag = self.root / 'diagnostics'
+        diag.mkdir()
+        (diag / 'diagnostics.json').write_text('{"decision":"disabled"}\n')
+        self.env = patch.dict(os.environ, MINDIE_AGENT_CONFIG=str(self.config), MINDIE_REMOTE_STATE_DIR=str(self.root / 'remote'), MINDIE_DIAGNOSTICS_CONFIG=str(diag / 'diagnostics.json'), MINDIE_DIAGNOSTICS_ROOT=str(diag))
         self.env.start()
 
     def tearDown(self):
@@ -35,24 +39,141 @@ class GeneralRemoteTests(unittest.TestCase):
         with patch.object(mcp_gate, 'run', return_value='{"content":[], "isError":false}') as dispatch:
             gate = mcp_gate.Gate('remote')
             self.assertFalse(gate.call(self.request())['isError'])
-            self.assertTrue(mcp_gate.Gate('remote').call(self.request())['isError'])
+            repeat = gate.call(self.request())
+            self.assertTrue(repeat['isError'])
+            self.assertIn('Duplicate MCP request', json.dumps(repeat))
             self.assertFalse(gate.call(self.request(turn='turn-2'))['isError'])
             self.assertFalse(gate.call(self.request(session='task-B'))['isError'])
             self.assertEqual(dispatch.call_count, 3)
         self.assertFalse(self.config.with_suffix('.sessions.sqlite3').exists())
         self.assertIsNone(gate.sessions)
 
+    def test_child_frame_receipt_uses_thread_not_session_tree(self):
+        # Synthetic component frame. The helper is a no-op. Not SSH or a live child.
+        meta = {
+            'threadId': 'child-thread',
+            'sessionId': 'root-tree',
+            'x-codex-turn-metadata': {
+                'thread_id': 'child-thread',
+                'session_id': 'root-tree',
+                'turn_id': 'turn-1',
+            },
+        }
+        request = self.request(identity=7)
+        request['params']['_meta'] = meta
+        absent = self.request(identity=8)
+        absent['params']['_meta'] = {
+            'threadId': 'child-two',
+            'x-codex-turn-metadata': {
+                'thread_id': 'child-two',
+                'session_id': 'root-tree',
+                'turn_id': 'turn-1',
+            },
+        }
+        with patch.object(mcp_gate, 'run', return_value='{"content":[], "isError":false}') as dispatch:
+            gate = mcp_gate.Gate('remote')
+            self.assertFalse(gate.call(request)['isError'])
+            payload = json.loads(dispatch.call_args.args[1])
+            self.assertEqual(payload['remote_session_id'], 'child-thread')
+            self.assertFalse(gate.call(absent)['isError'])
+            second = json.loads(dispatch.call_args.args[1])
+            self.assertEqual(second['remote_session_id'], 'child-two')
+            self.assertEqual(dispatch.call_count, 2)
+        self.assertTrue(mcp_gate.RemoteReceipts('child-thread').path.is_file())
+        self.assertTrue(mcp_gate.RemoteReceipts('child-two').path.is_file())
+        self.assertFalse(mcp_gate.RemoteReceipts('root-tree').path.exists())
+
     def test_pause_recovery_keeps_failed_receipts(self):
+        # Same connection: circuit reset must not make a failed key replayable.
+        gate = mcp_gate.Gate('remote')
         with patch.object(mcp_gate, 'run', side_effect=TimeoutError) as dispatch:
             for i in range(10):
-                self.assertTrue(mcp_gate.Gate('remote').call(self.request(i))['isError'])
+                self.assertTrue(gate.call(self.request(i))['isError'])
             self.assertEqual(dispatch.call_count, 3)
         receipts = mcp_gate.RemoteReceipts('task-A')
         receipts.recover()
         with patch.object(mcp_gate, 'run', return_value='{"content":[], "isError":false}') as dispatch:
-            self.assertTrue(mcp_gate.Gate('remote').call(self.request(0))['isError'])
-            self.assertFalse(mcp_gate.Gate('remote').call(self.request(11))['isError'])
+            self.assertTrue(gate.call(self.request(0))['isError'])
+            self.assertFalse(gate.call(self.request(11))['isError'])
             self.assertEqual(dispatch.call_count, 1)
+
+    def test_legacy_receipt_row_stays_and_still_rejects_its_old_key(self):
+        gate = mcp_gate.Gate('remote')
+        request = self.request()
+        old = 'turn-1:' + gate._request_identity(request)
+        receipts = mcp_gate.RemoteReceipts('task-A')
+        self.assertTrue(receipts.claim(old))
+        receipts.finish(old, False)
+        with patch.object(mcp_gate, 'run', return_value='{"content":[], "isError":false}') as dispatch:
+            self.assertFalse(gate.call(request)['isError'])
+            self.assertTrue(gate.call(request)['isError'])
+            self.assertEqual(dispatch.call_count, 1)
+        with sqlite3.connect(receipts.path) as db:
+            rows = db.execute('SELECT identity, status FROM attempts').fetchall()
+        self.assertIn((old, 'failed'), rows)
+        self.assertFalse(receipts.claim(old))
+        fresh = [row for row in rows if gate.connection_id in row[0]]
+        self.assertEqual(len(fresh), 1)
+        self.assertNotEqual(fresh[0][0], old)
+
+    def test_two_stdio_processes_accept_the_same_native_id(self):
+        # Component double only: the helper is a no-op. The processes, stdio
+        # and SQLite receipt file are real. Not a native host or model proof.
+        child = (
+            'import os, sys\n'
+            'sys.path.insert(0, os.environ["MINDIE_SCRIPTS"])\n'
+            'import mcp_gate\n'
+            'def component_noop_dispatch(*_args, **_kwargs):\n'
+            '    return \'{"content":[{"type":"text","text":"component-noop"}],"isError":false}\'\n'
+            'mcp_gate.run = component_noop_dispatch\n'
+            'mcp_gate.serve("remote")\n'
+        )
+        call = {
+            'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call',
+            'params': self.request(2)['params'],
+        }
+        init = {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {}}
+        payload = json.dumps(init) + '\n' + json.dumps(call) + '\n'
+        env = {key: value for key, value in os.environ.items() if key != 'PYTHONPATH'}
+        env.update(
+            MINDIE_SCRIPTS=str(SCRIPTS),
+            MINDIE_AGENT_CONFIG=str(self.config),
+            MINDIE_REMOTE_STATE_DIR=str(self.root / 'remote'),
+            MINDIE_DIAGNOSTICS_CONFIG=os.environ['MINDIE_DIAGNOSTICS_CONFIG'],
+            MINDIE_DIAGNOSTICS_ROOT=os.environ['MINDIE_DIAGNOSTICS_ROOT'],
+            PYTHONDONTWRITEBYTECODE='1',
+        )
+        processes = []
+        try:
+            for _ in range(2):
+                process = subprocess.Popen(
+                    [sys.executable, '-c', child],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, env=env,
+                )
+                process.stdin.write(payload)
+                process.stdin.flush()
+                processes.append(process)
+            accepted = []
+            for process in processes:
+                stdout, stderr = process.communicate(timeout=20)
+                self.assertEqual(process.returncode, 0, stderr)
+                messages = [json.loads(line) for line in stdout.splitlines() if line.strip()]
+                result = next(item['result'] for item in messages if item.get('id') == 2)
+                self.assertFalse(result['isError'], result)
+                accepted.append(result)
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=5)
+        self.assertEqual(len(accepted), 2)
+        receipts = mcp_gate.RemoteReceipts('task-A')
+        with sqlite3.connect(receipts.path) as db:
+            rows = db.execute("SELECT identity, status FROM attempts WHERE identity LIKE 'turn-1:%'").fetchall()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({status for _identity, status in rows}, {'succeeded'})
+        self.assertEqual(len({identity.split(':')[1] for identity, _status in rows}), 2)
 
     def test_bad_arguments_are_rejected_before_runtime_and_can_be_corrected(self):
         request = self.request()

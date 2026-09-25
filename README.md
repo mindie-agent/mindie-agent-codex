@@ -14,7 +14,13 @@ Old business Skills and profiling remain deferred.
 ## Install on macOS
 
 Requires Python 3.11+, Git, `uv`, and an authenticated Codex CLI with native
-plugin support. Sign in to Codex, then install from a downloaded copy:
+plugin support.
+
+The knowledge interpreter also needs SQLite 3.43.0 or newer with FTS5 and
+`contentless_delete` support. Installation checks the actual SQLite library;
+the Python version alone does not establish this capability.
+
+Sign in to Codex, then install from a downloaded copy:
 
 ```sh
 git clone https://github.com/mindie-agent/mindie-agent-codex.git

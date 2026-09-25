@@ -49,10 +49,7 @@ task at hand.
   without deleting drafts; re-enabling processes only newly authorized
   material and never backfills the disabled period. Toggling sharing never
   invalidates ordinary activation or read tools.
-- Contribution recovery (inspect / reconcile / retry / compact) is a
-  deterministic core CLI wrapped by `bridge.py contribution-* BATCH`. It does
-  not rerun the organizer, reset a capture cursor or replay failed model
-  attempts. Uncertain writes are inspected, never blindly retried.
+- Contribution inspect, reconcile, retry, and compact are optional troubleshooting for one existing batch, not ordinary recovery. A transient local or network failure is handled by the existing worker, and sharing status is how a problem is seen. Authentication, trust, rejected content, or invalid configuration can need an explicit user or operator action. These commands do not rerun the organizer, reset a capture cursor, or replay a model. Uncertain writes are inspected or reconciled, never blindly retried.
 
 Remote tools work in every native task without an activation lease. Their
 65-second call deadline, durable no-replay receipts and three-failure pause

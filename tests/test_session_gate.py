@@ -277,6 +277,74 @@ class SessionGateTests(unittest.TestCase):
             self.assertTrue(gate.call(self.request(lease, meta={}))["isError"])
             self.assertEqual(run.call_count, 0)
 
+    def test_session_tree_does_not_own_the_child_thread(self):
+        # Synthetic component frames only. Not an observed native child.
+        def frame(thread, tree, top=..., alias=None, drop=()):
+            meta = {
+                "x-codex-turn-metadata": {
+                    "thread_id": thread,
+                    "session_id": tree,
+                    "turn_id": "turn-1",
+                },
+                "threadId": thread if alias is None else alias,
+            }
+            if top is not ...:
+                meta["sessionId"] = top
+            for key in drop:
+                if key == "threadId":
+                    meta.pop("threadId", None)
+                else:
+                    meta["x-codex-turn-metadata"].pop(key, None)
+            return meta
+
+        root = self.request()
+        self.assertEqual(mcp_gate.native_identity(root), "manual-A")
+        self.assertNotIn("sessionId", root["params"]["_meta"])
+        child_meta = frame("child-thread", "root-tree", "root-tree")
+        self.assertEqual(
+            mcp_gate.native_identity(self.request(meta=child_meta)), "child-thread"
+        )
+        self.assertEqual(
+            mcp_gate.native_identity(
+                self.request(meta=frame("child-thread", "root-tree"))
+            ),
+            "child-thread",
+        )
+        self.assertEqual(
+            mcp_gate.native_identity(
+                self.request(meta=frame("root-thread", "root-thread", "root-thread"))
+            ),
+            "root-thread",
+        )
+        parent = self.activate("root-tree")
+        gate = mcp_gate.Gate("knowledge")
+        with patch.object(mcp_gate, "run") as run:
+            blocked = gate.call(self.request(parent, ident=11, meta=child_meta))
+            self.assertTrue(blocked["isError"])
+            run.assert_not_called()
+        child = self.activate("child-thread")
+        with patch.object(
+            mcp_gate, "run", return_value='{"content":[],"isError":false}'
+        ) as run:
+            self.assertFalse(
+                gate.call(self.request(child, ident=12, meta=child_meta))["isError"]
+            )
+            self.assertEqual(run.call_count, 1)
+        rejected = [
+            frame("child-thread", "root-tree", alias="other-thread"),
+            frame("child-thread", "root-tree", "other-tree"),
+            frame("child-thread", "root-tree", None),
+            frame("child-thread", "root-tree", ""),
+            frame("child-thread", "root-tree", 7),
+            frame("child-thread", "root-tree", drop=("thread_id",)),
+            frame("bad id", "root-tree"),
+        ]
+        with patch.object(mcp_gate, "run") as run:
+            for meta in rejected:
+                with self.subTest(meta=meta):
+                    self.assertTrue(gate.call(self.request(child, meta=meta))["isError"])
+            self.assertEqual(run.call_count, 0)
+
     def test_explain_is_gated_and_query_cannot_implicitly_activate(self):
         with patch.object(mcp_gate, "run") as run:
             gate = mcp_gate.Gate("knowledge")

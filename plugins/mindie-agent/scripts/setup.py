@@ -44,6 +44,35 @@ PROBE_TIMEOUT = 15
 
 ADMISSION_METHODS = ("activate", "check", "resolve", "claim", "finish", "deactivate")
 
+# In-memory only. contentless_delete=1 is SQLite >= 3.43 and an FTS5 build.
+_FTS_PROBE = r"""
+import sqlite3
+_fts = None
+try:
+    _fts = sqlite3.connect(":memory:")
+    _fts.execute("CREATE VIRTUAL TABLE probe USING fts5(body, content='', contentless_delete=1)")
+    _fts.execute("INSERT INTO probe(rowid, body) VALUES (1, 'alpha')")
+    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'alpha'").fetchall() != [(1,)]:
+        raise RuntimeError("insert MATCH failed")
+    _fts.execute("UPDATE probe SET body='beta' WHERE rowid=1")
+    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'beta'").fetchall() != [(1,)]:
+        raise RuntimeError("update MATCH failed")
+    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'alpha'").fetchall():
+        raise RuntimeError("stale MATCH survived update")
+    _fts.execute("DELETE FROM probe WHERE rowid=1")
+    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'beta'").fetchall():
+        raise RuntimeError("delete MATCH failed")
+except Exception as exc:
+    missing.insert(0, (
+        "sqlite " + sqlite3.sqlite_version
+        + " lacks FTS5 contentless_delete=1 (SQLite >=3.43.0): "
+        + type(exc).__name__ + ": " + str(exc)[:160]
+    ))
+finally:
+    if _fts is not None:
+        _fts.close()
+"""
+
 
 def probe_runtime(python):
     """Fail clearly, before any configuration write, when a pin is missing.
@@ -80,7 +109,8 @@ def probe_runtime(python):
         "                    missing.append('transcript adapter lacks ' + name)\n"
         "    except Exception as exc:\n"
         "        missing.append(f'transcript adapter ({type(exc).__name__}: {exc})')\n"
-        "print('MISSING: ' + '; '.join(missing) if missing else 'OK')\n"
+        + _FTS_PROBE
+        + "print('MISSING: ' + '; '.join(missing) if missing else 'OK')\n"
     )
     try:
         output = run([python, "-c", script], "", timeout=PROBE_TIMEOUT)
