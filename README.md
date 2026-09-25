@@ -144,36 +144,44 @@ optional background cost; they neither expire ordinary task authorization nor
 require a user-facing completion checklist. Exact status and recovery guidance
 are available through the entry Skill.
 
-The updater records bounded preparation/install attempts and concrete failure
-reasons. From any directory, use the retained paths (set the two variables as
-in the installation example in a new shell):
+The updater records preparation and install outcomes. A known temporary
+network failure keeps the installed generation and is retried by the existing
+schedule, with backoff. Incompatible content stays quarantined. A certificate
+failure is a local trust problem, not bad content, and is retried after
+backoff; TLS validation stays enabled. From any
+directory, use the stable launcher (set the two variables as in the
+installation example in a new shell):
 
 ```sh
-"$MINDIE_BOOTSTRAP/bin/python" "$MINDIE_DATA/updates/controller/auto_update.py" \
-  --settings "$HOME/.config/mindie-agent/updater.json" status
+"$MINDIE_BOOTSTRAP/bin/python" "$MINDIE_DATA/updates/launcher.py" \
+  "$HOME/.config/mindie-agent/updater.json" status
 "$MINDIE_BOOTSTRAP/bin/python" "$MINDIE_DATA/updates/launcher.py" \
   "$HOME/.config/mindie-agent/updater.json"
 ```
 
-The second command checks for updates using the committed generation; it takes
-no `check` argument. Current development tracks `main`. Release tracking
-can be selected when a suitable release exists; old business Skill migration
-is not part of this update.
+The second command checks for updates. It takes no operation argument, which
+is what the scheduler runs. `status`, `disable`, and `uninstall` are the other
+launcher operations; `uninstall` accepts `--purge` only. These dispatch to the
+committed generation, not a stale controller copy. Current development tracks
+`main`. Release tracking can be selected when a suitable release exists; old
+business Skill migration is not part of this update.
 
 ## Stop or uninstall
 
 Task deactivation ends that task's knowledge access. Sharing-disable stops
 contribution for its configured scope; neither removes the plugin nor stops
-model-free updates. To stop automatic updates, use the retained controller:
+model-free updates. To stop automatic updates, use the stable launcher:
 
 ```sh
-"$MINDIE_BOOTSTRAP/bin/python" "$MINDIE_DATA/updates/controller/auto_update.py" \
-  --settings "$HOME/.config/mindie-agent/updater.json" disable
+"$MINDIE_BOOTSTRAP/bin/python" "$MINDIE_DATA/updates/launcher.py" \
+  "$HOME/.config/mindie-agent/updater.json" disable
 ```
 
 To remove the updater, run the same command with `uninstall` instead of
-`disable`, then remove MindIE Agent in Codex's Plugins UI. Updater uninstall
-does not uninstall the native plugin. A failed schedule cancellation preserves
+`disable`. Add `--purge` only to that `uninstall`, and only when no live
+generation or recovery journal remains. Then remove MindIE Agent in Codex's
+Plugins UI. Updater uninstall does not uninstall the native plugin. A failed
+schedule cancellation preserves
 its files and reports failure. Close tasks using the plugin before removal;
 keep retained runtimes, receipts and caches while old entries may use them.
 Do not recursively delete the shared data directory. Removing one adapter does

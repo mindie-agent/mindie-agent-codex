@@ -593,6 +593,35 @@ class AutoUpdateTests(unittest.TestCase):
             )
 
 
+    def test_committed_generation_publishes_stable_launcher(self):
+        with patch("auto_update.schedule_enable") as schedule:
+            result = self.check()
+        schedule.assert_not_called()
+        self.assertEqual(result["status"], "installed")
+        plugin = Path(result["current"]["plugin"])
+        hooks = (plugin / "hooks/hooks.json").read_bytes()
+        bridge = (plugin / "scripts/bridge.py").read_bytes()
+        launcher = self.root / "launcher.py"
+        self.assertEqual(
+            launcher.read_bytes(),
+            (plugin / "scripts/update_launcher.py").read_bytes(),
+        )
+        self.assertIn(b"unsupported launcher operation", launcher.read_bytes())
+        self.check()
+        self.assertEqual((plugin / "hooks/hooks.json").read_bytes(), hooks)
+        self.assertEqual((plugin / "scripts/bridge.py").read_bytes(), bridge)
+        before = launcher.read_bytes()
+        state = read(self.updater.state_path)
+        state["current"]["plugin"] = str(self.base / "outside-plugin")
+        state["next_check"] = 0
+        atomic(self.updater.state_path, state)
+        failed = self.updater.check()
+        self.assertEqual(failed["status"], "check_failed")
+        self.assertIn("invalid current", failed["error"])
+        self.assertEqual(launcher.read_bytes(), before)
+        self.assertFalse((self.root / "launcher.next").exists())
+
+
 class UpdateIdleTests(unittest.TestCase):
     def test_missing_service_is_idle(self):
         import service_handoff
