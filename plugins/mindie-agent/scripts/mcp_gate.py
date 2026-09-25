@@ -28,6 +28,8 @@ from update_lock import update_lock
 MAX_INPUT = 128 * 1024
 KNOWLEDGE_TIMEOUT = 15
 REMOTE_TIMEOUT = 65
+# Knowledge stdout only. A legal maximum page measured 817407 bytes.
+KNOWLEDGE_MAX_OUTPUT = 1024 * 1024
 CATALOG = Path(__file__).with_name("mcp_catalog.json")
 
 REMOTE_MAX_FAILURES = 3
@@ -84,14 +86,15 @@ def remote_state_dir():
 
 
 def native_identity(request):
-    """Bind one tools/call to its native task via verified host metadata.
+    """Bind one tools/call to the native thread, not the session tree.
 
-    Codex delivers tools/call params._meta['x-codex-turn-metadata'] with
-    thread_id/session_id/turn_id, and params._meta.threadId agreeing (root
-    probe, task 01a0bcfa-cd11-7dc1-bfb4-bcd5ee180fd4, Codex 0.153.4). Every
-    call is bound from this metadata; tool arguments never override it.
-    Missing or contradictory metadata fails closed with a clear diagnostic
-    for older hosts — the most recently activated lease is never a fallback.
+    Nested thread_id, nested session_id, and top-level threadId are required
+    valid identity strings. thread_id must equal threadId. session_id names
+    the session tree and is not required to equal the thread. Top-level
+    sessionId is optional; when the key is present, null included, it must
+    be a valid id equal to nested session_id. The 0.153.4 root probe showed
+    equal ids on that one root task. It does not establish child metadata.
+    Tool arguments and a parent lease are never fallbacks.
     """
     params = request.get("params")
     if not isinstance(params, dict) or not isinstance(params.get("arguments"), dict):
@@ -110,10 +113,18 @@ def native_identity(request):
             "requires a Codex version with turn metadata on tools/call and "
             "fails closed here — do not retry or supply an identity by hand"
         )
-    if not (thread == session == plain):
+    if thread != plain:
         raise ValueError(
             "Contradictory native task identity metadata; call rejected"
         )
+    if isinstance(meta, dict) and "sessionId" in meta:
+        top_session = meta.get("sessionId")
+        if not isinstance(top_session, str) or not IDENTITY.fullmatch(top_session):
+            raise ValueError("Invalid native task identity metadata")
+        if top_session != session:
+            raise ValueError(
+                "Contradictory native task identity metadata; call rejected"
+            )
     return thread
 
 
@@ -277,9 +288,19 @@ class Gate:
                 turn = request["params"]["_meta"]["x-codex-turn-metadata"].get("turn_id")
                 if not isinstance(turn, str) or not IDENTITY.fullmatch(turn):
                     raise ValueError("Native turn identity required for remote request receipt")
+                # connection_id is this Gate, and one Gate serves one stdio
+                # process. Duplicate detection is connection-local: a numeric
+                # RPC id reused after reconnect is not the same invocation.
+                # An uncertain remote command is not automatically replayed.
+                identity = (
+                    turn + ":" + self.connection_id + ":"
+                    + self._request_identity(request)
+                )
             else:
+                # Domain CLI has no host turn id. Its existing nonce is this
+                # connection; do not add a second one.
                 turn = "cli-" + self.connection_id
-            identity = turn + ":" + self._request_identity(request)
+                identity = turn + ":" + self._request_identity(request)
             if not receipts.claim(identity):
                 raise ValueError("Duplicate MCP request; not executed again")
             admitted = True
@@ -381,6 +402,7 @@ class Gate:
                     timeout=bound,
                     cancel=cancel,
                     env=generation_env(self.sessions.config),
+                    max_output=KNOWLEDGE_MAX_OUTPUT,
                 )
             except Exception as exc:
                 # A timeout or refused connection is availability, not a

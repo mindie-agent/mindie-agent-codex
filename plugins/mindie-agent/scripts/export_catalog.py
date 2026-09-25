@@ -85,15 +85,17 @@ KNOWLEDGE_TOOLS = [
     dict(
         name="knowledge_explain",
         description=(
-            "Read a result's detailed case and cited evidence using its exact short ref. "
-            "Normally omit offset and limit; when supplied they count characters, not lines. "
+            "Read one page of a result's detailed case and cited evidence using its exact short ref. "
+            "The page is a slice, not the full case. offset and limit count Unicode characters, not lines or bytes. "
+            "When next_offset is an integer, pass it as offset to read another page only if that page is still relevant; "
+            "do not count characters. next_offset is null at the end. "
             "A withdrawn result is explicitly marked as historical."
         ),
         inputSchema=schema(
             dict(
                 ref={"type": "string", "description": "Copy the pinned ref returned by knowledge_query exactly."},
-                offset={"type": "integer", "minimum": 0, "description": "Character offset; normally omit."},
-                limit={"type": "integer", "minimum": 1, "maximum": 65536, "description": "Maximum characters, not lines; normally omit to read the detailed case."},
+                offset={"type": "integer", "minimum": 0, "description": "Unicode character offset. Use the previous next_offset; omit for the first page."},
+                limit={"type": "integer", "minimum": 1, "maximum": 32768, "description": "Maximum Unicode characters in this page."},
             ),
             ["ref"],
         ),

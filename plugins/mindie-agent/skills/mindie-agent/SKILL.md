@@ -50,15 +50,11 @@ status, not a reason to replay the user's failed operation.
 
 ## Sharing and recovery
 
-- Status: `python3 <bridge.py> status` or `init` (offline).
+- Status: `python3 <bridge.py> status` or `init` (offline). This is the normal way to see a sharing problem.
 - Toggle recorded sharing: `sharing-status`, `sharing-enable`, `sharing-disable`.
-- Recovery of one existing contribution batch (no organizer replay, no cursor
-  reset, no model replay):
-  - `python3 <bridge.py> contribution-inspect BATCH`
-  - `python3 <bridge.py> contribution-reconcile BATCH`
-  - `python3 <bridge.py> contribution-retry BATCH`
-  - `python3 <bridge.py> contribution-compact BATCH`
-  Uncertain writes are inspected or reconciled, never blindly retried.
+- A transient local or network failure is recovered by the existing worker. Do not intervene, re-run the model, or run a contribution command for it.
+- Authentication, trust, rejected content, or invalid configuration can need an explicit user or operator action.
+- Optional troubleshooting of one existing batch, not an activation step: `contribution-inspect`, `contribution-reconcile`, `contribution-retry`, or `contribution-compact`. Uncertain writes are inspected or reconciled, never blindly retried.
 
 A capture startup failure does not stop the user's task. Operational details:
 [activation lifecycle](references/activation-lifecycle.md).
@@ -69,8 +65,7 @@ Use knowledge when prior experience could help the task:
 
 - `knowledge_query` searches the selected domain. It is optional and never a
   prerequisite for capture or ordinary work.
-- `knowledge_explain` reads a useful result. Copy its returned `ref` exactly;
-  omit the limit for the full body, or use character offsets for pagination.
+- `knowledge_explain` reads one page of a useful result. Copy its returned `ref` exactly. The page is a slice, not the full case. If `next_offset` is an integer and more of that case is relevant, call again with that offset; do not count characters or keep paging once the page is enough.
 - `knowledge_feedback` optionally records `up` or `down` for a consulted entry;
   the reason is optional. Silence is not a vote.
 
