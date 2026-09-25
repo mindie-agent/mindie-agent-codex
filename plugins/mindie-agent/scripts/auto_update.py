@@ -10,20 +10,24 @@ transaction journal (likewise unverified on real hardware).
 
 import argparse
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import json
 import os
 from pathlib import Path
 import plistlib
+import random
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 
-from bounded_process import run
+from bounded_process import classify_transport_text, run
 from session_gate import config_path, runtime_scripts
 from update_lock import file_lock, update_lock
 
@@ -42,6 +46,20 @@ WIN_TASK = "MindIE Agent Plugin Updater"
 INTERVAL = 300
 TOTAL_TIMEOUT = 240
 ATTEMPTS = 3
+_RETRYABLE = frozenset({"temporary_network", "rate_limited"})
+_ACTIONABLE = frozenset({"authentication", "permission", "hook_trust", "certificate"})
+_QUARANTINE = frozenset({"resolver", "bad_content"})
+_KNOWN_FAILURE = _RETRYABLE | _ACTIONABLE | _QUARANTINE
+_STATIC_FAILURE = {
+    "temporary_network": "temporary network failure",
+    "rate_limited": "rate limited",
+    "authentication": "authentication failed",
+    "permission": "permission denied",
+    "hook_trust": "host hook trust required",
+    "certificate": "certificate verification failed",
+    "resolver": "dependency resolver conflict",
+    "bad_content": "package content rejected",
+}
 # Knowledge sync is model-free and independently budgeted: it runs inside the
 # same 300 s scheduler slot but before any plugin build work, so a slow or
 # stuck plugin candidate can never starve it. The knowledge core persists its
@@ -182,6 +200,141 @@ def link(path, target):
     os.replace(temporary, path)
 
 
+def _retry_delay(count, retry_after=None):
+    """Scheduler-scale exponential delay plus jitter. One later check, no loop."""
+    failures = max(1, int(count))
+    delay = min(INTERVAL * (2 ** min(failures - 1, 6)), 6 * 3600)
+    delay += random.uniform(0, max(1.0, delay * 0.1))
+    if retry_after is not None:
+        try:
+            delay = max(delay, float(retry_after))
+        except (TypeError, ValueError):
+            pass
+    return delay
+
+
+def _failure_category(exc):
+    category = getattr(exc, "category", None)
+    if category in _KNOWN_FAILURE:
+        return category
+    return None
+
+
+def _classified_error(category, retry_after=None):
+    err = RuntimeError(_STATIC_FAILURE.get(category, "update source rejected"))
+    err.category = category
+    if retry_after is not None:
+        err.retry_after = retry_after
+    return err
+
+
+def _finite_seconds(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if number != number or number == float("inf") or number == float("-inf") or number < 0:
+        return None
+    return number
+
+
+def _bounded_header(headers, name):
+    """One short header value. Nothing raw is retained by the caller."""
+    if headers is None:
+        return None
+    try:
+        raw = headers.get(name)
+    except Exception:
+        return None
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text or len(text) > 128 or any(char in text for char in "\r\n\x00"):
+        return None
+    return text
+
+
+def _header_retry_after(headers):
+    """Retry-After as delta-seconds or HTTP-date. Large finite delays are kept."""
+    text = _bounded_header(headers, "Retry-After")
+    if text is None:
+        return None
+    if text[:1].isdigit():
+        return _finite_seconds(text)
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    delay = (when - datetime.now(timezone.utc)).total_seconds()
+    if delay < 0:
+        delay = 0
+    return _finite_seconds(delay)
+
+
+def _rate_limit_delay(headers):
+    """Explicit rate-limit header evidence and a safe delay, or (False, None)."""
+    retry_after = _header_retry_after(headers)
+    remaining = _bounded_header(headers, "X-RateLimit-Remaining")
+    reset = _bounded_header(headers, "X-RateLimit-Reset")
+    remaining_zero = False
+    if remaining is not None:
+        try:
+            remaining_zero = int(remaining) == 0
+        except ValueError:
+            remaining_zero = False
+    reset_delay = None
+    if remaining_zero and reset is not None:
+        stamp = _finite_seconds(reset)
+        if stamp is not None:
+            if stamp > 1_000_000_000:
+                delay = stamp - datetime.now(timezone.utc).timestamp()
+                reset_delay = _finite_seconds(0 if delay < 0 else delay)
+            else:
+                reset_delay = stamp
+    if retry_after is None:
+        retry_after = reset_delay
+    return bool(retry_after is not None or remaining_zero), retry_after
+
+
+def _http_failure(code, headers, body):
+    """Static category for one release response. Body and headers are not kept."""
+    limited, retry_after = _rate_limit_delay(headers)
+    if code == 403 and limited:
+        return _classified_error("rate_limited", retry_after)
+    text = body if isinstance(body, str) else ""
+    classified = _classify_release_failure(f"HTTP {code}\n{text[:8192]}")
+    if classified is not None:
+        if (
+            getattr(classified, "retry_after", None) is None
+            and retry_after is not None
+            and classified.category in {"rate_limited", "temporary_network"}
+        ):
+            classified.retry_after = retry_after
+        return classified
+    if code in {500, 502, 503, 504}:
+        return _classified_error("temporary_network", retry_after)
+    if code == 429:
+        return _classified_error("rate_limited", retry_after)
+    if code == 401:
+        return _classified_error("authentication")
+    if code == 403:
+        return _classified_error("permission")
+    return None
+
+
+def _classify_release_failure(text):
+    kind = classify_transport_text(text)
+    if kind is None:
+        return None
+    return _classified_error(kind[0], kind[1])
+
+
 def venv_python(venv):
     """The interpreter uv creates inside a venv, on either platform."""
     return venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
@@ -198,7 +351,7 @@ class Updater:
         self.deadline = time.monotonic() + TOTAL_TIMEOUT
         self.command_deadline = self.deadline
 
-    def command(self, args, *, timeout=30, data="", allowed_returncodes=(0,)):
+    def command(self, args, *, timeout=30, data="", allowed_returncodes=(0,), transport=False):
         remaining = min(self.deadline, self.command_deadline) - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("update deadline reached")
@@ -219,7 +372,7 @@ class Updater:
         )
         return run(
             [str(arg) for arg in args], data, timeout=min(timeout, remaining), env=env,
-            allowed_returncodes=allowed_returncodes,
+            allowed_returncodes=allowed_returncodes, transport=transport,
         )
 
     def save(self, status, **values):
@@ -230,6 +383,32 @@ class Updater:
         atomic(self.state_path, self.state)
         return self.state
 
+    def _read_release(self, request):
+        """Read release JSON. Failure text is classified and then discarded."""
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.read(256 * 1024 + 1)
+        except urllib.error.HTTPError as exc:
+            try:
+                body = exc.read(8192)
+                text = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else ""
+            except Exception:
+                text = ""
+            classified = _http_failure(exc.code, exc.headers, text)
+            if classified is not None:
+                raise classified from None
+            raise ValueError("release metadata rejected") from None
+        except urllib.error.URLError as exc:
+            reason = exc.reason
+            if isinstance(reason, (TimeoutError, socket.timeout)):
+                raise _classified_error("temporary_network") from None
+            classified = _classify_release_failure(str(reason)[:4000])
+            if classified is not None:
+                raise classified from None
+            raise ValueError("release source unavailable") from None
+        except (TimeoutError, socket.timeout):
+            raise _classified_error("temporary_network") from None
+
     def resolve(self):
         ref = "refs/heads/main"
         if self.settings["channel"] == "release":
@@ -238,8 +417,7 @@ class Updater:
                 "https://api.github.com/repos/mindie-agent/mindie-agent-codex/releases/latest",
                 headers={"Accept": "application/vnd.github+json", "User-Agent": LABEL},
             )
-            with urllib.request.urlopen(request, timeout=10) as response:
-                raw = response.read(256 * 1024 + 1)
+            raw = self._read_release(request)
             if len(raw) > 256 * 1024:
                 raise ValueError("release metadata too large")
             tag = json.loads(raw)["tag_name"]
@@ -251,6 +429,7 @@ class Updater:
         output = self.command(
             ["git", "ls-remote", self.settings["repository"], ref, ref + "^{}"],
             timeout=15,
+            transport=True,
         )
         refs = dict(line.split()[::-1] for line in output.splitlines())
         sha = refs.get(ref + "^{}", refs.get(ref, ""))
@@ -382,6 +561,7 @@ class Updater:
                 sha,
             ],
             timeout=45,
+            transport=True,
         )
         self.command(["git", "-C", source, "checkout", "--detach", "-q", "FETCH_HEAD"])
         if self.command(["git", "-C", source, "rev-parse", "HEAD"]).strip() != sha:
@@ -404,6 +584,7 @@ class Updater:
                 source / "runtime-requirements.txt",
             ],
             timeout=120,
+            transport=True,
         )
         self.probe_runtime(python)
         return self.package(generation, source, python, sha)
@@ -483,14 +664,15 @@ class Updater:
             previous = Path(previous)
             # Preserve the immutable reviewed Stop executable only when its
             # complete local execution dependency set is byte-identical.
-            # The stdlib Stop branch imports exactly these helpers. Diagnostic
-            # support is lazy-loaded by status/reporting, not Stop. Capture
-            # diagnostics run inside the selected generation helper. Build
-            # metadata alone must not invalidate an identical Stop command.
+            # Stop imports these helpers, including diagnostic_support via
+            # bridge._record_stop and diagnostic_fallback via its _record.
+            # diagnostic-build.json is metadata and does not change that
+            # logic, so it must not invalidate an identical Stop command.
             # A changed executable dependency still requires native review.
             files = {
                 "bridge.py", "bounded_process.py", "session_gate.py",
                 "sharing.py", "update_lock.py", "installation.json",
+                "diagnostic_support.py", "diagnostic_fallback.py",
             }
             if all(
                 (previous / "scripts" / name).is_file()
@@ -812,12 +994,20 @@ class Updater:
                 )
                 (self.root / "transaction.json").unlink()
                 installed = True
+                try:
+                    self.publish_stable_launcher()
+                except Exception as exc:
+                    self.state["launcher_error"] = type(exc).__name__
                 return result
             except Exception:
                 final_proven = False
                 self.command_deadline = self.deadline - 8
                 self.recover()
                 final_proven = True
+                try:
+                    self.publish_stable_launcher()
+                except Exception:
+                    pass
                 raise
             finally:
                 self.command_deadline = self.deadline
@@ -954,68 +1144,237 @@ class Updater:
                     **extra,
                 )
 
-    def _check_plugin(self):
-            if self.state.get("next_check", 0) > time.time():
-                return self.state
-            try:
-                if (self.root / "transaction.json").exists():
-                    with update_lock(self.config, exclusive=True):
-                        self.recover()
-                sha = self.resolve()
-            except Exception as exc:
-                failures = self.state.get("check_failures", 0) + 1
-                return self.save(
-                    "check_failed",
-                    check_failures=failures,
-                    error=str(exc)[:240],
-                    next_check=time.time()
-                    + (3600 if failures >= ATTEMPTS else INTERVAL),
-                )
-            self.state.update(
-                check_failures=0, next_check=time.time() + INTERVAL, error=None
+    def publish_stable_launcher(self):
+        """Copy the committed generation's dispatcher onto the stable launcher.
+
+        The scheduler keeps the same launcher path, so this does not
+        re-register it. Hook and loaded plugin files are not rewritten.
+        A missing current generation is left alone; an invalid one fails.
+        """
+        current = self.state.get("current")
+        if current is None:
+            return
+        if not isinstance(current, dict):
+            raise Incompatible("invalid current generation")
+        plugin = current.get("plugin")
+        if plugin is None and not current:
+            return
+        if not isinstance(plugin, str) or not plugin or not Path(plugin).is_absolute():
+            raise Incompatible("invalid current generation")
+        try:
+            plugin_path = Path(plugin).resolve()
+            plugin_path.relative_to((self.root / "generations").resolve())
+        except (OSError, ValueError):
+            raise Incompatible("invalid current generation") from None
+        source = plugin_path / "scripts" / "update_launcher.py"
+        if not source.is_file():
+            raise Incompatible("invalid current generation")
+        launcher = self.root / "launcher.py"
+        try:
+            if launcher.is_file() and launcher.read_bytes() == source.read_bytes():
+                return
+        except OSError:
+            pass
+        temporary = self.root / "launcher.next"
+        try:
+            shutil.copy2(source, temporary)
+            os.replace(temporary, launcher)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _startup_current(self, *, recover):
+        """Publish a clean committed launcher. Recover a journal only when due."""
+        if recover and (self.root / "transaction.json").exists():
+            with update_lock(self.config, exclusive=True):
+                self.recover()
+        self.publish_stable_launcher()
+
+    def _note_resolve_failure(self, exc):
+        failures = self.state.get("check_failures", 0) + 1
+        if not isinstance(self.state.get("check_failure_at"), (int, float)) or isinstance(
+            self.state.get("check_failure_at"), bool
+        ):
+            self.state["check_failure_at"] = time.time()
+        category = _failure_category(exc)
+        fields = dict(check_failures=failures)
+        if category in _RETRYABLE or category in _ACTIONABLE or category in _QUARANTINE:
+            delay = _retry_delay(failures, getattr(exc, "retry_after", None))
+            nxt = time.time() + delay
+            fields.update(
+                status="action_required" if category in _ACTIONABLE else "check_failed",
+                failure_class=category,
+                error=_STATIC_FAILURE[category],
+                next_retry_at=nxt,
+                next_check=nxt,
             )
-            if self.state.get("current", {}).get("revision") == sha:
-                return self.save("up_to_date")
-            attempts = self.state.setdefault("attempts", {})
-            record = attempts.setdefault(sha, dict(count=0))
-            if record.get("incompatible") or record["count"] >= ATTEMPTS:
+        else:
+            self.state.pop("failure_class", None)
+            self.state.pop("next_retry_at", None)
+            fields.update(
+                status="check_failed",
+                error=str(exc)[:240],
+                next_check=time.time() + (3600 if failures >= ATTEMPTS else INTERVAL),
+            )
+        return self.save(**fields)
+
+    def _remember_attempt(self, record, exc):
+        category = _failure_category(exc)
+        if not isinstance(record.get("first_failure_at"), (int, float)) or isinstance(
+            record.get("first_failure_at"), bool
+        ):
+            record["first_failure_at"] = time.time()
+        history = record.get("history")
+        if not isinstance(history, list):
+            history = []
+        history.append({"at": time.time(), "class": category or "unknown"})
+        del history[:-8]
+        record["history"] = history
+        if category in _QUARANTINE:
+            record["failure_class"] = category
+            record["quarantined"] = True
+            record["reason"] = _STATIC_FAILURE[category]
+            record.pop("next_retry_at", None)
+            self.state.pop("next_retry_at", None)
+            self.state["failure_class"] = category
+            return "quarantine"
+        if category in _RETRYABLE or category in _ACTIONABLE:
+            record["failure_class"] = category
+            record["last_error"] = _STATIC_FAILURE[category]
+            record.pop("quarantined", None)
+            record["next_retry_at"] = time.time() + _retry_delay(
+                record.get("count", 1), getattr(exc, "retry_after", None)
+            )
+            self.state["next_retry_at"] = record["next_retry_at"]
+            self.state["failure_class"] = category
+            return "retry"
+        record.pop("failure_class", None)
+        record.pop("next_retry_at", None)
+        record.pop("quarantined", None)
+        self.state.pop("next_retry_at", None)
+        self.state.pop("failure_class", None)
+        record["last_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+        return "unknown"
+
+    def _clear_attempt_active(self, sha):
+        attempts = self.state.get("attempts")
+        record = attempts.get(sha) if isinstance(attempts, dict) else None
+        if isinstance(record, dict):
+            record.pop("next_retry_at", None)
+            record.pop("failure_class", None)
+        self.state.pop("next_retry_at", None)
+        self.state.pop("failure_class", None)
+
+    def _check_plugin(self):
+        due = self.state.get("next_check", 0) <= time.time()
+        journal = (self.root / "transaction.json").exists()
+        if journal and not due:
+            return self.state
+        try:
+            self._startup_current(recover=due)
+        except Exception as exc:
+            return self._note_resolve_failure(exc)
+        if not due:
+            return self.state
+        try:
+            sha = self.resolve()
+        except Exception as exc:
+            return self._note_resolve_failure(exc)
+        self.state.update(
+            check_failures=0, next_check=time.time() + INTERVAL, error=None
+        )
+        self.state.pop("failure_class", None)
+        self.state.pop("next_retry_at", None)
+        if self.state.get("current", {}).get("revision") == sha:
+            self._clear_attempt_active(sha)
+            return self.save("up_to_date", error=None)
+        attempts = self.state.setdefault("attempts", {})
+        record = attempts.get(sha)
+        if not isinstance(record, dict):
+            record = {"count": 0}
+            attempts[sha] = record
+        if not isinstance(record.get("count"), int) or isinstance(record.get("count"), bool):
+            record["count"] = 0
+        klass = record.get("failure_class")
+        if (
+            record.get("incompatible")
+            or record.get("quarantined")
+            or klass in _QUARANTINE
+        ):
+            return self.save(
+                "waiting_for_compatible_source",
+                candidate=sha,
+                error=record.get("reason")
+                or record.get("last_error")
+                or "source lacks required compatibility contract",
+            )
+        if klass in _RETRYABLE or klass in _ACTIONABLE:
+            due = record.get("next_retry_at")
+            if isinstance(due, (int, float)) and not isinstance(due, bool) and due > time.time():
                 return self.save(
-                    "waiting_for_compatible_source"
-                    if record.get("incompatible")
-                    else "attempts_exhausted",
+                    "action_required" if klass in _ACTIONABLE else "update_failed",
                     candidate=sha,
-                    error=record.get(
-                        "reason", "source lacks required compatibility contract"
-                    )
-                    if record.get("incompatible")
-                    else record.get("last_error", "update attempt limit reached"),
+                    error=_STATIC_FAILURE.get(klass, record.get("last_error")),
+                    next_retry_at=due,
+                    failure_class=klass,
                 )
-            # A crash consumes an attempt. A normal idle deferral refunds it.
-            record["count"] += 1
-            self.save("preparing", candidate=sha)  # Reserve before doing fallible work.
-            try:
-                candidate = self.prepare(sha)
-                result = self.install(candidate)
-                if result["status"] == "waiting_for_idle":
-                    record["count"] -= 1
-                    return self.save("waiting_for_idle", candidate=sha)
-                return result
-            except BlockingIOError:
+        elif record.get("count", 0) >= ATTEMPTS:
+            # Legacy or unknown exhaustion stays visible. Do not relabel it.
+            return self.save(
+                "attempts_exhausted",
+                candidate=sha,
+                error=record.get("last_error", "update attempt limit reached"),
+            )
+        # A crash consumes an attempt. A normal idle deferral refunds it.
+        record["count"] += 1
+        record.pop("next_retry_at", None)
+        self.state.pop("next_retry_at", None)
+        self.save("preparing", candidate=sha)  # Reserve before doing fallible work.
+        try:
+            candidate = self.prepare(sha)
+            result = self.install(candidate)
+            if result["status"] == "waiting_for_idle":
                 record["count"] -= 1
                 return self.save("waiting_for_idle", candidate=sha)
-            except Incompatible as exc:
-                record["incompatible"] = True
-                record["reason"] = str(exc)
+            if result.get("status") in {"installed", "up_to_date", "degraded"}:
+                self._clear_attempt_active(sha)
+                return self.save(result["status"], error=None)
+            return result
+        except BlockingIOError:
+            record["count"] -= 1
+            return self.save("waiting_for_idle", candidate=sha)
+        except Incompatible as exc:
+            record["incompatible"] = True
+            record["reason"] = str(exc)
+            record.pop("next_retry_at", None)
+            if not isinstance(record.get("first_failure_at"), (int, float)):
+                record["first_failure_at"] = time.time()
+            return self.save(
+                "waiting_for_compatible_source", error=str(exc), candidate=sha
+            )
+        except Exception as exc:
+            kind = self._remember_attempt(record, exc)
+            if kind == "quarantine":
                 return self.save(
-                    "waiting_for_compatible_source", error=str(exc), candidate=sha
-                )
-            except Exception as exc:
-                record["last_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
-                return self.save(
-                    "update_failed",
-                    error=record["last_error"],
+                    "waiting_for_compatible_source",
+                    error=record.get("reason"),
                     candidate=sha,
+                    failure_class=record.get("failure_class"),
                 )
+            if kind == "retry":
+                return self.save(
+                    "action_required"
+                    if record.get("failure_class") in _ACTIONABLE
+                    else "update_failed",
+                    error=record.get("last_error"),
+                    candidate=sha,
+                    next_retry_at=record.get("next_retry_at"),
+                    failure_class=record.get("failure_class"),
+                )
+            return self.save(
+                "update_failed",
+                error=record.get("last_error"),
+                candidate=sha,
+            )
 
 
 def _native_run(updater, argv, timeout):

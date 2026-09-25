@@ -469,6 +469,28 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(second["status"], "installed")
         self.assertEqual(read(Path(second["current"]["plugin"]) / "hooks/hooks.json"), before)
 
+    def test_stop_diagnostic_helper_change_selects_new_stop_command(self):
+        first = self.check()
+        previous = Path(first["current"]["plugin"])
+        previous_command = read(previous / "hooks/hooks.json")["hooks"]["Stop"][0][
+            "hooks"
+        ][0]["command"]
+        self.assertIn(str(previous / "scripts/bridge.py"), previous_command)
+        for name in ("diagnostic_support.py", "diagnostic_fallback.py"):
+            path = self.remote / "plugins/mindie-agent/scripts" / name
+            path.write_text(path.read_text() + f"\n# {name} stop behavior\n")
+            self.commit(name)
+            result = self.check()
+            self.assertEqual(result["status"], "installed")
+            plugin = Path(result["current"]["plugin"])
+            command = read(plugin / "hooks/hooks.json")["hooks"]["Stop"][0]["hooks"][
+                0
+            ]["command"]
+            self.assertIn(str(plugin / "scripts/bridge.py"), command)
+            self.assertNotIn(str(previous / "scripts/bridge.py"), command)
+            self.assertNotEqual(command, previous_command)
+            previous, previous_command = plugin, command
+
     def test_uncoordinated_caches_are_retained_untouched(self):
         # No compatibility shim: cached entrypoints of loaded tasks keep their
         # exact bytes; the updater only retains/restores them across switches.
@@ -569,6 +591,35 @@ class AutoUpdateTests(unittest.TestCase):
             self.updater.command(
                 [sys.executable, "-c", "raise AssertionError('must not run')"]
             )
+
+
+    def test_committed_generation_publishes_stable_launcher(self):
+        with patch("auto_update.schedule_enable") as schedule:
+            result = self.check()
+        schedule.assert_not_called()
+        self.assertEqual(result["status"], "installed")
+        plugin = Path(result["current"]["plugin"])
+        hooks = (plugin / "hooks/hooks.json").read_bytes()
+        bridge = (plugin / "scripts/bridge.py").read_bytes()
+        launcher = self.root / "launcher.py"
+        self.assertEqual(
+            launcher.read_bytes(),
+            (plugin / "scripts/update_launcher.py").read_bytes(),
+        )
+        self.assertIn(b"unsupported launcher operation", launcher.read_bytes())
+        self.check()
+        self.assertEqual((plugin / "hooks/hooks.json").read_bytes(), hooks)
+        self.assertEqual((plugin / "scripts/bridge.py").read_bytes(), bridge)
+        before = launcher.read_bytes()
+        state = read(self.updater.state_path)
+        state["current"]["plugin"] = str(self.base / "outside-plugin")
+        state["next_check"] = 0
+        atomic(self.updater.state_path, state)
+        failed = self.updater.check()
+        self.assertEqual(failed["status"], "check_failed")
+        self.assertIn("invalid current", failed["error"])
+        self.assertEqual(launcher.read_bytes(), before)
+        self.assertFalse((self.root / "launcher.next").exists())
 
 
 class UpdateIdleTests(unittest.TestCase):

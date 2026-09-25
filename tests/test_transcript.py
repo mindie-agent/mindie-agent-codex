@@ -146,6 +146,21 @@ class TranscriptTests(unittest.TestCase):
         self.assertNotIn("PRIVATE", inc["text"])
         self.assertIn("public answer", inc["text"])
 
+    def test_established_identity_does_not_fail_an_unrecognized_page(self):
+        path = self.root / "rollout.jsonl"
+        write_jsonl(path, [{"type": "noise", "n": i} for i in range(3)])
+        identity = transcript.identify(str(path))
+        with open(path, "a", encoding="utf-8", newline="\n") as stream:
+            stream.write('{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"later public"}]}}\n')
+        first = transcript.read_material(
+            str(path), 0, session_id="task-1", expected=identity, max_scan_bytes=1024,
+        )
+        if first["status"] == "unknown-format":
+            self.assertFalse(first["more"])
+        else:
+            self.assertEqual(first["status"], "ok")
+            self.assertTrue(first["more"] or "later public" in first["text"])
+
     def test_unknown_format_reports_summary_only(self):
         path = self.root / "other.jsonl"
         write_jsonl(path, [{"foo": 1}, "not json at all\n"])

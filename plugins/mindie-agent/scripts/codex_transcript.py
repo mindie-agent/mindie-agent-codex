@@ -370,9 +370,12 @@ def read_material(path, start, *, session_id=None, not_before=None, expected=Non
         result.update(status="missing",coverage_note="transcript unreadable")
         return result
     result.update(digest=consumed.hexdigest(),text="\n\n".join(included),records=len(included))
+    established = expected is not None or result.get("session_match") is True
     if result["end"] == start:
         result["status"] = "unchanged"
-    elif not recognized:
+    elif not recognized and not (
+        established and result["more"] and result["end"] > result["start"]
+    ):
         result.update(status="unknown-format",text="",coverage_note="no recognized native signature")
     return result
 
