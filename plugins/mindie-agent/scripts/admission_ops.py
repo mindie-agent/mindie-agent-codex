@@ -81,19 +81,15 @@ def operation(name, payload):
         root = payload.get("project_root")
         if not isinstance(root, str) or not os.path.isabs(root) or len(root) > 1024:
             raise ValueError("project_root must be an absolute path")
-        # Lineage is unknown at activation: the native task itself is the
-        # root. Known inherited Fork/subagent histories are not new scopes.
+        # Lineage is unknown at binding: the native task itself is the root.
+        # Known inherited Fork/subagent histories are not new scopes. This is
+        # the internal identity binding for the entry — never a consent step,
+        # and never failure-paused.
         lease = store.activate(
             native_session(),
             project_root=str(Path(root).resolve()),
             root_session=None,
         )
-        if not lease.get("enabled") or int(lease.get("failures") or 0) >= 3:
-            raise ValueError(
-                "MindIE session is paused after repeated failures; run "
-                "deactivate then activate to recover — activate does not "
-                "bypass the circuit"
-            )
         return dict(
             status="active",
             mindie_session_id=lease["session"],

@@ -14,7 +14,7 @@ and three readiness probes; the returned service must be unfrozen.
 
 Only a service stopped by this updater invocation is eligible for updater
 restoration. A service already absent before the update stays absent; revoked
-or circuit-paused task leases do not authorize updater restoration. No task is
+or explicitly unbound task leases do not authorize updater restoration. No task is
 activated, no transcript is replayed, and no model call belongs to the updater.
 
 The lifecycle repair candidate handles Stop separately: an activated task with

@@ -1,11 +1,12 @@
-"""Local, explicitly issued task authorization. Discovery never creates state.
+"""Local, entry-bound task identity. Discovery never creates state.
 
 The lease store itself is owned by the shared knowledge core
 (``mindie_knowledge.loop.activation.Admission``) under the explicit neutral
-``admission_path`` recorded at setup. Authorization persists for the same
-native task until it is revoked, paused by the failure circuit, or its
-project scope actually changes; there is no wall-clock expiry and no
-runtime/config fingerprint.
+``admission_path`` recorded at setup. A lease is the internal binding the
+entry establishes automatically; the install-level shared settings file is
+the only persistent user choice. A binding lasts until it is explicitly
+revoked or its project scope actually changes; there is no wall-clock
+expiry, no failure-count pause and no runtime/config fingerprint.
 
 This wrapper stays free of core imports: it binds the native task identity,
 validates shapes, holds the update lock for every store operation, and
@@ -184,12 +185,12 @@ class Sessions:
             return envelope["result"]
 
     def activate(self):
-        """Explicitly authorize this native task; persistent until revoked.
+        """Bind this native task internally; persistent until revoked.
 
-        A healthy repeated activation keeps the same token and original
-        capture boundary; a paused (failure-circuit) task is refused — recovery
-        is an explicit deactivate plus activate. Native identity comes only
-        from CODEX_THREAD_ID inside the helper.
+        A healthy repeated binding keeps the same token and original capture
+        boundary. Failure counts never pause it — no deactivate/reactivate
+        cycle is ever required. Native identity comes only from
+        CODEX_THREAD_ID inside the helper.
         """
         return self._op(
             "activate", {"project_root": Path.cwd().resolve().as_posix()}
@@ -229,7 +230,7 @@ class Sessions:
         )
 
     def finish(self, session, token, succeeded):
-        """Record one call outcome against the task's failure circuit."""
+        """Record one call outcome in the task's diagnostic failure counter."""
         self._op(
             "finish", {"session": session, "token": token, "succeeded": bool(succeeded)}
         )

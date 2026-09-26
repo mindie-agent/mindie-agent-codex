@@ -62,17 +62,19 @@ this change is merged**. Windows hardware acceptance is not this merge's gate.
 Explicitly invoke `$mindie-agent`. Its offline status offers three choices:
 recommended public contribution for a named project/repository/account,
 read-only knowledge, or configuration later. There is no default consent.
-The choice persists, and the Skill activates only this native task.
+The choice persists for the installation, and the Skill binds only this
+native task.
 
-Knowledge tools require that explicit activation. The host supplies task
+Knowledge tools require that entry binding. The host supplies task
 identity; public knowledge calls have no identity or capability argument.
 Mentioning MindIE, opening a repository, MCP discovery or a query does not
-activate it. Remote-dev works in ordinary native tasks independently.
+bind it. Remote-dev works in ordinary native tasks independently.
 
-Authorization persists across idle time and runtime updates. There is no
-24-hour renewal requirement and no configuration fingerprint expiry.
-Revocation, a paused task or an actual project-scope change still matters.
-Use the entry Skill to deactivate or explicitly recover a paused task.
+The install-level choice and the task binding persist across idle time,
+restarts, runtime updates and failures. There is no renewal requirement, no
+configuration fingerprint expiry and no failure-count pause — ordinary
+failures never require deactivate/reactivate. Only explicit unbinding or an
+actual project-scope change ends a binding.
 See [activation details](plugins/mindie-agent/skills/mindie-agent/references/activation-lifecycle.md).
 
 ## Optional experience sharing

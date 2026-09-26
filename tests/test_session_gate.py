@@ -426,9 +426,10 @@ class SessionGateTests(unittest.TestCase):
         with patch.object(mcp_gate, "run", side_effect=ValueError("bad runtime response")):
             for i in range(3):
                 self.assertTrue(gate.call(self.request(lease, ident=500 + i))["isError"])
-        with patch.object(mcp_gate, "run") as run:
-            self.assertTrue(gate.call(self.request(lease, ident=600))["isError"])
-            self.assertEqual(run.call_count, 0)
+        # Protocol failures are recorded diagnostically but never pause the lease.
+        with patch.object(mcp_gate, "run", return_value='{"content":[],"isError":false}') as run:
+            self.assertFalse(gate.call(self.request(lease, ident=600))["isError"])
+            self.assertEqual(run.call_count, 1)
 
     def test_not_started_disposition_is_not_honored_for_mutations(self):
         import runtime_call
@@ -483,22 +484,24 @@ class SessionGateTests(unittest.TestCase):
         self.assertEqual(result["structuredContent"]["execution"], "not_started")
         self.assertEqual(finished, [])
 
-    def test_consecutive_failure_circuit_is_per_session_and_explicitly_reset(self):
+    def test_consecutive_failures_are_per_session_and_never_pause(self):
         a, b = self.activate(), self.activate("manual-B")
         gate = mcp_gate.Gate("knowledge")
         with patch.object(mcp_gate, "run", side_effect=ValueError("bad runtime response")) as run:
             for i in range(20):
                 self.assertTrue(gate.call(self.request(a, ident=i))["isError"])
-            self.assertEqual(run.call_count, 3)
+            # Failure counts never gate: every admitted call still dispatches.
+            self.assertEqual(run.call_count, 20)
             gate.call(self.request(b, ident=21))
-            self.assertEqual(run.call_count, 4)
-            with self.assertRaises(Inactive):
-                self.activate()
+            self.assertEqual(run.call_count, 21)
+            # Re-binding keeps the token; only an explicit revoke rotates it.
+            renewed = self.activate()
+            self.assertEqual(a["mindie_activation"], renewed["mindie_activation"])
             self.sessions.deactivate()
             renewed = self.activate()
             self.assertNotEqual(a["mindie_activation"], renewed["mindie_activation"])
             gate.call(self.request(renewed, ident=22))
-            self.assertEqual(run.call_count, 5)
+            self.assertEqual(run.call_count, 22)
 
     def test_deactivation_rejects_and_config_bytes_do_not_revoke(self):
         lease = self.activate()
