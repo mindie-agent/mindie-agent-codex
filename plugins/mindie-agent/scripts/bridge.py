@@ -228,19 +228,30 @@ def activate(operation):
 
 
 def unconfigured_status():
-    """Stdlib-only offline first-use payload. Creates no files or services."""
+    """Stdlib-only offline first-use payload. Creates no files or services.
+
+    A profile that already holds a saved choice (e.g. from a sibling adapter)
+    is an existing installation: setup reuses the choice, no onboarding."""
+    import consent
+
+    saved = consent.load()
+    first_use = dict(
+        state="unconfigured",
+        prompt=sharing.CHOICES,
+        choices=["contribute", "read-only", "later"],
+    )
+    if saved["state"] == "ok" and saved["choice"]:
+        first_use = dict(state="chosen", choice=saved["choice"])
+    elif saved["state"] in {"corrupt", "unreadable"} or consent.install_traces():
+        first_use = dict(state="existing", detail=saved.get("error"))
     return dict(
         configured=False,
         sharing=dict(state="unconfigured"),
-        first_use=dict(
-            state="unconfigured",
-            prompt=sharing.CHOICES,
-            choices=["contribute", "read-only", "later"],
-        ),
+        first_use=first_use,
         next=(
             "Run scripts/setup.py install --knowledge-python PYTHON "
-            "(headless leaves sharing off). Then choose: recommended "
-            "public contribution via setup.py configure "
+            "(headless leaves sharing off). The saved install-level choice is "
+            "reused; configure contribution via setup.py configure "
             "--community-repository OWNER/REPO --community-project-root PATH "
             "--community-visibility public; or scripts/bridge.py "
             "sharing-choice read-only|later. Do not edit JSON or reinstall."
@@ -520,12 +531,21 @@ def configure(argv):
 
 
 def _reporting_choice():
-    """Optional, independent reporting recommendation. Never installs."""
+    """Optional, independent reporting recommendation. Never installs.
+
+    Offered once inside the first setup, never repeatedly afterwards."""
     from diagnostic_support import reporting_hint, reporting_status
+
+    import consent
 
     view = reporting_status()
     result = dict(reporting=view)
-    if view.get("status") == "not_configured":
+    saved = consent.load()
+    if (
+        view.get("status") == "not_configured"
+        and saved["state"] == "missing"
+        and not consent.install_traces()
+    ):
         result["choice"] = reporting_hint()
     return result
 
@@ -631,6 +651,14 @@ def reporting_operation(operation):
                 env=generation_env(config_file),
             )
             _print_reporting_json(output, "helper_response")
+            try:
+                import consent
+
+                consent.record_reporting(
+                    "enabled" if verb == "enable" else "disabled"
+                )
+            except Exception:
+                pass
         except SystemExit:
             raise
         except Exception as exc:

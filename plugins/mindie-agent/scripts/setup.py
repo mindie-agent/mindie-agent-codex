@@ -246,7 +246,7 @@ def install(args, parser):
         sharing_choice = "contribute"
     config = args.config.expanduser().absolute()
     engine_config = config.with_name(config.stem + ".engine.json")
-    community_config = config.with_name(config.stem + ".community.json")
+    community_config = config.with_name("mindie-community.json")
     admission_path = config.with_name(config.stem + ".admission.sqlite3")
     if config.exists() or engine_config.exists() or community_config.exists():
         parser.error(

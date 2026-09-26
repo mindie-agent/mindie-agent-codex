@@ -31,7 +31,7 @@ class SharingFixture(unittest.TestCase):
         self.scope.mkdir()
         self.config = self.root / "codex.json"
         self.engine = self.root / "engine.json"
-        self.community = self.root / "codex.community.json"
+        self.community = self.root / "mindie-community.json"
         self.admission = self.root / "codex.admission.sqlite3"
         self.engine.write_text(
             json.dumps(

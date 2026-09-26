@@ -64,7 +64,10 @@ class SharingError(ValueError):
 
 
 def configured_path(config_file=None):
-    """Absolute community settings path recorded in the adapter config."""
+    """Profile-shared community settings path, adopting a legacy
+    adapter-specific file once (atomic copy, legacy kept as evidence)."""
+    import consent
+
     config_file = Path(config_file or config_path())
     config = json.loads(config_file.read_text())
     value = config.get("community_config")
@@ -72,7 +75,24 @@ def configured_path(config_file=None):
         raise SharingError(
             "adapter configuration lacks an absolute community_config pointer"
         )
-    return Path(value)
+    legacy = Path(value)
+    shared = consent.shared_community_path()
+    if legacy != shared and legacy.exists() and not shared.exists():
+        try:
+            shared.parent.mkdir(parents=True, exist_ok=True)
+            tmp = shared.with_suffix(shared.suffix + ".tmp")
+            tmp.write_bytes(legacy.read_bytes())
+            os.replace(tmp, shared)
+            os.chmod(shared, 0o600)
+            with update_lock(config_file):
+                adapter = json.loads(config_file.read_text())
+                adapter["community_config"] = str(shared)
+                write(config_file, adapter)
+        except OSError:
+            return legacy
+    if shared.exists():
+        return shared
+    return legacy
 
 
 def canonical_root(value):
@@ -229,36 +249,45 @@ def capture_allowed(lease, cwd, config_file=None):
 
 
 def adapter_choice(config_file=None):
-    try:
-        value = json.loads(Path(config_file or config_path()).read_text()).get(
-            "sharing_choice"
-        )
-    except (OSError, ValueError):
-        return None
-    if value in {"contribute", "read-only", "later"}:
-        return value
+    """The persistent install-level choice from the shared consent document."""
+    import consent
+
+    saved = consent.load()
+    if saved["state"] == "ok" and saved["choice"] in consent.CHOICES:
+        return saved["choice"]
     return None
 
 
 def record_choice(choice, config_file=None):
     if choice not in {"contribute", "read-only", "later"}:
         raise SharingError("sharing choice must be contribute, read-only or later")
-    config_file = Path(config_file or config_path())
-    with update_lock(config_file):
-        adapter = json.loads(config_file.read_text())
-        adapter["sharing_choice"] = choice
-        write(config_file, adapter)
-        return choice
+    import consent
+
+    return consent.record_choice(choice)
+
+
+def consent_state(config_file=None):
+    """The raw consent read for status surfaces (state may be corrupt)."""
+    import consent
+
+    return consent.load()
 
 
 def first_use(config_file=None):
-    """None once a choice exists; otherwise the three first-use options."""
-    if adapter_choice(config_file) is not None:
+    """None once a choice exists or saved state is damaged; otherwise the
+    three first-use options. Installer default-off is unchosen: the one-time
+    setup is presented exactly until a choice is recorded."""
+    import consent
+
+    saved = consent.load()
+    if saved["state"] == "ok" and saved["choice"]:
         return None
+    if saved["state"] in {"corrupt", "unreadable"}:
+        return None  # a fault reported by status, never a fresh onboarding
     try:
-        settings = json.loads(configured_path(config_file).read_text())
-        if isinstance(settings, dict) and settings.get("schema") == SCHEMA:
-            return None
+        json.loads(configured_path(config_file).read_text())
+    except json.JSONDecodeError:
+        return None  # damaged settings: a fault, not onboarding
     except (OSError, ValueError, SharingError):
         pass
     return dict(
@@ -294,9 +323,9 @@ def set_enabled(enable, config_file=None):
         settings["generation"] = secrets.token_hex(8)
         normalized = normalize_with_runtime(settings, python, config_file)
         write(path, normalized)
-        if enable:
-            adapter["sharing_choice"] = "contribute"
-            write(config_file, adapter)
+        import consent
+
+        consent.record_choice("contribute" if enable else "disabled")
         return normalized
 
 

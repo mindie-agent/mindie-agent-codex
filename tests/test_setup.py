@@ -89,7 +89,7 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(adapter["runtime_scripts"], str(SCRIPTS))
             self.assertNotIn("sharing_choice", adapter)
             # Community sharing defaults OFF: the pointer exists, the file not.
-            community = config.with_name("codex.community.json")
+            community = config.with_name("mindie-community.json")
             self.assertEqual(value["community_config"], str(community))
             self.assertFalse(community.exists())
             self.assertFalse(admission.exists())
@@ -154,7 +154,7 @@ class SetupTests(unittest.TestCase):
                 "public",
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            community = config.with_name("codex.community.json")
+            community = config.with_name("mindie-community.json")
             self.assertEqual((community.stat().st_mode & 0o777), 0o600)
             settings = json.loads(community.read_text())
             self.assertEqual(settings["schema"], "mindie-community-config/1")
