@@ -138,6 +138,66 @@ class SetupTests(unittest.TestCase):
             )
             self.assertNotIn("session_activation", json.loads(engine.read_text()))
 
+    def test_configure_preserves_a_damaged_community_document(self):
+        for module in setup_script.PROBE_MODULES:
+            try:
+                __import__(module)
+            except ImportError:
+                self.skipTest(f"pinned runtime not installed in {sys.executable}")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            config = base / "codex.json"
+            result = run_setup(sys.executable, "--config", config, "--root", base / "data")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            scope = base / "scope"
+            scope.mkdir()
+            community = config.with_name("mindie-community.json")
+            community.write_text("{broken-community")
+            before = community.read_bytes()
+            configured = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "setup.py"),
+                    "configure",
+                    "--config", str(config),
+                    "--community-repository", "owner/explicit",
+                    "--community-project-root", str(scope),
+                    "--community-visibility", "public",
+                ],
+                text=True,
+                capture_output=True,
+                timeout=30,
+            )
+            self.assertNotEqual(configured.returncode, 0)
+            self.assertIn("damaged", configured.stderr)
+            self.assertEqual(community.read_bytes(), before)
+            # A parseable document with malformed managed values is the
+            # explicit repair path: configure rewrites it normally.
+            community.write_text(json.dumps(
+                dict(schema="mindie-community-config/1", enabled="yes",
+                     project_roots="not-a-list", idle_seconds=300,
+                     sibling_key={"owned": "extension"})
+            ))
+            repaired = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "setup.py"),
+                    "configure",
+                    "--config", str(config),
+                    "--community-repository", "owner/explicit",
+                    "--community-project-root", str(scope),
+                    "--community-visibility", "public",
+                ],
+                text=True,
+                capture_output=True,
+                timeout=30,
+            )
+            self.assertEqual(repaired.returncode, 0, repaired.stderr)
+            settings = json.loads(community.read_text())
+            self.assertTrue(settings["enabled"])
+            self.assertEqual(settings["repository"], "owner/explicit")
+            self.assertEqual(settings["sibling_key"], {"owned": "extension"})
+
     def test_community_selection_records_settings_and_enables_sharing(self):
         for module in setup_script.PROBE_MODULES:
             try:

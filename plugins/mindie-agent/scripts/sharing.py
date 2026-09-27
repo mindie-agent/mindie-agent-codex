@@ -115,6 +115,81 @@ def configured_path(config_file=None):
     return Path(value)
 
 
+def _migrate_community_locked(config_file):
+    """The resolve → adopt → repoint → wire sequence; the caller MUST hold
+    ``community_write_lock(config_file)`` — one context for the whole
+    boundary, so a toggle or configure can never interleave mid-sequence."""
+    import consent
+
+    shared = consent.shared_community_path_for(config_file)
+    authority = str(consent.consent_path_for(config_file))
+    result = dict(status="current", path=str(shared), detail=None)
+    adapter = json.loads(config_file.read_text())
+    pointer = adapter.get("community_config")
+    pointer = (
+        Path(pointer)
+        if isinstance(pointer, str) and os.path.isabs(pointer)
+        else None
+    )
+    if pointer != shared:
+        if (
+            pointer is not None
+            and pointer.exists()
+            and not shared.exists()
+        ):
+            shared.parent.mkdir(parents=True, exist_ok=True)
+            fd, name = tempfile.mkstemp(
+                dir=shared.parent, prefix=".community-"
+            )
+            try:
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(pointer.read_bytes())
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.chmod(name, 0o600)
+                os.replace(name, shared)
+            finally:
+                Path(name).unlink(missing_ok=True)
+            result.update(status="adopted", adopted_from=str(pointer))
+        elif pointer is not None and pointer.exists():
+            if pointer.read_bytes() != shared.read_bytes():
+                result["detail"] = (
+                    "legacy community settings differ from the shared "
+                    "authority; the shared file wins unchanged and the "
+                    f"legacy file is kept as evidence: {pointer}"
+                )
+        if result["status"] == "current":
+            result["status"] = "repointed"
+        adapter["community_config"] = str(shared)
+        write(config_file, adapter)
+        engine_value = adapter.get("engine_config")
+        if isinstance(engine_value, str) and os.path.isabs(engine_value):
+            engine_path = Path(engine_value)
+            try:
+                engine = json.loads(engine_path.read_text())
+            except (OSError, ValueError):
+                engine = None
+            if (
+                isinstance(engine, dict)
+                and engine.get("community_config") != str(shared)
+            ):
+                engine["community_config"] = str(shared)
+                write(engine_path, engine)
+    if shared.exists():
+        try:
+            settings = json.loads(shared.read_text())
+        except ValueError:
+            settings = None  # damaged settings stay a truthful fault
+        if isinstance(settings, dict) and (
+            not isinstance(settings.get("consent_config"), str)
+            or not os.path.isabs(settings["consent_config"])
+            or settings["consent_config"] != authority
+        ):
+            settings["consent_config"] = authority
+            write(shared, settings)
+    return result
+
+
 def migrate_community_path(config_file=None):
     """Explicit boundary convergence on the profile-shared community path.
 
@@ -133,7 +208,6 @@ def migrate_community_path(config_file=None):
     config_file = Path(config_file or config_path())
     shared = consent.shared_community_path_for(config_file)
     authority = str(consent.consent_path_for(config_file))
-    result = dict(status="current", path=str(shared), detail=None)
     # Steady-state fast path without the lock: pointer already converged and
     # the consent wiring already present.
     try:
@@ -147,74 +221,11 @@ def migrate_community_path(config_file=None):
                 isinstance(present, dict)
                 and present.get("consent_config") == authority
             ):
-                return result
+                return dict(status="current", path=str(shared), detail=None)
     except (OSError, ValueError):
         pass
     with community_write_lock(config_file):
-        adapter = json.loads(config_file.read_text())
-        pointer = adapter.get("community_config")
-        pointer = (
-            Path(pointer)
-            if isinstance(pointer, str) and os.path.isabs(pointer)
-            else None
-        )
-        if pointer != shared:
-            if (
-                pointer is not None
-                and pointer.exists()
-                and not shared.exists()
-            ):
-                shared.parent.mkdir(parents=True, exist_ok=True)
-                fd, name = tempfile.mkstemp(
-                    dir=shared.parent, prefix=".community-"
-                )
-                try:
-                    with os.fdopen(fd, "wb") as stream:
-                        stream.write(pointer.read_bytes())
-                        stream.flush()
-                        os.fsync(stream.fileno())
-                    os.chmod(name, 0o600)
-                    os.replace(name, shared)
-                finally:
-                    Path(name).unlink(missing_ok=True)
-                result.update(status="adopted", adopted_from=str(pointer))
-            elif pointer is not None and pointer.exists():
-                if pointer.read_bytes() != shared.read_bytes():
-                    result["detail"] = (
-                        "legacy community settings differ from the shared "
-                        "authority; the shared file wins unchanged and the "
-                        f"legacy file is kept as evidence: {pointer}"
-                    )
-            if result["status"] == "current":
-                result["status"] = "repointed"
-            adapter["community_config"] = str(shared)
-            write(config_file, adapter)
-            engine_value = adapter.get("engine_config")
-            if isinstance(engine_value, str) and os.path.isabs(engine_value):
-                engine_path = Path(engine_value)
-                try:
-                    engine = json.loads(engine_path.read_text())
-                except (OSError, ValueError):
-                    engine = None
-                if (
-                    isinstance(engine, dict)
-                    and engine.get("community_config") != str(shared)
-                ):
-                    engine["community_config"] = str(shared)
-                    write(engine_path, engine)
-        if shared.exists():
-            try:
-                settings = json.loads(shared.read_text())
-            except ValueError:
-                settings = None  # damaged settings stay a truthful fault
-            if isinstance(settings, dict) and (
-                not isinstance(settings.get("consent_config"), str)
-                or not os.path.isabs(settings["consent_config"])
-                or settings["consent_config"] != authority
-            ):
-                settings["consent_config"] = authority
-                write(shared, settings)
-    return result
+        return _migrate_community_locked(config_file)
 
 
 def canonical_root(value):
@@ -472,13 +483,26 @@ def set_enabled(enable, config_file=None):
     with community_write_lock(config_file):
         path = configured_path(config_file)
         try:
-            raw = json.loads(path.read_text())
-        except (OSError, ValueError):
+            raw = path.read_bytes()
+        except FileNotFoundError:
             raise SharingError(
                 "community sharing is not configured; run setup.py configure "
                 "with --community-* to select repository, scope and visibility first"
-            )
-        settings = validate(raw)
+            ) from None
+        except OSError:
+            raise SharingError(
+                "community settings file is unreadable; inspect and repair "
+                "the designated file explicitly — no fallback authority is used"
+            ) from None
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            raise SharingError(
+                "community settings file is damaged; its bytes are preserved. "
+                "Inspect the file and remove it explicitly before configuring "
+                "again — a damaged authority is never silently replaced"
+            ) from None
+        settings = validate(parsed)
         was_enabled = settings["enabled"]
         settings["enabled"] = bool(enable)
         # Match the shared core write() semantics: enabled_at refreshes only

@@ -365,10 +365,6 @@ def configure(args, parser):
             "(--community-repository, --community-project-root, "
             "--community-visibility public)"
         )
-    # Explicit configuration boundary: converge adapter/engine/worker onto
-    # the profile-shared community path before writing new settings.
-    moved = sharing.migrate_community_path(config)
-    community_config = Path(moved["path"])
     # The explicit contribution choice lands in the consent authority; a
     # damaged consent document refuses first so settings stay untouched.
     try:
@@ -376,19 +372,50 @@ def configure(args, parser):
     except consent.ConsentError as exc:
         parser.error(str(exc))
     with sharing.community_write_lock(config):
-        previous = {}
+        # One context for the whole boundary: converge adapter/engine/worker
+        # onto the profile-shared path, then resolve and re-read the current
+        # authority before writing.
+        moved = sharing._migrate_community_locked(config)
+        community_config = Path(moved["path"])
+        # A damaged or non-conforming document fails here with its bytes
+        # preserved — a managed mutation is never an implicit repair by
+        # replacement. A parseable document is rewritten normally (explicit
+        # re-selection is the repair path); a missing file is a first
+        # configuration.
         try:
-            old = json.loads(community_config.read_text())
-            if isinstance(old, dict):
-                previous = {
-                    key: value
-                    for key, value in old.items()
-                    if key not in sharing.CORE_KEYS and key != "consent_config"
-                }
-        except (OSError, ValueError):
-            pass
+            raw = community_config.read_bytes()
+        except FileNotFoundError:
+            raw = None
+        except OSError as exc:
+            parser.error(
+                "community settings file is unreadable; inspect and repair "
+                f"the designated file explicitly ({type(exc).__name__})"
+            )
+        extensions = {}
+        if raw is not None:
+            try:
+                old = json.loads(raw)
+            except ValueError:
+                parser.error(
+                    "community settings file is damaged; its bytes are "
+                    "preserved. Inspect and remove it explicitly before "
+                    "configuring again — a damaged authority is never "
+                    "silently replaced."
+                )
+            if not isinstance(old, dict) or old.get("schema") != sharing.SCHEMA:
+                parser.error(
+                    "community settings file is not a valid "
+                    "mindie-community-config/1 document; its bytes are "
+                    "preserved. Inspect and remove it explicitly before "
+                    "configuring again."
+                )
+            extensions = {
+                key: value
+                for key, value in old.items()
+                if key not in sharing.CORE_KEYS and key != "consent_config"
+            }
         merged = sharing.normalize_with_runtime(
-            {**previous, **community}, python, config
+            {**extensions, **community}, python, config
         )
         merged["consent_config"] = str(consent.consent_path_for(config))
         community_config.parent.mkdir(parents=True, exist_ok=True)
