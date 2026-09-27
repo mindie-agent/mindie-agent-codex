@@ -54,19 +54,24 @@ class LocalUpdater(Updater):
                 self.installs += 1
                 # Simulate the proven native behavior (codex-cli 0.153.4,
                 # isolated CODEX_HOME): add prunes all other version
-                # directories and caches exactly the marketplace version.
+                # directories and caches the marketplace plugin tree
+                # byte-identically under its manifest version.
                 cache = self.native_cache()
                 for entry in cache.iterdir():
                     if entry.is_dir():
                         shutil.rmtree(entry)
                 marketplace = read(self.root / "fixture-marketplace.json")
-                manifest = read(
-                    Path(marketplace["root"])
-                    / "plugins/mindie-agent/.codex-plugin/plugin.json"
+                plugin_source = (
+                    Path(marketplace["root"]) / "plugins/mindie-agent"
                 )
-                scripts = cache / manifest["version"] / "scripts"
-                scripts.mkdir(parents=True)
-                (scripts / "bridge.py").write_text("cached entrypoint")
+                manifest = read(
+                    plugin_source / ".codex-plugin/plugin.json"
+                )
+                shutil.copytree(
+                    plugin_source,
+                    cache / manifest["version"],
+                    ignore=shutil.ignore_patterns("__pycache__"),
+                )
                 if self.fail_install:
                     self.fail_install = False  # Rollback CLI succeeds.
                     raise RuntimeError("fixture installation failed")
@@ -264,6 +269,29 @@ class AutoUpdateTests(unittest.TestCase):
         installs = self.updater.installs
         self.assertEqual(self.check()["status"], "up_to_date")
         self.assertEqual(self.updater.installs, installs)
+
+    def test_verify_native_rejects_same_version_stale_bytes(self):
+        result = self.check()
+        self.assertEqual(result["status"], "installed")
+        current = self.updater.state["current"]
+        version = current["version"]
+        plugin = Path(current["plugin"])
+        cache_dir = self.updater.native_cache() / version
+        # The byte-identical resolved cache verifies.
+        entry = self.updater.verify_native(version, str(plugin))
+        self.assertEqual(entry["version"], version)
+        # A stale same-version cache copy is a hard failure, never a warning.
+        victim = cache_dir / "scripts/bridge.py"
+        original = victim.read_bytes()
+        victim.write_text("stale bytes from an older generation\n")
+        try:
+            with self.assertRaises(RuntimeError):
+                self.updater.verify_native(version, str(plugin))
+        finally:
+            victim.write_bytes(original)
+        self.assertEqual(
+            self.updater.verify_native(version, str(plugin))["version"], version
+        )
 
     def test_package_binds_installation_config_into_mcp_and_hook(self):
         result = self.check()

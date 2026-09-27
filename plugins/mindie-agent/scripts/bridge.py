@@ -466,6 +466,17 @@ def stop():
         event = hook_event(
             _read_hook_stdin(MAX_HOOK_BYTES, deadline - time.monotonic())
         )
+        # This host delivers no native thread identity to the hook process
+        # (verified on codex-cli 0.153.4: the hook env carries CODEX_HOME
+        # only). When a host does supply CODEX_THREAD_ID, a disagreement with
+        # the event's session is a genuine anomaly — fail closed before any
+        # capture. The transcript-artifact ownership check in the helper is
+        # the second, always-available layer.
+        native = os.environ.get("CODEX_THREAD_ID")
+        if native and native != event["session_id"]:
+            _record_stop("envelope", "identity_mismatch")
+            print("{}")
+            return
     except ValueError as exc:
         if str(exc) in {"unexpected hook event", "recursive Stop is not a capture"}:
             print("{}")
@@ -592,20 +603,23 @@ def configure(argv):
 def _reporting_choice():
     """Optional, independent reporting recommendation. Never installs.
 
-    Offered once inside the first setup, never repeatedly afterwards."""
-    from diagnostic_support import reporting_hint, reporting_status
+    Offered once inside the first setup, never repeatedly afterwards. The
+    effective view never reports an enabled reporter when the saved
+    reporting choice disagrees."""
+    from diagnostic_support import (
+        effective_reporting,
+        reporting_offer,
+        reporting_status,
+    )
 
     import consent
 
-    view = reporting_status()
-    result = dict(reporting=view)
     saved = consent.load()
-    if (
-        view.get("status") == "not_configured"
-        and saved["state"] == "missing"
-        and not consent.install_traces()
-    ):
-        result["choice"] = reporting_hint()
+    view = effective_reporting(reporting_status(), saved.get("reporting"))
+    result = dict(reporting=view)
+    offer = reporting_offer(view, saved, consent.install_traces())
+    if offer is not None:
+        result["choice"] = offer
     return result
 
 
@@ -691,6 +705,15 @@ def reporting_operation(operation):
         stage = "config_read"
         try:
             python, scripts = _adapter_python(config_file)
+            # The saved preference is recorded before the reporter policy is
+            # touched; a refused consent write (damaged authority) leaves the
+            # policy untouched, so the real service choice and the saved
+            # preference never diverge.
+            import consent
+
+            consent.record_reporting(
+                "enabled" if verb == "enable" else "disabled"
+            )
             stage = "helper_run"
             output = run(
                 [
@@ -710,14 +733,6 @@ def reporting_operation(operation):
                 env=generation_env(config_file),
             )
             _print_reporting_json(output, "helper_response")
-            try:
-                import consent
-
-                consent.record_reporting(
-                    "enabled" if verb == "enable" else "disabled"
-                )
-            except Exception:
-                pass
         except SystemExit:
             raise
         except Exception as exc:
@@ -726,6 +741,24 @@ def reporting_operation(operation):
     timeout = 60 if verb == "ensure" else 5
     stage = "config_read"
     try:
+        # Preparing or maintaining the reporter requires the saved reporting
+        # choice to be exactly "enabled" — a saved later/disabled constrains
+        # the real service, not just the prompts.
+        import consent
+
+        saved = consent.load()
+        if saved.get("reporting") != "enabled":
+            print(json.dumps(dict(
+                status="unavailable",
+                error=dict(type="ConsentError", stage="consent"),
+                detail=(
+                    "the saved reporting choice is "
+                    + str(saved.get("reporting") or saved.get("state"))
+                    + "; reporting ensure/maintain runs only after an explicit "
+                    "reporting-enable"
+                ),
+            )))
+            raise SystemExit(1)
         python, _scripts = _adapter_python(config_file)
         stage = "helper_run"
         output = run(

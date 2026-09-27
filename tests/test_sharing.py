@@ -243,6 +243,58 @@ class GateTests(SharingFixture):
         self.assertEqual(self.captures(), 1)
         self.assertEqual(self.attempts(), 0)
 
+    def test_transcript_owned_by_another_session_is_never_captured(self):
+        # The hook process gets no native thread identity from this host, so
+        # the forwarded transcript artifact is the binding evidence: a Stop
+        # event naming this task but forwarding ANOTHER session's transcript
+        # writes no capture row and no model work.
+        self.write_sharing()
+        self.activate()
+        self.prepare_store()
+        foreign = self.scope / "foreign.jsonl"
+        foreign.write_text(
+            json.dumps(
+                dict(
+                    type="session_meta",
+                    timestamp="2026-09-27T00:00:00Z",
+                    payload=dict(id="other-task", cwd=str(self.scope)),
+                )
+            )
+            + "\n"
+        )
+        result = self.bridge("stop", self.event(transcript_path=str(foreign)))
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        self.assertEqual(self.captures(), 0)
+        self.assertEqual(self.attempts(), 0)
+        # The task's own transcript captures normally.
+        own = self.scope / "own.jsonl"
+        own.write_text(
+            json.dumps(
+                dict(
+                    type="session_meta",
+                    timestamp="2026-09-27T00:00:00Z",
+                    payload=dict(id="manual-A", cwd=str(self.scope)),
+                )
+            )
+            + "\n"
+        )
+        result = self.bridge("stop", self.event(transcript_path=str(own)))
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        self.assertEqual(self.captures(), 1)
+
+    def test_env_thread_disagreeing_with_event_session_drops_capture(self):
+        # When the host does supply CODEX_THREAD_ID to the hook process, an
+        # event naming a different session is an anomaly: fail closed.
+        self.write_sharing()
+        self.activate()
+        self.prepare_store()
+        with patch.dict(os.environ, CODEX_THREAD_ID="child-task"):
+            result = self.bridge("stop", self.event(last_assistant_message="Done"))
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        self.assertEqual(self.captures(), 0)
+        self.assertEqual(self.attempts(), 0)
+
+
     def test_event_without_any_material_is_skipped(self):
         self.write_sharing()
         self.activate()

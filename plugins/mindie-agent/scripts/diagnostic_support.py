@@ -257,3 +257,43 @@ def reporting_hint():
                  "repository. Prompts, transcripts, commands, environment and credentials "
                  "are excluded. This is a separate shared user choice; consult its status."),
     }
+
+
+def reporting_offer(view, saved, install_traces):
+    """The one-time reporting offer, only inside a genuine first setup.
+
+    ``view`` is the upstream reporting status; ``saved`` the consent read.
+    A saved reporting choice (enabled/disabled/later) or any install trace
+    suppresses the offer forever: reporting unchosen-by-default is never a
+    reason to ask again in a later session.
+    """
+    if not isinstance(view, dict) or view.get("status") != "not_configured":
+        return None
+    if not isinstance(saved, dict) or saved.get("state") != "missing":
+        return None
+    if install_traces:
+        return None
+    return reporting_hint()
+
+
+def effective_reporting(view, saved_reporting):
+    """The effective reporting state for status surfaces.
+
+    A reporter policy that reads enabled only authorizes reporting when the
+    saved consent reporting choice is also ``enabled``. On disagreement the
+    saved choice wins: the view reports enabled=false with an explicit
+    reconcile note — the stale service configuration is surfaced, never
+    hidden, and never silently re-authorized.
+    """
+    if not isinstance(view, dict) or view.get("enabled") is not True:
+        return view
+    if saved_reporting == "enabled":
+        return view
+    adjusted = dict(view, enabled=False)
+    adjusted["detail"] = (
+        "the reporter policy is enabled but the saved reporting choice is "
+        f"{saved_reporting or 'absent'}; the saved choice wins and reporting "
+        "stays unauthorized — run scripts/bridge.py reporting-disable to "
+        "retire the stale reporter, or reporting-enable to choose again"
+    )
+    return adjusted

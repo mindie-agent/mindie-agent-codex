@@ -159,6 +159,22 @@ def operation(name, payload):
         turn = event.get("turn_id")
         if not isinstance(turn, str) or not IDENTITY.fullmatch(turn):
             raise ValueError("invalid hook identity")
+        transcript = event.get("transcript_path")
+        if isinstance(transcript, str):
+            # The hook process receives no native thread identity from this
+            # host, so the forwarded transcript artifact itself is the binding
+            # evidence: a positive mismatch between the event's session and
+            # the transcript owner is never captured. A missing/unreadable or
+            # unrecognizable transcript stays on the existing degrade path —
+            # the worker's parser remains the content-level backstop.
+            import codex_transcript
+
+            probe = codex_transcript.read_material(
+                transcript, 0, session_id=session,
+                max_scan_bytes=1024, max_seconds=1.0, max_text_bytes=16384,
+            )
+            if probe.get("session_match") is False:
+                return dict(stage="inert", reason="wrong-task")
         forwarded = dict(event, mindie_activation=lease["token"], harness="codex")
         config = json.loads(config_path().read_text())
         from mindie_knowledge.loop.cli import capture_hook

@@ -793,8 +793,16 @@ class Updater:
                 return entry
         return None
 
-    def verify_native(self, version):
-        """Fail unless native inventory resolves exactly this installed version."""
+    def verify_native(self, version, plugin=None):
+        """Fail unless native inventory resolves exactly this installed version
+        AND the resolved cache tree carries the candidate's bytes.
+
+        The version string alone is not proof: a stale cache directory with
+        the same version name could hold older bytes. When the candidate
+        plugin tree is given, every candidate file must exist in the resolved
+        cache directory with identical content — a same-version stale copy is
+        a hard failure, never a warning.
+        """
         entry = self.native_plugin_entry()
         if (
             not entry
@@ -816,7 +824,47 @@ class Updater:
                 + ", expected installed+enabled version "
                 + version
             )
+        if plugin is not None:
+            resolved = (
+                Path(self.settings["codex_home"])
+                / "plugins/cache/mindie-agent/mindie-agent"
+                / version
+            )
+            self._verify_tree_bytes(Path(plugin), resolved)
         return entry
+
+    @staticmethod
+    def _verify_tree_bytes(candidate, resolved):
+        """Every candidate file must exist in the resolved cache, byte-equal.
+
+        Extra files the host adds to its cache are tolerated; a missing or
+        differing candidate file means the host would execute bytes other
+        than the reviewed generation.
+        """
+        candidate = Path(candidate)
+        if not candidate.is_dir():
+            raise RuntimeError("candidate plugin tree is missing: " + str(candidate))
+        mismatches = []
+        for path in sorted(candidate.rglob("*")):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(candidate)
+            other = resolved / relative
+            try:
+                same = other.is_file() and other.read_bytes() == path.read_bytes()
+            except OSError:
+                same = False
+            if not same:
+                mismatches.append(str(relative))
+            if len(mismatches) >= 5:
+                break
+        if mismatches:
+            raise RuntimeError(
+                "resolved native cache does not carry the candidate bytes at "
+                + str(resolved)
+                + "; differing: "
+                + ", ".join(mismatches)
+            )
 
     def preserve_caches(self):
         # Loaded native tasks may still execute cached entrypoints: retain
@@ -850,7 +898,10 @@ class Updater:
         journal = read(journal_path)
         if self.state.get("current", {}).get("revision") == journal.get("candidate"):
             self.restore_caches()
-            self.verify_native(self.state["current"]["version"])
+            self.verify_native(
+                self.state["current"]["version"],
+                self.state["current"].get("plugin"),
+            )
             journal_path.unlink()
             return
         if journal.get("recoveries", 0) >= ATTEMPTS:
@@ -877,7 +928,10 @@ class Updater:
         # Retained caches must not pollute the rollback either: the native
         # selection after recovery has to be the version the journal restored.
         if journal.get("marketplace") and journal.get("previous_version"):
-            self.verify_native(journal["previous_version"])
+            self.verify_native(
+                journal["previous_version"],
+                self.state.get("current", {}).get("plugin"),
+            )
         journal_path.unlink()
 
     def restore_service(self, final_proven):
@@ -988,9 +1042,10 @@ class Updater:
                 )
                 self.restore_caches()
                 # The add receipt is not proof: retained caches compete in
-                # native discovery. Verify the actual resolved version or roll
-                # back instead of reporting a fake installed state.
-                self.verify_native(candidate["version"])
+                # native discovery. Verify the actual resolved version AND
+                # its bytes or roll back instead of reporting a fake
+                # installed state.
+                self.verify_native(candidate["version"], candidate["plugin"])
                 engine = read(adapter["engine_config"])
                 # One committed generation: worker, transcript parser and
                 # interpreter move together; the neutral admission store and
@@ -1085,6 +1140,12 @@ class Updater:
             python = adapter.get("python") if isinstance(adapter, dict) else None
             if not isinstance(python, str) or not python or not os.path.isfile(python):
                 return {"status": "deferred", "error_type": "missing_runtime"}
+            import consent as _consent
+
+            if _consent.load(self.config).get("reporting") != "enabled":
+                # The saved reporting choice constrains the real service:
+                # maintenance only runs while reporting is explicitly enabled.
+                return {"status": "deferred", "error_type": "reporting_not_enabled"}
             # Pass the REAL remaining window: the CLI's 75s default includes
             # offline work and skips the upgrade unless a full 60s handoff
             # plus 1s exit remains; 2s is this parent's exit/startup margin.
