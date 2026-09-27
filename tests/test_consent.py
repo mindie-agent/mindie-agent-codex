@@ -191,6 +191,33 @@ class ConsentFixture(unittest.TestCase):
         self.assertEqual(saved["choice"], "contribute")
         self.assertEqual(saved["reporting"], "enabled")
 
+    def test_migration_stamp_preserves_a_nonconforming_document(self):
+        shared = consent.shared_community_path()
+        foreign = '{"schema":"foreign-format/1","payload":"preserve"}\n'
+        shared.write_text(foreign)
+        migrated = sharing.migrate_community_path()
+        self.assertEqual(shared.read_text(), foreign)  # bytes preserved
+        self.assertIsNotNone(migrated["detail"])  # fault reported, not silent
+        # Parseable but malformed managed values: also never stamped.
+        shared.write_text(json.dumps(
+            dict(schema="mindie-community-config/1", enabled="yes",
+                 project_roots="not-a-list", idle_seconds=300)
+        ))
+        before = shared.read_text()
+        migrated = sharing.migrate_community_path()
+        self.assertEqual(shared.read_text(), before)
+        self.assertIsNotNone(migrated["detail"])
+        # A conforming document is stamped normally, managed keys untouched.
+        shared.write_text(json.dumps(
+            dict(schema="mindie-community-config/1", enabled=False,
+                 repository="owner/repo", project_roots=[], idle_seconds=300)
+        ))
+        migrated = sharing.migrate_community_path()
+        settings = json.loads(shared.read_text())
+        self.assertEqual(settings["consent_config"], str(consent.consent_path()))
+        self.assertFalse(settings["enabled"])
+        self.assertNotIn("enabled_at", settings)  # managed keys untouched
+
     def test_read_and_noop_migration_create_nothing(self):
         saved = consent.load()
         self.assertEqual(saved["state"], "missing")

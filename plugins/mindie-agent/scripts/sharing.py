@@ -176,17 +176,32 @@ def _migrate_community_locked(config_file):
                 engine["community_config"] = str(shared)
                 write(engine_path, engine)
     if shared.exists():
+        # The consent wiring stamp may only touch a document that passes the
+        # existing structural validator: a damaged, foreign-schema or
+        # otherwise non-conforming document is preserved byte-identical and
+        # reported, never implicitly repaired or stamped (the same contract
+        # core's update_extensions enforces; the explicit managed configure
+        # remains the only repair path for malformed values).
         try:
-            settings = json.loads(shared.read_text())
+            settings = validate(json.loads(shared.read_text()))
         except ValueError:
-            settings = None  # damaged settings stay a truthful fault
-        if isinstance(settings, dict) and (
+            settings = None
+        if settings is None:
+            if result["detail"] is None:
+                result["detail"] = (
+                    "shared community settings are damaged or non-conforming; "
+                    "bytes preserved and the consent wiring stamp skipped — "
+                    "the fault surfaces via status; repair is an explicit "
+                    "managed configure or manual removal"
+                )
+        elif (
             not isinstance(settings.get("consent_config"), str)
             or not os.path.isabs(settings["consent_config"])
             or settings["consent_config"] != authority
         ):
-            settings["consent_config"] = authority
-            write(shared, settings)
+            raw = json.loads(shared.read_text())
+            raw["consent_config"] = authority
+            write(shared, raw)
     return result
 
 
