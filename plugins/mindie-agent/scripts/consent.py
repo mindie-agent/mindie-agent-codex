@@ -79,23 +79,21 @@ def record_reporting(value: str, config_file=None) -> str:
     return value
 
 
-def _legacy_config_choice(config_file: Path):
+def _read_adapter_config(config_file: Path) -> dict:
+    """One read of the adapter configuration; {} when absent or invalid."""
     try:
-        value = json.loads(Path(config_file).read_text()).get("sharing_choice")
+        data = json.loads(Path(config_file).read_text())
     except (OSError, ValueError):
-        return None
-    return value if value in CHOICES else None
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
-def _legacy_community_files(config_file: Path):
+def _legacy_community_files(config_file: Path, config: dict):
     """Candidate legacy community files: the shared path and the configured
     legacy pointer, deduplicated by resolved path."""
     seen = set()
     paths = [shared_community_path_for(config_file)]
-    try:
-        value = json.loads(Path(config_file).read_text()).get("community_config")
-    except (OSError, ValueError):
-        value = None
+    value = config.get("community_config")
     if isinstance(value, str) and os.path.isabs(value):
         paths.append(Path(value))
     result = []
@@ -115,14 +113,15 @@ def legacy_candidates(config_file=None) -> dict:
     legacy source is a diagnosable problem, not consent evidence.
     """
     config_file = Path(config_file) if config_file is not None else config_path()
+    config = _read_adapter_config(config_file)
     candidates = []
     problems = []
-    choice = _legacy_config_choice(config_file)
-    if choice is not None:
+    choice = config.get("sharing_choice")
+    if choice in CHOICES:
         candidates.append(
             dict(choice=choice, reporting=None, source="adapter-config")
         )
-    for path in _legacy_community_files(config_file):
+    for path in _legacy_community_files(config_file, config):
         try:
             raw = path.read_bytes()
         except FileNotFoundError:
@@ -189,7 +188,8 @@ def install_traces(config_file=None) -> bool:
     config_file = Path(config_file) if config_file is not None else config_path()
     if consent_path_for(config_file).exists():
         return True
-    for path in _legacy_community_files(config_file):
+    config = _read_adapter_config(config_file)
+    for path in _legacy_community_files(config_file, config):
         if path.exists():
             return True
-    return _legacy_config_choice(config_file) is not None
+    return config.get("sharing_choice") in CHOICES

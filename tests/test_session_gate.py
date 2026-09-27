@@ -764,6 +764,12 @@ class SessionGateTests(unittest.TestCase):
         settings = json.loads(shared.read_text())
         self.assertEqual(settings["consent_config"], str(consent_file))
         self.assertTrue(community.exists())  # legacy kept as evidence
+        # One authority for every consumer: the adapter's read path and the
+        # worker-facing engine config resolve to the same file.
+        import sharing as sharing_mod
+
+        self.assertEqual(sharing_mod.configured_path(), shared)
+        self.assertEqual(engine["community_config"], str(shared))
         # Second entry: nothing migrated, no re-ask, same binding.
         again = json.loads(self.bridge("activate").stdout)
         self.assertNotIn("migration", again)

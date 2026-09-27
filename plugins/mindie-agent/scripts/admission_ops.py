@@ -36,13 +36,20 @@ def config_path():
     )
 
 
-def admission():
-    from mindie_knowledge.loop.activation import Admission
-
+def read_config():
+    """One read of the adapter configuration for this helper invocation."""
     try:
         config = json.loads(config_path().read_text())
     except (OSError, ValueError):
         raise ValueError("MindIE adapter configuration is unreadable")
+    if not isinstance(config, dict):
+        raise ValueError("MindIE adapter configuration is unreadable")
+    return config
+
+
+def admission(config):
+    from mindie_knowledge.loop.activation import Admission
+
     path = config.get("admission_path")
     if not isinstance(path, str) or not os.path.isabs(path):
         raise ValueError(
@@ -76,7 +83,8 @@ def checked_token(payload):
 
 
 def operation(name, payload):
-    store = admission()
+    config = read_config()
+    store = admission(config)
     if name == "activate":
         root = payload.get("project_root")
         if not isinstance(root, str) or not os.path.isabs(root) or len(root) > 1024:
@@ -176,7 +184,6 @@ def operation(name, payload):
             if probe.get("session_match") is False:
                 return dict(stage="inert", reason="wrong-task")
         forwarded = dict(event, mindie_activation=lease["token"], harness="codex")
-        config = json.loads(config_path().read_text())
         from mindie_knowledge.loop.cli import capture_hook
 
         result = capture_hook(config["engine_config"], forwarded)

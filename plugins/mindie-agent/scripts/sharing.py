@@ -380,11 +380,15 @@ def capture_allowed(lease, cwd, config_file=None):
     )
 
 
-def adapter_choice(config_file=None):
-    """The persistent install-level choice from the shared consent document."""
+def adapter_choice(config_file=None, saved=None):
+    """The persistent install-level choice from the shared consent document.
+
+    ``saved`` may carry an already-taken consent read so one status pass
+    loads the authority exactly once.
+    """
     import consent
 
-    saved = consent.load(config_file)
+    saved = saved if saved is not None else consent.load(config_file)
     if saved["state"] == "ok" and saved["choice"] in consent.CHOICES:
         return saved["choice"]
     return None
@@ -405,7 +409,7 @@ def consent_state(config_file=None):
     return consent.load(config_file)
 
 
-def first_use(config_file=None):
+def first_use(config_file=None, saved=None):
     """None once a choice exists, saved state is damaged, or any install
     trace shows this is an existing installation pending its one-time
     boundary migration; otherwise the three first-use options. Installer
@@ -413,7 +417,7 @@ def first_use(config_file=None):
     a choice is recorded."""
     import consent
 
-    saved = consent.load(config_file)
+    saved = saved if saved is not None else consent.load(config_file)
     if saved["state"] == "ok" and saved["choice"]:
         return None
     if saved["state"] in {"corrupt", "unreadable"}:
@@ -473,11 +477,18 @@ def set_enabled(enable, config_file=None):
         return normalized
 
 
-def status(config_file=None):
-    """Read-only sharing status; initializes no service, model or database."""
+def status(config_file=None, saved=None):
+    """Read-only sharing status; initializes no service, model or database.
+
+    One consent authority read per call (``saved`` may carry a caller's
+    already-taken read); every branch reports the same ``first_use`` value.
+    """
+    import consent
+
     config_file = Path(config_file or config_path())
-    choice = adapter_choice(config_file)
-    unused = first_use(config_file)
+    saved = saved if saved is not None else consent.load(config_file)
+    choice = adapter_choice(config_file, saved)
+    unused = first_use(config_file, saved)
     try:
         path = configured_path(config_file)
     except (OSError, ValueError) as exc:
@@ -502,6 +513,7 @@ def status(config_file=None):
             detail=str(exc)[:200],
             capture="fail-closed; retrieval and updates unaffected",
             sharing_choice=choice,
+            first_use=unused,
         )
     return dict(
         state="enabled" if settings["enabled"] else "disabled",
@@ -513,6 +525,7 @@ def status(config_file=None):
         project_roots=settings["project_roots"],
         visibility=settings.get("visibility"),
         sharing_choice=choice,
+        first_use=unused,
         note="capture only processes material authorized after enabled_at; "
         "no disabled-period backfill",
     )

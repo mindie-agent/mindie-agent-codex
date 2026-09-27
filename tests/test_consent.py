@@ -287,10 +287,12 @@ class ConsentFixture(unittest.TestCase):
         self.assertEqual(migrated["choice"], "contribute")
         self.assertEqual(sharing.adapter_choice(), "contribute")
 
-    def test_cross_adapter_profile_shares_choice(self):
-        # A sibling adapter in the same profile resolves the same consent
-        # document: simulated here with a differently-named adapter config in
-        # the same directory (a real kimi checkout is not required).
+    def test_profile_shared_consent_path_resolution(self):
+        # The consent document resolves beside the adapter config, so a
+        # sibling adapter in the same profile directory lands on the same
+        # file. Simulated with a differently-named adapter config in this
+        # directory; the authoritative cross-adapter check loads a real
+        # second adapter (grok-codex's contract suite with the kimi adapter).
         consent.record_choice("later")
         sibling = self.root / "kimi.json"
         sibling.write_text(json.dumps({}))

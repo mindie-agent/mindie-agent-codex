@@ -48,7 +48,11 @@ def status():
 
     adapter = json.loads(config_path().read_text())
     engine_config = adapter["engine_config"]
-    sharing_view = sharing.status()
+    import consent
+
+    # One consent authority read feeds the sharing view and the reporting view.
+    saved_consent = consent.load()
+    sharing_view = sharing.status(saved=saved_consent)
     if sharing_view.get("state") in {"malformed", "unconfigured"}:
         sharing_view["detail"] = "Inspect the configured community settings; capture remains disabled."
     try:
@@ -79,12 +83,10 @@ def status():
         reporting_offer,
         reporting_status,
     )
-    import consent
 
     commands["reporting_status"] = bridge + ["reporting-status"]
     commands["reporting_enable"] = bridge + ["reporting-enable"]
     commands["reporting_disable"] = bridge + ["reporting-disable"]
-    saved_consent = consent.load()
     diagnostic_view = effective_reporting(
         reporting_status(), saved_consent.get("reporting")
     )
@@ -94,12 +96,11 @@ def status():
     )
     if offer is not None:
         diagnostics["choice"] = offer
-    first_use = sharing_view.get("first_use") or sharing.first_use()
+    first_use = sharing_view.get("first_use")
     result = dict(
         adapter=dict(
             config=str(config_path()),
             engine_config=engine_config,
-            sharing_choice=adapter.get("sharing_choice"),
         ),
         sharing=sharing_view,
         admission=view["admission"],
