@@ -277,11 +277,15 @@ def activate(operation):
     if migration:
         result["migration"] = migration
     settings = sharing.read()
-    if settings is not None and settings["enabled"]:
+    if (
+        settings is not None
+        and settings["enabled"]
+        and sharing.consent_allows(settings) is not False
+    ):
         result["capture"] = bind(result)
     else:
-        # Sharing off/unconfigured: ordinary activation only. No cold start,
-        # no bind, no collection preparation.
+        # Sharing off/unconfigured or consent-blocked: ordinary activation
+        # only. No cold start, no bind, no collection preparation.
         result["capture"] = "disabled"
     return result
 
@@ -460,7 +464,9 @@ def stop():
     deadline = time.monotonic() + HOOK_BUDGET
     try:
         # Cheap default-off before stdin: no helper, no lock, no lease DB.
-        if sharing.read() is None:
+        # The consent gate applies too when the settings carry the authority.
+        settings = sharing.read()
+        if settings is None or sharing.consent_allows(settings) is False:
             print("{}")
             return
         event = hook_event(

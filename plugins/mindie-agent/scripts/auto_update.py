@@ -793,17 +793,7 @@ class Updater:
                 return entry
         return None
 
-    def verify_native(self, version, plugin=None):
-        """Fail unless native inventory resolves exactly this installed version
-        AND the resolved cache tree carries the candidate's bytes.
-
-        The version string alone is not proof: a stale cache directory with
-        the same version name could hold older bytes. When the candidate
-        plugin tree is given, every candidate file must exist in the resolved
-        cache directory with identical content — a same-version stale copy is
-        a hard failure, never a warning.
-        """
-        entry = self.native_plugin_entry()
+    def _require_selection(self, entry, version):
         if (
             not entry
             or entry.get("name") != "mindie-agent"
@@ -824,14 +814,42 @@ class Updater:
                 + ", expected installed+enabled version "
                 + version
             )
-        if plugin is not None:
-            resolved = (
-                Path(self.settings["codex_home"])
-                / "plugins/cache/mindie-agent/mindie-agent"
-                / version
-            )
-            self._verify_tree_bytes(Path(plugin), resolved)
         return entry
+
+    def verify_native(self, version, plugin=None):
+        """Acceptance of a candidate: fail unless native inventory resolves
+        exactly this installed version AND the resolved cache tree carries
+        the candidate's bytes.
+
+        The version string alone is not proof: a stale cache directory with
+        the same version name could hold older bytes. The candidate plugin
+        tree comes from the argument or the recorded current generation; when
+        no tree can be named, acceptance fails — a bare version match is
+        never a warning-level pass.
+        """
+        entry = self._require_selection(self.native_plugin_entry(), version)
+        if plugin is None:
+            plugin = self.state.get("current", {}).get("plugin")
+        if not isinstance(plugin, str) or not plugin:
+            raise RuntimeError(
+                "native byte verification requires the candidate plugin tree; "
+                "a bare version match is not acceptance"
+            )
+        resolved = (
+            Path(self.settings["codex_home"])
+            / "plugins/cache/mindie-agent/mindie-agent"
+            / version
+        )
+        self._verify_tree_bytes(Path(plugin), resolved)
+        return entry
+
+    def confirm_native(self, version):
+        """Recovery confirmation that a previously resolved native state was
+        restored: version/enabled/installed selection only. Byte verification
+        of a version installed by this updater happened at its own install;
+        pre-contract retained caches have no local generation tree to verify
+        against."""
+        return self._require_selection(self.native_plugin_entry(), version)
 
     @staticmethod
     def _verify_tree_bytes(candidate, resolved):
@@ -928,10 +946,7 @@ class Updater:
         # Retained caches must not pollute the rollback either: the native
         # selection after recovery has to be the version the journal restored.
         if journal.get("marketplace") and journal.get("previous_version"):
-            self.verify_native(
-                journal["previous_version"],
-                self.state.get("current", {}).get("plugin"),
-            )
+            self.confirm_native(journal["previous_version"])
         journal_path.unlink()
 
     def restore_service(self, final_proven):

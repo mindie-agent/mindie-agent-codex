@@ -101,6 +101,96 @@ class ConsentFixture(unittest.TestCase):
         self.assertEqual(consent.consent_path().read_text(), "{broken")
         self.assertEqual(consent.load()["state"], "corrupt")
 
+    def test_shared_authority_exists_means_legacy_pointer_is_not_consulted(self):
+        # The profile-shared file is the live authority once it exists; a
+        # legacy pointer naming an enabled file is never a fallback when the
+        # authority is damaged or unreadable.
+        shared = consent.shared_community_path()
+        shared.write_text("{broken")
+        self.legacy_community.write_text(json.dumps(
+            dict(schema="mindie-community-config/1", enabled=True,
+                 generation="g", enabled_at=1.0, repository="owner/repo",
+                 project_roots=[str(self.root)], idle_seconds=300)
+        ))
+        self.assertIsNone(sharing.read())
+        lease = dict(project_root=str(self.root), root_session="t",
+                     activated_at=1.0)
+        self.assertFalse(sharing.capture_allowed(lease, str(self.root)))
+
+    def test_consent_config_gates_the_capture_write_path(self):
+        # Settings carrying the consent authority: capture requires a saved
+        # contribute choice; every other consent state stops the write path
+        # at the adapter boundary, before any capture row or model work.
+        authority = consent.consent_path()
+        settings = dict(
+            schema="mindie-community-config/1", enabled=True, generation="g",
+            enabled_at=1.0, repository="owner/repo", branch="main",
+            project_roots=[str(self.root)], idle_seconds=300,
+            consent_config=str(authority),
+        )
+        shared = consent.shared_community_path()
+        shared.write_text(json.dumps(settings))
+        lease = dict(project_root=str(self.root), root_session="t",
+                     activated_at=1.0)
+        consent.record_choice("contribute")
+        self.assertTrue(sharing.capture_allowed(lease, str(self.root)))
+        for blocked in ("read-only", "later", "disabled"):
+            consent.record_choice(blocked)
+            self.assertFalse(sharing.capture_allowed(lease, str(self.root)), blocked)
+        authority.unlink()
+        self.assertFalse(sharing.capture_allowed(lease, str(self.root)), "missing")
+        authority.write_text("{broken")
+        self.assertFalse(sharing.capture_allowed(lease, str(self.root)), "corrupt")
+        # The field grants nothing by itself: enabled=false still wins.
+        authority.unlink()
+        consent.record_choice("contribute")
+        settings["enabled"] = False
+        settings["enabled_at"] = None
+        shared.write_text(json.dumps(settings))
+        self.assertFalse(sharing.capture_allowed(lease, str(self.root)))
+        # Legacy format without the field keeps previous read compatibility.
+        settings["enabled"] = True
+        settings["enabled_at"] = 1.0
+        del settings["consent_config"]
+        shared.write_text(json.dumps(settings))
+        authority.unlink()
+        self.assertTrue(sharing.capture_allowed(lease, str(self.root)))
+
+    def test_concurrent_field_updates_both_survive(self):
+        consent.record_choice("later")
+        consent.record_reporting("disabled")
+        script = self.root / "race_update.py"
+        script.write_text(
+            "import os, sys, time\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "os.environ['MINDIE_AGENT_CONFIG'] = sys.argv[2]\n"
+            "import consent_store\n"
+            "real = consent_store._read_raw\n"
+            "def slow(path):\n"
+            "    found = real(path)\n"
+            "    time.sleep(0.6)\n"
+            "    return found\n"
+            "consent_store._read_raw = slow\n"
+            "import consent\n"
+            "if sys.argv[3] == 'choice':\n"
+            "    consent.record_choice('contribute')\n"
+            "else:\n"
+            "    consent.record_reporting('enabled')\n"
+        )
+        children = [
+            subprocess.Popen(
+                [sys.executable, str(script), str(SCRIPTS), str(self.config), op],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            for op in ("choice", "reporting")
+        ]
+        finished = [child.communicate(timeout=15) for child in children]
+        codes = [child.returncode for child in children]
+        self.assertEqual(codes, [0, 0], finished)
+        saved = json.loads(consent.consent_path().read_text())
+        self.assertEqual(saved["choice"], "contribute")
+        self.assertEqual(saved["reporting"], "enabled")
+
     def test_read_and_noop_migration_create_nothing(self):
         saved = consent.load()
         self.assertEqual(saved["state"], "missing")

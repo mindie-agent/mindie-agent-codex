@@ -71,15 +71,21 @@ class SharingError(ValueError):
 
 
 def configured_path(config_file=None):
-    """The designated community settings path: the adapter-config pointer.
+    """The designated community settings path.
 
-    Pure read — no adoption copy, no config rewrite, no fallback to another
-    file. Convergence on the profile-shared path happens only at the
-    explicit install/upgrade/entry boundaries (``migrate_community_path``);
-    a missing/invalid pointer or an unreadable designated file stays an
-    honest fault instead of silently consulting a stale second authority.
+    The profile-shared conventional path is the live authority whenever it
+    exists — a legacy adapter-config pointer only locates a not-yet-migrated
+    file. Pure read: no adoption copy, no config rewrite, and never a
+    fallback to a second file when the authority is unreadable or damaged.
+    Convergence of the pointer itself happens only at the explicit
+    install/upgrade/entry boundaries (``migrate_community_path``).
     """
+    import consent
+
     config_file = Path(config_file or config_path())
+    shared = consent.shared_community_path_for(config_file)
+    if shared.exists():
+        return shared
     config = json.loads(config_file.read_text())
     value = config.get("community_config")
     if not isinstance(value, str) or not os.path.isabs(value):
@@ -324,8 +330,31 @@ def write(path, value):
         Path(name).unlink(missing_ok=True)
 
 
+def consent_allows(settings, config_file=None):
+    """The consent_config extension gate on the adapter's own write path.
+
+    ``None`` — the legacy format without the field keeps its previous read
+    compatibility (the community enabled flag alone decides). When the field
+    is present, the named profile consent authority must hold a saved
+    ``contribute`` choice: missing, unreadable, corrupt, or any other saved
+    choice stops the capture write path — the same rule the core gate
+    applies at the engine/model/outbound boundaries. The field grants no
+    permission by itself; explicit enabled=false still wins first.
+    """
+    ref = settings.get("consent_config")
+    if ref is None:
+        return None
+    if not isinstance(ref, str) or not os.path.isabs(ref):
+        return False
+    import consent_store
+
+    view = consent_store.read(ref)
+    return view["state"] == "ok" and view["choice"] == "contribute"
+
+
 def capture_allowed(lease, cwd, config_file=None):
-    """active lease AND community enabled AND lease project root in scope.
+    """active lease AND community enabled AND lease project root in scope,
+    plus the consent gate when the settings carry the consent authority.
 
     Scope is the lease's authorized activation-time project_root, never a
     caller-supplied cwd pointing into an allowed directory. Anything
@@ -333,6 +362,8 @@ def capture_allowed(lease, cwd, config_file=None):
     """
     settings = read(config_file)
     if settings is None or not settings["enabled"]:
+        return False
+    if consent_allows(settings, config_file) is False:
         return False
     if any(
         lease.get(key) is None
