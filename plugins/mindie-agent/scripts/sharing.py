@@ -402,13 +402,6 @@ def record_choice(choice, config_file=None):
     return consent.record_choice(choice, config_file)
 
 
-def consent_state(config_file=None):
-    """The raw consent read for status surfaces (state may be corrupt)."""
-    import consent
-
-    return consent.load(config_file)
-
-
 def first_use(config_file=None, saved=None):
     """None once a choice exists, saved state is damaged, or any install
     trace shows this is an existing installation pending its one-time
