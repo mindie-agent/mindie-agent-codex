@@ -429,6 +429,75 @@ class CommandTests(SharingFixture):
         self.assertEqual(status["state"], "malformed")
         self.assertIn("fail-closed", status["capture"])
 
+    def test_disable_survives_a_concurrent_settings_write(self):
+        # One writer pauses inside the settings os.replace (inside the
+        # community write lock). The concurrent disable must wait for it —
+        # never overlap the read-merge-replace — then land on the freshly
+        # enabled file: the stored flag ends disabled, both exit 0.
+        self.write_sharing(enabled=True)
+        script = self.root / "settings_race.py"
+        script.write_text(
+            "import os, sys, time\n"
+            "from pathlib import Path\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "os.environ['MINDIE_AGENT_CONFIG'] = sys.argv[2]\n"
+            "role, root = sys.argv[3], Path(sys.argv[4])\n"
+            "real_replace = os.replace\n"
+            "def paused(src, dst):\n"
+            "    if role == 'stamp' and Path(dst).name == 'mindie-community.json':\n"
+            "        (root / 'at-replace').write_text('1')\n"
+            "        deadline = time.time() + 10\n"
+            "        while not (root / 'release-stamp').exists():\n"
+            "            if time.time() > deadline:\n"
+            "                raise SystemExit('stamp was not released')\n"
+            "            time.sleep(0.01)\n"
+            "    return real_replace(src, dst)\n"
+            "os.replace = paused\n"
+            "import sharing\n"
+            "sharing.set_enabled(role == 'stamp')\n"
+            "(root / f'done-{role}').write_text('1')\n"
+        )
+        env = dict(os.environ)
+        stamp = subprocess.Popen(
+            [sys.executable, str(script), str(SCRIPTS), str(self.config), "stamp", str(self.root)],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        children = [stamp]
+        try:
+            deadline = time.time() + 10
+            while time.time() < deadline and not (self.root / "at-replace").exists():
+                if stamp.poll() is not None:
+                    break
+                time.sleep(0.01)
+            stamp_err = stamp.stderr.read() if stamp.poll() is not None else ""
+            self.assertTrue(
+                (self.root / "at-replace").is_file(),
+                "stamp never reached the settings replace: " + stamp_err,
+            )
+            disable = subprocess.Popen(
+                [sys.executable, str(script), str(SCRIPTS), str(self.config), "disable", str(self.root)],
+                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            children.append(disable)
+            deadline = time.time() + 2
+            while time.time() < deadline and disable.poll() is None and not (self.root / "done-disable").exists():
+                time.sleep(0.01)
+            overlapped = (self.root / "done-disable").exists()
+            (self.root / "release-stamp").write_text("1")
+            finished = [child.communicate(timeout=20) for child in children]
+        finally:
+            for child in children:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait()
+        codes = [child.returncode for child in children]
+        saved = json.loads(self.community.read_text())
+        self.assertEqual(
+            (overlapped, codes, saved["enabled"]),
+            (False, [0, 0], False),
+            f"overlapped={overlapped} codes={codes} enabled={saved['enabled']} out={finished}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

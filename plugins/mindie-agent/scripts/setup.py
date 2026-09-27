@@ -369,29 +369,30 @@ def configure(args, parser):
     # the profile-shared community path before writing new settings.
     moved = sharing.migrate_community_path(config)
     community_config = Path(moved["path"])
-    previous = {}
-    try:
-        old = json.loads(community_config.read_text())
-        if isinstance(old, dict):
-            previous = {
-                key: value
-                for key, value in old.items()
-                if key not in sharing.CORE_KEYS and key != "consent_config"
-            }
-    except (OSError, ValueError):
-        pass
-    merged = sharing.normalize_with_runtime(
-        {**previous, **community}, python, config
-    )
-    merged["consent_config"] = str(consent.consent_path_for(config))
     # The explicit contribution choice lands in the consent authority; a
     # damaged consent document refuses first so settings stay untouched.
     try:
         consent.record_choice("contribute", config)
     except consent.ConsentError as exc:
         parser.error(str(exc))
-    community_config.parent.mkdir(parents=True, exist_ok=True)
-    sharing.write(community_config, merged)
+    with sharing.community_write_lock(config):
+        previous = {}
+        try:
+            old = json.loads(community_config.read_text())
+            if isinstance(old, dict):
+                previous = {
+                    key: value
+                    for key, value in old.items()
+                    if key not in sharing.CORE_KEYS and key != "consent_config"
+                }
+        except (OSError, ValueError):
+            pass
+        merged = sharing.normalize_with_runtime(
+            {**previous, **community}, python, config
+        )
+        merged["consent_config"] = str(consent.consent_path_for(config))
+        community_config.parent.mkdir(parents=True, exist_ok=True)
+        sharing.write(community_config, merged)
     adapter["community_config"] = str(community_config)
     adapter.pop("sharing_choice", None)  # retired migration source
     adapter.pop("session_activation", None)

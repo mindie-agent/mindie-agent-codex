@@ -70,6 +70,26 @@ class SharingError(ValueError):
     pass
 
 
+def community_write_lock(config_file=None):
+    """The one cross-process write lock for the profile community authority.
+
+    Every enable/disable/configure/migration write to this profile's
+    community settings serializes here, with the complete
+    read-merge-replace inside. The lock key is the authority's sibling
+    ``mindie-community.json.lock`` — the same key all adapters and the core
+    settings writer use for this profile — implemented with the shared
+    consent store's bounded file lock (no forked protocol). The generation
+    update lock keeps protecting the running version; it never substitutes
+    for this data write lock. Converges to core's ``settings.write*`` API
+    when kimi-core publishes it (same key, same mechanism).
+    """
+    import consent
+    import consent_store
+
+    shared = consent.shared_community_path_for(config_file or config_path())
+    return consent_store._UpdateLock(shared.with_name(shared.name + ".lock"))
+
+
 def configured_path(config_file=None):
     """The designated community settings path.
 
@@ -130,7 +150,7 @@ def migrate_community_path(config_file=None):
                 return result
     except (OSError, ValueError):
         pass
-    with update_lock(config_file, exclusive=True):
+    with community_write_lock(config_file):
         adapter = json.loads(config_file.read_text())
         pointer = adapter.get("community_config")
         pointer = (
@@ -433,16 +453,24 @@ def first_use(config_file=None, saved=None):
 def set_enabled(enable, config_file=None):
     """Flip the sharing switch atomically; keep the recorded scope/settings.
 
-    Enabling sets a fresh enabled_at: material from a disabled period is
-    never backfilled, and failed-attempt budgets survive. Disabling keeps
-    drafts and published data untouched. The core normalizer is the range
-    authority.
+    The complete read-merge-replace runs inside the profile's community
+    write lock: a concurrent toggle, configure or migration can never
+    overwrite this user's committed choice with a stale read. The current
+    authority is resolved and re-read inside the lock. Enabling refreshes
+    enabled_at only on an off->on edge (the shared core write semantics):
+    material from a disabled period is never backfilled, a redundant enable
+    manufactures no capture gap, and failed-attempt budgets survive.
+    Disabling keeps drafts and published data untouched. The core
+    normalizer is the range authority.
     """
     config_file = Path(config_file or config_path())
     with update_lock(config_file):
-        path = configured_path(config_file)
         adapter = json.loads(config_file.read_text())
         python = adapter.get("python")
+    import consent
+
+    with community_write_lock(config_file):
+        path = configured_path(config_file)
         try:
             raw = json.loads(path.read_text())
         except (OSError, ValueError):
@@ -451,11 +479,18 @@ def set_enabled(enable, config_file=None):
                 "with --community-* to select repository, scope and visibility first"
             )
         settings = validate(raw)
+        was_enabled = settings["enabled"]
         settings["enabled"] = bool(enable)
-        settings["enabled_at"] = time.time() if enable else None
+        # Match the shared core write() semantics: enabled_at refreshes only
+        # on an off->on edge (a redundant enable must not manufacture a
+        # capture gap); disabling clears it. Generation always refreshes —
+        # it is the core-observed cancellation signal.
+        settings["enabled_at"] = (
+            time.time()
+            if enable and not was_enabled
+            else settings["enabled_at"] if enable else None
+        )
         settings["generation"] = secrets.token_hex(8)
-        import consent
-
         # Keep the consent-authority pointer wired on this user-intent
         # boundary; an explicit value pointing elsewhere is left for the
         # migration boundary to correct.
@@ -464,10 +499,10 @@ def set_enabled(enable, config_file=None):
         )
         normalized = normalize_with_runtime(settings, python, config_file)
         write(path, normalized)
-        consent.record_choice(
-            "contribute" if enable else "disabled", config_file
-        )
-        return normalized
+    consent.record_choice(
+        "contribute" if enable else "disabled", config_file
+    )
+    return normalized
 
 
 def status(config_file=None, saved=None):
