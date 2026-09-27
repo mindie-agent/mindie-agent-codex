@@ -15,6 +15,17 @@ Resolve `../../scripts/bridge.py` to an absolute path relative to this SKILL.md
 directory (`python` on Windows). The native shell supplies `CODEX_THREAD_ID`;
 do not set or override it. MCP calls need no identity or binding arguments.
 
+Only ever run the copy of this skill and its scripts that lives under the
+ACTIVE profile's plugin cache: `$CODEX_HOME/plugins/cache/mindie-agent/...`
+when `CODEX_HOME` is set, otherwise `~/.codex/plugins/cache/mindie-agent/...`.
+Stale caches from other profiles or older installs can remain on disk and may
+surface in searches; never run their scripts, because each installed copy binds
+the profile it was installed for. When several copies exist inside the active
+cache, use the one with the greatest version. After `activate`, the result's
+`scripts` (and `build` when present) identify the generation that actually
+ran — check they belong to that same active-cache install before relying on
+the binding.
+
 ## First explicit invocation
 
 1. Run `python3 <bridge.py> activate`. This one call performs the internal

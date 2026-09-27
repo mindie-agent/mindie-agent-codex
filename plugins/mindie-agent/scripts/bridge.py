@@ -213,10 +213,69 @@ def bind(lease):
         return f"unbound:{type(exc).__name__}"
 
 
+def _entry_migration(config_file):
+    """One-time convergence at the explicit entry-attach boundary.
+
+    Imports validated legacy consent evidence into the profile authority and
+    converges the community settings path; both are idempotent. A failure is
+    reported in the activation result (capture stays fail-closed), never
+    hidden and never blocking the read-only binding itself.
+    """
+    import consent
+
+    notes = {}
+    try:
+        migrated = consent.migrate_legacy(config_file)
+        if migrated.get("status") not in {"kept", "absent"}:
+            notes["consent"] = migrated
+    except Exception as exc:
+        notes["consent"] = dict(status="failed", error=type(exc).__name__)
+    try:
+        moved = sharing.migrate_community_path(config_file)
+        if moved.get("status") != "current" or moved.get("detail"):
+            notes["community"] = moved
+    except Exception as exc:
+        notes["community"] = dict(status="failed", error=type(exc).__name__)
+    return notes or None
+
+
+def _generation_identity():
+    """The actually running plugin generation, for verifiable binding proof.
+
+    ``scripts`` is the resolved directory of this running bridge.py; ``build``
+    carries the packaged generation's revision/version stamp when present.
+    A test profile can check these against the selected candidate instead of
+    trusting whichever stale cache copy a host or model happened to open.
+    """
+    scripts = Path(__file__).resolve().parent
+    build = None
+    stamp = scripts / "diagnostic-build.json"
+    try:
+        data = json.loads(stamp.read_text())
+        if isinstance(data, dict):
+            build = {
+                key: data[key]
+                for key in ("revision", "version")
+                if isinstance(data.get(key), str)
+            } or None
+    except (OSError, ValueError):
+        build = None
+    return scripts, build
+
+
 def activate(operation):
+    migration = None
+    if operation == "activate":
+        migration = _entry_migration(config_path())
     result = getattr(Sessions(), operation)()
     if operation != "activate":
         return result
+    scripts, build = _generation_identity()
+    result["scripts"] = str(scripts)
+    if build:
+        result["build"] = build
+    if migration:
+        result["migration"] = migration
     settings = sharing.read()
     if settings is not None and settings["enabled"]:
         result["capture"] = bind(result)

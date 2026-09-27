@@ -27,6 +27,7 @@ import tempfile
 import time
 
 from bounded_process import run
+import consent
 import sharing
 
 SCRIPTS = Path(__file__).parent.absolute()
@@ -238,12 +239,6 @@ def install(args, parser):
     transcript_adapter = str(SCRIPTS / "codex_transcript.py")
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args.domain):
         parser.error("invalid domain name")
-    sharing_choice = None
-    if args.interactive:
-        sharing_choice = interactive_choice(args, parser)
-    community = community_settings(args, parser, python)
-    if community is not None:
-        sharing_choice = "contribute"
     config = args.config.expanduser().absolute()
     engine_config = config.with_name(config.stem + ".engine.json")
     community_config = config.with_name("mindie-community.json")
@@ -253,6 +248,26 @@ def install(args, parser):
             "configuration already exists; use setup.py configure to record "
             "sharing on this installation, or choose --config"
         )
+    # The profile consent authority is shared with every adapter in this
+    # profile: an existing saved choice is reused and never re-asked or
+    # overwritten by a fresh install. A damaged document is a fault to fix
+    # first, never a state to silently clear.
+    saved = consent.load(config)
+    reused_choice = None
+    if saved["state"] == "ok" and saved["choice"]:
+        reused_choice = saved["choice"]
+    elif saved["state"] in {"corrupt", "unreadable"}:
+        parser.error(
+            f"existing consent document is {saved['state']} "
+            f"({saved['error']}); inspect and remove it explicitly before "
+            "recording a new choice"
+        )
+    sharing_choice = None
+    if args.interactive and reused_choice is None:
+        sharing_choice = interactive_choice(args, parser)
+    community = community_settings(args, parser, python)
+    if community is not None:
+        sharing_choice = "contribute"
     value = dict(
         root=str(args.root.expanduser().absolute()),
         domain=args.domain,
@@ -281,13 +296,21 @@ def install(args, parser):
         admission_path=str(admission_path),
         runtime_scripts=str(SCRIPTS),
     )
-    if sharing_choice:
-        adapter["sharing_choice"] = sharing_choice
     write_private(config, adapter)
+    if sharing_choice:
+        # The explicit install-time choice lands directly in the consent
+        # authority; the retired adapter-config sharing_choice key is never
+        # written as a record.
+        try:
+            consent.record_choice(sharing_choice, config)
+        except consent.ConsentError as exc:
+            parser.error(str(exc))
     if community is not None:
         # The user explicitly selected repository, scope, account and
         # visibility: record them and enable sharing from this moment. Only
-        # material authorized after enabled_at is ever captured.
+        # material authorized after enabled_at is ever captured. The consent
+        # authority pointer wires the core gate to this profile's document.
+        community["consent_config"] = str(consent.consent_path_for(config))
         sharing.write(community_config, community)
     print(
         json.dumps(
@@ -300,6 +323,7 @@ def install(args, parser):
                 domain=args.domain,
                 sharing="enabled" if community is not None else "off",
                 sharing_choice=sharing_choice,
+                reused_choice=reused_choice,
                 next=(
                     None
                     if community is not None
@@ -321,6 +345,8 @@ def configure(args, parser):
     because the engine configuration already exists. Enabling requires the
     full explicit selection (repository, scope, public visibility); sibling
     components' extension keys in an existing settings file are preserved.
+    This explicit boundary also converges the community path onto the
+    profile-shared authority and wires the consent authority pointer.
     """
     config = args.config.expanduser().absolute()
     if not config.is_file():
@@ -339,10 +365,10 @@ def configure(args, parser):
             "(--community-repository, --community-project-root, "
             "--community-visibility public)"
         )
-    community_config = Path(
-        adapter.get("community_config")
-        or config.with_name(config.stem + ".community.json")
-    )
+    # Explicit configuration boundary: converge adapter/engine/worker onto
+    # the profile-shared community path before writing new settings.
+    moved = sharing.migrate_community_path(config)
+    community_config = Path(moved["path"])
     previous = {}
     try:
         old = json.loads(community_config.read_text())
@@ -350,17 +376,24 @@ def configure(args, parser):
             previous = {
                 key: value
                 for key, value in old.items()
-                if key not in sharing.CORE_KEYS
+                if key not in sharing.CORE_KEYS and key != "consent_config"
             }
     except (OSError, ValueError):
         pass
     merged = sharing.normalize_with_runtime(
         {**previous, **community}, python, config
     )
+    merged["consent_config"] = str(consent.consent_path_for(config))
+    # The explicit contribution choice lands in the consent authority; a
+    # damaged consent document refuses first so settings stay untouched.
+    try:
+        consent.record_choice("contribute", config)
+    except consent.ConsentError as exc:
+        parser.error(str(exc))
     community_config.parent.mkdir(parents=True, exist_ok=True)
     sharing.write(community_config, merged)
     adapter["community_config"] = str(community_config)
-    adapter["sharing_choice"] = "contribute"
+    adapter.pop("sharing_choice", None)  # retired migration source
     adapter.pop("session_activation", None)
     engine_path = Path(adapter.get("engine_config") or "")
     if engine_path.is_file():

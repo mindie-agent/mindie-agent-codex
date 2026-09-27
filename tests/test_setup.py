@@ -124,7 +124,18 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(configured.returncode, 0, configured.stderr)
             settings = json.loads(community.read_text())
             self.assertTrue(settings["enabled"])
-            self.assertEqual(json.loads(config.read_text())["sharing_choice"], "contribute")
+            # The explicit choice lands in the consent authority; the retired
+            # adapter-config key is gone and the gate pointer is wired.
+            adapter = json.loads(config.read_text())
+            self.assertNotIn("sharing_choice", adapter)
+            consent_doc = json.loads(
+                config.with_name("mindie-consent.json").read_text()
+            )
+            self.assertEqual(consent_doc["choice"], "contribute")
+            self.assertEqual(
+                settings["consent_config"],
+                str(config.with_name("mindie-consent.json")),
+            )
             self.assertNotIn("session_activation", json.loads(engine.read_text()))
 
     def test_community_selection_records_settings_and_enables_sharing(self):
@@ -164,6 +175,15 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(settings["account"], "contributor-1")
             self.assertEqual(settings["visibility"], "public")
             self.assertGreater(settings["enabled_at"], 0)
+            # The consent authority pointer is wired at install.
+            self.assertEqual(
+                settings["consent_config"],
+                str(config.with_name("mindie-consent.json")),
+            )
+            consent_doc = json.loads(
+                config.with_name("mindie-consent.json").read_text()
+            )
+            self.assertEqual(consent_doc["choice"], "contribute")
             self.assertNotIn("token", community.read_text().lower())
 
     def test_partial_community_selection_fails_before_any_write(self):

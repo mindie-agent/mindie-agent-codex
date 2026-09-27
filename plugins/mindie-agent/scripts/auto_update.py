@@ -1025,6 +1025,20 @@ class Updater:
                         admission_path=admission_path,
                     ),
                 )
+                try:
+                    # Upgrade boundary: converge the community path and the
+                    # consent authority once. A deferred migration is recorded
+                    # truthfully and retried at the next entry attach; it
+                    # never fails the completed update.
+                    import consent as _consent
+                    import sharing as _sharing
+
+                    _consent.migrate_legacy(self.config)
+                    _sharing.migrate_community_path(self.config)
+                except Exception as migration_exc:
+                    self.state["settings_migration"] = (
+                        "deferred: " + type(migration_exc).__name__
+                    )
                 final_proven = True
                 result = self.save(
                     "installed",
