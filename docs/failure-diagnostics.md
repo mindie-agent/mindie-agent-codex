@@ -7,11 +7,11 @@ adapter metadata; runtime execution stays under the existing five-second budget.
 
 The selected runtime reads the shared diagnostic snapshot using only native
 `CODEX_THREAD_ID`. It returns safe startup stage, configuration/storage/service
-state, task admission (including paused), shared maintenance pause, and the latest
+state, task binding (including its diagnostic failure counter), and the latest
 five captures/contribution batches associated with the task. Without native task
 identity it returns no task records. Recover commands use the selected interpreter
 and scripts. Unknown publication writes require inspection/reconciliation before
-an explicit retry; status does not activate, reset, start or replay work.
+an explicit retry; status does not bind, reset, start or replay work.
 
 Remote exception responses preserve fixed safe categories, submission certainty
 and an existing job reference. They omit arbitrary error text and provider stderr.

@@ -48,7 +48,11 @@ def status():
 
     adapter = json.loads(config_path().read_text())
     engine_config = adapter["engine_config"]
-    sharing_view = sharing.status()
+    import consent
+
+    # One consent authority read feeds the sharing view and the reporting view.
+    saved_consent = consent.load()
+    sharing_view = sharing.status(saved=saved_consent)
     if sharing_view.get("state") in {"malformed", "unconfigured"}:
         sharing_view["detail"] = "Inspect the configured community settings; capture remains disabled."
     try:
@@ -67,13 +71,6 @@ def status():
             "import json,pathlib,sys; json.loads(pathlib.Path(sys.argv[1]).read_text()); print('JSON syntax valid')",
             engine_config,
         ]
-    if view["admission"].get("status") == "paused":
-        commands.update(deactivate=bridge + ["deactivate"], activate=bridge + ["activate"])
-    if view["maintenance"].get("paused"):
-        commands["maintenance_resume"] = [
-            adapter["python"], "-m", "mindie_knowledge.loop.cli",
-            "maintenance-resume", "--config", engine_config,
-        ]
     inspect = {
         row["batch_id"]: bridge + ["contribution-inspect", row["batch_id"]]
         for row in view["contributions"] if row.get("status") in RECOVERABLE_BATCH
@@ -81,21 +78,29 @@ def status():
     if inspect:
         commands["contribution_inspect"] = inspect
     # Optional and independent of knowledge consent. Status never ensures.
-    from diagnostic_support import reporting_hint, reporting_status
+    from diagnostic_support import (
+        effective_reporting,
+        reporting_offer,
+        reporting_status,
+    )
 
     commands["reporting_status"] = bridge + ["reporting-status"]
     commands["reporting_enable"] = bridge + ["reporting-enable"]
     commands["reporting_disable"] = bridge + ["reporting-disable"]
-    diagnostic_view = reporting_status()
+    diagnostic_view = effective_reporting(
+        reporting_status(), saved_consent.get("reporting")
+    )
     diagnostics = dict(reporting=diagnostic_view)
-    if diagnostic_view.get("status") == "not_configured":
-        diagnostics["choice"] = reporting_hint()
-    first_use = sharing_view.get("first_use") or sharing.first_use()
+    offer = reporting_offer(
+        diagnostic_view, saved_consent, consent.install_traces()
+    )
+    if offer is not None:
+        diagnostics["choice"] = offer
+    first_use = sharing_view.get("first_use")
     result = dict(
         adapter=dict(
             config=str(config_path()),
             engine_config=engine_config,
-            sharing_choice=adapter.get("sharing_choice"),
         ),
         sharing=sharing_view,
         admission=view["admission"],
@@ -115,11 +120,6 @@ def status():
         result["next"] = (
             "Present the three choices to the user and wait; do not default "
             "yes, do not edit JSON, do not reinstall. Then activate."
-        )
-    elif view["admission"].get("status") == "paused":
-        result["next"] = (
-            "Inspect the reported failures and fix the cause before explicit "
-            "deactivate/reactivate. Status does not reset admission or replay work."
         )
     elif (view["configuration"].get("status") != "ok"
           or view["startup"].get("status") in {"failed", "unavailable"}

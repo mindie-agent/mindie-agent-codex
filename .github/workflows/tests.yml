@@ -16,6 +16,24 @@ jobs:
       # exact commit pins instead of skipping modules or stubbing imports.
       - name: Install pinned runtime and domain dependencies
         run: python -m pip install -r runtime-requirements.txt
+      # Contract tests archive these commits. They do not guess a sibling
+      # checkout. Publish the exact core and peer revisions before adapter CI.
+      # Peer 90f73e7 is an ancestor of the reviewed Kimi 86de2c3 revision.
+      - name: Checkout pinned core
+        uses: actions/checkout@v4
+        with:
+          repository: mindie-agent/knowledge
+          ref: 0df968a03008a170bb52d4acade7c7226eb0d39b
+          path: .ci/core
+      - name: Checkout pinned peer adapter
+        uses: actions/checkout@v4
+        with:
+          repository: mindie-agent/mindie-agent-kimi
+          ref: 90f73e76c6087ce091570f2d151b709145c913bc
+          path: .ci/kimi
       - name: Core unit tests
+        env:
+          MINDIE_CORE_REPO: ${{ github.workspace }}/.ci/core
+          MINDIE_KIMI_REPO: ${{ github.workspace }}/.ci/kimi
         run: python -m unittest discover -s tests -p 'test_*.py'
       - run: python -m compileall -q plugins/mindie-agent tests

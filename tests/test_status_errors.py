@@ -145,10 +145,13 @@ class ScopedStatus(unittest.TestCase):
                 self.assertNotIn("outbox", payload["service"])
                 self.assertNotIn("token", payload["admission"])
                 if task == "own-task":
-                    self.assertEqual(payload["admission"]["status"], "paused")
+                    # Failure counts are diagnostic only: the binding stays
+                    # active and no deactivate/reactivate cycle is offered.
+                    self.assertEqual(payload["admission"]["status"], "active")
+                    self.assertEqual(payload["admission"]["failures"], 3)
                     self.assertEqual([row["id"] for row in payload["captures"]], [own_id])
                     self.assertEqual([row["batch_id"] for row in payload["contributions"]], ["own-task-batch"])
-                    self.assertEqual(payload["commands"]["deactivate"][0], sys.executable)
+                    self.assertNotIn("deactivate", payload["commands"])
                 else:
                     self.assertEqual(payload["captures"], [])
                     self.assertEqual(payload["contributions"], [])

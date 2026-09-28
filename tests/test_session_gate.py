@@ -426,9 +426,10 @@ class SessionGateTests(unittest.TestCase):
         with patch.object(mcp_gate, "run", side_effect=ValueError("bad runtime response")):
             for i in range(3):
                 self.assertTrue(gate.call(self.request(lease, ident=500 + i))["isError"])
-        with patch.object(mcp_gate, "run") as run:
-            self.assertTrue(gate.call(self.request(lease, ident=600))["isError"])
-            self.assertEqual(run.call_count, 0)
+        # Protocol failures are recorded diagnostically but never pause the lease.
+        with patch.object(mcp_gate, "run", return_value='{"content":[],"isError":false}') as run:
+            self.assertFalse(gate.call(self.request(lease, ident=600))["isError"])
+            self.assertEqual(run.call_count, 1)
 
     def test_not_started_disposition_is_not_honored_for_mutations(self):
         import runtime_call
@@ -483,22 +484,24 @@ class SessionGateTests(unittest.TestCase):
         self.assertEqual(result["structuredContent"]["execution"], "not_started")
         self.assertEqual(finished, [])
 
-    def test_consecutive_failure_circuit_is_per_session_and_explicitly_reset(self):
+    def test_consecutive_failures_are_per_session_and_never_pause(self):
         a, b = self.activate(), self.activate("manual-B")
         gate = mcp_gate.Gate("knowledge")
         with patch.object(mcp_gate, "run", side_effect=ValueError("bad runtime response")) as run:
             for i in range(20):
                 self.assertTrue(gate.call(self.request(a, ident=i))["isError"])
-            self.assertEqual(run.call_count, 3)
+            # Failure counts never gate: every admitted call still dispatches.
+            self.assertEqual(run.call_count, 20)
             gate.call(self.request(b, ident=21))
-            self.assertEqual(run.call_count, 4)
-            with self.assertRaises(Inactive):
-                self.activate()
+            self.assertEqual(run.call_count, 21)
+            # Re-binding keeps the token; only an explicit revoke rotates it.
+            renewed = self.activate()
+            self.assertEqual(a["mindie_activation"], renewed["mindie_activation"])
             self.sessions.deactivate()
             renewed = self.activate()
             self.assertNotEqual(a["mindie_activation"], renewed["mindie_activation"])
             gate.call(self.request(renewed, ident=22))
-            self.assertEqual(run.call_count, 5)
+            self.assertEqual(run.call_count, 22)
 
     def test_deactivation_rejects_and_config_bytes_do_not_revoke(self):
         lease = self.activate()
@@ -722,6 +725,82 @@ class SessionGateTests(unittest.TestCase):
         again = json.loads(self.bridge("init").stdout)
         self.assertIsNone(again["first_use"])
         self.assertFalse((self.root / "data").exists())
+
+    def test_entry_activation_migrates_legacy_state_once(self):
+        # Legacy install shape: adapter-config choice key plus a legacy
+        # per-adapter community file as the configured pointer.
+        community = self.root / "codex.community.json"
+        current = json.loads(self.config.read_text())
+        self.write_config(python=current["python"], sharing_choice="read-only")
+        community.write_text(
+            json.dumps(
+                dict(
+                    schema="mindie-community-config/1",
+                    enabled=False,
+                    repository="owner/repo",
+                    project_roots=[],
+                    idle_seconds=300,
+                )
+            )
+        )
+        consent_file = self.root / "mindie-consent.json"
+        shared = self.root / "mindie-community.json"
+        self.assertFalse(consent_file.exists())
+        self.assertFalse(shared.exists())
+        result = self.bridge("activate")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        # The entry boundary migrated once and reports it verifiably.
+        self.assertEqual(payload["migration"]["consent"]["status"], "migrated")
+        self.assertEqual(payload["migration"]["consent"]["choice"], "read-only")
+        self.assertEqual(payload["migration"]["community"]["status"], "adopted")
+        self.assertEqual(payload["scripts"], str(SCRIPTS))
+        saved = json.loads(consent_file.read_text())
+        self.assertEqual(saved["choice"], "read-only")
+        adapter = json.loads(self.config.read_text())
+        self.assertEqual(adapter["community_config"], str(shared))
+        engine = json.loads(self.engine.read_text())
+        self.assertEqual(engine["community_config"], str(shared))
+        settings = json.loads(shared.read_text())
+        self.assertEqual(settings["consent_config"], str(consent_file))
+        self.assertTrue(community.exists())  # legacy kept as evidence
+        # One authority for every consumer: the adapter's read path and the
+        # worker-facing engine config resolve to the same file.
+        import sharing as sharing_mod
+
+        self.assertEqual(sharing_mod.configured_path(), shared)
+        self.assertEqual(engine["community_config"], str(shared))
+        # Second entry: nothing migrated, no re-ask, same binding.
+        again = json.loads(self.bridge("activate").stdout)
+        self.assertNotIn("migration", again)
+        self.assertEqual(again["mindie_session_id"], payload["mindie_session_id"])
+        self.assertEqual(again["mindie_activation"], payload["mindie_activation"])
+
+    def test_entry_activation_reports_legacy_choice_conflict(self):
+        community = self.root / "codex.community.json"
+        current = json.loads(self.config.read_text())
+        self.write_config(python=current["python"], sharing_choice="read-only")
+        community.write_text(
+            json.dumps(
+                dict(
+                    schema="mindie-community-config/1",
+                    enabled=True,
+                    generation="g1",
+                    enabled_at=1.0,
+                    repository="owner/repo",
+                    project_roots=[str(self.root)],
+                    idle_seconds=300,
+                )
+            )
+        )
+        result = self.bridge("activate")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        # Conflicting legacy evidence is diagnosed, never guessed; the
+        # read-only binding still succeeds and no consent is written.
+        self.assertEqual(payload["migration"]["consent"]["status"], "conflict")
+        self.assertFalse((self.root / "mindie-consent.json").exists())
+        self.assertEqual(payload["migration"]["community"]["status"], "adopted")
 
     def test_init_without_config_returns_first_use_choices(self):
         absent = self.root / "missing-codex.json"

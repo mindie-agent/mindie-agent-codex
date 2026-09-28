@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Discover remote tools without importing or starting the remote runtime.
 
-Remote is a general tool: serving it never activates MindIE, touches a
-knowledge lease/service/capture, or creates any local state. The only other
-entry operation is `recover`: explicit native-CLI recovery of this task's
-paused remote failure circuit. It reads the native CODEX_THREAD_ID from the
-environment and never accepts a model-selected foreign id as an argument.
+Remote is a general tool: serving it never binds MindIE, touches a knowledge
+lease/service/capture, or creates any local state. The only other entry
+operation is `recover`: an optional operator action that releases this
+task's remote failure backoff early — the backoff otherwise recovers
+automatically. It reads the native CODEX_THREAD_ID from the environment and
+never accepts a model-selected foreign id as an argument.
 """
 
 import json

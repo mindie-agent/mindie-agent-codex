@@ -793,9 +793,7 @@ class Updater:
                 return entry
         return None
 
-    def verify_native(self, version):
-        """Fail unless native inventory resolves exactly this installed version."""
-        entry = self.native_plugin_entry()
+    def _require_selection(self, entry, version):
         if (
             not entry
             or entry.get("name") != "mindie-agent"
@@ -817,6 +815,74 @@ class Updater:
                 + version
             )
         return entry
+
+    def verify_native(self, version, plugin=None):
+        """Acceptance of a candidate: fail unless native inventory resolves
+        exactly this installed version AND the resolved cache tree carries
+        the candidate's bytes.
+
+        The version string alone is not proof: a stale cache directory with
+        the same version name could hold older bytes. The candidate plugin
+        tree comes from the argument or the recorded current generation; when
+        no tree can be named, acceptance fails — a bare version match is
+        never a warning-level pass.
+        """
+        entry = self._require_selection(self.native_plugin_entry(), version)
+        if plugin is None:
+            plugin = self.state.get("current", {}).get("plugin")
+        if not isinstance(plugin, str) or not plugin:
+            raise RuntimeError(
+                "native byte verification requires the candidate plugin tree; "
+                "a bare version match is not acceptance"
+            )
+        resolved = (
+            Path(self.settings["codex_home"])
+            / "plugins/cache/mindie-agent/mindie-agent"
+            / version
+        )
+        self._verify_tree_bytes(Path(plugin), resolved)
+        return entry
+
+    def confirm_native(self, version):
+        """Recovery confirmation that a previously resolved native state was
+        restored: version/enabled/installed selection only. Byte verification
+        of a version installed by this updater happened at its own install;
+        pre-contract retained caches have no local generation tree to verify
+        against."""
+        return self._require_selection(self.native_plugin_entry(), version)
+
+    @staticmethod
+    def _verify_tree_bytes(candidate, resolved):
+        """Every candidate file must exist in the resolved cache, byte-equal.
+
+        Extra files the host adds to its cache are tolerated; a missing or
+        differing candidate file means the host would execute bytes other
+        than the reviewed generation.
+        """
+        candidate = Path(candidate)
+        if not candidate.is_dir():
+            raise RuntimeError("candidate plugin tree is missing: " + str(candidate))
+        mismatches = []
+        for path in sorted(candidate.rglob("*")):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(candidate)
+            other = resolved / relative
+            try:
+                same = other.is_file() and other.read_bytes() == path.read_bytes()
+            except OSError:
+                same = False
+            if not same:
+                mismatches.append(str(relative))
+            if len(mismatches) >= 5:
+                break
+        if mismatches:
+            raise RuntimeError(
+                "resolved native cache does not carry the candidate bytes at "
+                + str(resolved)
+                + "; differing: "
+                + ", ".join(mismatches)
+            )
 
     def preserve_caches(self):
         # Loaded native tasks may still execute cached entrypoints: retain
@@ -850,7 +916,10 @@ class Updater:
         journal = read(journal_path)
         if self.state.get("current", {}).get("revision") == journal.get("candidate"):
             self.restore_caches()
-            self.verify_native(self.state["current"]["version"])
+            self.verify_native(
+                self.state["current"]["version"],
+                self.state["current"].get("plugin"),
+            )
             journal_path.unlink()
             return
         if journal.get("recoveries", 0) >= ATTEMPTS:
@@ -877,7 +946,7 @@ class Updater:
         # Retained caches must not pollute the rollback either: the native
         # selection after recovery has to be the version the journal restored.
         if journal.get("marketplace") and journal.get("previous_version"):
-            self.verify_native(journal["previous_version"])
+            self.confirm_native(journal["previous_version"])
         journal_path.unlink()
 
     def restore_service(self, final_proven):
@@ -988,9 +1057,10 @@ class Updater:
                 )
                 self.restore_caches()
                 # The add receipt is not proof: retained caches compete in
-                # native discovery. Verify the actual resolved version or roll
-                # back instead of reporting a fake installed state.
-                self.verify_native(candidate["version"])
+                # native discovery. Verify the actual resolved version AND
+                # its bytes or roll back instead of reporting a fake
+                # installed state.
+                self.verify_native(candidate["version"], candidate["plugin"])
                 engine = read(adapter["engine_config"])
                 # One committed generation: worker, transcript parser and
                 # interpreter move together; the neutral admission store and
@@ -1025,6 +1095,20 @@ class Updater:
                         admission_path=admission_path,
                     ),
                 )
+                try:
+                    # Upgrade boundary: converge the community path and the
+                    # consent authority once. A deferred migration is recorded
+                    # truthfully and retried at the next entry attach; it
+                    # never fails the completed update.
+                    import consent as _consent
+                    import sharing as _sharing
+
+                    _consent.migrate_legacy(self.config)
+                    _sharing.migrate_community_path(self.config)
+                except Exception as migration_exc:
+                    self.state["settings_migration"] = (
+                        "deferred: " + type(migration_exc).__name__
+                    )
                 final_proven = True
                 result = self.save(
                     "installed",
@@ -1071,6 +1155,12 @@ class Updater:
             python = adapter.get("python") if isinstance(adapter, dict) else None
             if not isinstance(python, str) or not python or not os.path.isfile(python):
                 return {"status": "deferred", "error_type": "missing_runtime"}
+            import consent as _consent
+
+            if _consent.load(self.config).get("reporting") != "enabled":
+                # The saved reporting choice constrains the real service:
+                # maintenance only runs while reporting is explicitly enabled.
+                return {"status": "deferred", "error_type": "reporting_not_enabled"}
             # Pass the REAL remaining window: the CLI's 75s default includes
             # offline work and skips the upgrade unless a full 60s handoff
             # plus 1s exit remains; 2s is this parent's exit/startup margin.

@@ -213,34 +213,108 @@ def bind(lease):
         return f"unbound:{type(exc).__name__}"
 
 
+def _entry_migration(config_file):
+    """One-time convergence at the explicit entry-attach boundary.
+
+    Imports validated legacy consent evidence into the profile authority and
+    converges the community settings path; both are idempotent. A failure is
+    reported in the activation result (capture stays fail-closed), never
+    hidden and never blocking the read-only binding itself.
+    """
+    import consent
+
+    notes = {}
+    try:
+        migrated = consent.migrate_legacy(config_file)
+        if migrated.get("status") not in {"kept", "absent"}:
+            notes["consent"] = migrated
+    except Exception as exc:
+        notes["consent"] = dict(status="failed", error=type(exc).__name__)
+    try:
+        moved = sharing.migrate_community_path(config_file)
+        if moved.get("status") != "current" or moved.get("detail"):
+            notes["community"] = moved
+    except Exception as exc:
+        notes["community"] = dict(status="failed", error=type(exc).__name__)
+    return notes or None
+
+
+def _generation_identity():
+    """The actually running plugin generation, for verifiable binding proof.
+
+    ``scripts`` is the resolved directory of this running bridge.py; ``build``
+    carries the packaged generation's revision/version stamp when present.
+    A test profile can check these against the selected candidate instead of
+    trusting whichever stale cache copy a host or model happened to open.
+    """
+    scripts = Path(__file__).resolve().parent
+    build = None
+    stamp = scripts / "diagnostic-build.json"
+    try:
+        data = json.loads(stamp.read_text())
+        if isinstance(data, dict):
+            build = {
+                key: data[key]
+                for key in ("revision", "version")
+                if isinstance(data.get(key), str)
+            } or None
+    except (OSError, ValueError):
+        build = None
+    return scripts, build
+
+
 def activate(operation):
+    migration = None
+    if operation == "activate":
+        migration = _entry_migration(config_path())
     result = getattr(Sessions(), operation)()
     if operation != "activate":
         return result
+    scripts, build = _generation_identity()
+    result["scripts"] = str(scripts)
+    if build:
+        result["build"] = build
+    if migration:
+        result["migration"] = migration
     settings = sharing.read()
-    if settings is not None and settings["enabled"]:
+    if (
+        settings is not None
+        and settings["enabled"]
+        and sharing.consent_allows(settings) is not False
+    ):
         result["capture"] = bind(result)
     else:
-        # Sharing off/unconfigured: ordinary activation only. No cold start,
-        # no bind, no collection preparation.
+        # Sharing off/unconfigured or consent-blocked: ordinary activation
+        # only. No cold start, no bind, no collection preparation.
         result["capture"] = "disabled"
     return result
 
 
 def unconfigured_status():
-    """Stdlib-only offline first-use payload. Creates no files or services."""
+    """Stdlib-only offline first-use payload. Creates no files or services.
+
+    A profile that already holds a saved choice (e.g. from a sibling adapter)
+    is an existing installation: setup reuses the choice, no onboarding."""
+    import consent
+
+    saved = consent.load()
+    first_use = dict(
+        state="unconfigured",
+        prompt=sharing.CHOICES,
+        choices=["contribute", "read-only", "later"],
+    )
+    if saved["state"] == "ok" and saved["choice"]:
+        first_use = dict(state="chosen", choice=saved["choice"])
+    elif saved["state"] in {"corrupt", "unreadable"} or consent.install_traces():
+        first_use = dict(state="existing", detail=saved.get("error"))
     return dict(
         configured=False,
         sharing=dict(state="unconfigured"),
-        first_use=dict(
-            state="unconfigured",
-            prompt=sharing.CHOICES,
-            choices=["contribute", "read-only", "later"],
-        ),
+        first_use=first_use,
         next=(
             "Run scripts/setup.py install --knowledge-python PYTHON "
-            "(headless leaves sharing off). Then choose: recommended "
-            "public contribution via setup.py configure "
+            "(headless leaves sharing off). The saved install-level choice is "
+            "reused; configure contribution via setup.py configure "
             "--community-repository OWNER/REPO --community-project-root PATH "
             "--community-visibility public; or scripts/bridge.py "
             "sharing-choice read-only|later. Do not edit JSON or reinstall."
@@ -390,12 +464,25 @@ def stop():
     deadline = time.monotonic() + HOOK_BUDGET
     try:
         # Cheap default-off before stdin: no helper, no lock, no lease DB.
-        if sharing.read() is None:
+        # The consent gate applies too when the settings carry the authority.
+        settings = sharing.read()
+        if settings is None or sharing.consent_allows(settings) is False:
             print("{}")
             return
         event = hook_event(
             _read_hook_stdin(MAX_HOOK_BYTES, deadline - time.monotonic())
         )
+        # This host delivers no native thread identity to the hook process
+        # (verified on codex-cli 0.153.4: the hook env carries CODEX_HOME
+        # only). When a host does supply CODEX_THREAD_ID, a disagreement with
+        # the event's session is a genuine anomaly — fail closed before any
+        # capture. The transcript-artifact ownership check in the helper is
+        # the second, always-available layer.
+        native = os.environ.get("CODEX_THREAD_ID")
+        if native and native != event["session_id"]:
+            _record_stop("envelope", "identity_mismatch")
+            print("{}")
+            return
     except ValueError as exc:
         if str(exc) in {"unexpected hook event", "recursive Stop is not a capture"}:
             print("{}")
@@ -520,13 +607,25 @@ def configure(argv):
 
 
 def _reporting_choice():
-    """Optional, independent reporting recommendation. Never installs."""
-    from diagnostic_support import reporting_hint, reporting_status
+    """Optional, independent reporting recommendation. Never installs.
 
-    view = reporting_status()
+    Offered once inside the first setup, never repeatedly afterwards. The
+    effective view never reports an enabled reporter when the saved
+    reporting choice disagrees."""
+    from diagnostic_support import (
+        effective_reporting,
+        reporting_offer,
+        reporting_status,
+    )
+
+    import consent
+
+    saved = consent.load()
+    view = effective_reporting(reporting_status(), saved.get("reporting"))
     result = dict(reporting=view)
-    if view.get("status") == "not_configured":
-        result["choice"] = reporting_hint()
+    offer = reporting_offer(view, saved, consent.install_traces())
+    if offer is not None:
+        result["choice"] = offer
     return result
 
 
@@ -612,6 +711,15 @@ def reporting_operation(operation):
         stage = "config_read"
         try:
             python, scripts = _adapter_python(config_file)
+            # The saved preference is recorded before the reporter policy is
+            # touched; a refused consent write (damaged authority) leaves the
+            # policy untouched, so the real service choice and the saved
+            # preference never diverge.
+            import consent
+
+            consent.record_reporting(
+                "enabled" if verb == "enable" else "disabled"
+            )
             stage = "helper_run"
             output = run(
                 [
@@ -639,6 +747,24 @@ def reporting_operation(operation):
     timeout = 60 if verb == "ensure" else 5
     stage = "config_read"
     try:
+        # Preparing or maintaining the reporter requires the saved reporting
+        # choice to be exactly "enabled" — a saved later/disabled constrains
+        # the real service, not just the prompts.
+        import consent
+
+        saved = consent.load()
+        if saved.get("reporting") != "enabled":
+            print(json.dumps(dict(
+                status="unavailable",
+                error=dict(type="ConsentError", stage="consent"),
+                detail=(
+                    "the saved reporting choice is "
+                    + str(saved.get("reporting") or saved.get("state"))
+                    + "; reporting ensure/maintain runs only after an explicit "
+                    "reporting-enable"
+                ),
+            )))
+            raise SystemExit(1)
         python, _scripts = _adapter_python(config_file)
         stage = "helper_run"
         output = run(

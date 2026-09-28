@@ -36,13 +36,20 @@ def config_path():
     )
 
 
-def admission():
-    from mindie_knowledge.loop.activation import Admission
-
+def read_config():
+    """One read of the adapter configuration for this helper invocation."""
     try:
         config = json.loads(config_path().read_text())
     except (OSError, ValueError):
         raise ValueError("MindIE adapter configuration is unreadable")
+    if not isinstance(config, dict):
+        raise ValueError("MindIE adapter configuration is unreadable")
+    return config
+
+
+def admission(config):
+    from mindie_knowledge.loop.activation import Admission
+
     path = config.get("admission_path")
     if not isinstance(path, str) or not os.path.isabs(path):
         raise ValueError(
@@ -76,24 +83,21 @@ def checked_token(payload):
 
 
 def operation(name, payload):
-    store = admission()
+    config = read_config()
+    store = admission(config)
     if name == "activate":
         root = payload.get("project_root")
         if not isinstance(root, str) or not os.path.isabs(root) or len(root) > 1024:
             raise ValueError("project_root must be an absolute path")
-        # Lineage is unknown at activation: the native task itself is the
-        # root. Known inherited Fork/subagent histories are not new scopes.
+        # Lineage is unknown at binding: the native task itself is the root.
+        # Known inherited Fork/subagent histories are not new scopes. This is
+        # the internal identity binding for the entry — never a consent step,
+        # and never failure-paused.
         lease = store.activate(
             native_session(),
             project_root=str(Path(root).resolve()),
             root_session=None,
         )
-        if not lease.get("enabled") or int(lease.get("failures") or 0) >= 3:
-            raise ValueError(
-                "MindIE session is paused after repeated failures; run "
-                "deactivate then activate to recover — activate does not "
-                "bypass the circuit"
-            )
         return dict(
             status="active",
             mindie_session_id=lease["session"],
@@ -163,8 +167,23 @@ def operation(name, payload):
         turn = event.get("turn_id")
         if not isinstance(turn, str) or not IDENTITY.fullmatch(turn):
             raise ValueError("invalid hook identity")
+        transcript = event.get("transcript_path")
+        if isinstance(transcript, str):
+            # The hook process receives no native thread identity from this
+            # host, so the forwarded transcript artifact itself is the binding
+            # evidence: a positive mismatch between the event's session and
+            # the transcript owner is never captured. A missing/unreadable or
+            # unrecognizable transcript stays on the existing degrade path —
+            # the worker's parser remains the content-level backstop.
+            import codex_transcript
+
+            probe = codex_transcript.read_material(
+                transcript, 0, session_id=session,
+                max_scan_bytes=1024, max_seconds=1.0, max_text_bytes=16384,
+            )
+            if probe.get("session_match") is False:
+                return dict(stage="inert", reason="wrong-task")
         forwarded = dict(event, mindie_activation=lease["token"], harness="codex")
-        config = json.loads(config_path().read_text())
         from mindie_knowledge.loop.cli import capture_hook
 
         result = capture_hook(config["engine_config"], forwarded)

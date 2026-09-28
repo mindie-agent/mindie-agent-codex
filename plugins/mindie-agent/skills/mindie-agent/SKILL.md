@@ -1,24 +1,38 @@
 ---
 name: mindie-agent
-description: Manually activate MindIE Agent knowledge and optional community sharing for this Codex session when the user explicitly invokes this skill for a vLLM-Ascend task.
+description: The single MindIE Agent entry. Invoke this skill once in a vLLM-Ascend task to bind it internally and use knowledge, optional community sharing, and remote-dev. One-time setup persists for the installation and is never re-asked.
 ---
 
 # MindIE Agent
 
-Use this entry when the user explicitly invokes MindIE Agent for the current
-native Codex task. Discussing the plugin or working in a relevant repository
-does not activate it. The configured domain is initially `vllm-ascend`.
+This skill is the only entry a user needs (`$mindie-agent`). Invoking it in
+the current native Codex task binds the task internally and automatically —
+binding reuses the saved install-level choice and is not a consent step.
+Discussing the plugin or working in a relevant repository does not bind
+anything. The configured domain is initially `vllm-ascend`.
 
 Resolve `../../scripts/bridge.py` to an absolute path relative to this SKILL.md
 directory (`python` on Windows). The native shell supplies `CODEX_THREAD_ID`;
-do not set or override it. MCP calls need no identity or activation arguments.
+do not set or override it. MCP calls need no identity or binding arguments.
+
+Only ever run the copy of this skill and its scripts that lives under the
+ACTIVE profile's plugin cache: `$CODEX_HOME/plugins/cache/mindie-agent/...`
+when `CODEX_HOME` is set, otherwise `~/.codex/plugins/cache/mindie-agent/...`.
+Stale caches from other profiles or older installs can remain on disk and may
+surface in searches; never run their scripts, because each installed copy binds
+the profile it was installed for. When several copies exist inside the active
+cache, use the one with the greatest version. After `activate`, the result's
+`scripts` (and `build` when present) identify the generation that actually
+ran — check they belong to that same active-cache install before relying on
+the binding.
 
 ## First explicit invocation
 
-1. Run `python3 <bridge.py> init` (same as `status`). This is an offline
-   config/status check: it does not start a service, a model, or activation.
-2. If the result includes `first_use`, present the three choices to the user
-   and wait for their answer. There is no default yes.
+1. Run `python3 <bridge.py> activate`. This one call performs the internal
+   binding for the current task and returns status. It does not start a
+   model or collect anything by itself.
+2. If the result indicates first use (no choice was ever saved), present the
+   three choices to the user and wait for their answer. There is no default yes.
    - Recommended: public community contribution for the current named
      project/repository/account. Then run `python3 <bridge.py> config
      --community-repository OWNER/REPO --community-project-root PATH
@@ -26,9 +40,12 @@ do not set or override it. MCP calls need no identity or activation arguments.
      Do not reinstall and do not hand-edit JSON.
    - Read-only knowledge, no contribution: `python3 <bridge.py> sharing-choice read-only`
    - Configure later: `python3 <bridge.py> sharing-choice later`
-3. After a choice is recorded, do not ask again. Then run
-   `python3 <bridge.py> activate`.
-4. On explicit disable, run the same script with `deactivate`.
+3. After a choice is recorded it persists for the installation: new tasks,
+   forks, restarts, upgrades and failure counts never re-ask it and never
+   revoke it; an explicitly disabled value stays disabled.
+4. On explicit disable of contribution, run `python3 <bridge.py> sharing-disable`.
+   `python3 <bridge.py> deactivate` only unbinds this task; invoking the
+   entry again rebinds it without any setup.
 
 Headless install leaves sharing unconfigured/off. Knowledge retrieval, plugin
 updates and remote tools work with sharing off. Sharing off means no Stop
@@ -52,9 +69,11 @@ status, not a reason to replay the user's failed operation.
 
 - Status: `python3 <bridge.py> status` or `init` (offline). This is the normal way to see a sharing problem.
 - Toggle recorded sharing: `sharing-status`, `sharing-enable`, `sharing-disable`.
-- A transient local or network failure is recovered by the existing worker. Do not intervene, re-run the model, or run a contribution command for it.
+- A transient local or network failure is recovered by the existing worker — a
+  deadline-interrupted region gets one bounded background recovery. Do not
+  intervene, re-run the model, or run a contribution command for it.
 - Authentication, trust, rejected content, or invalid configuration can need an explicit user or operator action.
-- Optional troubleshooting of one existing batch, not an activation step: `contribution-inspect`, `contribution-reconcile`, `contribution-retry`, or `contribution-compact`. Uncertain writes are inspected or reconciled, never blindly retried.
+- Optional troubleshooting of one existing batch, not a recovery step: `contribution-inspect`, `contribution-reconcile`, `contribution-retry`, or `contribution-compact`. Uncertain writes are inspected or reconciled, never blindly retried.
 
 A capture startup failure does not stop the user's task. Operational details:
 [activation lifecycle](references/activation-lifecycle.md).

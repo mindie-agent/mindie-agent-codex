@@ -1,11 +1,11 @@
 """Static discovery plus host-identity-bound, bounded, one-shot runtime calls.
 
 The remote surface is a general tool: every native Codex task may use it on
-demand without MindIE activation, leases, or the knowledge engine. Each call
+demand without the MindIE entry, leases, or the knowledge engine. Each call
 is bound to its native task from verified host metadata, and per-task
 ownership reaches remote-dev's REMOTE_DEV_SESSION_ID so one task cannot
-operate on another task's remote jobs. The knowledge surface is unchanged:
-it still requires manual activation and a checked lease.
+operate on another task's remote jobs. The knowledge surface requires a
+bound task and a checked lease.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -134,7 +134,12 @@ class RemoteReceipts:
     SQLite rejects corrupt state instead of reopening an empty replay ledger.
     Request keys remain on disk, never in an unbounded in-memory collection;
     there is no lifetime call ceiling or eviction that makes old keys reusable.
+    Repeated helper failures back off with a persisted, growing delay and
+    recover automatically — they never latch into a manual-recovery pause.
     """
+
+    BACKOFF_BASE = 60.0
+    BACKOFF_CAP = 3600.0
 
     def __init__(self, session):
         self.path = remote_state_dir() / "gate" / (session + ".sqlite3")
@@ -145,10 +150,19 @@ class RemoteReceipts:
         os.chmod(self.path, 0o600)
         db.execute("PRAGMA cache_size=-2048")
         db.execute("CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY, failures INTEGER NOT NULL, paused INTEGER NOT NULL)")
-        db.execute("INSERT OR IGNORE INTO state VALUES(1, 0, 0)")
+        db.execute("INSERT OR IGNORE INTO state(id, failures, paused) VALUES(1, 0, 0)")
+        columns = {row[1] for row in db.execute("PRAGMA table_info(state)")}
+        if "next_check" not in columns:
+            # The retired permanent pause becomes a bounded automatic backoff.
+            db.execute("ALTER TABLE state ADD COLUMN next_check REAL NOT NULL DEFAULT 0")
+            db.execute("UPDATE state SET paused=0 WHERE id=1")
         db.execute("CREATE TABLE IF NOT EXISTS attempts (identity TEXT PRIMARY KEY, started REAL NOT NULL, status TEXT NOT NULL)")
         db.commit()
         return db
+
+    @classmethod
+    def _backoff(cls, failures):
+        return min(cls.BACKOFF_CAP, cls.BACKOFF_BASE * (2.0 ** min(max(0, failures - REMOTE_MAX_FAILURES), 6)))
 
     def claim(self, identity):
         db = self._db()
@@ -156,15 +170,24 @@ class RemoteReceipts:
             with db:
                 db.execute("BEGIN IMMEDIATE")
                 # A killed gate leaves an uncertain, consumed receipt. It can
-                # contribute to the circuit but can never become dispatchable.
+                # contribute to the backoff but can never become dispatchable.
                 expired = db.execute("UPDATE attempts SET status='failed' WHERE status='running' AND started<?", (time.time() - REMOTE_TIMEOUT - 5,)).rowcount
                 if expired:
                     db.execute("UPDATE state SET failures=failures+? WHERE id=1", (expired,))
-                failures, paused = db.execute("SELECT failures, paused FROM state WHERE id=1").fetchone()
-                if paused or failures >= REMOTE_MAX_FAILURES:
-                    db.execute("UPDATE state SET paused=1 WHERE id=1")
-                    db.commit()
-                    raise ValueError("Remote calls paused after repeated failures; explicit recovery: remote_bridge.py recover in this native task")
+                failures, _, next_check = db.execute("SELECT failures, paused, next_check FROM state WHERE id=1").fetchone()
+                if failures >= REMOTE_MAX_FAILURES:
+                    now = time.time()
+                    if now < next_check:
+                        raise ValueError(
+                            "Remote calls are backing off after repeated helper "
+                            f"failures; they resume automatically in {int(next_check - now) + 1}s — "
+                            "no manual recovery or retry is needed"
+                        )
+                    # One bounded probe per backoff window.
+                    db.execute(
+                        "UPDATE state SET next_check=? WHERE id=1",
+                        (now + self._backoff(failures),),
+                    )
                 if db.execute("SELECT 1 FROM attempts WHERE identity=?", (identity,)).fetchone():
                     return False
                 if db.execute("SELECT count(*) FROM attempts WHERE status='running'").fetchone()[0] >= 4:
@@ -178,11 +201,20 @@ class RemoteReceipts:
         db = self._db()
         try:
             with db:
+                db.execute("BEGIN IMMEDIATE")
                 db.execute("UPDATE attempts SET status=? WHERE identity=? AND status='running'", ("succeeded" if succeeded else "failed", identity))
                 if succeeded:
-                    db.execute("UPDATE state SET failures=0 WHERE id=1")
+                    db.execute("UPDATE state SET failures=0, paused=0, next_check=0 WHERE id=1")
                 else:
-                    db.execute("UPDATE state SET failures=failures+1, paused=CASE WHEN failures+1>=? THEN 1 ELSE paused END WHERE id=1", (REMOTE_MAX_FAILURES,))
+                    row = db.execute("SELECT failures FROM state WHERE id=1").fetchone()
+                    count = (int(row[0]) if row else 0) + 1
+                    db.execute("UPDATE state SET failures=? WHERE id=1", (count,))
+                    if count >= REMOTE_MAX_FAILURES:
+                        # Growing persisted delay; never shortens an existing one.
+                        db.execute(
+                            "UPDATE state SET next_check=MAX(COALESCE(next_check, 0), ?) WHERE id=1",
+                            (time.time() + self._backoff(count),),
+                        )
         finally:
             db.close()
 
@@ -190,8 +222,9 @@ class RemoteReceipts:
         db = self._db()
         try:
             with db:
-                # Explicit recovery releases only the circuit, never attempts.
-                db.execute("UPDATE state SET failures=0, paused=0 WHERE id=1")
+                # Explicit operator action releases the backoff early; it is
+                # never required — recovery is automatic.
+                db.execute("UPDATE state SET failures=0, paused=0, next_check=0 WHERE id=1")
         finally:
             db.close()
 

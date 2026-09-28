@@ -62,17 +62,21 @@ this change is merged**. Windows hardware acceptance is not this merge's gate.
 Explicitly invoke `$mindie-agent`. Its offline status offers three choices:
 recommended public contribution for a named project/repository/account,
 read-only knowledge, or configuration later. There is no default consent.
-The choice persists, and the Skill activates only this native task.
+This choice is requested only on the first use after installation and is
+persisted for that installation. Later tasks, forks, restarts, updates and
+ordinary failures never request it again. Each entry binds only the current
+native task internally; users do not manage that binding.
 
-Knowledge tools require that explicit activation. The host supplies task
+Knowledge tools require that entry binding. The host supplies task
 identity; public knowledge calls have no identity or capability argument.
 Mentioning MindIE, opening a repository, MCP discovery or a query does not
-activate it. Remote-dev works in ordinary native tasks independently.
+bind it. Remote-dev works in ordinary native tasks independently.
 
-Authorization persists across idle time and runtime updates. There is no
-24-hour renewal requirement and no configuration fingerprint expiry.
-Revocation, a paused task or an actual project-scope change still matters.
-Use the entry Skill to deactivate or explicitly recover a paused task.
+The install-level choice and the task binding persist across idle time,
+restarts, runtime updates and failures. There is no renewal requirement, no
+configuration fingerprint expiry and no failure-count pause — ordinary
+failures never require deactivate/reactivate. Only explicit unbinding or an
+actual project-scope change ends a binding.
 See [activation details](plugins/mindie-agent/skills/mindie-agent/references/activation-lifecycle.md).
 
 ## Optional experience sharing
@@ -194,9 +198,12 @@ Do not recursively delete the shared data directory. Removing one adapter does
 not revoke or remove the shared reporter; disable reporting separately only
 when you want that choice to apply to all adapters.
 
+See [framework stability and verification](docs/framework-stability.md) for the
+current behavior, reproducible checks and acceptance boundaries.
+
 ## Evidence and follow-up
 
-[Current native acceptance](docs/acceptance-lifecycle-2026-09-21.md) records
+[Earlier native acceptance](docs/acceptance-lifecycle-2026-09-21.md) records
 Luna/max installation, explicit read-only use, configuration independence,
 update/job continuity and the remaining contribution/host checks.
 [Remote acceptance](docs/remote-general-acceptance-2026-09-20.md) records the
@@ -205,7 +212,12 @@ recorded revisions. Component checks are diagnostic and do not replace native
 or hardware acceptance.
 
 ```sh
-.venv/bin/python -m unittest discover -s tests
+# Pins match .github/workflows/tests.yml. Do not omit these: the contract
+# tests archive the commits below and fail, naming the variable, if unset.
+export MINDIE_CORE_REPO=/path/to/knowledge-checkout   # contains 0df968a03008a170bb52d4acade7c7226eb0d39b
+export MINDIE_KIMI_REPO=/path/to/kimi-adapter-checkout  # contains 90f73e76c6087ce091570f2d151b709145c913bc
+.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
+.venv/bin/python -m unittest tests.test_parallel_codex_contract -v
 ```
 
 Merging this pre-release adapter permits integrated main-branch and Windows
