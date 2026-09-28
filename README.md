@@ -218,7 +218,7 @@ MCP calls have bounded input, output and process deadlines; long remote work
 uses owned jobs with explicit status and cancellation.
 
 Optional organizer work is isolated from tools, plugins and other agents and
-has a 120-second model-process deadline. It preserves `model` and
+has a 300-second model-process deadline. It preserves `model` and
 `model_reasoning_effort` from the selected `CODEX_HOME/config.toml` while ignoring
 that file's tool and plugin settings; explicit worker arguments take precedence.
 Its process sandbox is read-only because the organizer returns structured data
@@ -291,7 +291,7 @@ or hardware acceptance.
 ```sh
 # Pins match .github/workflows/tests.yml. Do not omit these: the contract
 # tests archive the commits below and fail, naming the variable, if unset.
-export MINDIE_CORE_REPO=/path/to/knowledge-checkout   # contains b15c78c9901327d4d59794cba7f7b0521dc4c778
+export MINDIE_CORE_REPO=/path/to/knowledge-checkout   # contains 8aaa8b0a7f25c7a6f5e756dc7b42cd5985312809
 export MINDIE_KIMI_REPO=/path/to/kimi-adapter-checkout  # contains 90f73e76c6087ce091570f2d151b709145c913bc
 .venv/bin/python -m unittest discover -s tests -p 'test_*.py'
 .venv/bin/python -m unittest tests.test_parallel_codex_contract -v

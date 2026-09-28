@@ -67,6 +67,7 @@ else:
         from mindie_knowledge.loop.cli import STARTUP_TIMEOUT, MAX_STARTUP_PROBES, load_transcript_adapter
         from mindie_knowledge.loop.activation import Admission
         from mindie_knowledge.loop.budget import MaintenanceBudget
+        from mindie_knowledge.loop.limits import ORGANIZER_TIMEOUT, ORGANIZER_PROCESS_TIMEOUT, ORGANIZER_LEASE_SECONDS
         from mindie_knowledge.loop.engine import Engine
         from mindie_knowledge.loop.transport import Service
         from mindie_knowledge.loop import documents, locks
@@ -77,6 +78,8 @@ else:
     else:
         if not callable(load_transcript_adapter):
             missing.append("load_transcript_adapter is unavailable")
+        if not (0 < ORGANIZER_TIMEOUT < ORGANIZER_PROCESS_TIMEOUT < ORGANIZER_LEASE_SECONDS):
+            missing.append("organizer lifetime bounds are inconsistent")
         if not callable(getattr(locks, "lock_held", None)):
             missing.append("core locks lacks lock_held")
         if not callable(call_tool):

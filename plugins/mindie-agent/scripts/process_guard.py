@@ -17,9 +17,10 @@ import threading
 import time
 
 import windows_process
+from mindie_knowledge.loop.limits import ORGANIZER_TIMEOUT
 
 MAX_OUTPUT = 128 * 1024
-TIMEOUT = 120
+TIMEOUT = ORGANIZER_TIMEOUT
 ALLOWED_ITEMS = {"agent_message", "reasoning"}
 POSIX = os.name == "posix"
 
