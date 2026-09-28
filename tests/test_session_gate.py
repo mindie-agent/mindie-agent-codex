@@ -175,7 +175,7 @@ class SessionGateTests(unittest.TestCase):
         )
         skill = (skill / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("init", skill)
-        self.assertIn("sharing-choice", skill)
+        self.assertIn("experience", skill)
         self.assertIn("contribution-inspect", skill)
         self.assertNotIn("SessionStart", skill)
 
@@ -723,15 +723,15 @@ class SessionGateTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["service"]["state"], "not-running")
         self.assertEqual(
-            payload["first_use"]["choices"], ["contribute", "read-only", "later"]
+            payload["first_use"]["choices"], []
         )
         self.assertFalse((self.root / "data").exists())
         init = self.bridge("init")
         self.assertEqual(init.returncode, 0, init.stderr)
         self.assertEqual(json.loads(init.stdout)["service"]["state"], "not-running")
-        recorded = self.bridge("sharing-choice", extra=["later"])
+        recorded = self.bridge("sharing-disable")
         self.assertEqual(recorded.returncode, 0, recorded.stderr)
-        self.assertEqual(json.loads(recorded.stdout)["sharing_choice"], "later")
+        self.assertEqual(json.loads(recorded.stdout)["sharing_choice"], "disabled")
         again = json.loads(self.bridge("init").stdout)
         self.assertIsNone(again["first_use"])
         self.assertFalse((self.root / "data").exists())
@@ -831,7 +831,7 @@ class SessionGateTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertFalse(payload["configured"])
         self.assertEqual(
-            payload["first_use"]["choices"], ["contribute", "read-only", "later"]
+            payload["first_use"]["choices"], []
         )
         self.assertIn("setup.py", payload["next"])
         self.assertEqual(payload["service"]["state"], "not-running")

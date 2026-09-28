@@ -123,13 +123,15 @@ five minutes while that manager is running.
 
 ## First use and task boundaries
 
-Explicitly invoke `$mindie-agent`. Its offline status offers three choices:
-recommended public contribution for a named project/repository/account,
-read-only knowledge, or configuration later. There is no default consent.
-This choice is requested only on the first use after installation and is
-persisted for that installation. Later tasks, forks, restarts, updates and
-ordinary failures never request it again. Each entry binds only the current
-native task internally; users do not manage that binding.
+Explicitly invoke `$mindie-agent`. Its status distinguishes task binding from
+experience capture. Missing public destination and project scope are incomplete
+configuration; supply only those missing values through `bridge.py config`.
+Existing approved settings persist across tasks and updates. Configuration in
+an already-bound task prepares capture without a second activation.
+An explicit disable and legacy declined settings remain disabled until changed.
+Read-only/later product modes are removed; they are retained only as migration
+data. Inspect actual capture, organization and contribution receipts before
+claiming full-loop success.
 
 Knowledge tools require that entry binding. The host supplies task
 identity; public knowledge calls have no identity or capability argument.

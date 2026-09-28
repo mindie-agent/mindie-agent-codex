@@ -16,8 +16,8 @@ task at hand.
   revoke/rebind never replays old captures. A fresh binding rotates the
   token and capture boundary.
 - First explicit invocation runs `bridge.py activate` once: it binds the task
-  and returns status. If sharing is unconfigured, present the three choices
-  once (contribute / read-only / later), with no default yes. The saved choice
+  and returns status. If sharing is unconfigured, obtain only missing destination and scope;
+  do not offer partial product modes or claim capture is ready. The saved choice
   persists for the installation — new tasks, forks, restarts, upgrades and
   failures never re-ask and never revoke it; an explicit off stays off.
   Configure sharing with `setup.py configure` or `bridge.py config`; do not

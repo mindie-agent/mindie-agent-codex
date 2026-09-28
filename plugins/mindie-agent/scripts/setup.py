@@ -138,28 +138,24 @@ def community_settings(args, parser, python):
 
 
 def interactive_choice(args, parser):
-    """Optional installer prompt. No default yes; headless never calls this."""
+    """Confirm the supplied destination; there are no partial product modes."""
     print(sharing.CHOICES, file=sys.stderr)
     try:
-        line = input("Choice [1/2/3]: ").strip()
+        line = input("Configure the supplied public destination and scope? [yes/no]: ").strip()
     except EOFError:
-        parser.error("interactive setup requires an explicit 1, 2 or 3; no default")
-    if line == "1":
+        parser.error("interactive setup needs a response; configuration is incomplete")
+    if line.lower() == "yes":
         if not (
             args.community_repository
             and args.community_project_root
             and args.community_visibility == "public"
         ):
             parser.error(
-                "choice 1 requires --community-repository OWNER/REPO "
+                "configuration requires --community-repository OWNER/REPO "
                 "--community-project-root PATH --community-visibility public"
             )
         return "contribute"
-    if line == "2":
-        return "read-only"
-    if line == "3":
-        return "later"
-    parser.error("no default yes; choose 1, 2 or 3")
+    parser.error("configuration was not completed; no product mode was selected")
 
 
 def install(args, parser):
@@ -297,12 +293,11 @@ def configure(args, parser):
             "(--community-repository, --community-project-root, "
             "--community-visibility public)"
         )
-    # The explicit contribution choice lands in the consent authority; a
-    # damaged consent document refuses first so settings stay untouched.
-    try:
-        consent.record_choice("contribute", config)
-    except consent.ConsentError as exc:
-        parser.error(str(exc))
+    # Validate the consent authority first, but do not claim completed setup
+    # before the real configuration writes succeed.
+    saved = consent.load(config)
+    if saved["state"] in {"corrupt", "unreadable"}:
+        parser.error("saved setup state is damaged; configuration was not changed")
     with sharing.community_write_lock(config):
         # One context for the whole boundary: converge adapter/engine/worker
         # onto the profile-shared path, then resolve and re-read the current
@@ -369,6 +364,7 @@ def configure(args, parser):
                 engine["admission_path"] = adapter["admission_path"]
             replace_private(engine_path, engine)
     replace_private(config, adapter)
+    consent.record_choice("contribute", config)
     print(
         json.dumps(
             dict(

@@ -283,17 +283,41 @@ def activate(operation):
         result["build"] = build
     if migration:
         result["migration"] = migration
+    return _prepare_capture(result)
+
+
+def _prepare_capture(result):
+    """Report the effective loop state for this already verified binding."""
     settings = sharing.read()
+    view = sharing.status()
     if (
         settings is not None
         and settings["enabled"]
         and sharing.consent_allows(settings) is not False
     ):
-        result["capture"] = bind(result)
+        if sharing.capture_allowed(dict(result, root_session=result["mindie_session_id"]), result.get("project_root")):
+            result["capture"] = bind(result)
+        else:
+            result["capture"] = "out-of-scope"
     else:
         # Sharing off/unconfigured or consent-blocked: ordinary activation
         # only. No cold start, no bind, no collection preparation.
         result["capture"] = "disabled"
+    result["sharing"] = view
+    result["experience"] = (
+        "capture-ready" if result["capture"] == "bound"
+        else "out-of-scope" if result["capture"] == "out-of-scope"
+        else "unavailable" if result["capture"].startswith("unbound:")
+        else "disabled" if view["state"] == "disabled"
+        else "unavailable" if view["state"] == "malformed"
+        else "needs-configuration"
+    )
+    if result["experience"] == "needs-configuration":
+        result["next"] = sharing.CHOICES
+    elif result["experience"] == "out-of-scope":
+        result["next"] = "This task is outside the configured project scope; capture is not active."
+    elif result["experience"] == "unavailable":
+        result["next"] = "Capture could not be prepared; inspect status. Task binding alone does not establish capture readiness."
     return result
 
 
@@ -308,7 +332,8 @@ def unconfigured_status():
     first_use = dict(
         state="unconfigured",
         prompt=sharing.CHOICES,
-        choices=["contribute", "read-only", "later"],
+        choices=[],
+        required=["runtime", "repository", "project_roots", "public_visibility"],
     )
     if saved["state"] == "ok" and saved["choice"]:
         first_use = dict(state="chosen", choice=saved["choice"])
@@ -316,6 +341,7 @@ def unconfigured_status():
         first_use = dict(state="existing", detail=saved.get("error"))
     return dict(
         configured=False,
+        experience="needs-configuration",
         sharing=dict(state="unconfigured"),
         first_use=first_use,
         next=(
@@ -323,8 +349,8 @@ def unconfigured_status():
             "(headless leaves sharing off). The saved install-level choice is "
             "reused; configure contribution via setup.py configure "
             "--community-repository OWNER/REPO --community-project-root PATH "
-            "--community-visibility public; or scripts/bridge.py "
-            "sharing-choice read-only|later. Do not edit JSON or reinstall."
+            "--community-visibility public. Installation alone does not enable "
+            "the experience loop. Reuse existing approved values."
         ),
         recovery=[],
         service=dict(state="not-running"),
@@ -533,27 +559,24 @@ def sharing_operation(operation, extra=None):
     if operation == "sharing-status":
         return sharing.status()
     if operation == "sharing-choice":
-        if extra not in {"read-only", "later"}:
-            raise ValueError(
-                "sharing-choice is read-only or later; contribution uses "
-                "setup.py configure / bridge.py config"
-            )
-        choice = sharing.record_choice(extra)
-        return dict(
-            status="recorded",
-            sharing_choice=choice,
-            sharing="off",
-            note="knowledge retrieval stays available; no capture until "
-            "an explicit later configure",
+        raise ValueError(
+            "read-only/later product modes were removed. Configure the "
+            "destination and scope with bridge.py config, or explicitly "
+            "disable capture with sharing-disable. Saved legacy settings are preserved."
         )
     if operation == "sharing-enable":
         settings = sharing.set_enabled(True)
-        return dict(
+        result = dict(
             status="enabled",
             generation=settings["generation"],
             enabled_at=settings["enabled_at"],
             note="only newly authorized material is captured; no backfill",
         )
+        return _refresh_capture(result)
+    if not sharing.configured_path().exists():
+        import consent
+        consent.record_choice("disabled")
+        return dict(status="disabled", sharing_choice="disabled")
     settings = sharing.set_enabled(False)
     return dict(
         status="disabled",
@@ -611,7 +634,25 @@ def configure(argv):
             max_output=65536,
             env=generation_env(config_file),
         )
-    return json.loads(output) if output.strip() else dict(status="configured")
+    result = json.loads(output) if output.strip() else dict(status="configured")
+    return _refresh_capture(result)
+
+
+def _refresh_capture(result):
+    """Finish configuration in the already-bound native task; never infer one."""
+    session = os.environ.get("CODEX_THREAD_ID")
+    if session:
+        try:
+            lease = Sessions().check(session)
+        except (Inactive, ValueError):
+            pass
+        else:
+            result["activation"] = _prepare_capture(dict(
+                status="active", mindie_session_id=lease["session"],
+                mindie_activation=lease["token"], activated_at=lease["activated_at"],
+                project_root=lease["project_root"],
+            ))
+    return result
 
 
 def _reporting_choice():

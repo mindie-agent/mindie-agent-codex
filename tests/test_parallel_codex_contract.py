@@ -76,7 +76,7 @@ import session_gate  # noqa: E402
 import sharing  # noqa: E402
 from session_gate import Sessions  # noqa: E402
 
-CHOICE_PROMPT = "Community sharing is unconfigured."
+CHOICE_PROMPT = "Experience capture is not configured."
 SENTINEL = "CODEX-CONTRACT-SENTINEL-7f3a"
 PARENT_SECRET = "PARENT-ONLY-SECRET-9c2e"
 CHILD_FACT = "CHILD-FORK-FACT-1b80"
@@ -1333,9 +1333,9 @@ class EntryReuseTests(LaneCase):
         opened = json.loads(first.stdout)
         visible = json.dumps(self._visible(opened))
         self.assertIn(CHOICE_PROMPT, visible, visible)
-        chosen = self.bridge("sharing-choice", "later", thread="task-first")
+        chosen = self.bridge("sharing-disable", thread="task-first")
         self.assertEqual(chosen.returncode, 0, chosen.stderr)
-        self.assertEqual(json.loads(chosen.stdout)["sharing_choice"], "later")
+        self.assertEqual(json.loads(chosen.stdout)["sharing_choice"], "disabled")
         for thread in ("task-second", "fork-of-first"):
             with self.subTest(thread=thread):
                 again = self.bridge("status", thread=thread)
@@ -1345,7 +1345,7 @@ class EntryReuseTests(LaneCase):
                 self.assertNotIn(CHOICE_PROMPT, shown, shown)
                 self.assertIsNone(payload.get("first_use"), shown)
         saved = json.loads((self.root / "mindie-consent.json").read_text())
-        self.assertEqual(saved["choice"], "later")
+        self.assertEqual(saved["choice"], "disabled")
 
     def test_corrupt_consent_status_is_not_a_fresh_install(self):
         self.write_community(enabled=False)

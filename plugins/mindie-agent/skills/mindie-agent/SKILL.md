@@ -28,28 +28,24 @@ the binding.
 
 ## First explicit invocation
 
-1. Run `python3 <bridge.py> activate`. This one call performs the internal
-   binding for the current task and returns status. It does not start a
-   model or collect anything by itself.
-2. If the result indicates first use (no choice was ever saved), present the
-   three choices to the user and wait for their answer. There is no default yes.
-   - Recommended: public community contribution for the current named
-     project/repository/account. Then run `python3 <bridge.py> config
-     --community-repository OWNER/REPO --community-project-root PATH
-     --community-visibility public` (optional `--community-account NAME`).
-     Do not reinstall and do not hand-edit JSON.
-   - Read-only knowledge, no contribution: `python3 <bridge.py> sharing-choice read-only`
-   - Configure later: `python3 <bridge.py> sharing-choice later`
-3. After a choice is recorded it persists for the installation: new tasks,
-   forks, restarts, upgrades and failure counts never re-ask it and never
-   revoke it; an explicitly disabled value stays disabled.
-4. On explicit disable of contribution, run `python3 <bridge.py> sharing-disable`.
-   `python3 <bridge.py> deactivate` only unbinds this task; invoking the
-   entry again rebinds it without any setup.
+1. Run `python3 <bridge.py> activate` once in the native task. Inspect
+   `experience` and `capture`; task binding alone is not capture readiness.
+2. If configuration is incomplete, reuse existing approved values and ask only
+   for the missing public destination/account/project scope. Run
+   `python3 <bridge.py> config --community-repository OWNER/REPO
+   --community-project-root PATH --community-visibility public`
+   (optional `--community-account NAME`). This attaches capture in the already
+   bound task; no second activation or reinstall is needed.
+3. Preserve explicit disable and legacy declined settings. They are disabled
+   configurations, not alternative product modes or successful acceptance.
+   Change them only when the user requests it. `sharing-disable` stops sharing;
+   `deactivate` unbinds this task.
 
-Headless install leaves sharing unconfigured/off. Knowledge retrieval, plugin
-updates and remote tools work with sharing off. Sharing off means no Stop
-capture, transcript reading, draft creation or background model work.
+The normal configured path captures and processes eligible Stop events
+automatically. Missing configuration, an out-of-scope task or a failed service
+must be reported as such. A configured or bound status is not a receipt that
+capture, organization or publication actually completed. Retrieval remains
+optional; remote tools work independently.
 
 ## Local diagnostics
 
@@ -109,8 +105,8 @@ Details: [domain tooling](references/domain-skills.md).
 
 Hook and MCP deadlines, duplicate-request checks and background model budgets
 are enforced by the runtime. Stop capture must never request another model turn
-or block task completion. Do not reactivate a paused task to bypass a failure
-circuit; recover with deactivate then activate. Preserve unrelated tasks and
+or block task completion. Failures never revoke task binding. Do not deactivate/reactivate to recover
+a component failure; use its reported state and existing recovery path. Preserve unrelated tasks and
 remote workloads.
 
 The old domain Skill catalogue is retired; profiling analysis remains deferred.

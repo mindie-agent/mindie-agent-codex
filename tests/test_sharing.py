@@ -367,7 +367,7 @@ class GateTests(SharingFixture):
 class CommandTests(SharingFixture):
     def test_enable_disable_status_cycle_is_atomic_and_bounded(self):
         result = self.bridge("sharing-status")
-        self.assertEqual(json.loads(result.stdout)["state"], "off")
+        self.assertEqual(json.loads(result.stdout)["state"], "unconfigured")
         # Enable requires recorded settings; unconfigured fails clearly.
         result = self.bridge("sharing-enable")
         self.assertEqual(result.returncode, 1)

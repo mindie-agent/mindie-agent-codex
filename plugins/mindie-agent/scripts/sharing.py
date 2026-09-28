@@ -50,14 +50,12 @@ CORE_KEYS = {
     "idle_seconds",
 }
 CHOICES = (
-    "Community sharing is unconfigured. Choose one (no default yes):\n"
-    "1. Recommended: public community contribution for the current named "
+    "Experience capture is not configured. Supply the missing public "
     "project/repository/account — scripts/setup.py configure "
     "--community-repository OWNER/REPO --community-project-root PATH "
-    "--community-visibility public [--community-account NAME]\n"
-    "2. Read-only knowledge; no contribution — scripts/bridge.py "
-    "sharing-choice read-only\n"
-    "3. Configure later — scripts/bridge.py sharing-choice later"
+    "--community-visibility public [--community-account NAME]. "
+    "Reuse existing user-approved values. Installation or task binding alone "
+    "does not complete configuration."
 )
 NORMALIZE_SCRIPT = """
 import json, sys
@@ -499,7 +497,8 @@ def first_use(config_file=None, saved=None):
     return dict(
         state="unconfigured",
         prompt=CHOICES,
-        choices=["contribute", "read-only", "later"],
+        choices=[],
+        required=["repository", "project_roots", "public_visibility"],
     )
 
 
@@ -583,6 +582,9 @@ def status(config_file=None, saved=None):
     saved = saved if saved is not None else consent.load(config_file)
     choice = adapter_choice(config_file, saved)
     unused = first_use(config_file, saved)
+    if saved["state"] in {"corrupt", "unreadable"}:
+        return dict(state="malformed", detail="saved setup state is damaged",
+                    sharing_choice=choice, first_use=None)
     try:
         path = configured_path(config_file)
     except (OSError, ValueError) as exc:
@@ -594,7 +596,7 @@ def status(config_file=None, saved=None):
         )
     if not path.exists():
         return dict(
-            state="off",
+            state="disabled" if choice in {"read-only", "later", "disabled"} else "unconfigured",
             detail="no community settings recorded",
             sharing_choice=choice,
             first_use=unused,
@@ -610,7 +612,10 @@ def status(config_file=None, saved=None):
             first_use=unused,
         )
     return dict(
-        state="enabled" if settings["enabled"] else "disabled",
+        state=("disabled" if choice in {"read-only", "later", "disabled"}
+               else "enabled" if settings["enabled"] and consent_allows(settings, config_file) is not False
+               else "disabled" if choice and settings.get("repository") and settings.get("project_roots")
+               else "unconfigured"),
         path=str(path),
         generation=settings["generation"],
         enabled_at=settings["enabled_at"],
