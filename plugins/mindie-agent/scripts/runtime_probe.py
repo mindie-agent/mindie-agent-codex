@@ -69,7 +69,7 @@ else:
         from mindie_knowledge.loop.budget import MaintenanceBudget
         from mindie_knowledge.loop.engine import Engine
         from mindie_knowledge.loop.transport import Service
-        from mindie_knowledge.loop import documents
+        from mindie_knowledge.loop import documents, locks
         from mindie_knowledge.community import submit_batch, reconcile_batch
         from remote_dev.mcp.tools import call_tool
     except Exception as exc:
@@ -77,6 +77,8 @@ else:
     else:
         if not callable(load_transcript_adapter):
             missing.append("load_transcript_adapter is unavailable")
+        if not callable(getattr(locks, "lock_held", None)):
+            missing.append("core locks lacks lock_held")
         if not callable(call_tool):
             missing.append("remote_dev call_tool is unavailable")
         if not callable(getattr(Engine, "stop_if_idle", None)):

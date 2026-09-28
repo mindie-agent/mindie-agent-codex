@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 
 
 def _fail(message):
@@ -70,10 +71,10 @@ def main(argv):
     if not settings_path.is_file():
         _fail("cannot read updater settings")
     entry = _current_updater(settings_path)
-    os.execv(
-        sys.executable,
-        [sys.executable, str(entry), "--settings", str(settings_path), *operation],
-    )
+    command = [sys.executable, str(entry), "--settings", str(settings_path), *operation]
+    if os.name == "nt":
+        raise SystemExit(subprocess.call(command))
+    os.execv(sys.executable, command)
 
 
 if __name__ == "__main__":

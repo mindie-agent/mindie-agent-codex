@@ -494,7 +494,8 @@ def serve(surface):
 
     def send(value):
         with output_lock:
-            print(json.dumps(value, ensure_ascii=False), flush=True)
+            sys.stdout.buffer.write((json.dumps(value, ensure_ascii=False) + "\n").encode("utf-8"))
+            sys.stdout.buffer.flush()
 
     def respond(identifier, result):
         send(dict(jsonrpc="2.0", id=identifier, result=result))

@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 
 
 def _transient_unavailable(exc):
@@ -261,7 +262,10 @@ def redispatch():
             return
         if not target.is_file():
             return
-        os.execve(python, [python, str(target)], generation_env())
+        command = [python, str(target)]
+        if os.name == "nt":
+            raise SystemExit(subprocess.call(command, env=generation_env()))
+        os.execve(python, command, generation_env())
     except OSError:
         return  # A stale generation record fails closed in this process.
 
@@ -272,7 +276,8 @@ if __name__ == "__main__":
         raw = sys.stdin.buffer.read(128 * 1024 + 1)
         if len(raw) > 128 * 1024:
             raise ValueError("call exceeds limit")
-        print(json.dumps(call(json.loads(raw)), ensure_ascii=False))
+        sys.stdout.buffer.write((json.dumps(call(json.loads(raw)), ensure_ascii=False) + "\n").encode("utf-8"))
+        sys.stdout.buffer.flush()
     except Exception as exc:
         shaped = dict(
             content=[
