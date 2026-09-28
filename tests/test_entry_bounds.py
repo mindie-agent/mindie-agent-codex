@@ -121,7 +121,7 @@ class EntryBoundsTests(unittest.TestCase):
 
     def test_worker_input_rejected_before_model_start(self):
         result = subprocess.run(
-            [sys.executable, str(SCRIPTS / "agent_worker.py")],
+            [sys.executable, str(SCRIPTS / "agent_worker.py"), "--model", "synthetic-summary-model"],
             input="x" * 65537,
             text=True,
             capture_output=True,
@@ -129,7 +129,7 @@ class EntryBoundsTests(unittest.TestCase):
             env={**os.environ, "MINDIE_CODEX_BIN": "/missing/not-called"},
         )
         self.assertEqual(result.returncode, 65)
-        self.assertEqual(result.stderr.strip(), "organizer result was invalid")
+        self.assertEqual(result.stderr.strip(), "summary failed: invalid_result")
         self.assertNotIn("x" * 32, result.stderr)
 
     def test_session_start_is_not_registered(self):

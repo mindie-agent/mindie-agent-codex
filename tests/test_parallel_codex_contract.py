@@ -39,7 +39,7 @@ SCRIPTS = REPO / "plugins/mindie-agent/scripts"
 
 
 KIMI_COMMIT = "90f73e76c6087ce091570f2d151b709145c913bc"
-CORE_COMMIT = "68ed86579bcbf88ac8ed2817a2ca81756c351485"
+CORE_COMMIT = "6c36fbb370fe11a30bfaaec5235977fc68af9e08"
 CONSENT_STORE_SHA256 = "0a979620b415e1faf9f7366d23580d498ddee9089f34fc35e03614bff1166b94"
 
 
@@ -137,6 +137,17 @@ def _user(text, stamp):
     }
 
 
+_SCANNER_CACHE = tempfile.TemporaryDirectory(prefix="mindie-scanner-tests-")
+_SCANNER = None
+
+def installed_scanner():
+    global _SCANNER
+    if _SCANNER is None:
+        from mindie_knowledge.loop.transcript_redaction import install_scanner
+        _SCANNER = install_scanner(Path(_SCANNER_CACHE.name))
+    return _SCANNER
+
+
 class LaneCase(unittest.TestCase):
     def setUp(self):
         self.platform_env = {
@@ -180,7 +191,8 @@ class LaneCase(unittest.TestCase):
             "admission_path": str(self.admission),
             "community_config": str(self.community),
             "transcript_adapter": str(SCRIPTS / "codex_transcript.py"),
-            "agent_command": [PY, str(self.double), str(self.model_log)],
+            "capture_mode": "public-transcript",
+            "redactor_executable": installed_scanner(),
         }
         self.engine.write_text(json.dumps(self.engine_doc))
         self.adapter = {
@@ -366,6 +378,14 @@ class LaneCase(unittest.TestCase):
             return ""
         return self.model_log.read_text()
 
+    def saved_text(self):
+        from mindie_knowledge.loop.store import Store
+        store = Store(self.root / "data", "test")
+        try:
+            return "\n".join(doc["content"] for doc in store.drafts_changed())
+        finally:
+            store.close()
+
     def drain_worker(self):
         from mindie_knowledge.loop.activation import Admission
         from mindie_knowledge.loop.cli import load_transcript_adapter
@@ -376,7 +396,7 @@ class LaneCase(unittest.TestCase):
         try:
             engine = Engine(
                 store,
-                agent_command=[PY, str(self.double), str(self.model_log)],
+                capture_mode="public-transcript", redactor_executable=installed_scanner(),
                 settings_path=str(self.community),
                 admission=Admission(str(self.admission)),
                 transcript_adapter=load_transcript_adapter(
@@ -402,6 +422,58 @@ class LaneCase(unittest.TestCase):
 
 
 class ConsentGateTests(LaneCase):
+    def test_corrupt_transcript_holds_public_body_and_cursor(self):
+        self.write_consent("contribute", reporting="disabled")
+        self.write_community(enabled=True)
+        self.open_store()
+        self.activate("task-main")
+        transcript = self.root / "corrupt-body.jsonl"
+        _jsonl(transcript, [_session_meta("task-main"),
+            _user("Must not declare complete", self.after_boundary("task-main", 30))])
+        with transcript.open('ab') as stream:
+            stream.write(b'{"type":broken}\n')
+        self.assertEqual(self.stop(self.event("task-main", transcript)).returncode, 0)
+        self.drain_worker()
+        self.assertEqual(self.saved_text(), '')
+        self.assertEqual(self.capture_rows()[0]['status'], 'failed')
+        from mindie_knowledge.loop.store import Store
+        store = Store(self.root / "data", "test")
+        try:
+            self.assertIsNone(store.cursor(str(transcript.resolve())))
+        finally:
+            store.close()
+
+    def test_stop_stores_public_body_and_export_without_tool_or_hidden_material(self):
+        self.write_consent("contribute", reporting="disabled")
+        self.write_community(enabled=True)
+        self.open_store()
+        self.activate("task-main")
+        transcript = self.root / "public-body.jsonl"
+        stamp = self.after_boundary("task-main", 30)
+        records = [_session_meta("task-main"), _user("Public request marker", stamp)]
+        for channel, text in (("analysis", "hidden-only-marker"), ("commentary", "Public progress marker"), ("final_answer", "Public result marker")):
+            records.append(dict(type="response_item", timestamp=stamp, payload=dict(type="message", role="assistant", phase=channel, content=[dict(type="output_text", text=text)])))
+        records.append(dict(type="response_item", timestamp=stamp, payload=dict(type="function_call_output", output="tool-only-marker")))
+        _jsonl(transcript, records)
+        result = self.stop(self.event("task-main", transcript))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.drain_worker()
+        expected = "### user\nPublic request marker\n\n### assistant:commentary\nPublic progress marker\n\n### assistant:final_answer\nPublic result marker"
+        self.assertEqual(self.saved_text(), expected)
+        self.assertEqual(self.model_text(), "")
+        from mindie_knowledge.loop.documents import parse_entry
+        from mindie_knowledge.loop.export import build_batch
+        from mindie_knowledge.loop.store import Store
+        from mindie_knowledge.loop import settings
+        store = Store(self.root / "data", "test")
+        try:
+            batch = build_batch(store, settings=settings.load(self.community))
+            self.assertIsNotNone(batch)
+            public = parse_entry(batch[2]["files"][0]["content"].encode("utf-8"))
+            self.assertEqual(public["content"], expected)
+        finally:
+            store.close()
+
     def test_disallowed_consent_does_not_capture_or_call_the_model(self):
         """community.enabled=true must not collect when consent is not contribute."""
         cases = {
@@ -469,13 +541,14 @@ class ConsentGateTests(LaneCase):
         self.assertEqual(rows[0]["session"], "task-main")
         self.drain_worker()
         called = self.model_text()
-        self.assertEqual(called.count("\n"), 1, called[:500])
-        self.assertIn(SENTINEL, called)
+        self.assertEqual(called, "")
+        self.assertEqual(self.saved_text().count(SENTINEL), 1)
         second = self.stop(self.event("task-main", transcript))
         self.assertEqual(second.returncode, 0, second.stderr)
         self.drain_worker()
         self.assertEqual(len(self.capture_rows()), 1, self.capture_rows())
-        self.assertEqual(self.model_text().count("\n"), 1, self.model_text()[:500])
+        self.assertEqual(self.model_text(), "")
+        self.assertEqual(self.saved_text().count(SENTINEL), 1)
         saved = [
             row["status"] for row in self.capture_rows()
         ]
@@ -530,7 +603,8 @@ class ConsentGateTests(LaneCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.capture_rows()), 1, self.capture_rows())
         self.drain_worker()
-        observed = self.model_text()
+        observed = self.saved_text()
+        self.assertEqual(self.model_text(), "")
         self.assertIn(CHILD_FACT, observed, observed[:600])
         self.assertNotIn(PARENT_SECRET, observed, observed[:600])
 
@@ -550,7 +624,7 @@ class ConsentGateTests(LaneCase):
         rows = self.capture_rows()
         if rows:
             self.drain_worker()
-        self.assertNotIn(PRE_ADMISSION, self.model_text())
+        self.assertNotIn(PRE_ADMISSION, self.saved_text())
         self.assertEqual(self.model_text(), "")
 
 

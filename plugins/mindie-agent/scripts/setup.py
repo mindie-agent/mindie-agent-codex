@@ -199,14 +199,12 @@ def install(args, parser):
     value = dict(
         root=str(args.root.expanduser().absolute()),
         domain=args.domain,
-        agent_command=[
-            python,
-            str(SCRIPTS / "agent_worker.py"),
-        ],
         admission_path=str(admission_path),
         transcript_adapter=transcript_adapter,
         community_config=str(community_config),
     )
+    from capture_config import prepare
+    value.update(prepare(python, SCRIPTS))
     if args.domain == "vllm-ascend" and not args.no_public_feed:
         value["feeds"] = [
             dict(

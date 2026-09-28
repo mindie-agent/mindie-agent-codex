@@ -70,6 +70,7 @@ else:
         from mindie_knowledge.loop.limits import ORGANIZER_TIMEOUT, ORGANIZER_PROCESS_TIMEOUT, ORGANIZER_LEASE_SECONDS
         from mindie_knowledge.loop.process import spawn_service
         from mindie_knowledge.loop.engine import Engine
+        from mindie_knowledge.loop.transcript_redaction import install_scanner
         from mindie_knowledge.loop.transport import Service
         from mindie_knowledge.loop import documents, locks
         from mindie_knowledge.community import submit_batch, reconcile_batch
@@ -87,6 +88,8 @@ else:
             missing.append("remote_dev call_tool is unavailable")
         if not callable(getattr(Engine, "stop_if_idle", None)):
             missing.append("Engine.stop_if_idle is unavailable")
+        if "capture_mode" not in inspect.signature(Engine).parameters:
+            missing.append("core lacks deterministic public transcript capture")
         if not callable(getattr(Service, "_stop_if_idle", None)):
             missing.append("Service._stop_if_idle is unavailable")
         if not all(callable(getattr(documents, name, None)) for name in ("render_entry", "parse_entry", "revision_of")):

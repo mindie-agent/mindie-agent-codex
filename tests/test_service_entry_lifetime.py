@@ -31,14 +31,23 @@ class ServiceEntryLifetimeTests(SharingFixture):
         self.write_sharing()
         consent.record_choice("contribute")
         engine = json.loads(self.engine.read_text())
-        engine["agent_command"] = [sys.executable, "-c", 'print(\'{"entries":[]}\')']
+        from tests.test_parallel_codex_contract import installed_scanner
+        engine.pop("agent_command", None)
+        engine.update(capture_mode="public-transcript", redactor_executable=installed_scanner(),
+                      transcript_adapter=str(SCRIPTS / "codex_transcript.py"))
         self.engine.write_text(json.dumps(engine))
         result = self.bridge("activate")
         self.assertEqual(result["experience"], "capture-ready")
         # The bridge AND bounded runtime helper have exited before this probe.
         self.assertTrue(rpc(connect(engine), "status", timeout=1)["worker_alive"])
         stop_owned_knowledge_service(self.engine)
-        self.bridge("stop", event=self.event(last_assistant_message="Measured a real local fixture result"))
+        from datetime import datetime, timezone
+        transcript = self.root / "public.jsonl"
+        transcript.write_text(json.dumps(dict(type="session_meta", payload=dict(id="manual-A"))) + "\n" +
+            json.dumps(dict(type="response_item", timestamp=datetime.now(timezone.utc).isoformat(),
+                payload=dict(type="message", role="assistant", phase="final_answer",
+                    content=[dict(type="output_text", text="Synthetic lifetime test: public body persisted.")]))) + "\n", encoding="utf-8")
+        self.bridge("stop", event=self.event(transcript_path=str(transcript)))
         path = self.root / "data/test/store-v3.sqlite3"
         deadline = time.monotonic() + 8
         statuses = []
@@ -48,5 +57,11 @@ class ServiceEntryLifetimeTests(SharingFixture):
             if statuses == ["organized"]:
                 break
             time.sleep(.05)
-        self.assertEqual(statuses, ["organized"])
+        if statuses != ["organized"]:
+            from mindie_knowledge.loop.diagnostics import snapshot
+            view = snapshot(self.engine, session="manual-A")
+            wake_path = path.with_name("wake.json")
+            wake = json.loads(wake_path.read_text()) if wake_path.exists() else None
+            self.fail(json.dumps(dict(statuses=statuses, startup=view["startup"],
+                                      delivery=view["delivery"], service=view["service"], wake=wake)))
         self.assertTrue(rpc(connect(engine), "status", timeout=1)["worker_alive"])

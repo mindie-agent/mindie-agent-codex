@@ -80,11 +80,10 @@ class SetupTests(unittest.TestCase):
             value = json.loads(engine.read_text())
             adapter = json.loads(config.read_text())
             self.assertEqual(value["domain"], "vllm-ascend")
-            self.assertTrue(value["agent_command"][1].endswith("agent_worker.py"))
-            self.assertEqual(
-                Path(value["agent_command"][0]).resolve(),
-                Path(sys.executable).resolve(),
-            )
+            self.assertEqual(value["capture_mode"], "public-transcript")
+            self.assertNotIn("agent_command", value)
+            self.assertTrue(Path(value["redactor_executable"]).is_file())
+            self.assertNotIn("summary_command", value)
             self.assertNotIn("session_activation", value)
             self.assertNotIn("session_activation", adapter)
             admission = config.with_name("codex.admission.sqlite3")

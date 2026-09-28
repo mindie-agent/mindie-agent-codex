@@ -150,10 +150,14 @@ See [activation details](plugins/mindie-agent/skills/mindie-agent/references/act
 With contribution off, there is no Stop capture, transcript reading, draft
 creation or organizer invocation. Plugin and public knowledge updates continue.
 
-With contribution on, an admitted Stop delivery records the current task's
-eligible public material for a separate, bounded local organizer. Hidden
-reasoning and inherited task history are excluded. The publication path checks
-scope and sensitive content before sending a Markdown contribution PR; raw
+With contribution on, an admitted Stop delivery saves the current task's user
+messages, public assistant progress and final answers in their original order.
+Tools, hidden reasoning, injected instructions and inherited task history are
+excluded. A local Gitleaks scanner and privacy rules redact the retained text
+before storage or any optional summary call. No model writes or rewrites the
+body. One task appends to one record within its authorized sharing generation;
+the body and read position commit together. The publication path checks scope
+and sensitive content before sending a Markdown contribution PR; raw
 transcripts are not uploaded. The existing external Grok Bot application owns
 repository review and merge. This plugin does not install a Grok CLI reviewer.
 
@@ -217,19 +221,23 @@ capture does not create an automatic repair task.
 MCP calls have bounded input, output and process deadlines; long remote work
 uses owned jobs with explicit status and cancellation.
 
-Optional organizer work is isolated from tools, plugins and other agents and
-has a 300-second model-process deadline. It preserves `model` and
-`model_reasoning_effort` from the selected `CODEX_HOME/config.toml` while ignoring
-that file's tool and plugin settings; explicit worker arguments take precedence.
-Its process sandbox is read-only because the organizer returns structured data
-to the runtime, which performs the authorized contribution. This is process
-isolation, not a user-facing mode that disables capture or contribution.
-The shared runtime applies per-session
-and per-hour background admission limits. It records consecutive failures for
-diagnostics, but those failures do not pause organizer work or revoke ordinary
-task authorization. These limits bound optional background cost and do not
-require a user-facing completion checklist. Exact status and recovery guidance
-are available through the entry Skill.
+Setup installs a checksum-pinned Gitleaks release once. Stop processing performs
+no downloads and has no model dependency. A missing or failed scanner leaves
+the input unread instead of publishing unredacted content. Public messages are
+not shortened to fit a model; the parser advances at complete message boundaries.
+
+The default title and search introduction are labeled source excerpts. An
+optional, separately configured non-thinking model may replace only these two
+metadata fields. It does not inherit the business task's model or effort. The
+worker uses reasoning effort `none`, accepts at most 24 KiB of summary source
+(explicitly labeled first/last excerpts for larger bodies), and has a 35-second
+native invocation deadline. The service bounds the entire invocation to 45
+seconds. One settled body version gets at most one attempt, including across
+restart; failure retains the excerpt and does not block saving, retrieval or
+publication. The selected account must actually support that model and effort;
+`low` and disabled reasoning display are not substitutes for non-thinking mode.
+See [the transcript contract](docs/public-transcript.md) for configuration and
+measured acceptance boundaries.
 
 The updater records preparation and install outcomes. A known temporary
 network failure keeps the installed generation and is retried by the existing

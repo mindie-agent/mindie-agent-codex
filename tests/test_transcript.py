@@ -96,7 +96,7 @@ class TranscriptTests(unittest.TestCase):
         self.assertEqual(inc["status"], "ok")
         self.assertIn("device mapping", inc["text"])
         self.assertIn("zero", inc["text"])
-        self.assertIn("npu-smi", inc["text"])
+        self.assertNotIn("npu-smi", inc["text"])
         self.assertNotIn("hidden", inc["text"])
         self.assertNotIn("developer secret", inc["text"])
         self.assertEqual(inc["end"], path.stat().st_size)
@@ -162,9 +162,9 @@ class TranscriptTests(unittest.TestCase):
             self.assertEqual(first["status"], "ok")
             self.assertTrue(first["more"] or "later public" in first["text"])
 
-    def test_unknown_format_reports_summary_only(self):
+    def test_unknown_object_format_is_reported_without_public_text(self):
         path = self.root / "other.jsonl"
-        write_jsonl(path, [{"foo": 1}, "not json at all\n"])
+        write_jsonl(path, [{"foo": 1}, {"unsupported": "record"}])
         inc = transcript.read_increment(str(path), 0)
         self.assertEqual(inc["status"], "unknown-format")
         self.assertEqual(inc["text"], "")
@@ -276,8 +276,8 @@ class TranscriptTests(unittest.TestCase):
         )
         inc = transcript.read_material(path, 0, session_id="task-1")
         self.assertIn("public final", inc["text"])
-        self.assertIn("npu-smi", inc["text"])
-        self.assertIn("actual bounded output", inc["text"])
+        self.assertNotIn("npu-smi", inc["text"])
+        self.assertNotIn("actual bounded output", inc["text"])
         self.assertNotIn("private phase", inc["text"])
         self.assertNotIn("not public", inc["text"])
         old = path.stat().st_size

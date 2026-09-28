@@ -26,6 +26,7 @@ def spawn(command, *, allow_service=False, **kwargs):
     kwargs["creationflags"] = (
         kwargs.get("creationflags", 0)
         | subprocess.CREATE_NEW_PROCESS_GROUP
+        | subprocess.CREATE_NO_WINDOW
         | _CREATE_SUSPENDED
     )
     process = subprocess.Popen(command, **kwargs)

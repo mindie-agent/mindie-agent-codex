@@ -95,6 +95,9 @@ class LocalUpdater(Updater):
             return json.dumps(dict(idle=self.idle))
         return super().command(args, **kwargs)
 
+    def prepare_capture(self, candidate):
+        return dict(capture_mode="public-transcript", redactor_executable=str(Path(candidate["python"]).absolute()))
+
     def probe_runtime(self, python, scripts=None):
         self.assert_runtime = Path(python).exists()
         if not self.assert_runtime:
@@ -298,6 +301,17 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(
             self.updater.verify_native(version, str(plugin))["version"], version
         )
+
+    def test_explicit_summary_worker_moves_with_runtime_generation(self):
+        engine = read(self.engine)
+        engine['summary_command'] = ['old-python', str(SCRIPTS / 'agent_worker.py'), '--model', 'explicit-nonthinking-model']
+        atomic(self.engine, engine)
+        result = self.check()
+        self.assertEqual(result['status'], 'installed')
+        selected = read(self.config)
+        updated = read(selected['engine_config'])
+        self.assertEqual(updated['summary_command'], [selected['python'],
+            str(Path(selected['runtime_scripts']) / 'agent_worker.py'), '--model', 'explicit-nonthinking-model'])
 
     def test_native_inventory_without_source_type_updates_owned_marketplace(self):
         first = self.check()

@@ -41,8 +41,9 @@ class NativeStartError(OSError):
     """The native executable could not be started."""
 
 
-def run_codex(command, prompt):
+def run_codex(command, prompt, *, timeout=None):
     # The knowledge service owns one group for worker + Codex + descendants.
+    timeout = TIMEOUT if timeout is None else timeout
     inherited = (
         POSIX
         and os.environ.get("MINDIE_MAINTENANCE_GROUP") == "1"
@@ -107,7 +108,7 @@ def run_codex(command, prompt):
         ]
         for thread in threads:
             thread.start()
-        deadline = time.monotonic() + TIMEOUT
+        deadline = time.monotonic() + timeout
         turns = 0
 
         def check_line(line):

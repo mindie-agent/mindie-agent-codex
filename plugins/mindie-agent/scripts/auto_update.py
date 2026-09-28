@@ -513,6 +513,7 @@ class Updater:
             "admission_ops.py",
             "codex_transcript.py",
             "agent_worker.py",
+            "capture_config.py",
             "service_handoff.py",
             "auto_update.py",
             "update_launcher.py",
@@ -966,6 +967,10 @@ class Updater:
             result = dict(status="failed", error=type(exc).__name__)
         self.save(self.state.get("status", "update_failed"), service_handoff=result)
 
+    def prepare_capture(self, candidate):
+        from capture_config import prepare
+        return prepare(candidate['python'], Path(candidate['plugin']) / 'scripts')
+
     def install(self, candidate):
         # Actual-idle switching: the exclusive operation lock waits for any
         # in-flight admitted call (holders of the shared lock), and the idle
@@ -978,6 +983,9 @@ class Updater:
             existing = self.marketplace()
             # Validate before stopping a working service or writing a journal.
             self.validate_marketplace(existing)
+            # Dependency preparation happens only for an owned installation
+            # and before stopping its service. Stop hooks never download.
+            capture_config = self.prepare_capture(candidate)
             idle_helper = Path(__file__).with_name("service_handoff.py")
             if not idle_helper.is_file():
                 raise Incompatible("updater is missing service_handoff.py")
@@ -1064,15 +1072,23 @@ class Updater:
                 # generation. The old session_activation alias is removed
                 # instead of kept as a second name.
                 engine.pop("session_activation", None)
+                engine.pop("agent_command", None)
+                # Move our optional worker with the interpreter/parser, while
+                # retaining its explicit model. Independent custom commands
+                # are configuration owned by their caller.
+                summary = engine.get("summary_command")
+                old_scripts = adapter.get("runtime_scripts")
+                if (isinstance(summary, list) and len(summary) == 4 and old_scripts
+                    and summary[1] == str(Path(old_scripts) / "agent_worker.py")
+                    and summary[2] == "--model"):
+                    engine["summary_command"] = [candidate["python"],
+                        str(Path(candidate["plugin"]) / "scripts/agent_worker.py"), *summary[2:]]
                 engine.update(
-                    agent_command=[
-                        candidate["python"],
-                        str(Path(candidate["plugin"]) / "scripts/agent_worker.py"),
-                    ],
                     transcript_adapter=str(
                         Path(candidate["plugin"]) / "scripts/codex_transcript.py"
                     ),
                 )
+                engine.update(capture_config)
                 admission_path = engine.get("admission_path")
                 if not isinstance(admission_path, str):
                     admission_path = str(

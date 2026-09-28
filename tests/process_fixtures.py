@@ -22,15 +22,64 @@ def stop_owned_knowledge_service(engine_config, *, timeout=8):
     processes by command text.
     """
     engine_config = Path(engine_config)
-    result = subprocess.run(
-        [sys.executable, str(SCRIPTS / "service_handoff.py"), "stop", str(engine_config)],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
-    if result.returncode != 0:
+    # A cold Stop returns before its detached starter publishes the service.
+    # Wait for that exact test's starter to finish before asking the endpoint
+    # to stop; an absent endpoint while startup is pending is not cleanup.
+    config = json.loads(engine_config.read_text(encoding="utf-8"))
+    wake_path = Path(config["root"]) / config["domain"] / "wake.json"
+    try:
+        wake_pid = json.loads(wake_path.read_text(encoding="utf-8")).get("wake_pid")
+    except FileNotFoundError:
+        wake_pid = None
+    deadline = time.monotonic() + timeout
+    while type(wake_pid) is int and _process_running(wake_pid):
+        if time.monotonic() >= deadline:
+            raise RuntimeError("owned test startup has not completed")
+        time.sleep(.05)
+    while time.monotonic() < deadline:
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "service_handoff.py"), "stop", str(engine_config)],
+            capture_output=True, text=True, timeout=timeout, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if result.returncode == 0:
+            receipt = json.loads(result.stdout)
+            if receipt.get("idle") is True and receipt.get("service") in {"stopped", "absent"}:
+                return
+            if receipt.get("service") == "busy":
+                time.sleep(.1)
+                continue
         raise RuntimeError("owned test service did not stop: " + (result.stdout + result.stderr).strip()[:500])
+    raise RuntimeError("owned test service remained busy; cleanup is not complete")
+
+
+def _process_running(pid):
+    """Read liveness only; a receipt PID never grants permission to kill."""
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return False
+        try:
+            code = wintypes.DWORD()
+            return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
+        finally:
+            kernel.CloseHandle(handle)
+    try:
+        stat = Path(f"/proc/{pid}/stat")
+        if stat.exists() and stat.read_text().rsplit(")", 1)[1].split()[0] == "Z":
+            return False
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
 
 
 def cleanup_temporary_directory(temporary, *, timeout=5):
