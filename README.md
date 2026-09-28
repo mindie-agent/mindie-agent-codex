@@ -207,7 +207,12 @@ recorded revisions. Component checks are diagnostic and do not replace native
 or hardware acceptance.
 
 ```sh
-.venv/bin/python -m unittest discover -s tests
+# Pins match .github/workflows/tests.yml. Do not omit these: the contract
+# tests archive the commits below and fail, naming the variable, if unset.
+export MINDIE_CORE_REPO=/path/to/knowledge-checkout   # contains d0538e584c9e606cf9ff1952ba06747cb5c04966
+export MINDIE_KIMI_REPO=/path/to/kimi-adapter-checkout  # contains 90f73e76c6087ce091570f2d151b709145c913bc
+.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
+.venv/bin/python -m unittest tests.test_parallel_codex_contract -v
 ```
 
 Merging this pre-release adapter permits integrated main-branch and Windows

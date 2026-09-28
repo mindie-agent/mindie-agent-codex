@@ -325,6 +325,42 @@ class ConsentFixture(unittest.TestCase):
         self.assertEqual(migrated["choice"], "contribute")
         self.assertEqual(sharing.adapter_choice(), "contribute")
 
+    def test_cross_adapter_profile_shares_choice(self):
+        consent.record_choice("later")
+        kimi_commit = "90f73e76c6087ce091570f2d151b709145c913bc"
+        value = os.environ.get("MINDIE_KIMI_REPO")
+        if not value:
+            raise AssertionError(
+                "MINDIE_KIMI_REPO is required to load the kimi adapter at "
+                + kimi_commit
+                + ". Pass the fixed checkout path. This test does not guess "
+                "a sibling directory or a production install."
+            )
+        kimi_repo = Path(value).expanduser()
+        if not kimi_repo.is_dir():
+            raise AssertionError("MINDIE_KIMI_REPO=" + value + " is not a directory")
+        archive = subprocess.run(
+            ["git", "-C", str(kimi_repo), "archive", kimi_commit, "scripts"],
+            check=True, capture_output=True,
+        )
+        extracted = self.root / "kimi-adapter"
+        extracted.mkdir()
+        subprocess.run(["tar", "-x", "-C", str(extracted)], input=archive.stdout, check=True)
+        (self.root / "kimi.json").write_text("{}\n")
+        env = dict(os.environ, MINDIE_KIMI_CONFIG=str(self.root / "kimi.json"))
+        env.pop("MINDIE_AGENT_CONFIG", None)
+        code = (
+            "import sys,json;sys.path.insert(0,sys.argv[1]);"
+            "import consent;print(json.dumps(consent.load()))"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code, str(extracted / "scripts")],
+            env=env, capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        saved = json.loads(result.stdout)
+        self.assertEqual(saved["choice"], "later")
+
     def test_profile_shared_consent_path_resolution(self):
         # The consent document resolves beside the adapter config, so a
         # sibling adapter in the same profile directory lands on the same
