@@ -200,10 +200,20 @@ class GeneralRemoteTests(unittest.TestCase):
 
     def test_no_lifetime_receipt_eviction_or_call_ceiling(self):
         receipts = mcp_gate.RemoteReceipts('task-A')
-        for i in range(4100):
+        self.assertTrue(receipts.claim('0'))
+        receipts.finish('0', True)
+        # This contract is the former 4096-receipt boundary, not thousands
+        # of repetitions of the same disk transaction. Seed durable history
+        # in one transaction, then cross that boundary through the real API.
+        with closing(sqlite3.connect(receipts.path)) as db, db:
+            db.executemany('INSERT INTO attempts(identity, started, status) VALUES(?, ?, ?)',
+                           ((str(i), 1.0, 'succeeded') for i in range(1, 4094)))
+        for i in range(4094, 4100):
             self.assertTrue(receipts.claim(str(i)))
             receipts.finish(str(i), True)
+        receipts = mcp_gate.RemoteReceipts('task-A')
         self.assertFalse(receipts.claim('0'))
+        self.assertFalse(receipts.claim('4099'))
         with closing(sqlite3.connect(receipts.path)) as db:
             self.assertEqual(db.execute('SELECT count(*) FROM attempts').fetchone()[0], 4100)
 

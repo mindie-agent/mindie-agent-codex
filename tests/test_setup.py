@@ -62,7 +62,7 @@ class SetupTests(unittest.TestCase):
             try:
                 __import__(module)
             except ImportError:
-                self.skipTest(f"pinned runtime not installed in {sys.executable}")
+                self.fail(f"pinned runtime not installed in {sys.executable}; run tests/preflight.py")
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             config = base / "codex.json"
