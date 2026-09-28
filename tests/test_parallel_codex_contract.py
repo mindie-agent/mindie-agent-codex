@@ -33,8 +33,8 @@ SCRIPTS = REPO / "plugins/mindie-agent/scripts"
 
 
 KIMI_COMMIT = "90f73e76c6087ce091570f2d151b709145c913bc"
-CORE_COMMIT = "d0538e584c9e606cf9ff1952ba06747cb5c04966"
-CONSENT_STORE_SHA256 = "b6f309777d4ac56a73871c5aa7bb260ab3b7a6b3226ef33dc61eb86b2d200b2d"
+CORE_COMMIT = "e42666ff075cca3aaddda39e9e14c884dda2a373"
+CONSENT_STORE_SHA256 = "a9fb07a4fab173a3d5cfd583579ee4df09fd3d70106d208f8173c873ce6ba919"
 
 
 def _require_checkout(env_name, purpose):
