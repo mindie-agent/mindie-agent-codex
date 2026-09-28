@@ -720,26 +720,8 @@ class UpdateIdleTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     service_handoff.stop(str(engine))
 
-    def test_authenticated_idle_result_is_used(self):
-        import service_handoff
-
-        with tempfile.TemporaryDirectory() as tmp:
-            engine = Path(tmp) / "engine.json"
-            engine.write_text(json.dumps(dict(root=tmp, domain="test")))
-            with (
-                patch(
-                    "service_handoff.connect",
-                    return_value=dict(url="http://127.0.0.1:9", token="t"),
-                ),
-                patch(
-                    "service_handoff.rpc",
-                    side_effect=[dict(idle=True, status="stopping"),
-                                 dict(admission_frozen=True), ConnectionRefusedError()],
-                ) as rpc,
-            ):
-                self.assertTrue(service_handoff.stop(str(engine)))
-                self.assertEqual([c.args[1] for c in rpc.call_args_list],
-                                 ["stop_if_idle", "status", "status"])
+    # Authenticated acknowledgement and real lifetime release are exercised
+    # by test_service_handoff; a canned sequence of TCP results cannot prove it.
 
 
 if __name__ == "__main__":

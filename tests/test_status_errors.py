@@ -1,4 +1,6 @@
 import json
+import sqlite3
+from contextlib import closing
 import os
 from pathlib import Path
 import subprocess
@@ -88,8 +90,6 @@ class ScopedStatus(unittest.TestCase):
     def test_paused_task_records_are_scoped_and_read_only(self):
         from mindie_knowledge.loop.activation import Admission
         from mindie_knowledge.loop.store import Store, session_key
-import sqlite3
-from contextlib import closing
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

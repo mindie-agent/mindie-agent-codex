@@ -242,14 +242,14 @@ def _adapter_config():
             "MindIE adapter configuration is required to locate the runtime "
             "interpreter; remote execution fails closed"
         )
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding='utf-8'))
 
 
 class Gate:
     def __init__(self, surface):
         self.surface = surface
         self.sessions = Sessions() if surface == "knowledge" else None
-        self.tools = json.loads(CATALOG.read_text())[surface]
+        self.tools = json.loads(CATALOG.read_text(encoding='utf-8'))[surface]
         self.connection_id = uuid.uuid4().hex
 
     def call(self, request, cancel=None, *, timeout=None, cli_identity=None):
@@ -414,7 +414,7 @@ class Gate:
                 session, "mcp", self.connection_id + ":" + self._request_identity(request), token
             ):
                 raise ValueError("Duplicate MCP request; not executed again")
-            config = json.loads(self.sessions.config.read_text())
+            config = json.loads(self.sessions.config.read_text(encoding='utf-8'))
             payload = dict(
                 surface=self.surface,
                 name=name,

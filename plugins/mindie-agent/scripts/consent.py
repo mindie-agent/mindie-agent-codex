@@ -82,7 +82,7 @@ def record_reporting(value: str, config_file=None) -> str:
 def _read_adapter_config(config_file: Path) -> dict:
     """One read of the adapter configuration; {} when absent or invalid."""
     try:
-        data = json.loads(Path(config_file).read_text())
+        data = json.loads(Path(config_file).read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}

@@ -144,7 +144,7 @@ def _feed_error_summary(rows):
 
 def read(path, default=None):
     try:
-        return json.loads(Path(path).read_text())
+        return json.loads(Path(path).read_text(encoding='utf-8'))
     except FileNotFoundError:
         if default is not None:
             return default
@@ -156,7 +156,7 @@ def atomic(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(dir=path.parent, prefix=".update-")
     try:
-        with os.fdopen(fd, "w") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(value, stream, indent=2)
             stream.write("\n")
             stream.flush()
@@ -483,7 +483,7 @@ class Updater:
             raise Incompatible("plugin package exceeds 16 MiB")
         if (
             "allow_implicit_invocation: false"
-            not in (plugin / "skills/mindie-agent/agents/openai.yaml").read_text()
+            not in (plugin / "skills/mindie-agent/agents/openai.yaml").read_text(encoding='utf-8')
         ):
             raise Incompatible("implicit invocation is enabled")
         hooks = read(plugin / "hooks/hooks.json")["hooks"]
@@ -515,7 +515,7 @@ class Updater:
             raise Incompatible("adapter knowledge catalogue is incomplete")
         if "knowledge_use" in names or "knowledge_judge" in names:
             raise Incompatible("retired knowledge tools are advertised")
-        requirements = (source / "runtime-requirements.txt").read_text().splitlines()
+        requirements = (source / "runtime-requirements.txt").read_text(encoding='utf-8').splitlines()
         pattern = r"([a-z-]+) @ git\+https://github.com/mindie-agent/(knowledge|remote-dev)@([0-9a-f]{40})"
         packages = {}
         for line in requirements:

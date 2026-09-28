@@ -111,7 +111,7 @@ def configured_path(config_file=None):
     shared = consent.shared_community_path_for(config_file)
     if shared.exists():
         return shared
-    config = json.loads(config_file.read_text())
+    config = json.loads(config_file.read_text(encoding='utf-8'))
     value = config.get("community_config")
     if not isinstance(value, str) or not os.path.isabs(value):
         raise SharingError(
@@ -129,7 +129,7 @@ def _migrate_community_locked(config_file):
     shared = consent.shared_community_path_for(config_file)
     authority = str(consent.consent_path_for(config_file))
     result = dict(status="current", path=str(shared), detail=None)
-    adapter = json.loads(config_file.read_text())
+    adapter = json.loads(config_file.read_text(encoding='utf-8'))
     pointer = adapter.get("community_config")
     pointer = (
         Path(pointer)
@@ -171,7 +171,7 @@ def _migrate_community_locked(config_file):
         if isinstance(engine_value, str) and os.path.isabs(engine_value):
             engine_path = Path(engine_value)
             try:
-                engine = json.loads(engine_path.read_text())
+                engine = json.loads(engine_path.read_text(encoding='utf-8'))
             except (OSError, ValueError):
                 engine = None
             if (
@@ -191,7 +191,7 @@ def _migrate_community_locked(config_file):
         # failure is reported; a missing runtime fails the same honest way —
         # never a fallback to a weaker adapter-side validation.
         try:
-            parsed = json.loads(shared.read_text())
+            parsed = json.loads(shared.read_text(encoding='utf-8'))
         except ValueError:
             parsed = None
         if not isinstance(parsed, dict):
@@ -241,10 +241,10 @@ def migrate_community_path(config_file=None):
     # Steady-state fast path without the lock: pointer already converged and
     # the consent wiring already present.
     try:
-        current = json.loads(config_file.read_text())
+        current = json.loads(config_file.read_text(encoding='utf-8'))
         if current.get("community_config") == str(shared):
             try:
-                present = json.loads(shared.read_text())
+                present = json.loads(shared.read_text(encoding='utf-8'))
             except (OSError, ValueError):
                 present = None
             if present is None or (
@@ -380,7 +380,7 @@ def normalize_with_runtime(settings, python, config_file=None):
 def read(config_file=None):
     """Cheap fail-closed view for capture precheck; no interpreter spawn."""
     try:
-        raw = json.loads(configured_path(config_file).read_text())
+        raw = json.loads(configured_path(config_file).read_text(encoding='utf-8'))
         settings = validate(raw)
     except (OSError, ValueError):
         return None
@@ -392,7 +392,7 @@ def read(config_file=None):
 def write(path, value):
     fd, name = tempfile.mkstemp(dir=path.parent, prefix=".community-")
     try:
-        with os.fdopen(fd, "w") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(value, stream, ensure_ascii=False, indent=2)
             stream.write("\n")
             stream.flush()
@@ -491,7 +491,7 @@ def first_use(config_file=None, saved=None):
     if consent.install_traces(config_file):
         return None  # existing installation; the entry boundary migrates it
     try:
-        json.loads(configured_path(config_file).read_text())
+        json.loads(configured_path(config_file).read_text(encoding='utf-8'))
     except json.JSONDecodeError:
         return None  # damaged settings: a fault, not onboarding
     except (OSError, ValueError, SharingError):
@@ -518,7 +518,7 @@ def set_enabled(enable, config_file=None):
     """
     config_file = Path(config_file or config_path())
     with update_lock(config_file):
-        adapter = json.loads(config_file.read_text())
+        adapter = json.loads(config_file.read_text(encoding='utf-8'))
         python = adapter.get("python")
     import consent
 
@@ -600,7 +600,7 @@ def status(config_file=None, saved=None):
             first_use=unused,
         )
     try:
-        settings = validate(json.loads(path.read_text()))
+        settings = validate(json.loads(path.read_text(encoding='utf-8')))
     except (OSError, ValueError) as exc:
         return dict(
             state="malformed",

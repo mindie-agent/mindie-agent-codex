@@ -202,7 +202,7 @@ def bind(lease):
     try:
         config_file = config_path()
         with update_lock(config_file):
-            config = json.loads(config_file.read_text())
+            config = json.loads(config_file.read_text(encoding='utf-8'))
             output = run(
                 [
                     config["python"],
@@ -258,7 +258,7 @@ def _generation_identity():
     build = None
     stamp = scripts / "diagnostic-build.json"
     try:
-        data = json.loads(stamp.read_text())
+        data = json.loads(stamp.read_text(encoding='utf-8'))
         if isinstance(data, dict):
             build = {
                 key: data[key]
@@ -340,7 +340,7 @@ def _status_failure(state, stage, exc, config_file, selected=None):
         "status": [python, str(scripts / "bridge.py"), "--config", str(config_file), "status"],
         "check_config_json": [
             sys.executable, "-c",
-            "import json,pathlib,sys; json.loads(pathlib.Path(sys.argv[1]).read_text()); print('JSON syntax valid')",
+            "import json,pathlib,sys; json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8')); print('JSON syntax valid')",
             str(config_file),
         ],
     }
@@ -572,7 +572,7 @@ def contribution(operation, batch_id):
     """
     config_file = config_path()
     with update_lock(config_file):
-        config = json.loads(config_file.read_text())
+        config = json.loads(config_file.read_text(encoding='utf-8'))
         output = run(
             [
                 config["python"],
@@ -596,7 +596,7 @@ def configure(argv):
     """Post-install sharing configuration; never refuses an existing engine."""
     config_file = config_path()
     with update_lock(config_file):
-        config = json.loads(config_file.read_text())
+        config = json.loads(config_file.read_text(encoding='utf-8'))
         output = run(
             [
                 config["python"],
@@ -895,7 +895,7 @@ def main():
     try:
         config_file = config_path()
         with update_lock(config_file):
-            config = json.loads(config_file.read_text())
+            config = json.loads(config_file.read_text(encoding='utf-8'))
             control = [
                 config["python"],
                 str(Path(runtime_scripts(config)) / "service_control.py"),

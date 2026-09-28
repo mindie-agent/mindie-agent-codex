@@ -39,7 +39,7 @@ def config_path():
 def read_config():
     """One read of the adapter configuration for this helper invocation."""
     try:
-        config = json.loads(config_path().read_text())
+        config = json.loads(config_path().read_text(encoding='utf-8'))
     except (OSError, ValueError):
         raise ValueError("MindIE adapter configuration is unreadable")
     if not isinstance(config, dict):

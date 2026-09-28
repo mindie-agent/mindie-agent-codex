@@ -94,3 +94,9 @@ def extract_git_archive(repository, revision, destination, *members):
             if target != base and base not in target.parents:
                 raise ValueError("fixture archive contains an unsafe path")
         bundle.extractall(destination)
+
+
+def copy_runtime_scripts(destination):
+    """Use a real interpreter with selected fixture helpers as one generation."""
+    shutil.copytree(SCRIPTS, destination, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    return Path(destination)

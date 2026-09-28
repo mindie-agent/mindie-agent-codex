@@ -39,11 +39,11 @@ def _operation(argv):
 
 def _current_updater(settings_path):
     try:
-        settings = json.loads(settings_path.read_text())
+        settings = json.loads(settings_path.read_text(encoding='utf-8'))
         if not isinstance(settings, dict) or not isinstance(settings.get("root"), str):
             raise ValueError("settings")
         root = Path(settings["root"])
-        state = json.loads((root / "state.json").read_text())
+        state = json.loads((root / "state.json").read_text(encoding='utf-8'))
         if not isinstance(state, dict):
             raise ValueError("state")
         current = state.get("current")

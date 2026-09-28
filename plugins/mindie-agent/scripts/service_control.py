@@ -46,7 +46,7 @@ def status():
     # Core imports belong here, never in the stdlib bootstrap or Stop path.
     from mindie_knowledge.loop.diagnostics import snapshot
 
-    adapter = json.loads(config_path().read_text())
+    adapter = json.loads(config_path().read_text(encoding='utf-8'))
     engine_config = adapter["engine_config"]
     import consent
 
@@ -68,7 +68,7 @@ def status():
     if view["configuration"].get("status") != "ok":
         commands["check_engine_json"] = [
             adapter["python"], "-c",
-            "import json,pathlib,sys; json.loads(pathlib.Path(sys.argv[1]).read_text()); print('JSON syntax valid')",
+            "import json,pathlib,sys; json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8')); print('JSON syntax valid')",
             engine_config,
         ]
     inspect = {
@@ -153,7 +153,7 @@ def shutdown():
     from mindie_knowledge.loop.cli import config_at, connect
     from mindie_knowledge.loop.transport import rpc
 
-    config = json.loads(config_path().read_text())
+    config = json.loads(config_path().read_text(encoding='utf-8'))
     return rpc(connect(config_at(config["engine_config"])), "stop", timeout=2)
 
 

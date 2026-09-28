@@ -54,7 +54,7 @@ def _installation_binding():
     if not path.is_file():
         raise ValueError("installation config binding is not a file")
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding='utf-8'))
     except (OSError, ValueError) as exc:
         raise ValueError("installation config binding is unreadable") from exc
     if not isinstance(data, dict):
@@ -138,7 +138,7 @@ class Sessions:
         Construction does not create the file; activation does.
         """
         try:
-            value = json.loads(self.config.read_text()).get("admission_path")
+            value = json.loads(self.config.read_text(encoding='utf-8')).get("admission_path")
         except (OSError, ValueError):
             value = None
         if isinstance(value, str) and os.path.isabs(value):
@@ -147,7 +147,7 @@ class Sessions:
 
     def _config(self):
         try:
-            config = json.loads(self.config.read_text())
+            config = json.loads(self.config.read_text(encoding='utf-8'))
         except (OSError, ValueError) as exc:
             raise Inactive(f"MindIE adapter configuration is unreadable: {exc}")
         python = config.get("python")

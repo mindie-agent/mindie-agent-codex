@@ -28,6 +28,7 @@ import unittest
 from unittest.mock import patch
 from tests.process_fixtures import (
     cleanup_temporary_directory,
+    copy_runtime_scripts,
     extract_git_archive,
     stop_owned_knowledge_service,
 )
@@ -202,7 +203,14 @@ class LaneCase(unittest.TestCase):
 
     def _stop_owned_engine(self):
         """Stop only the service reached through this fixture's engine file."""
-        stop_owned_knowledge_service(self.engine)
+        # Fault tests deliberately corrupt the adapter's engine document.
+        # Cleanup retains the original store identity rather than treating
+        # that expected configuration failure as a second product failure.
+        cleanup_config = self.root / "cleanup-engine.json"
+        cleanup_config.write_text(json.dumps({
+            "root": self.engine_doc["root"], "domain": self.engine_doc["domain"],
+        }))
+        stop_owned_knowledge_service(cleanup_config)
 
     def tearDown(self):
         self._stop_owned_engine()
@@ -624,18 +632,17 @@ class AuthorityMigrationTests(LaneCase):
         path = self.write_consent("later", reporting="disabled")
         script = self.root / "race_update.py"
         script.write_text(
-            "import fcntl, os, sys, time\n"
+            "import os, sys, time\n"
             "from pathlib import Path\n"
             "sys.path.insert(0, sys.argv[1])\n"
             "os.environ['MINDIE_AGENT_CONFIG'] = sys.argv[2]\n"
             "op, value, root = sys.argv[3], sys.argv[4], Path(sys.argv[5])\n"
-            "real_flock = fcntl.flock\n"
-            "def watched(fd, flags):\n"
-            "    exclusive = bool(flags & fcntl.LOCK_EX)\n"
-            "    if exclusive:\n"
-            "        (root / f'try-{op}').write_text('1')\n"
-            "    real_flock(fd, flags)\n"
-            "    if exclusive:\n"
+            "import consent_store\n"
+            "real_lock = consent_store._lock_file_nb\n"
+            "def watched(fd):\n"
+            "    (root / f'try-{op}').write_text('1')\n"
+            "    real_lock(fd)\n"
+            "    if True:\n"
             "        (root / f'got-{op}').write_text('1')\n"
             "        if not (root / 'release').exists() and not (root / 'holder').exists():\n"
             "            (root / 'holder').write_text(op)\n"
@@ -644,7 +651,7 @@ class AuthorityMigrationTests(LaneCase):
             "                if time.time() > deadline:\n"
             "                    raise SystemExit('holder was not released')\n"
             "                time.sleep(0.01)\n"
-            "fcntl.flock = watched\n"
+            "consent_store._lock_file_nb = watched\n"
             "(root / f'entered-{op}').write_text('1')\n"
             "deadline = time.time() + 5\n"
             "while time.time() < deadline and len(list(root.glob('entered-*'))) < 2:\n"
@@ -668,9 +675,10 @@ class AuthorityMigrationTests(LaneCase):
                 ))
             holder = self.root / "holder"
             deadline = time.time() + 5
-            while time.time() < deadline and not holder.exists():
+            while time.time() < deadline and (not holder.exists() or len(list(self.root.glob("try-*"))) < 2):
                 time.sleep(0.01)
             self.assertTrue(holder.is_file(), "neither update took the consent lock")
+            self.assertEqual(len(list(self.root.glob("try-*"))), 2, "both writers must reach the real OS lock")
             self.assertEqual(len(list(self.root.glob("got-*"))), 1, "peer was not blocked on the lock")
             (self.root / "release").write_text("1")
             finished = [child.communicate(timeout=10) for child in children]
@@ -1384,28 +1392,20 @@ class RemoteIsolationTests(LaneCase):
     def test_remote_survives_knowledge_failure_and_forks_do_not_share_receipts(self):
         import mcp_gate
 
-        wrapper = self.root / "runtime-python.py"
+        scripts = copy_runtime_scripts(self.root / "runtime-fixture")
         marker = self.root / "runtime-calls.jsonl"
-        real = PY
-        wrapper.write_text(
-            "import json, os, sys\n"
-            "from pathlib import Path\n"
-            f"real = {real!r}\n"
-            f"marker = Path({str(marker)!r})\n"
-            "argv = sys.argv[1:]\n"
-            "if argv and str(argv[0]).endswith('runtime_call.py'):\n"
-            "    raw = sys.stdin.read()\n"
-            "    marker.open('a').write(raw + '\\n')\n"
-            "    payload = json.loads(raw)\n"
-            "    if payload.get('surface') == 'remote':\n"
-            "        print(json.dumps({'content': [{'type': 'text', 'text': 'remote-ok'}], 'isError': False}))\n"
-            "    else:\n"
-            "        print(json.dumps({'content': [{'type': 'text', 'text': 'knowledge-down'}], 'isError': True}))\n"
-            "    raise SystemExit(0)\n"
-            "os.execv(real, [real, *argv])\n"
+        (scripts / "runtime_call.py").write_text(
+            "import json, sys\nfrom pathlib import Path\n"
+            "raw = sys.stdin.read()\n"
+            f"Path({str(marker)!r}).open('a').write(raw + '\\n')\n"
+            "payload = json.loads(raw)\n"
+            "if payload.get('surface') == 'remote':\n"
+            "    print(json.dumps({'content': [{'type': 'text', 'text': 'remote-ok'}], 'isError': False}))\n"
+            "else:\n"
+            "    print(json.dumps({'content': [{'type': 'text', 'text': 'knowledge-down'}], 'isError': True}))\n"
         )
         adapter = json.loads(self.config.read_text())
-        adapter["python"] = str(wrapper)
+        adapter["runtime_scripts"] = str(scripts)
         self.config.write_text(json.dumps(adapter))
         self.sessions = Sessions(self.config)
 

@@ -27,7 +27,7 @@ from session_gate import IDENTITY, config_path, generation_env, runtime_scripts
 
 
 def knowledge_names():
-    catalog = json.loads(Path(__file__).with_name("mcp_catalog.json").read_text())
+    catalog = json.loads(Path(__file__).with_name("mcp_catalog.json").read_text(encoding='utf-8'))
     return {tool["name"] for tool in catalog["knowledge"]}
 
 
@@ -55,7 +55,7 @@ def finish_outcome(config, session, token, succeeded):
 def call(payload):
     if payload["surface"] == "remote":
         return remote(payload)
-    config = json.loads(config_path().read_text())
+    config = json.loads(config_path().read_text(encoding='utf-8'))
     # The internal activation token resolves the owning lease again inside the
     # runtime; it must agree with the gate-bound session, and no
     # caller-supplied identity is ever trusted on its own.
@@ -152,7 +152,7 @@ def remote(payload):
     if not isinstance(session, str) or not IDENTITY.fullmatch(session):
         raise ValueError("MindIE remote runtime identity mismatch")
     name = payload["name"]
-    catalog = json.loads(Path(__file__).with_name("mcp_catalog.json").read_text())
+    catalog = json.loads(Path(__file__).with_name("mcp_catalog.json").read_text(encoding='utf-8'))
     if name not in {tool["name"] for tool in catalog["remote"]}:
         raise ValueError("unknown remote tool")
     os.environ["REMOTE_DEV_STATE_DIR"] = str(remote_state_dir() / "runtime" / session)
@@ -248,7 +248,7 @@ def redispatch():
     instead of mixing an old script with a new interpreter or library.
     """
     try:
-        config = json.loads(config_path().read_text())
+        config = json.loads(config_path().read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return  # Unconfigured: run in place and fail closed on the call itself.
     python, scripts = config.get("python"), config.get("runtime_scripts")

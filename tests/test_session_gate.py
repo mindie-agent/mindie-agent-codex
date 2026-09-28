@@ -14,7 +14,7 @@ import threading
 import time
 import unittest
 from unittest.mock import patch
-from tests.process_fixtures import cleanup_temporary_directory, stop_owned_knowledge_service
+from tests.process_fixtures import cleanup_temporary_directory, stop_owned_knowledge_service, copy_runtime_scripts
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -98,6 +98,7 @@ class SessionGateTests(unittest.TestCase):
         current = json.loads(self.config.read_text())
         self.write_config(
             python=current["python"],
+            runtime_scripts=current["runtime_scripts"],
             community_config=str(community),
             sharing_choice="contribute",
         )
@@ -131,33 +132,26 @@ class SessionGateTests(unittest.TestCase):
         )
 
     def runtime_fixture(self, *, delay=0, hook=False):
-        """Wrapper interpreter: admission_ops execs the real runtime; calls count.
-
-        Does not use PYTHONPATH to mask the configured interpreter.
-        """
+        """Keep Python executable; substitute only the selected runtime helper."""
         marker = self.root / "invocations"
-        wrapper = self.root / "runtime-python.py"
-        real = sys.executable
-        wrapper.write_text(
-            "import os, sys, time\n"
-            "from pathlib import Path\n"
-            f"marker = Path({str(marker)!r})\n"
-            "argv = sys.argv[1:]\n"
-            "joined = ' '.join(argv)\n"
-            "op = argv[1] if len(argv) > 1 else ''\n"
-            f"delay = {delay}\n"
-            "if argv and argv[0].endswith('admission_ops.py') and (\n"
-            "    op != 'stop_capture' or delay <= 0\n"
-            "):\n"
-            f"    os.execv({real!r}, [{real!r}, *argv])\n"
-            "if 'mindie_knowledge.loop.settings' in joined:\n"
-            f"    os.execv({real!r}, [{real!r}, *argv])\n"
-            "marker.open('a').write('attempt\\n')\n"
+        scripts = copy_runtime_scripts(self.root / "runtime-fixture")
+        behavior = (
+            "import sys, time\nfrom pathlib import Path\n"
+            f"Path({str(marker)!r}).open('a').write('attempt\\n')\n"
             "sys.stdin.read()\n"
             f"time.sleep({delay})\n"
             "print('{}')\n"
         )
-        self.write_config(python=str(wrapper))
+        (scripts / "runtime_call.py").write_text(behavior)
+        if delay > 0:
+            (scripts / "admission_ops.py").write_text(
+                "import sys, runpy\n"
+                "if sys.argv[1] == 'stop_capture':\n"
+                + "\n".join("    " + line for line in behavior.splitlines())
+                + "\nelse:\n"
+                + f"    runpy.run_path({str(SCRIPTS / 'admission_ops.py')!r}, run_name='__main__')\n"
+            )
+        self.write_config(runtime_scripts=str(scripts))
         return marker
 
     def event(self, session="manual-A", turn="turn-1", cwd=None):
@@ -173,13 +167,13 @@ class SessionGateTests(unittest.TestCase):
         skill = SCRIPTS.parent / "skills/mindie-agent"
         self.assertIn(
             "allow_implicit_invocation: false",
-            (skill / "agents/openai.yaml").read_text(),
+            (skill / "agents/openai.yaml").read_text(encoding="utf-8"),
         )
         self.assertNotIn(
             "SessionStart",
             json.loads((SCRIPTS.parent / "hooks/hooks.json").read_text())["hooks"],
         )
-        skill = (skill / "SKILL.md").read_text()
+        skill = (skill / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("init", skill)
         self.assertIn("sharing-choice", skill)
         self.assertIn("contribution-inspect", skill)

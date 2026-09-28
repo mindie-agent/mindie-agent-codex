@@ -62,7 +62,7 @@ def probe_runtime(python):
 def write_private(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(descriptor, "w") as stream:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
         json.dump(value, stream, ensure_ascii=False, indent=2)
         stream.write("\n")
 
@@ -72,7 +72,7 @@ def replace_private(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(dir=path.parent, prefix=".mindie-")
     try:
-        with os.fdopen(fd, "w") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(value, stream, ensure_ascii=False, indent=2)
             stream.write("\n")
             stream.flush()
@@ -286,7 +286,7 @@ def configure(args, parser):
             "no existing configuration; run setup.py install "
             "--knowledge-python PYTHON first"
         )
-    adapter = json.loads(config.read_text())
+    adapter = json.loads(config.read_text(encoding='utf-8'))
     python = adapter.get("python")
     if not isinstance(python, str) or not python:
         parser.error("existing configuration has no runtime interpreter")
@@ -358,7 +358,7 @@ def configure(args, parser):
     engine_path = Path(adapter.get("engine_config") or "")
     if engine_path.is_file():
         try:
-            engine = json.loads(engine_path.read_text())
+            engine = json.loads(engine_path.read_text(encoding='utf-8'))
         except (OSError, ValueError):
             engine = None
         if isinstance(engine, dict) and "session_activation" in engine:
