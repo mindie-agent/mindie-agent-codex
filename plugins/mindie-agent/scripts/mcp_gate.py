@@ -442,6 +442,7 @@ class Gate:
                     cancel=cancel,
                     env=generation_env(self.sessions.config),
                     max_output=KNOWLEDGE_MAX_OUTPUT,
+                    allow_service=True,
                 )
             except Exception as exc:
                 # A timeout or refused connection is availability, not a

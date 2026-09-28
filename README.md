@@ -291,7 +291,7 @@ or hardware acceptance.
 ```sh
 # Pins match .github/workflows/tests.yml. Do not omit these: the contract
 # tests archive the commits below and fail, naming the variable, if unset.
-export MINDIE_CORE_REPO=/path/to/knowledge-checkout   # contains 8aaa8b0a7f25c7a6f5e756dc7b42cd5985312809
+export MINDIE_CORE_REPO=/path/to/knowledge-checkout   # contains 68ed86579bcbf88ac8ed2817a2ca81756c351485
 export MINDIE_KIMI_REPO=/path/to/kimi-adapter-checkout  # contains 90f73e76c6087ce091570f2d151b709145c913bc
 .venv/bin/python -m unittest discover -s tests -p 'test_*.py'
 .venv/bin/python -m unittest tests.test_parallel_codex_contract -v

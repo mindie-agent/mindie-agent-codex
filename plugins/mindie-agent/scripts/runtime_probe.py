@@ -68,6 +68,7 @@ else:
         from mindie_knowledge.loop.activation import Admission
         from mindie_knowledge.loop.budget import MaintenanceBudget
         from mindie_knowledge.loop.limits import ORGANIZER_TIMEOUT, ORGANIZER_PROCESS_TIMEOUT, ORGANIZER_LEASE_SECONDS
+        from mindie_knowledge.loop.process import spawn_service
         from mindie_knowledge.loop.engine import Engine
         from mindie_knowledge.loop.transport import Service
         from mindie_knowledge.loop import documents, locks

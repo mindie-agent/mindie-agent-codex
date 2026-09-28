@@ -21,7 +21,7 @@ if POSIX:
     import signal
 
 
-def _spawn(command, stdin, env):
+def _spawn(command, stdin, env, *, allow_service=False):
     if POSIX:
         return subprocess.Popen(
             command,
@@ -34,6 +34,7 @@ def _spawn(command, stdin, env):
     # Windows assigns the process to its Job before resuming user code.
     return windows_process.spawn(
         command,
+        allow_service=allow_service,
         stdin=stdin,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -320,13 +321,13 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
             process.stderr.close()
 
 
-def run(command, data, *, timeout, max_output=1024 * 1024, cancel=None, env=None, allowed_returncodes=(0,), transport=False):
+def run(command, data, *, timeout, max_output=1024 * 1024, cancel=None, env=None, allowed_returncodes=(0,), transport=False, allow_service=False):
     if cancel is not None and cancel.is_set():
         raise RuntimeError("MindIE request cancelled before execution")
     with tempfile.TemporaryFile() as stream:
         stream.write(data.encode())
         stream.seek(0)
-        process = _spawn(command, stream, env)
+        process = _spawn(command, stream, env, allow_service=allow_service)
         if POSIX:
             return _run_posix(
                 process, timeout, max_output, cancel, allowed_returncodes, transport

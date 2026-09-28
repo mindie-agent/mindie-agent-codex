@@ -75,9 +75,9 @@ class WindowsProcessTreeTests(unittest.TestCase):
             f"sys.path.insert(0, {str(SCRIPTS)!r})\n"
             "api, leader = sys.argv[1], sys.argv[2]\n"
             "timed_out = False\n"
-            "if api == 'bounded_process':\n"
+            "if api in ('bounded_process', 'service_launcher'):\n"
             " import bounded_process\n"
-            " try: bounded_process.run([sys.executable, leader, *sys.argv[3:]], '', timeout=0.5)\n"
+            " try: bounded_process.run([sys.executable, leader, *sys.argv[3:]], '', timeout=0.5, allow_service=(api == 'service_launcher'))\n"
             " except TimeoutError: timed_out = True\n"
             "elif api == 'process_guard':\n"
             " import process_guard\n"
@@ -150,6 +150,11 @@ class WindowsProcessTreeTests(unittest.TestCase):
         for pipe_mode in ("inherited", "detached"):
             with self.subTest(pipe_mode=pipe_mode):
                 self._run_case("process_guard", pipe_mode)
+
+    def test_service_launcher_still_cleans_ordinary_descendants(self):
+        for pipe_mode in ("inherited", "detached"):
+            with self.subTest(pipe_mode=pipe_mode):
+                self._run_case("service_launcher", pipe_mode)
 
     def test_legacy_live_leader_check_is_caught_by_inherited_pipe_control(self):
         """The pre-Job taskkill check misses the tree once its leader exits."""

@@ -211,6 +211,7 @@ def bind(lease):
                 json.dumps(payload),
                 timeout=15,
                 env=generation_env(config_file),
+                allow_service=True,
             )
         result = json.loads(output)
         if isinstance(result, dict) and result.get("isError") is not True:

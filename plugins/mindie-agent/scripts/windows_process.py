@@ -18,7 +18,7 @@ _TH32CS_SNAPTHREAD = 0x00000004
 _THREAD_SUSPEND_RESUME = 0x0002
 
 
-def spawn(command, **kwargs):
+def spawn(command, *, allow_service=False, **kwargs):
     """Create a suspended child, assign its Job, then resume its first thread."""
     if os.name != "nt":
         return subprocess.Popen(command, **kwargs)
@@ -30,7 +30,7 @@ def spawn(command, **kwargs):
     )
     process = subprocess.Popen(command, **kwargs)
     try:
-        _assign_job(process)
+        _assign_job(process, allow_service=allow_service)
         _resume_primary_thread(process)
     except BaseException:
         # The suspended process has no descendants unless it was successfully
@@ -56,7 +56,7 @@ def spawn(command, **kwargs):
     return process
 
 
-def _assign_job(process):
+def _assign_job(process, *, allow_service=False):
     class BasicLimitInformation(ctypes.Structure):
         _fields_ = [
             ("PerProcessUserTimeLimit", ctypes.c_int64),
@@ -115,6 +115,10 @@ def _assign_job(process):
         raise ctypes.WinError(ctypes.get_last_error())
     limits = ExtendedLimitInformation()
     limits.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if allow_service:
+        # Only explicit service launchers may request CREATE_BREAKAWAY_FROM_JOB.
+        # Ordinary descendants still inherit this Job and are always cleaned.
+        limits.BasicLimitInformation.LimitFlags |= 0x00000800
     configured = kernel.SetInformationJobObject(
         job,
         _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,

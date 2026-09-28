@@ -392,7 +392,7 @@ class Updater:
         self.deadline = time.monotonic() + TOTAL_TIMEOUT
         self.command_deadline = self.deadline
 
-    def command(self, args, *, timeout=30, data="", allowed_returncodes=(0,), transport=False):
+    def command(self, args, *, timeout=30, data="", allowed_returncodes=(0,), transport=False, allow_service=False):
         remaining = min(self.deadline, self.command_deadline) - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("update deadline reached")
@@ -414,6 +414,7 @@ class Updater:
         return run(
             [str(arg) for arg in args], data, timeout=min(timeout, remaining), env=env,
             allowed_returncodes=allowed_returncodes, transport=transport,
+            allow_service=allow_service,
         )
 
     def save(self, status, **values):
@@ -691,6 +692,7 @@ class Updater:
                 "bridge.py", "bounded_process.py", "session_gate.py",
                 "sharing.py", "update_lock.py", "installation.json",
                 "diagnostic_support.py", "diagnostic_fallback.py",
+                "windows_process.py",
             }
             old_commands = stop_hook_commands([
                 self.settings["python"], str(previous / "scripts/bridge.py"),
@@ -956,7 +958,7 @@ class Updater:
             selected = read(self.config)
             output = self.command(
                 [selected["python"], Path(__file__).with_name("service_handoff.py"),
-                 "restore", selected["engine_config"]], timeout=8)
+                 "restore", selected["engine_config"]], timeout=8, allow_service=True)
             result = json.loads(output)
             if result.get("status") not in {"restored", "not-needed"}:
                 raise RuntimeError("invalid restoration result")

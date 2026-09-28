@@ -542,7 +542,7 @@ class AutoUpdateTests(unittest.TestCase):
             "hooks"
         ][0]["command"]
         self.assertIn(str(previous / "scripts/bridge.py"), previous_command)
-        for name in ("diagnostic_support.py", "diagnostic_fallback.py"):
+        for name in ("diagnostic_support.py", "diagnostic_fallback.py", "windows_process.py"):
             path = self.remote / "plugins/mindie-agent/scripts" / name
             path.write_text(path.read_text(encoding="utf-8") + f"\n# {name} stop behavior\n", encoding="utf-8")
             self.commit(name)

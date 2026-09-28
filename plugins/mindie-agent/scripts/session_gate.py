@@ -171,6 +171,7 @@ class Sessions:
                     timeout=self.op_timeout,
                     max_output=32768,
                     env=generation_env(self.config),
+                    allow_service=operation == "stop_capture",
                 )
                 envelope = json.loads(output)
             except Inactive:
