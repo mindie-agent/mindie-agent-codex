@@ -32,7 +32,7 @@ checkout transformation. This permits Windows checkouts without ignoring any
 source content differences.
 
 The history test prepares 4093 completed rows in one transaction instead of
-repeating 8198 redundant claim/finish transactions. Seven actual claim/finish
+repeating 8186 redundant claim/finish calls. Seven actual claim/finish
 pairs still exercise initial creation and crossing the former limit. This is a
 white-box fixture for a specific state boundary, not a throughput benchmark.
 
