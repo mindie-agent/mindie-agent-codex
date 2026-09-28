@@ -24,6 +24,13 @@ under test. They must not patch missing production APIs into a positive probe,
 force-kill a service and count that as successful shutdown, or treat missing
 dependencies as passing skips.
 
+The full suite keeps the host's default text encoding. UTF-8 protocol fixtures
+write bytes like the production entry point; source fixture edits explicitly
+read and write UTF-8. Pin comparisons retain the exact canonical Git blob hash
+and VCS commit receipt, while source comparisons normalize only Git's CRLF
+checkout transformation. This permits Windows checkouts without ignoring any
+source content differences.
+
 The history test prepares 4093 completed rows in one transaction instead of
 repeating 8198 redundant claim/finish transactions. Seven actual claim/finish
 pairs still exercise initial creation and crossing the former limit. This is a

@@ -6,9 +6,8 @@ on:
 jobs:
   # Package/unit CI: bounded, model-free checks against the exact pinned
   # runtime and domain dependencies. Linux and Windows run the same component
-  # entry. This is not native desktop acceptance: macOS hook-trust/plugin
-  # acceptance is run by the maintainer locally, and Windows hardware
-  # acceptance is still pending.
+  # entry. Native model turns, hook trust and OS scheduler acceptance are
+  # separate evidence; this job does not exercise remote NPU hardware.
   adapter:
     strategy:
       fail-fast: false
@@ -60,6 +59,9 @@ jobs:
         run: python -m unittest tests.test_service_handoff -v
       - name: Component tests
         env:
+          # Preserve the host's native encoding so the harness cannot hide
+          # implicit text I/O. Protocol encoding belongs to product code.
+          PYTHONUTF8: '0'
           MINDIE_CORE_REPO: ${{ github.workspace }}/.ci/core
           MINDIE_KIMI_REPO: ${{ github.workspace }}/.ci/kimi
         run: python -m unittest discover -s tests -p 'test_*.py'

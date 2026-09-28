@@ -194,7 +194,7 @@ class AutoUpdateTests(unittest.TestCase):
             self.base / "codex/plugins/cache/mindie-agent/mindie-agent/old/scripts"
         )
         self.cache.mkdir(parents=True)
-        (self.cache / "bridge.py").write_text("retained safe entrypoint")
+        (self.cache / "bridge.py").write_text("retained safe entrypoint", encoding="utf-8")
         initial_version = read(self.remote / "plugins/mindie-agent/.codex-plugin/plugin.json")["version"]
         (self.cache.parent.parent / initial_version / "scripts").mkdir(parents=True)
         atomic(
@@ -246,20 +246,20 @@ class AutoUpdateTests(unittest.TestCase):
         old_plugin = Path(first["current"]["plugin"])
         self.assertEqual(first["current"]["revision"], self.sha)
         skill = self.remote / "plugins/mindie-agent/skills/mindie-agent/SKILL.md"
-        skill.write_text(skill.read_text() + "\nRevision two marker\n")
+        skill.write_text(skill.read_text(encoding="utf-8") + "\nRevision two marker\n", encoding="utf-8")
         bridge = self.remote / "plugins/mindie-agent/scripts/bridge.py"
-        bridge.write_text(bridge.read_text() + "\n# Revision two marker\n")
+        bridge.write_text(bridge.read_text(encoding="utf-8") + "\n# Revision two marker\n", encoding="utf-8")
         second_sha = self.commit("second")
-        skill.write_text(skill.read_text() + "\nUncommitted developer work\n")
+        skill.write_text(skill.read_text(encoding="utf-8") + "\nUncommitted developer work\n", encoding="utf-8")
         result = self.check()
         self.assertEqual(result["status"], "installed")
         plugin = Path(result["current"]["plugin"])
         self.assertEqual(result["current"]["revision"], second_sha)
         self.assertIn(
-            "Revision two marker", (plugin / "skills/mindie-agent/SKILL.md").read_text()
+            "Revision two marker", (plugin / "skills/mindie-agent/SKILL.md").read_text(encoding="utf-8")
         )
         self.assertNotIn(
-            "Uncommitted", (plugin / "skills/mindie-agent/SKILL.md").read_text()
+            "Uncommitted", (plugin / "skills/mindie-agent/SKILL.md").read_text(encoding="utf-8")
         )
         mcp = read(plugin / ".mcp.json")["mcpServers"]["mindie-knowledge"]
         self.assertEqual(mcp["args"][0], str(plugin / "scripts/bridge.py"))
@@ -271,7 +271,7 @@ class AutoUpdateTests(unittest.TestCase):
         )
         self.assertTrue(old_plugin.exists())
         self.assertTrue((self.cache / "bridge.py").exists())
-        self.assertIn("Uncommitted", skill.read_text())
+        self.assertIn("Uncommitted", skill.read_text(encoding="utf-8"))
         installs = self.updater.installs
         self.assertEqual(self.check()["status"], "up_to_date")
         self.assertEqual(self.updater.installs, installs)
@@ -289,7 +289,7 @@ class AutoUpdateTests(unittest.TestCase):
         # A stale same-version cache copy is a hard failure, never a warning.
         victim = cache_dir / "scripts/bridge.py"
         original = victim.read_bytes()
-        victim.write_text("stale bytes from an older generation\n")
+        victim.write_text("stale bytes from an older generation\n", encoding="utf-8")
         try:
             with self.assertRaises(RuntimeError):
                 self.updater.verify_native(version, str(plugin))
@@ -360,7 +360,7 @@ class AutoUpdateTests(unittest.TestCase):
                     runtime_scripts=str(plugin / "scripts"),
                 )
             )
-        )
+        , encoding="utf-8")
         other = self.base / "other-adapter.json"
         atomic(
             other,
@@ -507,7 +507,7 @@ class AutoUpdateTests(unittest.TestCase):
         first = self.check()
         before = read(Path(first["current"]["plugin"]) / "hooks/hooks.json")
         remote = self.remote / "plugins/mindie-agent/scripts/remote_bridge.py"
-        remote.write_text(remote.read_text() + "\n# Remote-only revision\n")
+        remote.write_text(remote.read_text(encoding="utf-8") + "\n# Remote-only revision\n", encoding="utf-8")
         self.commit("remote-only")
         second = self.check()
         self.assertEqual(second["status"], "installed")
@@ -522,7 +522,7 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertIn(str(previous / "scripts/bridge.py"), previous_command)
         for name in ("diagnostic_support.py", "diagnostic_fallback.py"):
             path = self.remote / "plugins/mindie-agent/scripts" / name
-            path.write_text(path.read_text() + f"\n# {name} stop behavior\n")
+            path.write_text(path.read_text(encoding="utf-8") + f"\n# {name} stop behavior\n", encoding="utf-8")
             self.commit(name)
             result = self.check()
             self.assertEqual(result["status"], "installed")
@@ -539,9 +539,9 @@ class AutoUpdateTests(unittest.TestCase):
         # No compatibility shim: cached entrypoints of loaded tasks keep their
         # exact bytes; the updater only retains/restores them across switches.
         self.check()
-        self.assertEqual((self.cache / "bridge.py").read_text(), "retained safe entrypoint")
+        self.assertEqual((self.cache / "bridge.py").read_text(encoding="utf-8"), "retained safe entrypoint")
         retained = self.root / "retained-caches/old/scripts/bridge.py"
-        self.assertEqual(retained.read_text(), "retained safe entrypoint")
+        self.assertEqual(retained.read_text(encoding="utf-8"), "retained safe entrypoint")
         self.assertFalse((self.root / "legacy-caches-original").exists())
 
     def test_knowledge_sync_runs_on_every_schedule_and_failure_is_isolated(self):
@@ -557,7 +557,7 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(result["knowledge_status"], "sync_failed")
         self.assertIn("knowledge_error", result)
         self.updater.fail_knowledge = False
-        self.remote.joinpath("marker").write_text("new revision")
+        self.remote.joinpath("marker").write_text("new revision", encoding="utf-8")
         self.commit("failing candidate")
         for _ in range(3):
             self.updater.fail_install = True
@@ -567,10 +567,10 @@ class AutoUpdateTests(unittest.TestCase):
 
     def test_unreadable_admission_bytes_do_not_block_update(self):
         sessions = Sessions(self.config)
-        sessions.path.write_text("not a sqlite database")
+        sessions.path.write_text("not a sqlite database", encoding="utf-8")
         result = self.check()
         self.assertEqual(result["status"], "installed")
-        self.assertEqual(sessions.path.read_text(), "not a sqlite database")
+        self.assertEqual(sessions.path.read_text(encoding="utf-8"), "not a sqlite database")
         self.assertGreater(self.updater.installs, 0)
 
     def test_install_verifies_native_selection_while_retaining_old_entrypoints(self):
@@ -579,7 +579,7 @@ class AutoUpdateTests(unittest.TestCase):
         # the old entrypoint must keep its exact bytes and path.
         old = self.updater.native_cache() / "0.1.0+codex.20260919061330608250/scripts"
         old.mkdir(parents=True)
-        (old / "bridge.py").write_text("old loaded-task entrypoint")
+        (old / "bridge.py").write_text("old loaded-task entrypoint", encoding="utf-8")
         result = self.check()
         self.assertEqual(result["status"], "installed")
         candidate_version = result["current"]["version"]
@@ -590,7 +590,7 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(native["version"], candidate_version)
         self.assertTrue(native["installed"] and native["enabled"])
         retained = self.updater.native_cache() / "0.1.0+codex.20260919061330608250/scripts/bridge.py"
-        self.assertEqual(retained.read_text(), "old loaded-task entrypoint")
+        self.assertEqual(retained.read_text(encoding="utf-8"), "old loaded-task entrypoint")
 
     def test_no_fake_installed_when_retained_cache_wins_native_discovery(self):
         # A candidate whose build metadata sorts BELOW a retained cache (the
@@ -598,7 +598,7 @@ class AutoUpdateTests(unittest.TestCase):
         # installed: readback verification fails and rolls back.
         old = self.updater.native_cache() / "0.1.0+codex.20260919061330608250/scripts"
         old.mkdir(parents=True)
-        (old / "bridge.py").write_text("old loaded-task entrypoint")
+        (old / "bridge.py").write_text("old loaded-task entrypoint", encoding="utf-8")
         with patch("auto_update.datetime") as clock:
             clock.now.return_value.strftime.return_value = "20260920055301"
             result = self.check()
@@ -612,7 +612,7 @@ class AutoUpdateTests(unittest.TestCase):
         native = self.updater.native_list()["installed"][0]
         self.assertEqual(native["version"], "0.1.0+codex.20260919061330608250")
         self.assertEqual(
-            (self.updater.native_cache() / "0.1.0+codex.20260919061330608250/scripts/bridge.py").read_text(),
+            (self.updater.native_cache() / "0.1.0+codex.20260919061330608250/scripts/bridge.py").read_text(encoding="utf-8"),
             "old loaded-task entrypoint",
         )
         # Bounded: a repeated check consumes attempts, never loops adds.
@@ -701,7 +701,7 @@ class UpdateIdleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             engine = Path(tmp) / "engine.json"
-            engine.write_text(json.dumps(dict(root=tmp, domain="test")))
+            engine.write_text(json.dumps(dict(root=tmp, domain="test")), encoding="utf-8")
             self.assertTrue(service_handoff.stop(str(engine)))
 
     def test_absent_stop_if_idle_fails_closed(self):
@@ -709,7 +709,7 @@ class UpdateIdleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             engine = Path(tmp) / "engine.json"
-            engine.write_text(json.dumps(dict(root=tmp, domain="test")))
+            engine.write_text(json.dumps(dict(root=tmp, domain="test")), encoding="utf-8")
             with (
                 patch(
                     "service_handoff.connect",

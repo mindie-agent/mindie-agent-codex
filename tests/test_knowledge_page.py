@@ -64,7 +64,10 @@ elif mode == "mismatch":
 
 payload = json.loads(sys.stdin.read())
 if mode == "page":
-    print(json.dumps(runtime_call.call(payload), ensure_ascii=False))
+    # Match runtime_call's UTF-8 wire, independent of the fixture's console
+    # encoding. The production CLI writes bytes too.
+    sys.stdout.buffer.write((json.dumps(runtime_call.call(payload), ensure_ascii=False) + "\n").encode("utf-8"))
+    sys.stdout.buffer.flush()
 else:
     try:
         runtime_call.call(payload)

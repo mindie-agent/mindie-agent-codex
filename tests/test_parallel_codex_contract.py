@@ -1238,9 +1238,12 @@ class CrossAdapterTests(LaneCase):
         blob = subprocess.check_output(
             ["git", "-C", str(core_repo), "show", f"{CORE_COMMIT}:mindie_knowledge/consent_store.py"],
         )
-        local = (SCRIPTS / "consent_store.py").read_bytes()
+        local = (SCRIPTS / "consent_store.py").read_text(encoding="utf-8")
         self.assertEqual(hashlib.sha256(blob).hexdigest(), CONSENT_STORE_SHA256)
-        self.assertEqual(local, blob)
+        # Git checkout/wheel line endings may be CRLF on Windows. Keep the
+        # canonical Git blob hash exact, and compare source text without only
+        # that checkout transformation; no whitespace/content is stripped.
+        self.assertEqual(local, blob.decode("utf-8").replace("\r\n", "\n"))
 
     def test_running_runtime_matches_the_declared_core(self):
         import mindie_knowledge
@@ -1267,7 +1270,11 @@ class CrossAdapterTests(LaneCase):
             blob = subprocess.check_output(
                 ["git", "-C", str(core_repo), "show", f"{CORE_COMMIT}:mindie_knowledge/{rel}"],
             )
-            self.assertEqual(installed.read_bytes(), blob, rel)
+            self.assertEqual(
+                installed.read_text(encoding="utf-8"),
+                blob.decode("utf-8").replace("\r\n", "\n"),
+                rel,
+            )
 
     def test_kimi_adapter_reads_the_same_profile_consent(self):
         self.write_consent("read-only", reporting="later")
