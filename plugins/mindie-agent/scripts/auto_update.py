@@ -727,6 +727,20 @@ class Updater:
             [self.settings["codex"], "plugin", "marketplace", "add", source, "--json"]
         )
 
+    def validate_marketplace(self, existing):
+        if not existing:
+            return
+        source_type = (existing.get("marketplaceSource") or {}).get("sourceType")
+        if source_type == "local":
+            return
+        # Native Windows 0.158 lists only name/root. An omitted optional
+        # field is sufficient for neither rejection nor migration authority:
+        # accept only this updater's exact managed marketplace directory.
+        if source_type is None and isinstance(existing.get("root"), str):
+            if Path(existing["root"]).resolve() == (self.root / "marketplace").resolve():
+                return
+        raise Incompatible("only the existing local MindIE marketplace can be migrated")
+
     def native_plugin_entry(self):
         """Actual native inventory entry for mindie-agent@mindie-agent, or None.
 
@@ -941,6 +955,9 @@ class Updater:
         # closed but is not an update concern either.
         with update_lock(self.config, exclusive=True):
             adapter = read(self.config)
+            existing = self.marketplace()
+            # Validate before stopping a working service or writing a journal.
+            self.validate_marketplace(existing)
             idle_helper = Path(__file__).with_name("service_handoff.py")
             if not idle_helper.is_file():
                 raise Incompatible("updater is missing service_handoff.py")
@@ -971,14 +988,6 @@ class Updater:
             # Leave a bounded rollback + restoration tail inside this check.
             self.command_deadline = self.deadline - 38
             try:
-                existing = self.marketplace()
-                if (
-                    existing
-                    and existing.get("marketplaceSource", {}).get("sourceType") != "local"
-                ):
-                    raise Incompatible(
-                        "only the existing local MindIE marketplace can be migrated"
-                    )
                 market = self.root / "marketplace"
                 plugin_link = market / "plugins/mindie-agent"
                 self.preserve_caches()

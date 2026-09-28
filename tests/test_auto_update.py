@@ -299,6 +299,28 @@ class AutoUpdateTests(unittest.TestCase):
             self.updater.verify_native(version, str(plugin))["version"], version
         )
 
+    def test_native_inventory_without_source_type_updates_owned_marketplace(self):
+        first = self.check()
+        self.assertEqual(first["status"], "installed")
+        inventory = self.root / "fixture-marketplace.json"
+        # Observed Windows codex-cli 0.158.0-alpha.2.1 list response.
+        atomic(inventory, dict(name="mindie-agent", root=str(self.root / "marketplace")))
+        worker = self.remote / "plugins/mindie-agent/scripts/agent_worker.py"
+        worker.write_text(worker.read_text(encoding="utf-8") + "\n# updated worker\n", encoding="utf-8")
+        revision = self.commit("updated worker")
+        result = self.check()
+        self.assertEqual(result["status"], "installed")
+        self.assertEqual(result["current"]["revision"], revision)
+        self.assertEqual(self.updater.verify_native(result["current"]["version"], result["current"]["plugin"])["version"], result["current"]["version"])
+
+    def test_unknown_external_marketplace_rejected_before_service_stop(self):
+        external = dict(name="mindie-agent", root=str(self.remote))
+        with patch.object(self.updater, 'marketplace', return_value=external), patch.object(self.updater, 'command') as command:
+            with self.assertRaises(auto_update.Incompatible):
+                self.updater.install(dict(revision='candidate'))
+        command.assert_not_called()
+        self.assertFalse((self.root / 'transaction.json').exists())
+
     def test_package_binds_installation_config_into_mcp_and_hook(self):
         result = self.check()
         self.assertEqual(result["status"], "installed")
