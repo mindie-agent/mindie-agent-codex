@@ -177,16 +177,19 @@ def _migrate_community_locked(config_file):
                 write(engine_path, engine)
     if shared.exists():
         # The consent wiring stamp may only touch a document that passes the
-        # existing structural validator: a damaged, foreign-schema or
-        # otherwise non-conforming document is preserved byte-identical and
-        # reported, never implicitly repaired or stamped (the same contract
-        # core's update_extensions enforces; the explicit managed configure
-        # remains the only repair path for malformed values).
+        # core's authoritative normalize() — the same conformance bar core's
+        # update_extensions enforces. The runtime normalize runs only here,
+        # at a required write boundary, and only when the stamp is actually
+        # missing or wrong; reads and the steady-state fast path never spawn
+        # it. A damaged, foreign-schema or otherwise non-conforming document
+        # (including managed values core rejects) keeps its bytes and the
+        # failure is reported; a missing runtime fails the same honest way —
+        # never a fallback to a weaker adapter-side validation.
         try:
-            settings = validate(json.loads(shared.read_text()))
+            parsed = json.loads(shared.read_text())
         except ValueError:
-            settings = None
-        if settings is None:
+            parsed = None
+        if not isinstance(parsed, dict):
             if result["detail"] is None:
                 result["detail"] = (
                     "shared community settings are damaged or non-conforming; "
@@ -195,13 +198,21 @@ def _migrate_community_locked(config_file):
                     "managed configure or manual removal"
                 )
         elif (
-            not isinstance(settings.get("consent_config"), str)
-            or not os.path.isabs(settings["consent_config"])
-            or settings["consent_config"] != authority
+            not isinstance(parsed.get("consent_config"), str)
+            or not os.path.isabs(parsed["consent_config"])
+            or parsed["consent_config"] != authority
         ):
-            raw = json.loads(shared.read_text())
-            raw["consent_config"] = authority
-            write(shared, raw)
+            try:
+                normalize_with_runtime(parsed, adapter.get("python"), config_file)
+            except SharingError as exc:
+                result["detail"] = (
+                    "consent wiring stamp skipped: core normalize rejected "
+                    "the current document or the runtime is unavailable; "
+                    f"bytes preserved ({str(exc)[:160]})"
+                )
+            else:
+                parsed["consent_config"] = authority
+                write(shared, parsed)
     return result
 
 

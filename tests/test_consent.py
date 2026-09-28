@@ -207,6 +207,17 @@ class ConsentFixture(unittest.TestCase):
         migrated = sharing.migrate_community_path()
         self.assertEqual(shared.read_text(), before)
         self.assertIsNotNone(migrated["detail"])
+        # Managed values the adapter pre-filter tolerates but the core's
+        # authoritative normalize rejects (idle_seconds below the floor):
+        # bytes preserved, fault reported — the stamp is not a repair path.
+        shared.write_text(json.dumps(
+            dict(schema="mindie-community-config/1", enabled=False,
+                 repository="owner/repo", project_roots=[], idle_seconds=1)
+        ))
+        before = shared.read_text()
+        migrated = sharing.migrate_community_path()
+        self.assertEqual(shared.read_text(), before)
+        self.assertIn("normalize", migrated["detail"])
         # A conforming document is stamped normally, managed keys untouched.
         shared.write_text(json.dumps(
             dict(schema="mindie-community-config/1", enabled=False,
