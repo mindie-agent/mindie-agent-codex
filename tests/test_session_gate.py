@@ -3,8 +3,9 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
+from contextlib import closing
 from pathlib import Path
-import selectors
+import queue
 import sqlite3
 import subprocess
 import sys
@@ -13,6 +14,7 @@ import threading
 import time
 import unittest
 from unittest.mock import patch
+from tests.process_fixtures import cleanup_temporary_directory, stop_owned_knowledge_service
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -45,9 +47,9 @@ class SessionGateTests(unittest.TestCase):
         self.sessions = Sessions()
 
     def tearDown(self):
-        subprocess.run(["pkill", "-f", str(self.engine)], check=False)
+        stop_owned_knowledge_service(self.engine)
         self.environment.stop()
-        self.temp.cleanup()
+        cleanup_temporary_directory(self.temp)
 
     def write_config(self, **extra):
         value = dict(
@@ -134,10 +136,9 @@ class SessionGateTests(unittest.TestCase):
         Does not use PYTHONPATH to mask the configured interpreter.
         """
         marker = self.root / "invocations"
-        wrapper = self.root / "runtime-python"
+        wrapper = self.root / "runtime-python.py"
         real = sys.executable
         wrapper.write_text(
-            f"#!{real}\n"
             "import os, sys, time\n"
             "from pathlib import Path\n"
             f"marker = Path({str(marker)!r})\n"
@@ -156,7 +157,6 @@ class SessionGateTests(unittest.TestCase):
             f"time.sleep({delay})\n"
             "print('{}')\n"
         )
-        wrapper.chmod(0o755)
         self.write_config(python=str(wrapper))
         return marker
 
@@ -211,7 +211,12 @@ class SessionGateTests(unittest.TestCase):
         bound_again = json.loads(self.bridge("activate").stdout)
         self.assertEqual(marker.read_text().splitlines(), ["attempt", "attempt"])
         self.assertEqual(bound_again["mindie_activation"], bound["mindie_activation"])
-        self.assertEqual(self.sessions.path.stat().st_mode & 0o777, 0o600)
+        if os.name == "posix":
+            self.assertEqual(self.sessions.path.stat().st_mode & 0o777, 0o600)
+        else:
+            # Windows ACL enforcement is inherited from the profile directory
+            # and remains outside this mode-bit assertion.
+            self.assertTrue(self.sessions.path.is_file())
 
     def test_inactive_hooks_create_no_state_or_runtime(self):
         marker = self.runtime_fixture()
@@ -408,7 +413,7 @@ class SessionGateTests(unittest.TestCase):
                     for c in run.call_args_list
                 )
             )
-        with sqlite3.connect(self.sessions.path) as db:
+        with closing(sqlite3.connect(self.sessions.path)) as db:
             failures = db.execute(
                 "SELECT failures FROM leases WHERE session='manual-A'"
             ).fetchone()[0]
@@ -628,15 +633,22 @@ class SessionGateTests(unittest.TestCase):
         popen.assert_not_called()
 
     def test_timeout_kills_owned_descendants(self):
-        marker = self.root / "child-pid"
-        code = f"import os,time\npid=os.fork()\nif pid:\n open({str(marker)!r},'w').write(str(pid))\ntime.sleep(20)\n"
+        marker = self.root / "grandchild-survived"
+        child = (
+            "import time\n"
+            "from pathlib import Path\n"
+            "time.sleep(0.8)\n"
+            f"Path({str(marker)!r}).write_text('survived')\n"
+        )
+        code = (
+            "import subprocess,sys,time\n"
+            f"subprocess.Popen([sys.executable, '-c', {child!r}])\n"
+            "time.sleep(20)\n"
+        )
         with self.assertRaises(TimeoutError):
             bounded_process.run([sys.executable, "-c", code], "", timeout=0.3)
-        pid = marker.read_text()
-        result = subprocess.run(
-            ["ps", "-p", pid, "-o", "stat="], capture_output=True, text=True
-        )
-        self.assertTrue(result.returncode != 0 or result.stdout.strip().startswith("Z"))
+        time.sleep(1)
+        self.assertFalse(marker.exists(), "owned grandchild outlived timeout cleanup")
 
     def test_mcp_protocol_call_and_cancellation(self):
         marker = self.runtime_fixture(delay=20)
@@ -661,10 +673,14 @@ class SessionGateTests(unittest.TestCase):
             )
             process.stdin.write((json.dumps(cancel) + "\n").encode())
             process.stdin.flush()
-            with selectors.DefaultSelector() as selector:
-                selector.register(process.stdout, selectors.EVENT_READ)
-                self.assertTrue(selector.select(2))
-            result = json.loads(process.stdout.readline())
+            messages = queue.Queue()
+            reader = threading.Thread(
+                target=lambda: messages.put(process.stdout.readline()), daemon=True
+            )
+            reader.start()
+            line = messages.get(timeout=2)
+            self.assertTrue(line)
+            result = json.loads(line)
             self.assertTrue(result["result"]["isError"])
             self.assertEqual(marker.read_text().splitlines(), ["attempt"])
         finally:

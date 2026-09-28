@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from tests.process_fixtures import cleanup_temporary_directory
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -238,7 +239,7 @@ class PolicyTests(unittest.TestCase):
 
     def tearDown(self):
         self._time.stop()
-        self.tmp.cleanup()
+        cleanup_temporary_directory(self.tmp)
 
     def check(self):
         self.updater.state["next_check"] = 0
@@ -498,7 +499,7 @@ class LauncherTests(unittest.TestCase):
         (self.base / "home").mkdir()
 
     def tearDown(self):
-        self.tmp.cleanup()
+        cleanup_temporary_directory(self.tmp)
 
     def _run(self, *args):
         return subprocess.run(
@@ -559,14 +560,30 @@ class LauncherTests(unittest.TestCase):
 
     def test_real_status_has_no_side_effects(self):
         for name in (
-            "auto_update.py", "bounded_process.py", "session_gate.py", "update_lock.py",
+            "auto_update.py", "bounded_process.py", "windows_process.py",
+            "runtime_probe.py", "session_gate.py", "update_lock.py",
         ):
             shutil.copy(SCRIPTS / name, self.plugin / "scripts" / name)
+        self.settings.write_text(json.dumps({
+            "root": str(self.root),
+            "adapter_config": str(self.base / "adapter.json"),
+            "codex_home": str(self.base / "codex-home"),
+            "codex": "codex-fixture",
+            "schedule_mode": "manual",
+            "schedule": {"mode": "manual", "registered": False},
+        }) + "\n")
         state = self.root / "state.json"
         before = state.read_bytes()
         names = sorted(path.name for path in self.root.iterdir())
         proc = self._run("status")
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(
+            proc.stdout.strip(),
+            "status command returned no JSON; stderr="
+            + repr(proc.stderr)
+            + "; marker="
+            + (self.marker.read_text() if self.marker.exists() else "missing"),
+        )
         payload = json.loads(proc.stdout)
         self.assertEqual(payload["state"]["current"]["revision"], "local")
         self.assertEqual(state.read_bytes(), before)

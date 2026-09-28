@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from tests.process_fixtures import cleanup_temporary_directory
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,7 +61,7 @@ class ReportingFixture(unittest.TestCase):
 
     def tearDown(self):
         self.environment.stop()
-        self.temp.cleanup()
+        cleanup_temporary_directory(self.temp)
 
     def write_consent(self, choice="read-only", reporting="later"):
         consent.record_choice(choice)

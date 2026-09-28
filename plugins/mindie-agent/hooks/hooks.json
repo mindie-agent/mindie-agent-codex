@@ -6,6 +6,7 @@
           {
             "type": "command",
             "command": "python3 \"${PLUGIN_ROOT}/scripts/bridge.py\" stop >/dev/null 2>&1; printf '{}\\n'",
+            "commandWindows": "python \"${PLUGIN_ROOT}\\scripts\\bridge.py\" stop >NUL 2>&1 & echo {}",
             "timeout": 2
           }
         ]

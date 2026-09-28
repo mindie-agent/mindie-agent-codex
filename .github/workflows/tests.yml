@@ -2,16 +2,19 @@ name: Adapter checks
 on: [push, pull_request]
 jobs:
   # Package/unit CI: bounded, model-free checks against the exact pinned
-  # runtime and domain dependencies. This is not native desktop acceptance:
-  # macOS hook-trust/plugin acceptance is run by the maintainer locally, and
-  # Windows hardware acceptance is still pending.
+  # runtime and domain dependencies on Linux and Windows. Native Codex plugin
+  # acceptance and Windows ACL/hardware acceptance remain separate.
   adapter:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.13'
       # Real core tests import remote_dev; install the
       # exact commit pins instead of skipping modules or stubbing imports.
       - name: Install pinned runtime and domain dependencies

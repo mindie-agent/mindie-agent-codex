@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from tests.process_fixtures import cleanup_temporary_directory, extract_git_archive
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/mindie-agent/scripts"
@@ -46,7 +47,7 @@ class ConsentFixture(unittest.TestCase):
 
     def tearDown(self):
         self.environment.stop()
-        self.temp.cleanup()
+        cleanup_temporary_directory(self.temp)
 
     def test_legacy_adapter_choice_imports_once_at_boundary(self):
         adapter = json.loads(self.config.read_text())
@@ -339,13 +340,8 @@ class ConsentFixture(unittest.TestCase):
         kimi_repo = Path(value).expanduser()
         if not kimi_repo.is_dir():
             raise AssertionError("MINDIE_KIMI_REPO=" + value + " is not a directory")
-        archive = subprocess.run(
-            ["git", "-C", str(kimi_repo), "archive", kimi_commit, "scripts"],
-            check=True, capture_output=True,
-        )
         extracted = self.root / "kimi-adapter"
-        extracted.mkdir()
-        subprocess.run(["tar", "-x", "-C", str(extracted)], input=archive.stdout, check=True)
+        extract_git_archive(kimi_repo, kimi_commit, extracted, "scripts")
         (self.root / "kimi.json").write_text("{}\n")
         env = dict(os.environ, MINDIE_KIMI_CONFIG=str(self.root / "kimi.json"))
         env.pop("MINDIE_AGENT_CONFIG", None)

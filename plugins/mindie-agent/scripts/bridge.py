@@ -23,6 +23,11 @@ import sys
 import threading
 import time
 
+# Start the hook's deadline before loading its project modules. On a cold
+# Windows interpreter those imports are part of the native two-second Stop
+# window just as much as helper dispatch and stdin parsing.
+_ENTRYPOINT_STARTED_AT = time.monotonic()
+
 from bounded_process import run
 from session_gate import (
     Inactive,
@@ -66,9 +71,11 @@ CONTRIBUTION_OPERATIONS = {
 }
 IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
 BATCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
-# Native Stop budget is 2s. The whole hook (stdin + helper) stays under
-# HOOK_BUDGET so print/exit still fit before the host kills this process.
+# Native Stop budget is 2s. The Windows allowance reserves more of that host
+# window for cold interpreter startup; all loaded-module, stdin and helper time
+# stays bounded by the platform's inner allowance.
 HOOK_BUDGET = 1.5
+WINDOWS_HOOK_BUDGET = 1.3
 
 
 def _bounded_path(value, name):
@@ -461,7 +468,8 @@ def _observe_stop(result):
 
 
 def stop():
-    deadline = time.monotonic() + HOOK_BUDGET
+    budget = WINDOWS_HOOK_BUDGET if os.name == "nt" else HOOK_BUDGET
+    deadline = _ENTRYPOINT_STARTED_AT + budget
     try:
         # Cheap default-off before stdin: no helper, no lock, no lease DB.
         # The consent gate applies too when the settings carry the authority.

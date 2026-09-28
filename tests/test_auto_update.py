@@ -3,6 +3,7 @@
 import json
 import io
 import os
+from contextlib import closing
 from pathlib import Path
 import shutil
 import sqlite3
@@ -11,11 +12,14 @@ import sys
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
+from tests.process_fixtures import cleanup_temporary_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
+import auto_update
 from auto_update import Updater, atomic, read
 from session_gate import Sessions, bind_explicit_config
 from update_lock import update_lock
@@ -80,7 +84,9 @@ class LocalUpdater(Updater):
             return "{}"
         if args[0] == "fixture-uv":
             if args[1] == "venv":
-                runtime = Path(args[-1]) / "bin/python"
+                runtime = Path(args[-1]) / (
+                    "Scripts/python.exe" if os.name == "nt" else "bin/python"
+                )
                 runtime.parent.mkdir(parents=True)
                 runtime.touch()
                 self.builds += 1
@@ -89,7 +95,7 @@ class LocalUpdater(Updater):
             return json.dumps(dict(idle=self.idle))
         return super().command(args, **kwargs)
 
-    def probe_runtime(self, python):
+    def probe_runtime(self, python, scripts=None):
         self.assert_runtime = Path(python).exists()
         if not self.assert_runtime:
             raise RuntimeError("runtime missing")
@@ -217,7 +223,7 @@ class AutoUpdateTests(unittest.TestCase):
 
     def tearDown(self):
         bind_explicit_config(None)
-        self.temp.cleanup()
+        cleanup_temporary_directory(self.temp)
 
     def git(self, *args):
         return subprocess.check_output(
@@ -327,6 +333,10 @@ class AutoUpdateTests(unittest.TestCase):
             bind_explicit_config(None)
         binding = read(plugin / "scripts/installation.json")
         self.assertEqual(binding, {"adapter_config": expected})
+        self.assertEqual(
+            (plugin / "scripts/windows_process.py").read_bytes(),
+            (SCRIPTS / "windows_process.py").read_bytes(),
+        )
 
     def test_generated_bridge_init_binds_installation_config_without_env(self):
         result = self.check()
@@ -363,9 +373,15 @@ class AutoUpdateTests(unittest.TestCase):
         )
         env = {
             "HOME": str(home),
+            # pathlib.Path.home() uses USERPROFILE on Windows; overriding only
+            # HOME leaves subprocesses pointed at the real user profile.
+            "USERPROFILE": str(home),
             "PATH": os.environ.get("PATH", ""),
             "TMPDIR": str(self.base / "tmp"),
         }
+        for name in ("SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP"):
+            if name in os.environ:
+                env[name] = os.environ[name]
         (self.base / "tmp").mkdir(exist_ok=True)
         bridge = plugin / "scripts/bridge.py"
         init = subprocess.run(
@@ -375,7 +391,7 @@ class AutoUpdateTests(unittest.TestCase):
             timeout=15,
             env=env,
         )
-        self.assertEqual(init.returncode, 0, init.stderr)
+        self.assertEqual(init.returncode, 0, init.stderr or init.stdout)
         payload = json.loads(init.stdout)
         self.assertEqual(payload["adapter"]["config"], expected)
         status = subprocess.run(
@@ -416,7 +432,7 @@ class AutoUpdateTests(unittest.TestCase):
             lease = sessions.activate()
             result = self.check()
             self.assertEqual(result["status"], "installed")
-            with sqlite3.connect(self.admission) as db:
+            with closing(sqlite3.connect(self.admission)) as db, db:
                 row = db.execute(
                     "SELECT session, enabled, token FROM leases WHERE session=?",
                     ("fixture-manual",),
@@ -648,6 +664,35 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertIn("invalid current", failed["error"])
         self.assertEqual(launcher.read_bytes(), before)
         self.assertFalse((self.root / "launcher.next").exists())
+
+    def test_manual_enable_installs_native_plugin_and_persists_manual_state(self):
+        args = SimpleNamespace(
+            source_root=self.remote,
+            root=self.root,
+            settings=self.settings,
+            channel="main",
+            schedule="manual",
+        )
+        with (
+            patch("auto_update.Updater", LocalUpdater),
+            patch("auto_update.schedule_enable") as schedule,
+        ):
+            result = auto_update.enable(args)
+        schedule.assert_not_called()
+        self.assertEqual(result["status"], "manual")
+        self.assertEqual(result["schedule"]["mode"], "manual")
+        self.assertIs(result["schedule"]["registered"], False)
+        launcher = Path(result["schedule"]["check_command"][1])
+        self.assertTrue(launcher.is_file())
+        settings = read(self.settings)
+        self.assertEqual(settings["schedule_mode"], "manual")
+        self.assertEqual(settings["schedule"], result["schedule"])
+        state = read(self.root / "state.json")
+        current = state["current"]
+        verified = LocalUpdater(self.settings).verify_native(
+            current["version"], current["plugin"]
+        )
+        self.assertEqual(verified["version"], current["version"])
 
 
 class UpdateIdleTests(unittest.TestCase):

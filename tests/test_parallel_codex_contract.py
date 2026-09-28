@@ -19,13 +19,18 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
-import stat
+from contextlib import closing
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from tests.process_fixtures import (
+    cleanup_temporary_directory,
+    extract_git_archive,
+    stop_owned_knowledge_service,
+)
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -133,6 +138,14 @@ def _user(text, stamp):
 
 class LaneCase(unittest.TestCase):
     def setUp(self):
+        self.platform_env = {
+            key: os.environ[key]
+            for key in (
+                "PATH", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT",
+                "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
+            )
+            if key in os.environ
+        }
         self.temp = tempfile.TemporaryDirectory(dir=_test_root())
         self.root = _refuse_user_config(self.temp.name)
         self.home = self.root / "home"
@@ -188,38 +201,20 @@ class LaneCase(unittest.TestCase):
         self.sessions = Sessions(self.config)
 
     def _stop_owned_engine(self):
-        """Stop a service this test's engine path started. Not a global pkill."""
-        engine = str(self.engine)
-        try:
-            listing = subprocess.run(
-                ["ps", "-ax", "-o", "pid=,command="],
-                capture_output=True, text=True, timeout=5, check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return
-        me = os.getpid()
-        for line in listing.stdout.splitlines():
-            pid_text, sep, command = line.strip().partition(" ")
-            if not sep:
-                continue
-            try:
-                pid = int(pid_text)
-            except ValueError:
-                continue
-            if pid == me or engine not in command:
-                continue
-            os.kill(pid, 15)
+        """Stop only the service reached through this fixture's engine file."""
+        stop_owned_knowledge_service(self.engine)
 
     def tearDown(self):
         self._stop_owned_engine()
         session_gate.bind_explicit_config(None)
         tempfile.tempdir = None
         self.env_patch.stop()
-        self.temp.cleanup()
+        cleanup_temporary_directory(self.temp)
 
     def child_env(self, **extra):
-        env = {
-            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        env = dict(self.platform_env)
+        env.update({
+            "PATH": env.get("PATH", os.defpath),
             "HOME": str(self.home),
             "TMPDIR": str(self.root / "tmp"),
             "XDG_CONFIG_HOME": str(self.root / "xdg-config"),
@@ -233,7 +228,15 @@ class LaneCase(unittest.TestCase):
             "PYTHONNOUSERSITE": "1",
             "PYTHONDONTWRITEBYTECODE": "1",
             "CODEX_THREAD_ID": "task-main",
-        }
+        })
+        if os.name == "nt":
+            env.update(
+                USERPROFILE=str(self.home),
+                HOMEDRIVE=self.home.drive,
+                HOMEPATH=str(self.home)[len(self.home.drive):],
+                TMP=str(self.root / "tmp"),
+                TEMP=str(self.root / "tmp"),
+            )
         for key in ("MINDIE_KIMI_REPO", "MINDIE_CORE_REPO"):
             if key in os.environ:
                 env[key] = os.environ[key]
@@ -774,11 +777,7 @@ class AuthorityMigrationTests(LaneCase):
         )
         snapshot = self.root / "core-snapshot"
         snapshot.mkdir()
-        archived = subprocess.run(
-            ["git", "-C", str(core_repo), "archive", CORE_COMMIT],
-            check=True, capture_output=True,
-        )
-        subprocess.run(["tar", "-x", "-C", str(snapshot)], input=archived.stdout, check=True)
+        extract_git_archive(core_repo, CORE_COMMIT, snapshot)
         legacy = self.root / "legacy-enabled.json"
         legacy.write_text(json.dumps({
             "schema": "mindie-community-config/1",
@@ -1001,9 +1000,12 @@ class AuthorityMigrationTests(LaneCase):
         self.write_community(enabled=True)
         before = self.community.read_bytes()
         marker = self.root / "runtime-spawned"
-        wrapper = self.root / "not-a-runtime"
-        wrapper.write_text("#!/bin/sh\necho spawned >> '%s'\nexit 86\n" % marker)
-        wrapper.chmod(0o755)
+        wrapper = self.root / "not-a-runtime.py"
+        wrapper.write_text(
+            "from pathlib import Path\n"
+            f"Path({str(marker)!r}).open('a').write('spawned\\n')\n"
+            "raise SystemExit(86)\n"
+        )
         adapter = json.loads(self.config.read_text())
         adapter["python"] = str(wrapper)
         self.config.write_text(json.dumps(adapter))
@@ -1039,12 +1041,18 @@ class AuthorityMigrationTests(LaneCase):
         self.config.write_text(json.dumps(adapter))
         self.community.write_text("{not-the-other-file")
         # Specified shared path exists, so a reader must not go looking for
-        # the other enabled document. Force the shared path to be unreadable.
-        self.community.chmod(0)
-        try:
+        # the other enabled document. POSIX mode bits exercise unreadability;
+        # Windows mode bits cannot deny access, so malformed bytes below still
+        # cover fail-closed authority selection there. Native ACL denial stays
+        # an explicit Windows acceptance gap.
+        if os.name == "posix":
+            self.community.chmod(0)
+            try:
+                view = sharing.read(self.config)
+            finally:
+                self.community.chmod(0o600)
+        else:
             view = sharing.read(self.config)
-        finally:
-            self.community.chmod(0o600)
         self.assertIsNone(view)
         self.assertFalse(sharing.capture_allowed(
             {"project_root": str(self.work), "root_session": "t", "activated_at": 1},
@@ -1071,7 +1079,12 @@ class AuthorityMigrationTests(LaneCase):
         profile directory cannot create the shared sibling. It is not a
         fallback onto some third file, and it must not pretend migration ran.
         """
-        if os.geteuid() == 0:
+        if os.name != "posix":
+            self.skipTest(
+                "POSIX mode-bit write denial; Windows ACL denial is not exercised "
+                "by this fixture (authority and preservation checks run elsewhere)"
+            )
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
             self.skipTest("root ignores the directory mode used below")
         legacy = self.root / "legacy-enabled.json"
         self._legacy_enabled(legacy, [self.work])
@@ -1094,7 +1107,12 @@ class AuthorityMigrationTests(LaneCase):
         self.assertTrue(allowed)
 
     def test_explicit_migration_failure_does_not_claim_success(self):
-        if os.geteuid() == 0:
+        if os.name != "posix":
+            self.skipTest(
+                "POSIX mode-bit write denial; Windows ACL denial is not exercised "
+                "by this fixture (authority and preservation checks run elsewhere)"
+            )
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
             self.skipTest("root ignores the directory mode used to fail the copy")
         legacy = self.root / "outside" / "legacy-enabled.json"
         legacy.parent.mkdir()
@@ -1121,16 +1139,19 @@ class AuthorityMigrationTests(LaneCase):
         self.write_community(enabled=True, roots=[self.work])
         narrow_roots = json.loads(self.community.read_text())["project_roots"]
         self.config.write_text(json.dumps(dict(self.adapter, community_config=str(wide))))
-        self.community.chmod(0)
-        try:
-            self.assertIsNone(sharing.read(self.config))
-            self.assertFalse(sharing.capture_allowed(
-                {"project_root": str(self.work), "root_session": "t", "activated_at": 1.0},
-                str(self.work),
-                self.config,
-            ))
-        finally:
-            self.community.chmod(0o600)
+        if os.name == "posix":
+            self.community.chmod(0)
+            try:
+                self.assertIsNone(sharing.read(self.config))
+                self.assertFalse(sharing.capture_allowed(
+                    {"project_root": str(self.work), "root_session": "t", "activated_at": 1.0},
+                    str(self.work),
+                    self.config,
+                ))
+            finally:
+                self.community.chmod(0o600)
+        # On Windows the following malformed-byte case remains active; chmod
+        # does not provide a file ACL denial test.
         self.community.write_text("{not-json")
         self.assertIsNone(sharing.read(self.config))
         self.assertEqual(sharing.configured_path(self.config), self.community)
@@ -1246,14 +1267,8 @@ class CrossAdapterTests(LaneCase):
             "MINDIE_KIMI_REPO",
             "loading the kimi adapter scripts at " + KIMI_COMMIT,
         )
-        archive = subprocess.run(
-            ["git", "-C", str(kimi_repo), "archive", KIMI_COMMIT, "scripts"],
-            check=True,
-            capture_output=True,
-        )
         extracted = self.root / "kimi-adapter"
-        extracted.mkdir()
-        subprocess.run(["tar", "-x", "-C", str(extracted)], input=archive.stdout, check=True)
+        extract_git_archive(kimi_repo, KIMI_COMMIT, extracted, "scripts")
         sibling = self.root / "kimi.json"
         sibling.write_text("{}\n")
 
@@ -1369,11 +1384,10 @@ class RemoteIsolationTests(LaneCase):
     def test_remote_survives_knowledge_failure_and_forks_do_not_share_receipts(self):
         import mcp_gate
 
-        wrapper = self.root / "runtime-python"
+        wrapper = self.root / "runtime-python.py"
         marker = self.root / "runtime-calls.jsonl"
         real = PY
         wrapper.write_text(
-            "#!" + real + "\n"
             "import json, os, sys\n"
             "from pathlib import Path\n"
             f"real = {real!r}\n"
@@ -1390,7 +1404,6 @@ class RemoteIsolationTests(LaneCase):
             "    raise SystemExit(0)\n"
             "os.execv(real, [real, *argv])\n"
         )
-        wrapper.chmod(wrapper.stat().st_mode | stat.S_IEXEC)
         adapter = json.loads(self.config.read_text())
         adapter["python"] = str(wrapper)
         self.config.write_text(json.dumps(adapter))
@@ -1439,8 +1452,10 @@ class RemoteIsolationTests(LaneCase):
         child_db = self.remote_state / "gate" / "child-task.sqlite3"
         self.assertTrue(parent_db.is_file(), list((self.remote_state / "gate").glob("*")))
         self.assertTrue(child_db.is_file())
-        parent_ids = sqlite3.connect(parent_db).execute("SELECT identity FROM attempts").fetchall()
-        child_ids = sqlite3.connect(child_db).execute("SELECT identity FROM attempts").fetchall()
+        with closing(sqlite3.connect(parent_db)) as db:
+            parent_ids = db.execute("SELECT identity FROM attempts").fetchall()
+        with closing(sqlite3.connect(child_db)) as db:
+            child_ids = db.execute("SELECT identity FROM attempts").fetchall()
         self.assertTrue(parent_ids)
         self.assertTrue(child_ids)
         self.assertEqual(set(parent_ids) & set(child_ids), set())
@@ -1471,7 +1486,7 @@ class CandidateResolutionTests(LaneCase):
         }
 
     def test_same_version_old_bytes_fail_acceptance(self):
-        from auto_update import Updater, atomic
+        from auto_update import Updater, atomic, stop_hook_commands
 
         candidate = self.root / "candidate-plugin"
         cache_version = self.codex_home / "plugins/cache/mindie-agent/mindie-agent/1.4.0"
@@ -1510,13 +1525,16 @@ class CandidateResolutionTests(LaneCase):
             accepted = None
             refusal = f"{type(exc).__name__}: {exc}"
         resolved = self._hashes(cache_version)
-        hook = json.loads((PLUGIN / "hooks/hooks.json").read_text())["hooks"]["Stop"][0]["hooks"][0]
+        hook = stop_hook_commands(
+            [PY, str(cache_version / "scripts/bridge.py"), "stop"]
+        )
         ran = subprocess.run(
-            ["/bin/sh", "-c", hook["command"]],
+            hook["commandWindows" if os.name == "nt" else "command"],
             input="{}",
             text=True,
             capture_output=True,
             timeout=5,
+            shell=True,
             env=self.child_env(PLUGIN_ROOT=str(cache_version)),
         )
         self.assertEqual(ran.returncode, 0, ran.stderr)

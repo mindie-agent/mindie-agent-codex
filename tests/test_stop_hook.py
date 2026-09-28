@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -18,17 +19,23 @@ PLUGIN = ROOT / "plugins/mindie-agent"
 STOP = json.loads((PLUGIN / "hooks/hooks.json").read_text())["hooks"]["Stop"][0][
     "hooks"
 ][0]
+sys.path.insert(0, str(ROOT / "plugins/mindie-agent/scripts"))
+from auto_update import stop_hook_commands
 
 
 class StopHookTests(unittest.TestCase):
-    def run_stop(self, plugin, **env):
+    def run_stop(self, plugin, *, python=None, **env):
         event = {"session_id": "hook-regression", "last_assistant_message": "Done"}
+        command = stop_hook_commands(
+            [python or sys.executable, str(plugin / "scripts/bridge.py"), "stop"]
+        )["commandWindows" if os.name == "nt" else "command"]
         result = subprocess.run(
-            ["/bin/sh", "-c", STOP["command"]],
+            command,
             input=json.dumps(event),
             text=True,
             capture_output=True,
             timeout=STOP["timeout"],
+            shell=True,
             env={**os.environ, "PLUGIN_ROOT": str(plugin), **env},
         )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -43,7 +50,11 @@ class StopHookTests(unittest.TestCase):
 
     def test_missing_interpreter_does_not_resume_conversation(self):
         with tempfile.TemporaryDirectory() as root:
-            self.run_stop(PLUGIN, PATH=root)
+            self.run_stop(
+                PLUGIN,
+                python=str(Path(root) / "missing-python.exe"),
+                PATH=root,
+            )
 
     def test_bridge_failures_and_outputs_cannot_control_conversation(self):
         for code in (0, 1, 2, 127):
@@ -57,7 +68,7 @@ class StopHookTests(unittest.TestCase):
                     "print('capture failure', file=sys.stderr)\n"
                     f"raise SystemExit({code})\n"
                 )
-                self.run_stop(plugin)
+                self.run_stop(plugin, python=sys.executable)
 
     def test_success_still_delivers_event_once(self):
         with tempfile.TemporaryDirectory() as root:
@@ -72,7 +83,9 @@ class StopHookTests(unittest.TestCase):
                 "    stream.write(sys.stdin.read() + '\\n')\n"
                 "print('{}')\n"
             )
-            event = self.run_stop(plugin, HOOK_TEST_RECEIVED=str(received))
+            event = self.run_stop(
+                plugin, python=sys.executable, HOOK_TEST_RECEIVED=str(received)
+            )
             self.assertEqual(
                 [json.loads(line) for line in received.read_text().splitlines()], [event]
             )

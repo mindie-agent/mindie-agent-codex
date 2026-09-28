@@ -3,7 +3,6 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import stat
 import subprocess
 import sys
 import tempfile
@@ -11,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
+sys.path.insert(0, str(SCRIPTS))
 
 guard_spec = importlib.util.spec_from_file_location(
     "process_guard", SCRIPTS / "process_guard.py"
@@ -40,7 +40,10 @@ ORGANIZE = {
 
 
 def _worker_cli(payload, *, binary=None, extra_env=None, raw=None, timeout=5):
-    env = {**os.environ, "MINDIE_CODEX_BIN": binary or "/missing/codex-not-called"}
+    env = {
+        **os.environ,
+        "MINDIE_CODEX_BIN": binary or "/missing/codex-not-called",
+    }
     if extra_env:
         env.update(extra_env)
     data = raw if raw is not None else json.dumps(payload)
@@ -54,11 +57,41 @@ def _worker_cli(payload, *, binary=None, extra_env=None, raw=None, timeout=5):
     )
 
 
-def _stub_bin(directory, source):
-    path = Path(directory) / "codex-stub"
-    path.write_text("#!/usr/bin/env python3\n" + source)
-    path.chmod(path.stat().st_mode | stat.S_IEXEC)
-    return str(path)
+def _worker_cli_with_invoker(payload, behavior, *, timeout=5):
+    """Run the actual worker CLI with its native invoker replaced by Python code.
+
+    The Codex binary is a native executable contract. These cases test worker
+    result classification, so a Python subprocess drives the real worker CLI
+    and substitutes only the native invocation boundary.
+    """
+    driver = (
+        "import json,runpy,sys\n"
+        "from pathlib import Path\n"
+        f"sys.path.insert(0, {str(SCRIPTS)!r})\n"
+        "import process_guard\n"
+        "behavior, worker_path = sys.argv[1], sys.argv[2]\n"
+        "def invoke(command, prompt):\n"
+        " if behavior == 'native-error':\n"
+        "  raise process_guard.NativeFailure('private fixture failure')\n"
+        " output = command[command.index('--output-last-message') + 1]\n"
+        " if behavior == 'malformed':\n"
+        "  Path(output).write_text('not-json', encoding='utf-8')\n"
+        " elif behavior == 'over-limit':\n"
+        "  Path(output).write_text('x' * 40000, encoding='utf-8')\n"
+        " else:\n"
+        "  raise AssertionError('unknown fixture behavior')\n"
+        "process_guard.run_codex = invoke\n"
+        "sys.argv = [worker_path]\n"
+        "runpy.run_path(worker_path, run_name='__main__')\n"
+    )
+    return subprocess.run(
+        [sys.executable, "-c", driver, behavior, str(SCRIPTS / "agent_worker.py")],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+        env=dict(os.environ, MINDIE_CODEX_BIN="codex-fixture"),
+    )
 
 
 class OrganizerCategoryTests(unittest.TestCase):
@@ -110,40 +143,19 @@ class OrganizerCategoryTests(unittest.TestCase):
         self.assertNotIn("No such file", missing.stderr)
 
     def test_cli_native_error_event(self):
-        with tempfile.TemporaryDirectory() as directory:
-            binary = _stub_bin(
-                directory,
-                "import json,sys,time\n"
-                "print(json.dumps({'type':'error'}), flush=True)\n"
-                "time.sleep(10)\n",
-            )
-            result = _worker_cli(ORGANIZE, binary=binary)
+        result = _worker_cli_with_invoker(ORGANIZE, "native-error")
         self.assertEqual(result.returncode, 70)
         self.assertEqual(result.stderr.strip(), "organizer native invocation failed")
         self.assertNotIn("error", result.stdout)
 
     def test_cli_malformed_result_file(self):
-        with tempfile.TemporaryDirectory() as directory:
-            binary = _stub_bin(
-                directory,
-                "import sys\n"
-                "out=sys.argv[sys.argv.index('--output-last-message')+1]\n"
-                "open(out,'w').write('not-json')\n",
-            )
-            result = _worker_cli(ORGANIZE, binary=binary)
+        result = _worker_cli_with_invoker(ORGANIZE, "malformed")
         self.assertEqual(result.returncode, 65)
         self.assertEqual(result.stderr.strip(), "organizer result was invalid")
         self.assertNotIn("not-json", result.stderr)
 
     def test_cli_result_file_output_limit(self):
-        with tempfile.TemporaryDirectory() as directory:
-            binary = _stub_bin(
-                directory,
-                "import sys\n"
-                "out=sys.argv[sys.argv.index('--output-last-message')+1]\n"
-                "open(out,'w').write('x'*40000)\n",
-            )
-            result = _worker_cli(ORGANIZE, binary=binary)
+        result = _worker_cli_with_invoker(ORGANIZE, "over-limit")
         self.assertEqual(result.returncode, 75)
         self.assertEqual(result.stderr.strip(), "organizer output exceeded the bound")
         self.assertNotIn("xxxx", result.stderr)
@@ -176,12 +188,10 @@ class OrganizerCategoryTests(unittest.TestCase):
         with self.assertRaises(guard.InvalidResultError):
             guard.run_codex([sys.executable, "-c", "print('{\"type\":\"item.started\",\"item\":[]}')"], "input")
 
-    @unittest.skipUnless(os.name == "posix", "requires POSIX exec format errors")
     def test_unlaunchable_format_is_configuration(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "not-an-executable-format"
+            path = Path(directory) / "not-an-executable-format.exe"
             path.write_text("PRIVATE_INVALID_BINARY_MARKER")
-            path.chmod(0o700)
             result = _worker_cli(ORGANIZE, binary=str(path))
         self.assertEqual(result.returncode, 78)
         self.assertEqual(result.stderr.strip(), "organizer configuration failed")

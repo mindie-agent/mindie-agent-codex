@@ -1,17 +1,18 @@
 """One attempt with an absolute deadline and bounded output; own the child tree.
 
 POSIX reads pipes with a selector and kills the owned process group. Windows
-cannot select() process pipes, so it uses two daemon reader threads and kills
-the tree with taskkill /T. The Windows path uses only standard primitives but
-has not been verified on real hardware yet.
+uses a suspended spawn and owned Job before child code can create descendants.
 """
 
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import threading
 import time
+
+import windows_process
 
 POSIX = os.name == "posix"
 
@@ -30,13 +31,12 @@ def _spawn(command, stdin, env):
             start_new_session=True,
             env=env,
         )
-    # Windows (unverified on real hardware).
-    return subprocess.Popen(
+    # Windows assigns the process to its Job before resuming user code.
+    return windows_process.spawn(
         command,
         stdin=stdin,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
         env=env,
     )
 
@@ -48,13 +48,7 @@ def _kill_tree(process):
         except ProcessLookupError:
             pass
         return
-    # Windows (unverified on real hardware): /T covers owned descendants.
-    if process.poll() is None:
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
-            capture_output=True,
-            timeout=5,
-        )
+    windows_process.close_tree(process)
 
 
 class _Cap:
@@ -312,11 +306,18 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
         return bytes(output).decode()
     finally:
         _kill_tree(process)
-        process.wait(timeout=1)
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=1)
         for thread in threads:
-            thread.join(timeout=1)
-        process.stdout.close()
-        process.stderr.close()
+            thread.join(timeout=0.5)
+        # The Job is closed before readers or their pipe objects are touched.
+        # This releases descendants which kept inherited pipe handles open.
+        if all(not thread.is_alive() for thread in threads):
+            process.stdout.close()
+            process.stderr.close()
 
 
 def run(command, data, *, timeout, max_output=1024 * 1024, cancel=None, env=None, allowed_returncodes=(0,), transport=False):

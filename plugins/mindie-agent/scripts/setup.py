@@ -28,51 +28,13 @@ import time
 
 from bounded_process import run
 import consent
+from runtime_probe import PROBE_MODULES, SETUP_FTS_PROBE as _FTS_PROBE, build_probe_script
 import sharing
 
 SCRIPTS = Path(__file__).parent.absolute()
 
-# The configured interpreter must carry the exact runtime pins,
-# matching the actual new package APIs; the updater's capability probe covers
-# deeper runtime behavior.
-PROBE_MODULES = (
-    "mindie_knowledge.loop.cli",
-    "mindie_knowledge.loop.documents",
-    "mindie_knowledge.loop.activation",
-    "remote_dev.mcp.server",
-)
+# Setup and updater use the same API and SQLite capability contract.
 PROBE_TIMEOUT = 15
-
-ADMISSION_METHODS = ("activate", "check", "resolve", "claim", "finish", "deactivate")
-
-# In-memory only. contentless_delete=1 is SQLite >= 3.43 and an FTS5 build.
-_FTS_PROBE = r"""
-import sqlite3
-_fts = None
-try:
-    _fts = sqlite3.connect(":memory:")
-    _fts.execute("CREATE VIRTUAL TABLE probe USING fts5(body, content='', contentless_delete=1)")
-    _fts.execute("INSERT INTO probe(rowid, body) VALUES (1, 'alpha')")
-    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'alpha'").fetchall() != [(1,)]:
-        raise RuntimeError("insert MATCH failed")
-    _fts.execute("UPDATE probe SET body='beta' WHERE rowid=1")
-    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'beta'").fetchall() != [(1,)]:
-        raise RuntimeError("update MATCH failed")
-    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'alpha'").fetchall():
-        raise RuntimeError("stale MATCH survived update")
-    _fts.execute("DELETE FROM probe WHERE rowid=1")
-    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'beta'").fetchall():
-        raise RuntimeError("delete MATCH failed")
-except Exception as exc:
-    missing.insert(0, (
-        "sqlite " + sqlite3.sqlite_version
-        + " lacks FTS5 contentless_delete=1 (SQLite >=3.43.0): "
-        + type(exc).__name__ + ": " + str(exc)[:160]
-    ))
-finally:
-    if _fts is not None:
-        _fts.close()
-"""
 
 
 def probe_runtime(python):
@@ -82,37 +44,7 @@ def probe_runtime(python):
     ``load_transcript_adapter`` (registers the module before exec). This
     process does not grow a second dynamic importer.
     """
-    adapter = str(SCRIPTS / "codex_transcript.py")
-    script = (
-        "import importlib, inspect\n"
-        "missing = []\n"
-        f"for name in {list(PROBE_MODULES)!r}:\n"
-        "    try:\n"
-        "        importlib.import_module(name)\n"
-        "    except Exception as exc:\n"
-        "        missing.append(f'{name} ({type(exc).__name__}: {exc})')\n"
-        "if not missing:\n"
-        "    from mindie_knowledge.loop.activation import Admission\n"
-        "    from mindie_knowledge.loop.cli import load_transcript_adapter\n"
-        "    if 'path' not in inspect.signature(Admission.__init__).parameters:\n"
-        "        missing.append('Admission does not take an explicit admission path')\n"
-        f"    for method in {ADMISSION_METHODS!r}:\n"
-        "        if not hasattr(Admission, method):\n"
-        "            missing.append('Admission lacks ' + method)\n"
-        f"    adapter = {adapter!r}\n"
-        "    try:\n"
-        "        module = load_transcript_adapter({'transcript_adapter': adapter})\n"
-        "        if module is None:\n"
-        "            missing.append('load_transcript_adapter returned None')\n"
-        "        else:\n"
-        "            for name in ('FileIdentity', 'identify', 'read_material'):\n"
-        "                if not hasattr(module, name):\n"
-        "                    missing.append('transcript adapter lacks ' + name)\n"
-        "    except Exception as exc:\n"
-        "        missing.append(f'transcript adapter ({type(exc).__name__}: {exc})')\n"
-        + _FTS_PROBE
-        + "print('MISSING: ' + '; '.join(missing) if missing else 'OK')\n"
-    )
+    script = build_probe_script(SCRIPTS / "codex_transcript.py")
     try:
         output = run([python, "-c", script], "", timeout=PROBE_TIMEOUT)
     except Exception as exc:

@@ -3,11 +3,13 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+from contextlib import closing
 import subprocess
 import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from tests.process_fixtures import cleanup_temporary_directory
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
 sys.path.insert(0, str(SCRIPTS))
@@ -30,7 +32,7 @@ class GeneralRemoteTests(unittest.TestCase):
 
     def tearDown(self):
         self.env.stop()
-        self.temp.cleanup()
+        cleanup_temporary_directory(self.temp)
 
     def request(self, identity=1, turn='turn-1', session='task-A'):
         return {'id': identity, 'params': {'name': 'remote_bash', 'arguments': {'command': 'true', 'host': 'example.invalid'}, '_meta': {'threadId': session, 'x-codex-turn-metadata': {'thread_id': session, 'session_id': session, 'turn_id': turn}}}}
@@ -108,7 +110,7 @@ class GeneralRemoteTests(unittest.TestCase):
             self.assertFalse(gate.call(request)['isError'])
             self.assertTrue(gate.call(request)['isError'])
             self.assertEqual(dispatch.call_count, 1)
-        with sqlite3.connect(receipts.path) as db:
+        with closing(sqlite3.connect(receipts.path)) as db:
             rows = db.execute('SELECT identity, status FROM attempts').fetchall()
         self.assertIn((old, 'failed'), rows)
         self.assertFalse(receipts.claim(old))
@@ -169,7 +171,7 @@ class GeneralRemoteTests(unittest.TestCase):
                     process.wait(timeout=5)
         self.assertEqual(len(accepted), 2)
         receipts = mcp_gate.RemoteReceipts('task-A')
-        with sqlite3.connect(receipts.path) as db:
+        with closing(sqlite3.connect(receipts.path)) as db:
             rows = db.execute("SELECT identity, status FROM attempts WHERE identity LIKE 'turn-1:%'").fetchall()
         self.assertEqual(len(rows), 2)
         self.assertEqual({status for _identity, status in rows}, {'succeeded'})
@@ -202,7 +204,7 @@ class GeneralRemoteTests(unittest.TestCase):
             self.assertTrue(receipts.claim(str(i)))
             receipts.finish(str(i), True)
         self.assertFalse(receipts.claim('0'))
-        with sqlite3.connect(receipts.path) as db:
+        with closing(sqlite3.connect(receipts.path)) as db:
             self.assertEqual(db.execute('SELECT count(*) FROM attempts').fetchone()[0], 4100)
 
     def test_remote_runtime_uses_separate_job_roots(self):

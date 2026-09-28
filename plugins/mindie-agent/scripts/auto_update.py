@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Bounded, model-free MindIE updates. Main now; stable GitHub releases later.
 
-Scheduling has a platform boundary: macOS uses a user LaunchAgent, Windows a
-scheduled task (implemented, not yet verified on real hardware). Filesystem
-publishing uses an atomic symlink swap on POSIX; on Windows it uses an
-unprivileged directory junction with a non-atomic swap covered by the
-transaction journal (likewise unverified on real hardware).
+Scheduling uses a per-user LaunchAgent on macOS, Task Scheduler on Windows,
+and a systemd user timer on Linux. Filesystem publishing uses an atomic
+symlink swap on POSIX; on Windows it uses an unprivileged directory junction
+with a non-atomic swap covered by the transaction journal. Native Windows
+Codex acceptance remains to be recorded separately.
 """
 
 import argparse
@@ -28,6 +28,7 @@ import urllib.error
 import urllib.request
 
 from bounded_process import classify_transport_text, run
+from runtime_probe import UPDATER_FTS_PROBE as _FTS_PROBE, build_probe_script
 from session_gate import config_path, runtime_scripts
 from update_lock import file_lock, update_lock
 
@@ -43,6 +44,8 @@ CONTRACT = dict(
 )
 LABEL = "org.mindie-agent.plugin-updater"
 WIN_TASK = "MindIE Agent Plugin Updater"
+SYSTEMD_SERVICE = "mindie-agent-updater.service"
+SYSTEMD_TIMER = "mindie-agent-updater.timer"
 INTERVAL = 300
 TOTAL_TIMEOUT = 240
 ATTEMPTS = 3
@@ -156,6 +159,21 @@ def atomic(path, value):
         with os.fdopen(fd, "w") as stream:
             json.dump(value, stream, indent=2)
             stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+def atomic_text(path, value):
+    """Publish a complete updater-owned text file by same-directory replace."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=".update-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(value)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(name, path)
@@ -340,38 +358,17 @@ def venv_python(venv):
     return venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
-# In-memory only. Capability failure exits 0 so stdout keeps the diagnostic.
-# Import and API failures above this snippet still exit nonzero.
-_FTS_PROBE = r"""
-import sqlite3
-_fts = None
-try:
-    _fts = sqlite3.connect(":memory:")
-    _fts.execute("CREATE VIRTUAL TABLE probe USING fts5(body, content='', contentless_delete=1)")
-    _fts.execute("INSERT INTO probe(rowid, body) VALUES (1, 'alpha')")
-    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'alpha'").fetchall() != [(1,)]:
-        raise RuntimeError("insert MATCH failed")
-    _fts.execute("UPDATE probe SET body='beta' WHERE rowid=1")
-    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'beta'").fetchall() != [(1,)]:
-        raise RuntimeError("update MATCH failed")
-    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'alpha'").fetchall():
-        raise RuntimeError("stale MATCH survived update")
-    _fts.execute("DELETE FROM probe WHERE rowid=1")
-    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'beta'").fetchall():
-        raise RuntimeError("delete MATCH failed")
-except Exception as exc:
-    print(
-        "MISSING: sqlite " + sqlite3.sqlite_version
-        + " lacks FTS5 contentless_delete=1 (SQLite >=3.43.0): "
-        + type(exc).__name__ + ": " + str(exc)[:160],
-        flush=True,
-    )
-else:
-    print("OK")
-finally:
-    if _fts is not None:
-        _fts.close()
-"""
+def stop_hook_commands(argv):
+    """Build shell commands that always complete a non-blocking Stop hook.
+
+    Codex accepts a Windows-specific command override. The POSIX command and
+    its Windows counterpart both discard helper output and print normal hook
+    completion even when the child executable is absent or fails.
+    """
+    argv = [str(value) for value in argv]
+    posix = shlex.join(argv) + " >/dev/null 2>&1; printf '{}\\n'"
+    windows = subprocess.list2cmdline(argv) + " >NUL 2>&1 & echo {}"
+    return {"command": posix, "commandWindows": windows, "timeout": 2}
 
 
 class Updater:
@@ -500,6 +497,7 @@ class Updater:
             "mcp_gate.py",
             "update_lock.py",
             "bounded_process.py",
+            "windows_process.py",
             "runtime_call.py",
             "admission_ops.py",
             "codex_transcript.py",
@@ -536,43 +534,19 @@ class Updater:
         ):
             raise Incompatible("invalid runtime package combination")
 
-    def probe_runtime(self, python):
-        # The probe must match the actual new package APIs (persistent core
-        # admission, adapter-owned transcript parser, stop_if_idle). Knowledge
-        # tools live in the adapter catalogue, not a retired core TOOLS list.
-        # Production installs only the exact official remote pins.
-        # command() allows only exit 0. A nonzero child is rejected even if it
-        # already printed OK. FTS failure is exit 0 and one stdout diagnostic.
+    def probe_runtime(self, python, scripts=None):
+        """Check the full installed-runtime contract before any native install.
+
+        Setup and the updater share one probe definition. ``scripts`` selects
+        the source generation's adapter-owned transcript parser while a
+        candidate is being prepared.
+        """
+        scripts = Path(scripts or Path(__file__).parent)
         output = self.command(
             [
                 python,
                 "-c",
-                "\n".join(
-                    [
-                        "import inspect, math",
-                        "from mindie_knowledge.loop.cli import STARTUP_TIMEOUT, MAX_STARTUP_PROBES, load_transcript_adapter",
-                        "from mindie_knowledge.loop.activation import Admission",
-                        "from mindie_knowledge.loop.budget import MaintenanceBudget as B",
-                        "from mindie_knowledge.loop.engine import Engine",
-                        "from mindie_knowledge.loop.transport import Service",
-                        "from mindie_knowledge.loop import documents",
-                        "from mindie_knowledge.community import submit_batch, reconcile_batch",
-                        "from remote_dev.mcp.tools import call_tool",
-                        "assert callable(load_transcript_adapter)",
-                        "assert callable(call_tool)",
-                        "assert callable(Engine.stop_if_idle)",
-                        "assert callable(getattr(Service, '_stop_if_idle', None))",
-                        "assert all(hasattr(documents, n) for n in ('render_entry', 'parse_entry', 'revision_of'))",
-                        "assert 'path' in inspect.signature(Admission.__init__).parameters",
-                        "assert all(hasattr(Admission, n) for n in ('activate', 'check', 'resolve', 'claim', 'finish', 'deactivate', 'capture_lease', 'active_lease', 'scope_root', 'allows_hash', 'leases'))",
-                        "assert 'admission' in inspect.signature(Service).parameters",
-                        "assert all(type(getattr(B, n)) is int and getattr(B, n) > 0 for n in ('SESSION_LIMIT', 'HOURLY_LIMIT', 'FAILURE_LIMIT'))",
-                        "assert type(B.SESSION_WINDOW) in (int, float) and math.isfinite(B.SESSION_WINDOW) and B.SESSION_WINDOW > 0",
-                        "assert type(STARTUP_TIMEOUT) in (int, float) and math.isfinite(STARTUP_TIMEOUT) and STARTUP_TIMEOUT > 0",
-                        "assert type(MAX_STARTUP_PROBES) is int and MAX_STARTUP_PROBES > 0",
-                        _FTS_PROBE,
-                    ]
-                ),
+                build_probe_script(scripts / "codex_transcript.py"),
             ],
             timeout=15,
         )
@@ -627,7 +601,7 @@ class Updater:
             timeout=120,
             transport=True,
         )
-        self.probe_runtime(python)
+        self.probe_runtime(python, source / "plugins/mindie-agent/scripts")
         return self.package(generation, source, python, sha)
 
     def package(self, generation, source, python, revision):
@@ -679,13 +653,6 @@ class Updater:
             config_value,
             "stop",
         ]
-        if os.name == "nt":
-            # Explicit cmd boundary works even if the host uses PowerShell.
-            # echo runs after missing executables/paths and masks hook failures.
-            inner = subprocess.list2cmdline(argv) + " >NUL 2>&1 & echo {}"
-            command = 'cmd.exe /d /s /c "' + inner + '"'
-        else:
-            command = shlex.join(argv) + " >/dev/null 2>&1; printf '{}\\n'"
         atomic(
             plugin / "hooks/hooks.json",
             {
@@ -693,7 +660,7 @@ class Updater:
                     "Stop": [
                         {
                             "hooks": [
-                                {"type": "command", "command": command, "timeout": 2}
+                                {"type": "command", **stop_hook_commands(argv)}
                             ]
                         }
                     ]
@@ -1580,7 +1547,144 @@ def _task_state(updater, task, timeout=20):
     return ("present" if count else "absent"), ""
 
 
-def schedule_enable(updater, launcher, settings_path):
+def _systemd_state(updater, timer=SYSTEMD_TIMER, timeout=5):
+    """Read exact user timer state; manager or parse faults stay unknown."""
+    try:
+        code, stdout, stderr = _native_run(
+            updater,
+            [
+                "systemctl", "--user", "show", timer,
+                "--property=LoadState", "--property=ActiveState",
+                "--property=UnitFileState", "--no-pager",
+            ],
+            timeout,
+        )
+    except (OSError, TimeoutError, subprocess.TimeoutExpired) as exc:
+        return "unknown", f"{type(exc).__name__}: {exc}"[:240]
+    if code != 0:
+        return "unknown", (stderr or "").strip()[:240] or f"systemctl exited {code}"
+    props = {}
+    for line in (stdout or "").splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key in {"LoadState", "ActiveState", "UnitFileState"}:
+            props[key] = value.strip()
+    if set(props) != {"LoadState", "ActiveState", "UnitFileState"}:
+        return "unknown", "unparseable systemd timer properties"
+    if props["LoadState"] == "not-found":
+        return "absent", ""
+    if props["LoadState"] != "loaded":
+        return "unknown", "unexpected LoadState=" + props["LoadState"]
+    detail = ";".join(f"{key}={props[key]}" for key in sorted(props))
+    if (
+        props["ActiveState"] == "active"
+        and props["UnitFileState"] in {"enabled", "enabled-runtime"}
+    ):
+        return "active", detail
+    return "present", detail
+
+
+def _systemd_property(detail, name):
+    for item in detail.split(";"):
+        key, sep, value = item.partition("=")
+        if sep and key == name:
+            return value
+    return None
+
+
+def _systemd_quote(value):
+    value = str(value)
+    if any(character in value for character in ("\0", "\n", "\r")):
+        raise ValueError("systemd command paths cannot contain newlines")
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'
+
+
+def _systemd_user_root(schedule_root=None):
+    if schedule_root is not None:
+        return Path(schedule_root).expanduser().absolute()
+    config_home = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(config_home).expanduser() if config_home else Path.home() / ".config"
+    return (base / "systemd/user").absolute()
+
+
+def _validate_systemd_paths(timer_path, service_path):
+    for label, path in (("timer", timer_path), ("service", service_path)):
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise RuntimeError(
+                f"refusing to replace a non-file systemd {label} path"
+            )
+
+
+def _schedule_preflight(updater):
+    """Prove this user's scheduler is reachable before registering a plugin."""
+    if sys.platform == "darwin":
+        state, detail = _launchd_state(updater, LABEL)
+    elif os.name == "nt":
+        state, detail = _task_state(updater, WIN_TASK)
+    elif sys.platform.startswith("linux"):
+        state, detail = _systemd_state(updater)
+    else:
+        raise ValueError(
+            "automatic scheduling is supported on macOS, Windows, and Linux "
+            "with a per-user systemd manager; use --schedule manual elsewhere"
+        )
+    if state == "unknown":
+        raise RuntimeError(
+            "the per-user update scheduler is unavailable or its state is "
+            f"unproven ({detail or 'query failed'}); rerun with --schedule manual"
+        )
+
+
+def _schedule_systemd_enable(updater, launcher, settings_path, *, schedule_root=None,
+                             timer=SYSTEMD_TIMER, service=SYSTEMD_SERVICE):
+    root = _systemd_user_root(schedule_root)
+    timer_path = root / timer
+    service_path = root / service
+    _validate_systemd_paths(timer_path, service_path)
+    state, detail = _systemd_state(updater, timer)
+    if state == "unknown":
+        raise RuntimeError(f"systemd timer state unproven: {detail}")
+    service_text = "\n".join((
+        "[Unit]",
+        "Description=MindIE Agent plugin update check",
+        "",
+        "[Service]",
+        "Type=oneshot",
+        "ExecStart=" + " ".join(_systemd_quote(arg) for arg in (
+            updater.settings["python"], str(launcher), str(settings_path),
+        )),
+        "",
+    ))
+    timer_text = "\n".join((
+        "[Unit]",
+        "Description=Check for MindIE Agent plugin updates every five minutes",
+        "",
+        "[Timer]",
+        "OnBootSec=2min",
+        "OnUnitActiveSec=5min",
+        f"Unit={service}",
+        "",
+        "[Install]",
+        "WantedBy=timers.target",
+        "",
+    ))
+    atomic_text(service_path, service_text)
+    atomic_text(timer_path, timer_text)
+    code, _, stderr = _native_run(updater, ["systemctl", "--user", "daemon-reload"], 10)
+    if code:
+        raise RuntimeError("systemd daemon-reload failed: " + (stderr or "").strip()[:200])
+    code, _, stderr = _native_run(
+        updater, ["systemctl", "--user", "enable", "--now", timer], 15
+    )
+    state, detail = _systemd_state(updater, timer)
+    if state != "active":
+        raise RuntimeError(
+            "systemd timer registration unproven"
+            + (f" ({detail or (stderr or '').strip()[:200]})" if detail or stderr else "")
+        )
+    return f"systemd user timer: {timer}"
+
+
+def schedule_enable(updater, launcher, settings_path, *, schedule_root=None):
     """Register the periodic check with the platform scheduler."""
     if sys.platform == "darwin":
         plist = Path.home() / "Library/LaunchAgents" / (LABEL + ".plist")
@@ -1632,12 +1736,23 @@ def schedule_enable(updater, launcher, settings_path):
             ],
             timeout=15,
         )
+        state, detail = _task_state(updater, WIN_TASK)
+        if state != "present":
+            raise RuntimeError(
+                "scheduled task registration unproven"
+                + (f" ({detail})" if detail else "")
+            )
         return WIN_TASK
-    raise ValueError("automatic scheduling requires macOS launchd or Windows schtasks")
+    if sys.platform.startswith("linux"):
+        return _schedule_systemd_enable(
+            updater, launcher, settings_path, schedule_root=schedule_root
+        )
+    raise ValueError("automatic scheduling requires a supported per-user scheduler")
 
 
 def schedule_disable(updater, *, label=None, plist_path=None, schedule_root=None,
-                     task=None):
+                     task=None, systemd_root=None, timer_path=None,
+                     service_path=None, timer=None, service=None):
     """Remove the platform schedule; installed plugin and state stay in place.
 
     Truthful removal of ONLY this updater's exact owned target: query real
@@ -1653,6 +1768,8 @@ def schedule_disable(updater, *, label=None, plist_path=None, schedule_root=None
     explicit label/plist-path/schedule-root/task exist for isolated native
     acceptance.
     """
+    if updater.settings.get("schedule_mode") == "manual":
+        return
     if sys.platform == "darwin":
         label = label or LABEL
         target = f"gui/{os.getuid()}/{label}"
@@ -1727,13 +1844,74 @@ def schedule_disable(updater, *, label=None, plist_path=None, schedule_root=None
                     f"schedule removal unproven: task {problem}"
                     + (f" ({detail})" if detail else ""))
         return
-    raise ValueError("automatic scheduling requires macOS launchd or Windows schtasks")
+    if sys.platform.startswith("linux"):
+        timer = timer or SYSTEMD_TIMER
+        service = service or SYSTEMD_SERVICE
+        root = _systemd_user_root(systemd_root or schedule_root)
+        timer_file = Path(timer_path).expanduser().absolute() if timer_path else root / timer
+        service_file = Path(service_path).expanduser().absolute() if service_path else root / service
+        _validate_systemd_paths(timer_file, service_file)
+        state, detail = _systemd_state(updater, timer)
+        if state == "unknown":
+            raise RuntimeError(
+                f"systemd timer state unproven: {detail or 'query failed'}"
+            )
+        if state != "absent":
+            removal_detail = ""
+            try:
+                code, _, stderr = _native_run(
+                    updater, ["systemctl", "--user", "disable", "--now", timer], 15
+                )
+                if code:
+                    removal_detail = (stderr or "").strip()[:240]
+            except (OSError, TimeoutError, subprocess.TimeoutExpired) as exc:
+                removal_detail = f"{type(exc).__name__}: {exc}"[:240]
+            state, detail = _systemd_state(updater, timer)
+            if state == "unknown":
+                raise RuntimeError(
+                    "systemd timer removal unproven: "
+                    + (detail or removal_detail or "query failed")
+                )
+            still_enabled = _systemd_property(detail, "UnitFileState") in {
+                "enabled", "enabled-runtime",
+            }
+            still_active = _systemd_property(detail, "ActiveState") == "active"
+            if state == "active" or still_enabled or still_active:
+                raise RuntimeError(
+                    "schedule removal unproven: systemd timer remains active or "
+                    "enabled"
+                    + (f" ({detail or removal_detail})" if detail or removal_detail else "")
+                )
+        # Deletion follows a readback proving that the timer is inactive and
+        # disabled. These are exactly our per-user unit filenames.
+        timer_file.unlink(missing_ok=True)
+        service_file.unlink(missing_ok=True)
+        code, _, stderr = _native_run(
+            updater, ["systemctl", "--user", "daemon-reload"], 10
+        )
+        if code:
+            raise RuntimeError(
+                "systemd unit reload after removal failed: "
+                + (stderr or "").strip()[:200]
+            )
+        state, detail = _systemd_state(updater, timer)
+        if state != "absent":
+            raise RuntimeError(
+                "schedule removal unproven: systemd timer "
+                + ("still present" if state != "unknown" else "state unknown")
+                + (f" ({detail})" if detail else "")
+            )
+        return
+    raise ValueError("automatic scheduling requires a supported per-user scheduler")
 
 
 def enable(args):
     source = args.source_root.expanduser().absolute()
     root = args.root.expanduser().absolute()
     settings_path = args.settings.expanduser().absolute()
+    schedule_mode = getattr(args, "schedule", "auto")
+    if schedule_mode not in {"auto", "manual"}:
+        raise ValueError("schedule mode must be auto or manual")
     settings = read(settings_path, {})
     if settings:
         root = Path(settings["root"])
@@ -1749,18 +1927,24 @@ def enable(args):
             uv=shutil.which("uv"),
             codex_home=os.environ.get("CODEX_HOME", str(Path.home() / ".codex")),
         )
+    settings["schedule_mode"] = schedule_mode
     if not settings["codex"] or not settings["uv"]:
         raise ValueError("codex and uv are required")
     root.mkdir(parents=True, exist_ok=True)
     atomic(settings_path, settings)
     updater = Updater(settings_path)
+    if schedule_mode == "auto":
+        _schedule_preflight(updater)
     if (root / "transaction.json").exists():
         with update_lock(updater.config, exclusive=True):
             updater.recover()
     candidate = updater.state.get("current")
     if not candidate:
         updater.validate_source(source)
-        updater.probe_runtime(read(updater.config)["python"])
+        updater.probe_runtime(
+            read(updater.config)["python"],
+            source / "plugins/mindie-agent/scripts",
+        )
         # Preserve local safety fixes without altering a dirty checkout or inventing a remote revision.
         generation = (
             root
@@ -1786,13 +1970,48 @@ def enable(args):
     temporary_launcher = root / "launcher.next"
     shutil.copy2(Path(__file__).with_name("update_launcher.py"), temporary_launcher)
     os.replace(temporary_launcher, launcher)
-    registration = schedule_enable(updater, launcher, settings_path)
+    if schedule_mode == "manual":
+        registration = dict(
+            mode="manual",
+            registered=False,
+            check_command=[settings["python"], str(launcher), str(settings_path)],
+        )
+        result_status = "manual"
+    else:
+        target = schedule_enable(updater, launcher, settings_path)
+        registration = dict(mode="automatic", registered=True, target=target)
+        result_status = "enabled"
+    settings["schedule"] = registration
+    atomic(settings_path, settings)
     return dict(
-        status="enabled",
+        status=result_status,
         channel=args.channel,
         settings=str(settings_path),
         schedule=registration,
     )
+
+
+def schedule_status(updater):
+    """Report persisted intent and a readback of automatic scheduler state."""
+    mode = updater.settings.get("schedule_mode", "auto")
+    if mode == "manual":
+        return dict(mode="manual", registered=False)
+    if sys.platform == "darwin":
+        state, detail = _launchd_state(updater, LABEL)
+    elif os.name == "nt":
+        state, detail = _task_state(updater, WIN_TASK)
+    elif sys.platform.startswith("linux"):
+        state, detail = _systemd_state(updater)
+    else:
+        state, detail = "unknown", "no supported per-user scheduler"
+    registered = state in {"loaded", "active"}
+    if state == "present":
+        registered = (
+            _systemd_property(detail, "UnitFileState") in {"enabled", "enabled-runtime"}
+            or os.name == "nt"
+        )
+    return dict(mode="automatic", registered=registered, state=state,
+                detail=detail or None)
 
 
 def uninstall(args):
@@ -1919,6 +2138,7 @@ def main():
         "--root", type=Path, default=Path.home() / ".local/share/mindie-agent/updates"
     )
     start.add_argument("--channel", choices=["main", "release"], default="main")
+    start.add_argument("--schedule", choices=["auto", "manual"], default="auto")
     sub.add_parser("check")
     sub.add_parser("status")
     sub.add_parser("disable")
@@ -1929,11 +2149,19 @@ def main():
         result = enable(args)
     elif args.operation == "status":
         settings = read(args.settings)
+        updater = Updater(args.settings)
         result = dict(
-            settings=settings, state=read(Path(settings["root"]) / "state.json", {})
+            settings=settings,
+            state=read(Path(settings["root"]) / "state.json", {}),
+            schedule=schedule_status(updater),
         )
     elif args.operation == "disable":
-        schedule_disable(Updater(args.settings))
+        updater = Updater(args.settings)
+        schedule_disable(updater)
+        settings = read(args.settings)
+        settings["schedule_mode"] = "manual"
+        settings["schedule"] = dict(mode="manual", registered=False)
+        atomic(args.settings, settings)
         result = dict(status="disabled")
     elif args.operation == "uninstall":
         result = uninstall(args)

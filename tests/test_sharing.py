@@ -13,7 +13,9 @@ import sys
 import tempfile
 import time
 import unittest
+from tests.process_fixtures import cleanup_temporary_directory
 from unittest.mock import patch
+from tests.process_fixtures import stop_owned_knowledge_service
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/mindie-agent/scripts"
@@ -60,9 +62,9 @@ class SharingFixture(unittest.TestCase):
         self.sessions = Sessions()
 
     def tearDown(self):
-        subprocess.run(["pkill", "-f", str(self.engine)], check=False)
+        stop_owned_knowledge_service(self.engine)
         self.environment.stop()
-        self.temp.cleanup()
+        cleanup_temporary_directory(self.temp)
 
     def settings(self, **overrides):
         value = dict(
@@ -377,7 +379,12 @@ class CommandTests(SharingFixture):
         self.assertGreaterEqual(enabled["enabled_at"], started)
         settings = sharing.validate(json.loads(self.community.read_text()))
         self.assertTrue(settings["enabled"])
-        self.assertEqual(self.community.stat().st_mode & 0o777, 0o600)
+        if os.name == "posix":
+            self.assertEqual(self.community.stat().st_mode & 0o777, 0o600)
+        else:
+            # The Windows ACL comes from the private profile directory; this
+            # assertion checks creation but does not claim ACL validation.
+            self.assertTrue(self.community.is_file())
         # Disable keeps settings and bumps the generation; the generation
         # change itself is the core-observed cancellation signal.
         started = time.monotonic()

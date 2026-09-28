@@ -128,8 +128,6 @@ class _UpdateLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
-            if os.name == "nt" and os.fstat(fd).st_size == 0:
-                os.write(fd, b" ")  # msvcrt.locking needs byte 0 to exist
             deadline = time.monotonic() + self.wait
             while True:
                 try:

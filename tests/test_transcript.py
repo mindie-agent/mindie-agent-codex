@@ -12,6 +12,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from tests.process_fixtures import cleanup_temporary_directory
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -50,7 +51,7 @@ class TranscriptTests(unittest.TestCase):
         self.root = Path(self.temp.name)
 
     def tearDown(self):
-        self.temp.cleanup()
+        cleanup_temporary_directory(self.temp)
 
     def test_increment_from_zero_extracts_public_records(self):
         path = self.root / "rollout.jsonl"

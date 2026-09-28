@@ -53,9 +53,73 @@ to setup and `MINDIE_AGENT_CONFIG` to the one-time updater enable command.
 The generated Skill, MCP and Hook entries retain that configuration binding;
 ordinary later tasks do not need to export it.
 
-Windows installation, process handling and Task Scheduler paths are implemented.
-The user will validate and advance them on a dedicated Windows machine **after
-this change is merged**. Windows hardware acceptance is not this merge's gate.
+## Install on Windows PowerShell
+
+Requires Python 3.11+, Git, `uv`, and an authenticated Codex CLI with native
+plugin support. Run these commands from the downloaded repository in PowerShell;
+the default schedule uses the current user's Windows Task Scheduler task.
+
+```powershell
+$Repo = (Get-Location).Path
+$Data = Join-Path $env:LOCALAPPDATA 'MindIEAgent'
+$Bootstrap = Join-Path $Data 'codex-bootstrap\runtime'
+$Config = Join-Path $Data 'codex.json'
+$UpdaterSettings = Join-Path $Data 'updater.json'
+New-Item -ItemType Directory -Force -Path $Data | Out-Null
+uv venv --python 3.11 $Bootstrap
+uv pip install --python (Join-Path $Bootstrap 'Scripts\python.exe') `
+  -r (Join-Path $Repo 'runtime-requirements.txt')
+$env:MINDIE_AGENT_CONFIG = $Config
+& (Join-Path $Bootstrap 'Scripts\python.exe') `
+  (Join-Path $Repo 'plugins\mindie-agent\scripts\setup.py') install `
+  --knowledge-python (Join-Path $Bootstrap 'Scripts\python.exe') `
+  --config $Config --root $Data
+& (Join-Path $Bootstrap 'Scripts\python.exe') `
+  (Join-Path $Repo 'plugins\mindie-agent\scripts\auto_update.py') `
+  --settings $UpdaterSettings enable --source-root $Repo `
+  --root (Join-Path $Data 'updates') --channel main --schedule auto
+& (Join-Path $Bootstrap 'Scripts\python.exe') `
+  (Join-Path $Data 'updates\launcher.py') $UpdaterSettings status
+```
+
+The final command validates and installs the plugin through Codex's native
+plugin API before registering the task. To install and validate it without a
+periodic task, use `--schedule manual`; this mode persists and reports the
+manual check command. Windows CI exercises the pinned runtime and process
+contracts. A native Codex install and real Windows host acceptance still need
+to be recorded separately.
+
+## Install on WSL/Linux
+
+Use the same runtime prerequisites and shell setup as macOS. On Linux the
+default schedule is a per-user systemd timer, enabled only when that user's
+systemd manager responds. In WSL, this requires systemd to be enabled and the
+user manager to be available. If that scheduler is unavailable, use
+`--schedule manual`; it still performs the full runtime probe, native plugin
+install and selection readback, then saves a manual scheduling state.
+
+```sh
+MINDIE_DATA="${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent"
+MINDIE_BOOTSTRAP="$MINDIE_DATA/codex-bootstrap/runtime"
+MINDIE_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/codex.json"
+MINDIE_UPDATER_SETTINGS="${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/updater.json"
+uv venv --python 3.11 "$MINDIE_BOOTSTRAP"
+uv pip install --python "$MINDIE_BOOTSTRAP/bin/python" -r runtime-requirements.txt
+MINDIE_AGENT_CONFIG="$MINDIE_CONFIG" \
+  "$MINDIE_BOOTSTRAP/bin/python" plugins/mindie-agent/scripts/setup.py install \
+  --knowledge-python "$MINDIE_BOOTSTRAP/bin/python" \
+  --config "$MINDIE_CONFIG" --root "$MINDIE_DATA"
+MINDIE_AGENT_CONFIG="$MINDIE_CONFIG" \
+  "$MINDIE_BOOTSTRAP/bin/python" plugins/mindie-agent/scripts/auto_update.py \
+  --settings "$MINDIE_UPDATER_SETTINGS" enable --source-root "$PWD" \
+  --root "$MINDIE_DATA/updates" --channel main --schedule auto
+"$MINDIE_BOOTSTRAP/bin/python" "$MINDIE_DATA/updates/launcher.py" \
+  "$MINDIE_UPDATER_SETTINGS" status
+```
+
+Change the final option to `--schedule manual` on systems without a responding
+per-user systemd manager. Automatic Linux checks run as the same user every
+five minutes while that manager is running.
 
 ## First use and task boundaries
 
@@ -127,9 +191,12 @@ with reporting off. See the [shared diagnostics contract](https://github.com/min
 
 ## Updates and failures
 
-The macOS LaunchAgent checks the adapter's remote `main` and public knowledge
-feed every five minutes. This work does not open model tasks or activate
-knowledge. Runtime dependencies follow exact reviewed commits in
+The macOS LaunchAgent, Windows Task Scheduler task, or Linux systemd user timer
+checks the adapter's remote `main` and public knowledge feed every five
+minutes. On unsupported systems, or when Linux has no responding per-user
+systemd manager, explicit `--schedule manual` mode still installs the validated
+plugin and records that no scheduler is registered. This work does not open
+model tasks or activate knowledge. Runtime dependencies follow exact reviewed commits in
 `runtime-requirements.txt`; code, interpreter, configuration and plugin files
 switch as one generation.
 
@@ -141,16 +208,18 @@ and native package, with readback. Changed Hook dependencies require fresh
 native trust. No live entrypoint is automatically deleted.
 
 Business MCP calls and each admitted Stop delivery get one attempt, without an
-automatic model retry. The Stop Hook has a 1.5-second inner budget and a 2-second
-native timeout, always returns normal completion and cannot request another
-model turn. Missing/offline capture does not create an automatic repair task.
+automatic model retry. The Stop Hook has a 1.5-second inner budget on POSIX and
+1.3 seconds on Windows, within the 2-second native timeout. It always returns
+normal completion and cannot request another model turn. Missing/offline
+capture does not create an automatic repair task.
 MCP calls have bounded input, output and process deadlines; long remote work
 uses owned jobs with explicit status and cancellation.
 
 Optional organizer work is isolated from tools, plugins and other agents and
-has a 120-second model-process deadline. The shared runtime limits background
-admission per rolling hour and pauses consecutive failures. These limits bound
-optional background cost; they neither expire ordinary task authorization nor
+has a 120-second model-process deadline. The shared runtime applies per-session
+and per-hour background admission limits. It records consecutive failures for
+diagnostics, but those failures do not pause organizer work or revoke ordinary
+task authorization. These limits bound optional background cost and do not
 require a user-facing completion checklist. Exact status and recovery guidance
 are available through the entry Skill.
 

@@ -112,6 +112,10 @@ def generation_env(config=None):
     interpreter's installed knowledge/remote-dev pins.
     """
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    # All adapter helpers exchange bounded UTF-8 JSON over pipes. Python on a
+    # Windows host can otherwise inherit a legacy console encoding from the
+    # user's profile, which disagrees with bounded_process's UTF-8 contract.
+    env["PYTHONIOENCODING"] = "utf-8"
     selected = str(Path(config or config_path()).absolute())
     env["MINDIE_AGENT_CONFIG"] = selected
     env[_DISPATCH_CONFIG] = selected
