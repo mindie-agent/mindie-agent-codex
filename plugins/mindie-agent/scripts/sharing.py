@@ -62,7 +62,12 @@ CHOICES = (
 NORMALIZE_SCRIPT = """
 import json, sys
 from mindie_knowledge.loop.settings import normalize
-print(json.dumps(normalize(json.loads(sys.stdin.read())), ensure_ascii=False))
+try:
+    value = normalize(json.loads(sys.stdin.read()))
+except ValueError as exc:
+    print(json.dumps({"rejected": str(exc)[:240]}, ensure_ascii=False))
+else:
+    print(json.dumps({"ok": value}, ensure_ascii=False))
 """
 
 
@@ -206,9 +211,8 @@ def _migrate_community_locked(config_file):
                 normalize_with_runtime(parsed, adapter.get("python"), config_file)
             except SharingError as exc:
                 result["detail"] = (
-                    "consent wiring stamp skipped: core normalize rejected "
-                    "the current document or the runtime is unavailable; "
-                    f"bytes preserved ({str(exc)[:160]})"
+                    "consent wiring stamp skipped; bytes preserved: "
+                    + str(exc)[:220]
                 )
             else:
                 parsed["consent_config"] = authority
@@ -338,7 +342,12 @@ def validate(settings):
 
 
 def normalize_with_runtime(settings, python, config_file=None):
-    """Definitive shared-core normalize through the committed interpreter."""
+    """Definitive shared-core normalize through the committed interpreter.
+
+    A document the core rejects raises a SharingError naming the rejection;
+    a genuinely unavailable runtime fails with a distinct message — the two
+    faults are never conflated.
+    """
     if not isinstance(python, str) or not python:
         raise SharingError("adapter configuration has no runtime interpreter")
     try:
@@ -354,11 +363,18 @@ def normalize_with_runtime(settings, python, config_file=None):
         value = json.loads(output)
     except Exception as exc:
         raise SharingError(
-            f"core sharing normalize failed: {type(exc).__name__}: {str(exc)[:200]}"
+            f"core sharing normalize runtime failed: {type(exc).__name__}: {str(exc)[:200]}"
         )
     if not isinstance(value, dict):
         raise SharingError("core sharing normalize returned a non-object")
-    return value
+    if "rejected" in value:
+        raise SharingError(
+            "community settings rejected by core normalize: "
+            + str(value["rejected"])[:200]
+        )
+    if not isinstance(value.get("ok"), dict):
+        raise SharingError("core sharing normalize returned an invalid envelope")
+    return value["ok"]
 
 
 def read(config_file=None):
