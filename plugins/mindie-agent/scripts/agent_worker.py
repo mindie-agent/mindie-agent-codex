@@ -14,6 +14,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import tomllib
 
 from process_guard import (
     InvalidResultError,
@@ -145,6 +146,31 @@ def check_entry(entry):
         raise ValueError("organized entry content must not be empty")
 
 
+def native_model_settings():
+    """Retain the selected profile's model without loading its tools or rules.
+
+    --ignore-user-config deliberately isolates maintenance. It also discards
+    model/effort, so pass these two native scalar settings explicitly. Auth
+    continues to use the same CODEX_HOME; no credential file is copied.
+    """
+    profile = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    try:
+        with (profile / "config.toml").open("rb") as stream:
+            saved = tomllib.load(stream)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        raise ConfigurationError("organizer configuration failed") from exc
+    selected = {}
+    for key in ("model", "model_reasoning_effort"):
+        value = saved.get(key)
+        if value is not None:
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigurationError("organizer configuration failed")
+            selected[key] = value
+    return selected
+
+
 def run(payload, *, model=None, reasoning_effort=None):
     if not isinstance(payload, dict):
         raise InvalidResultError("organizer result was invalid")
@@ -157,6 +183,9 @@ def run(payload, *, model=None, reasoning_effort=None):
         raise ConfigurationError("organizer configuration failed") from exc
     if not isinstance(role, str) or role not in SCHEMAS:
         raise ConfigurationError("organizer configuration failed")
+    native = native_model_settings() if model is None or reasoning_effort is None else {}
+    model = model if model is not None else native.get("model")
+    reasoning_effort = reasoning_effort if reasoning_effort is not None else native.get("model_reasoning_effort")
     with tempfile.TemporaryDirectory(prefix="mindie-maintenance-") as directory:
         root = Path(directory)
         schema, output = root / "schema.json", root / "result.json"

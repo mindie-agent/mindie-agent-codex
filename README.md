@@ -218,7 +218,13 @@ MCP calls have bounded input, output and process deadlines; long remote work
 uses owned jobs with explicit status and cancellation.
 
 Optional organizer work is isolated from tools, plugins and other agents and
-has a 120-second model-process deadline. The shared runtime applies per-session
+has a 120-second model-process deadline. It preserves `model` and
+`model_reasoning_effort` from the selected `CODEX_HOME/config.toml` while ignoring
+that file's tool and plugin settings; explicit worker arguments take precedence.
+Its process sandbox is read-only because the organizer returns structured data
+to the runtime, which performs the authorized contribution. This is process
+isolation, not a user-facing mode that disables capture or contribution.
+The shared runtime applies per-session
 and per-hour background admission limits. It records consecutive failures for
 diagnostics, but those failures do not pause organizer work or revoke ordinary
 task authorization. These limits bound optional background cost and do not
