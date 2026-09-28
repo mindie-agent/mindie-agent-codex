@@ -158,6 +158,12 @@ def _timestamp(record):
 PUBLIC = {None, "final", "final_answer", "commentary"}
 KNOWN = {"session_meta", "turn_context", "response_item", "event_msg", "compacted"}
 RECORD_LIMIT = 100 * 1024 * 1024  # external per-file envelope; fail visibly above it
+INJECTED_PREFIXES = (
+    "<recommended_plugins>", "<environment_context>",
+    "# AGENTS.md instructions", "<permissions instructions>",
+    "<skills_instructions>", "<app-context>",
+)
+ATTACHMENTS = {"input_image": "Image", "image": "Image", "input_audio": "Audio", "input_file": "File"}
 
 
 def _extract(record):
@@ -180,21 +186,22 @@ def _extract(record):
         if role not in {"user", "assistant"}:
             return None
         if ptype == "agent_message" and isinstance(payload.get("text"), str):
-            return (role, payload["text"])
-        content = payload.get("content")
-        if not isinstance(content, list):
-            return None
-        parts = [item["text"] for item in content if isinstance(item, dict)
-                 and item.get("type") in _TEXT_CONTENT
-                 and isinstance(item.get("text"), str)
-                 and item.get("channel") in PUBLIC]
+            parts = [payload['text']]
+        else:
+            content = payload.get("content")
+            if not isinstance(content, list):
+                return None
+            parts = []
+            for item in content:
+                if not isinstance(item, dict) or item.get('channel') not in PUBLIC:
+                    continue
+                if item.get('type') in _TEXT_CONTENT and isinstance(item.get('text'), str):
+                    parts.append(item['text'])
+                elif item.get('type') in ATTACHMENTS:
+                    parts.append('[' + ATTACHMENTS[item['type']] + ' attachment omitted]')
+        if role == 'user':
+            parts = [part for part in parts if not part.lstrip().startswith(INJECTED_PREFIXES)]
         text = "\n".join(parts)
-        if role == "user" and text.lstrip().startswith((
-            "<recommended_plugins>", "<environment_context>",
-            "# AGENTS.md instructions", "<permissions instructions>",
-            "<skills_instructions>", "<app-context>",
-        )):
-            return None
         text = re.sub(r"<oai-mem-citation>.*?</oai-mem-citation>", "", text, flags=re.S)
         phase = payload.get("phase") or payload.get("channel")
         label = role + (":" + phase if role == "assistant" and phase else "")
@@ -339,9 +346,12 @@ def read_material(path, start, *, session_id=None, not_before=None, expected=Non
                             extracted = None  # inherited parent context, never a new experience
                 if extracted and extracted[1]:
                     stamp = _timestamp(record)
-                    if not_before is not None and (stamp is None or stamp < not_before):
-                        if stamp is None:
-                            result["timestamps_reliable"] = False
+                    if not_before is not None and stamp is None:
+                        result.update(status='invalid-record', timestamps_reliable=False,
+                                      coverage_note='public message timestamp unavailable; not consumed')
+                        result['coverage'].append(dict(start=offset, end=stream.tell(), reason='missing public timestamp'))
+                        break
+                    if not_before is not None and stamp < not_before:
                         extracted = None
                     else:
                         kind, text = extracted

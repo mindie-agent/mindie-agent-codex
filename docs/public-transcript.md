@@ -12,6 +12,10 @@ duplicate event wrappers and inherited fork history. Equal public messages at
 different positions are retained. Reads page between records; a long public
 message is processed whole. Oversized/invalid input cannot be represented as
 complete coverage. No semantic shortening or model call belongs to this step.
+Missing public-message timestamps hold the cursor because the authorization
+boundary cannot be verified. Supported attachment types leave a safe placeholder;
+their URLs, files and binary data are never read. Both native text shapes use
+the same injection/citation filters, applied per content part.
 
 Gitleaks 8.30.1 supplies secret rules; the existing privacy scanner supplements
 paths, addresses and identities. Setup/update download a fixed release with a

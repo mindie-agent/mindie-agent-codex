@@ -70,3 +70,28 @@ class PublicProjectionTests(unittest.TestCase):
                     self.assertEqual(result['end'], boundary)
                     self.assertTrue(result['coverage'])
                     self.assertFalse(result['text'])
+
+    def test_public_timestamp_is_required_even_when_no_dated_message_follows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'native.jsonl'
+            undated = message('user', 'unverifiable authority boundary')
+            undated.pop('timestamp', None)
+            write_jsonl(path, [meta(), undated])
+            result = transcript.read_material(path, 0, session_id='task-1', not_before=0)
+            self.assertEqual(result['status'], 'invalid-record')
+            self.assertFalse(result['text'])
+            self.assertLess(result['end'], path.stat().st_size)
+
+    def test_native_text_shapes_share_filters_and_safe_attachment_placeholders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'native.jsonl'
+            records = [meta(),
+                dict(type='response_item', payload=dict(type='agent_message', role='user', text='<environment_context>injected marker')),
+                dict(type='response_item', payload=dict(type='agent_message', text='visible<oai-mem-citation>private reference</oai-mem-citation> answer')),
+                dict(type='response_item', payload=dict(type='message', role='user', content=[
+                    dict(type='input_text', text='<environment_context>injected block</environment_context>'),
+                    dict(type='input_text', text='Real user question'),
+                    dict(type='input_image', image_url='private-image-url')]))]
+            write_jsonl(path, records)
+            result = transcript.read_material(path, 0, session_id='task-1')
+            self.assertEqual(result['text'], '### assistant\nvisible answer\n\n### user\nReal user question\n[Image attachment omitted]')
