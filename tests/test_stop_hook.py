@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import tempfile
 import unittest
@@ -24,18 +25,21 @@ from auto_update import stop_hook_commands
 
 
 class StopHookTests(unittest.TestCase):
+    host_shell = None
+
     def run_stop(self, plugin, *, python=None, **env):
         event = {"session_id": "hook-regression", "last_assistant_message": "Done"}
         command = stop_hook_commands(
             [python or sys.executable, str(plugin / "scripts/bridge.py"), "stop"]
         )["commandWindows" if os.name == "nt" else "command"]
+        argv = [self.host_shell, '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command] if self.host_shell else command
         result = subprocess.run(
-            command,
+            argv,
             input=json.dumps(event),
             text=True,
             capture_output=True,
             timeout=STOP["timeout"],
-            shell=True,
+            shell=self.host_shell is None,
             env={**os.environ, "PLUGIN_ROOT": str(plugin), **env},
         )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -47,13 +51,11 @@ class StopHookTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             self.run_stop(Path(root) / "missing cache")
             self.assertEqual(list(Path(root).iterdir()), [])
-
     def test_missing_interpreter_does_not_resume_conversation(self):
         with tempfile.TemporaryDirectory() as root:
             self.run_stop(
                 PLUGIN,
                 python=str(Path(root) / "missing-python.exe"),
-                PATH=root,
             )
 
     def test_bridge_failures_and_outputs_cannot_control_conversation(self):
@@ -94,6 +96,13 @@ class StopHookTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             self.run_stop(PLUGIN, MINDIE_AGENT_CONFIG=str(Path(root) / "missing.json"))
             self.assertEqual(list(Path(root).iterdir()), [])
+
+
+@unittest.skipUnless(os.name == 'nt', 'native PowerShell hook dispatch')
+class PowerShellStopHookTests(StopHookTests):
+    # The native Windows host uses PowerShell, while shell=True uses CMD.
+    # Exercise both dispatchers with the real stdin and missing-child cases.
+    host_shell = shutil.which('pwsh') or shutil.which('powershell')
 
 
 if __name__ == "__main__":

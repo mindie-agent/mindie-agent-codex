@@ -557,6 +557,26 @@ class AutoUpdateTests(unittest.TestCase):
             self.assertNotEqual(command, previous_command)
             previous, previous_command = plugin, command
 
+    def test_wrapper_change_replaces_stop_even_with_identical_helpers(self):
+        first = self.check()
+        previous = Path(first["current"]["plugin"])
+        hook_path = previous / "hooks/hooks.json"
+        legacy = read(hook_path)
+        legacy["hooks"]["Stop"][0]["hooks"][0]["commandWindows"] = (
+            'python "legacy-bridge.py" stop >NUL 2>&1 & echo {}'
+        )
+        atomic(hook_path, legacy)
+        remote = self.remote / "plugins/mindie-agent/scripts/remote_bridge.py"
+        remote.write_text(remote.read_text(encoding="utf-8") + "\n# Next revision\n", encoding="utf-8")
+        self.commit("wrapper migration")
+        result = self.check()
+        self.assertEqual(result["status"], "installed")
+        plugin = Path(result["current"]["plugin"])
+        hook = read(plugin / "hooks/hooks.json")["hooks"]["Stop"][0]["hooks"][0]
+        self.assertIn(str(plugin / "scripts/bridge.py"), hook["command"])
+        self.assertIn("-EncodedCommand", hook["commandWindows"])
+        self.assertNotEqual(hook["commandWindows"], legacy["hooks"]["Stop"][0]["hooks"][0]["commandWindows"])
+
     def test_uncoordinated_caches_are_retained_untouched(self):
         # No compatibility shim: cached entrypoints of loaded tasks keep their
         # exact bytes; the updater only retains/restores them across switches.

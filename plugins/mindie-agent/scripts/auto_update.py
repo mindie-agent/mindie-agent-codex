@@ -9,6 +9,7 @@ Codex acceptance remains to be recorded separately.
 """
 
 import argparse
+import base64
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import json
@@ -367,7 +368,16 @@ def stop_hook_commands(argv):
     """
     argv = [str(value) for value in argv]
     posix = shlex.join(argv) + " >/dev/null 2>&1; printf '{}\\n'"
-    windows = subprocess.list2cmdline(argv) + " >NUL 2>&1 & echo {}"
+    # Native Codex can dispatch Windows hooks through PowerShell. CMD's
+    # `& echo` becomes a background job there and loses the event on stdin.
+    # An encoded PowerShell command has one unambiguous argv under either
+    # host shell; the child inherits stdin and all failures complete normally.
+    def ps_arg(value):
+        if value.startswith("${PLUGIN_ROOT}/"):
+            return "(Join-Path $env:PLUGIN_ROOT '" + value[len('${PLUGIN_ROOT}/'):].replace("'", "''") + "')"
+        return "'" + value.replace("'", "''") + "'"
+    body = "try { & " + " ".join(ps_arg(arg) for arg in argv) + " 1>$null 2>$null } catch {} finally { [Console]::Out.WriteLine('{}') }; exit 0"
+    windows = "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " + base64.b64encode(body.encode("utf-16le")).decode("ascii")
     return {"command": posix, "commandWindows": windows, "timeout": 2}
 
 
@@ -682,7 +692,15 @@ class Updater:
                 "sharing.py", "update_lock.py", "installation.json",
                 "diagnostic_support.py", "diagnostic_fallback.py",
             }
-            if all(
+            old_commands = stop_hook_commands([
+                self.settings["python"], str(previous / "scripts/bridge.py"),
+                "--config", config_value, "stop",
+            ])
+            old_hooks = read(previous / "hooks/hooks.json", {})
+            wrapper_matches = old_hooks == {"hooks": {"Stop": [{"hooks": [
+                {"type": "command", **old_commands},
+            ]}]}}
+            if wrapper_matches and all(
                 (previous / "scripts" / name).is_file()
                 and (plugin / "scripts" / name).read_bytes()
                 == (previous / "scripts" / name).read_bytes()

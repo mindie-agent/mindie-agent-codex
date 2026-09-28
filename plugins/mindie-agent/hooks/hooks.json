@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "python3 \"${PLUGIN_ROOT}/scripts/bridge.py\" stop >/dev/null 2>&1; printf '{}\\n'",
-            "commandWindows": "python \"${PLUGIN_ROOT}\\scripts\\bridge.py\" stop >NUL 2>&1 & echo {}",
+            "commandWindows": "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand dAByAHkAIAB7ACAAJgAgACcAcAB5AHQAaABvAG4AJwAgACgASgBvAGkAbgAtAFAAYQB0AGgAIAAkAGUAbgB2ADoAUABMAFUARwBJAE4AXwBSAE8ATwBUACAAJwBzAGMAcgBpAHAAdABzAC8AYgByAGkAZABnAGUALgBwAHkAJwApACAAJwBzAHQAbwBwACcAIAAxAD4AJABuAHUAbABsACAAMgA+ACQAbgB1AGwAbAAgAH0AIABjAGEAdABjAGgAIAB7AH0AIABmAGkAbgBhAGwAbAB5ACAAewAgAFsAQwBvAG4AcwBvAGwAZQBdADoAOgBPAHUAdAAuAFcAcgBpAHQAZQBMAGkAbgBlACgAJwB7AH0AJwApACAAfQA7ACAAZQB4AGkAdAAgADAA",
             "timeout": 2
           }
         ]
