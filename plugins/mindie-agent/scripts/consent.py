@@ -123,7 +123,7 @@ def legacy_candidates(config_file=None) -> dict:
         )
     for path in _legacy_community_files(config_file, config):
         try:
-            raw = path.read_bytes()
+            raw = consent_store._read_bytes(path)
         except FileNotFoundError:
             continue
         except OSError:
