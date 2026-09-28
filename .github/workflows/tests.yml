@@ -17,8 +17,8 @@ jobs:
       - name: Install pinned runtime and domain dependencies
         run: python -m pip install -r runtime-requirements.txt
       # Contract tests archive these commits. They do not guess a sibling
-      # checkout. Core d0538e5 is published first. Peer 90f73e7 is an ancestor
-      # of review 86de2c3, so the peer checkout fails until that branch is published.
+      # checkout. Publish the exact core and peer revisions before adapter CI.
+      # Peer 90f73e7 is an ancestor of the reviewed Kimi 86de2c3 revision.
       - name: Checkout pinned core
         uses: actions/checkout@v4
         with:

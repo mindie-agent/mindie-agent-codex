@@ -62,8 +62,10 @@ this change is merged**. Windows hardware acceptance is not this merge's gate.
 Explicitly invoke `$mindie-agent`. Its offline status offers three choices:
 recommended public contribution for a named project/repository/account,
 read-only knowledge, or configuration later. There is no default consent.
-The choice persists for the installation, and the Skill binds only this
-native task.
+This choice is requested only on the first use after installation and is
+persisted for that installation. Later tasks, forks, restarts, updates and
+ordinary failures never request it again. Each entry binds only the current
+native task internally; users do not manage that binding.
 
 Knowledge tools require that entry binding. The host supplies task
 identity; public knowledge calls have no identity or capability argument.
@@ -196,9 +198,12 @@ Do not recursively delete the shared data directory. Removing one adapter does
 not revoke or remove the shared reporter; disable reporting separately only
 when you want that choice to apply to all adapters.
 
+See [framework stability and verification](docs/framework-stability.md) for the
+current behavior, reproducible checks and acceptance boundaries.
+
 ## Evidence and follow-up
 
-[Current native acceptance](docs/acceptance-lifecycle-2026-09-21.md) records
+[Earlier native acceptance](docs/acceptance-lifecycle-2026-09-21.md) records
 Luna/max installation, explicit read-only use, configuration independence,
 update/job continuity and the remaining contribution/host checks.
 [Remote acceptance](docs/remote-general-acceptance-2026-09-20.md) records the
