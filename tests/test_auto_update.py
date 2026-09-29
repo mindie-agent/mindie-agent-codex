@@ -168,6 +168,11 @@ class AutoUpdateTests(unittest.TestCase):
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.name", "Fixture")
         self.git("config", "user.email", "fixture@example.invalid")
+        # This disposable repository is a local server fixture. New Git
+        # versions may launch maintenance after commit as well as fetch;
+        # detached writers must not outlive its test-owned directory.
+        self.git("config", "maintenance.auto", "false")
+        self.git("config", "gc.auto", "0")
         self.sha = self.commit("first")
         self.root = self.base / "updates"
         self.root.mkdir()
