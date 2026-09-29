@@ -53,6 +53,7 @@ def run_imports(sources, *, emit):
         engine = Engine(store, settings_path=engine_config.get('community_config'),
                         admission=authority, transcript_adapter=parser,
                         capture_mode='public-transcript',
+                        summary_command=engine_config.get('summary_command'),
                         redactor_executable=engine_config['redactor_executable'])
         generation = engine._settings().generation
         for source in sources:

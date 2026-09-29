@@ -110,9 +110,10 @@ def run_codex(command, prompt, *, timeout=None):
             thread.start()
         deadline = time.monotonic() + timeout
         turns = 0
+        usage = None
 
         def check_line(line):
-            nonlocal turns
+            nonlocal turns, usage
             try:
                 event = json.loads(line)
             except ValueError as exc:
@@ -125,6 +126,14 @@ def run_codex(command, prompt, *, timeout=None):
                 turns += 1
                 if turns > 1:
                     raise NativeFailure("maintenance attempted another turn")
+            if event.get("type") == "turn.completed":
+                reported = event.get("usage")
+                if isinstance(reported, dict):
+                    # Allowlisted counters only; never retain native events,
+                    # reasoning, credentials or prompt/output text for metering.
+                    usage = {key: reported[key] for key in
+                             ("input_tokens", "cached_input_tokens", "output_tokens")
+                             if type(reported.get(key)) is int and reported[key] >= 0}
             item = event.get("item")
             if item is not None and not isinstance(item, dict):
                 raise InvalidResultError("invalid Codex item")
@@ -189,3 +198,4 @@ def run_codex(command, prompt, *, timeout=None):
                 process.stdout.close()
             if not threads[1].is_alive():
                 process.stderr.close()
+        return usage

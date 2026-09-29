@@ -88,6 +88,7 @@ class HistoryImportTests(SharingFixture):
         saved = consent.consent_path().read_bytes()
         engine = json.loads(self.engine.read_text())
         engine['redactor_executable'] = installed_scanner()
+        engine['summary_command'] = [sys.executable, '-c', 'raise AssertionError("scheduled, not inline")']
         self.engine.write_text(json.dumps(engine))
         self.make_source('Synthetic historical experiment produced eight output tokens.')
         with patch('mindie_knowledge.loop.cli.ensure_service', return_value={'ready': True}) as service:
@@ -102,6 +103,11 @@ class HistoryImportTests(SharingFixture):
         self.assertIsNone(self.authority.active_lease('historical-task'))
         with closing(Store(self.root / 'data', 'test')) as store:
             self.assertEqual(len(store.drafts_changed()), 1)
+            tasks = [dict(row) for row in store.db.execute('SELECT * FROM transcript_tasks')]
+            self.assertEqual(len(tasks), 1)
+            self.assertEqual(tasks[0]['summary_status'], 'pending')
+            self.assertEqual(json.loads(tasks[0]['authorization'])['session'], 'manual-A')
+            self.assertEqual(store.db.execute('SELECT count(*) FROM captures').fetchone()[0], 0)
 
     def test_bridge_dispatches_explicit_empty_source_without_service(self):
         self.activate()

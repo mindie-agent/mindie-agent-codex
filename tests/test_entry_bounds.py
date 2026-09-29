@@ -19,6 +19,16 @@ spec.loader.exec_module(guard)
 
 
 class EntryBoundsTests(unittest.TestCase):
+    def test_native_usage_retains_only_nonnegative_integer_counters(self):
+        event = dict(type='turn.completed', usage=dict(input_tokens=100,
+                     cached_input_tokens=20, output_tokens=5, source='private-canary'))
+        result = guard.run_codex([sys.executable, '-c', f'print({json.dumps(event)!r})'], 'input')
+        self.assertEqual(result, dict(input_tokens=100, cached_input_tokens=20, output_tokens=5))
+        event['usage'].update(input_tokens=-1, cached_input_tokens=True, output_tokens='5')
+        result = guard.run_codex([sys.executable, '-c', f'print({json.dumps(event)!r})'], 'input')
+        self.assertEqual(result, {})
+        self.assertIsNone(guard.run_codex([sys.executable, '-c', 'pass'], 'input'))
+
     def test_invalid_hooks_never_invoke_runtime(self):
         event = dict(
             hook_event_name="Stop",
