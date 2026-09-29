@@ -157,7 +157,6 @@ def _timestamp(record):
 
 PUBLIC = {None, "final", "final_answer", "commentary"}
 KNOWN = {"session_meta", "turn_context", "response_item", "event_msg", "compacted"}
-RECORD_LIMIT = 100 * 1024 * 1024  # external per-file envelope; fail visibly above it
 INJECTED_PREFIXES = (
     "<recommended_plugins>", "<environment_context>",
     "# AGENTS.md instructions", "<permissions instructions>",
@@ -226,13 +225,13 @@ def read_material(path, start, *, session_id=None, not_before=None, expected=Non
     """
     if type(start) is not int or start < 0:
         raise ValueError("start must be a nonnegative offset")
-    if not 1024 <= max_scan_bytes <= 64*1024*1024 or not 0 < max_seconds <= 30:
+    if max_scan_bytes <= 0 or max_seconds <= 0:
         raise ValueError("invalid scan budget")
     if scan_until is not None and (
         type(scan_until) is not int or scan_until < start
     ):
         raise ValueError("scan_until must be an exact byte boundary at or after start")
-    if not 16384 <= max_text_bytes <= MAX_TEXT:
+    if max_text_bytes <= 0:
         raise ValueError("invalid text budget")
     result = dict(status="ok", start=start, end=start, digest=hashlib.sha256(b"").hexdigest(),
                   text="", records=0, skipped_records=0, oversize_records=0,
@@ -264,11 +263,11 @@ def read_material(path, start, *, session_id=None, not_before=None, expected=Non
                 result.update(status="replaced", coverage_note="transcript truncated")
                 return result
             # Task identity is checked even at a nonzero cursor. The metadata
-            # line alone is bounded; no foreign public material is returned.
+            # identifies ownership; no foreign public material is returned.
             stream.seek(0)
-            header = stream.readline(1024 * 1024 + 1)
+            header = stream.readline()
             try:
-                meta = json.loads(header) if len(header) <= RECORD_LIMIT else {}
+                meta = json.loads(header)
                 owner = _session_of(meta) if isinstance(meta, dict) else None
             except ValueError:
                 owner = None
@@ -301,24 +300,17 @@ def read_material(path, start, *, session_id=None, not_before=None, expected=Non
                 offset = stream.tell()
                 # A page target limits work between records. One complete
                 # public message may exceed it; never clip or consume half.
-                room = min(RECORD_LIMIT + 1, stat.st_size - offset)
+                room = stat.st_size - offset
                 if scan_until is not None:
                     room = min(room, scan_until - offset)
                 raw = stream.readline(room)
                 if not raw:
                     break
                 complete = raw.endswith(b"\n")
-                oversize = len(raw) > RECORD_LIMIT
-                if not complete and not oversize:
+                if not complete:
                     # A budget boundary or incomplete append must not consume
-                    # a record that fits our record bound on the next call.
+                    # a record that can be completed on the next call.
                     result["partial"] = offset+len(raw) == stat.st_size
-                    break
-                if oversize:
-                    result["status"] = "oversize"
-                    result["oversize_records"] += 1
-                    result["coverage"].append(dict(start=offset,end=stream.tell(),reason="record exceeds platform envelope; not consumed"))
-                    result["coverage_note"] = "record exceeds platform envelope; not consumed"
                     break
                 try:
                     record = json.loads(raw)
