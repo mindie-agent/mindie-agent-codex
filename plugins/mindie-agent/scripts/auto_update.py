@@ -587,6 +587,7 @@ class Updater:
                 "-C",
                 source,
                 "fetch",
+                "--no-auto-maintenance",
                 "--depth=1",
                 self.settings["repository"],
                 sha,
