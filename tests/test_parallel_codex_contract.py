@@ -422,24 +422,29 @@ class LaneCase(unittest.TestCase):
 
 
 class ConsentGateTests(LaneCase):
-    def test_corrupt_transcript_holds_public_body_and_cursor(self):
+    def test_corrupt_transcript_isolates_only_the_bad_record(self):
         self.write_consent("contribute", reporting="disabled")
         self.write_community(enabled=True)
         self.open_store()
         self.activate("task-main")
         transcript = self.root / "corrupt-body.jsonl"
         _jsonl(transcript, [_session_meta("task-main"),
-            _user("Must not declare complete", self.after_boundary("task-main", 30))])
+            _user("Public before corruption", self.after_boundary("task-main", 30))])
         with transcript.open('ab') as stream:
             stream.write(b'{"type":broken}\n')
+            stream.write((json.dumps(_user("Public after corruption", self.after_boundary("task-main", 31)))+'\n').encode())
         self.assertEqual(self.stop(self.event("task-main", transcript)).returncode, 0)
         self.drain_worker()
-        self.assertEqual(self.saved_text(), '')
-        self.assertEqual(self.capture_rows()[0]['status'], 'failed')
+        self.assertEqual(self.saved_text(), '### user\nPublic before corruption\n\n### user\nPublic after corruption')
+        self.assertEqual(self.capture_rows()[0]['status'], 'organized')
         from mindie_knowledge.loop.store import Store
         store = Store(self.root / "data", "test")
         try:
-            self.assertIsNone(store.cursor(str(transcript.resolve())))
+            self.assertEqual(store.cursor(str(transcript.resolve()))['ok_finish'], transcript.stat().st_size)
+            row = store.capture_row(self.capture_rows()[0]['id'])
+            discarded = json.loads(row['detail'])['discarded_records']
+            self.assertEqual(len(discarded), 1)
+            self.assertEqual(discarded[0]['reason'], 'invalid record')
         finally:
             store.close()
 
