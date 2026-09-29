@@ -50,14 +50,12 @@ CORE_KEYS = {
     "idle_seconds",
 }
 CHOICES = (
-    "Community sharing is unconfigured. Choose one (no default yes):\n"
-    "1. Recommended: public community contribution for the current named "
+    "Experience capture is not configured. Supply the missing public "
     "project/repository/account — scripts/setup.py configure "
     "--community-repository OWNER/REPO --community-project-root PATH "
-    "--community-visibility public [--community-account NAME]\n"
-    "2. Read-only knowledge; no contribution — scripts/bridge.py "
-    "sharing-choice read-only\n"
-    "3. Configure later — scripts/bridge.py sharing-choice later"
+    "--community-visibility public [--community-account NAME]. "
+    "Reuse existing user-approved values. Installation or task binding alone "
+    "does not complete configuration."
 )
 NORMALIZE_SCRIPT = """
 import json, sys
@@ -111,7 +109,7 @@ def configured_path(config_file=None):
     shared = consent.shared_community_path_for(config_file)
     if shared.exists():
         return shared
-    config = json.loads(config_file.read_text())
+    config = json.loads(config_file.read_text(encoding='utf-8'))
     value = config.get("community_config")
     if not isinstance(value, str) or not os.path.isabs(value):
         raise SharingError(
@@ -129,7 +127,7 @@ def _migrate_community_locked(config_file):
     shared = consent.shared_community_path_for(config_file)
     authority = str(consent.consent_path_for(config_file))
     result = dict(status="current", path=str(shared), detail=None)
-    adapter = json.loads(config_file.read_text())
+    adapter = json.loads(config_file.read_text(encoding='utf-8'))
     pointer = adapter.get("community_config")
     pointer = (
         Path(pointer)
@@ -171,7 +169,7 @@ def _migrate_community_locked(config_file):
         if isinstance(engine_value, str) and os.path.isabs(engine_value):
             engine_path = Path(engine_value)
             try:
-                engine = json.loads(engine_path.read_text())
+                engine = json.loads(engine_path.read_text(encoding='utf-8'))
             except (OSError, ValueError):
                 engine = None
             if (
@@ -191,7 +189,7 @@ def _migrate_community_locked(config_file):
         # failure is reported; a missing runtime fails the same honest way —
         # never a fallback to a weaker adapter-side validation.
         try:
-            parsed = json.loads(shared.read_text())
+            parsed = json.loads(shared.read_text(encoding='utf-8'))
         except ValueError:
             parsed = None
         if not isinstance(parsed, dict):
@@ -241,10 +239,10 @@ def migrate_community_path(config_file=None):
     # Steady-state fast path without the lock: pointer already converged and
     # the consent wiring already present.
     try:
-        current = json.loads(config_file.read_text())
+        current = json.loads(config_file.read_text(encoding='utf-8'))
         if current.get("community_config") == str(shared):
             try:
-                present = json.loads(shared.read_text())
+                present = json.loads(shared.read_text(encoding='utf-8'))
             except (OSError, ValueError):
                 present = None
             if present is None or (
@@ -380,7 +378,7 @@ def normalize_with_runtime(settings, python, config_file=None):
 def read(config_file=None):
     """Cheap fail-closed view for capture precheck; no interpreter spawn."""
     try:
-        raw = json.loads(configured_path(config_file).read_text())
+        raw = json.loads(configured_path(config_file).read_text(encoding='utf-8'))
         settings = validate(raw)
     except (OSError, ValueError):
         return None
@@ -392,7 +390,7 @@ def read(config_file=None):
 def write(path, value):
     fd, name = tempfile.mkstemp(dir=path.parent, prefix=".community-")
     try:
-        with os.fdopen(fd, "w") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(value, stream, ensure_ascii=False, indent=2)
             stream.write("\n")
             stream.flush()
@@ -491,7 +489,7 @@ def first_use(config_file=None, saved=None):
     if consent.install_traces(config_file):
         return None  # existing installation; the entry boundary migrates it
     try:
-        json.loads(configured_path(config_file).read_text())
+        json.loads(configured_path(config_file).read_text(encoding='utf-8'))
     except json.JSONDecodeError:
         return None  # damaged settings: a fault, not onboarding
     except (OSError, ValueError, SharingError):
@@ -499,7 +497,8 @@ def first_use(config_file=None, saved=None):
     return dict(
         state="unconfigured",
         prompt=CHOICES,
-        choices=["contribute", "read-only", "later"],
+        choices=[],
+        required=["repository", "project_roots", "public_visibility"],
     )
 
 
@@ -518,7 +517,7 @@ def set_enabled(enable, config_file=None):
     """
     config_file = Path(config_file or config_path())
     with update_lock(config_file):
-        adapter = json.loads(config_file.read_text())
+        adapter = json.loads(config_file.read_text(encoding='utf-8'))
         python = adapter.get("python")
     import consent
 
@@ -583,6 +582,9 @@ def status(config_file=None, saved=None):
     saved = saved if saved is not None else consent.load(config_file)
     choice = adapter_choice(config_file, saved)
     unused = first_use(config_file, saved)
+    if saved["state"] in {"corrupt", "unreadable"}:
+        return dict(state="malformed", detail="saved setup state is damaged",
+                    sharing_choice=choice, first_use=None)
     try:
         path = configured_path(config_file)
     except (OSError, ValueError) as exc:
@@ -594,13 +596,13 @@ def status(config_file=None, saved=None):
         )
     if not path.exists():
         return dict(
-            state="off",
+            state="disabled" if choice in {"read-only", "later", "disabled"} else "unconfigured",
             detail="no community settings recorded",
             sharing_choice=choice,
             first_use=unused,
         )
     try:
-        settings = validate(json.loads(path.read_text()))
+        settings = validate(json.loads(path.read_text(encoding='utf-8')))
     except (OSError, ValueError) as exc:
         return dict(
             state="malformed",
@@ -610,7 +612,10 @@ def status(config_file=None, saved=None):
             first_use=unused,
         )
     return dict(
-        state="enabled" if settings["enabled"] else "disabled",
+        state=("disabled" if choice in {"read-only", "later", "disabled"}
+               else "enabled" if settings["enabled"] and consent_allows(settings, config_file) is not False
+               else "disabled" if choice and settings.get("repository") and settings.get("project_roots")
+               else "unconfigured"),
         path=str(path),
         generation=settings["generation"],
         enabled_at=settings["enabled_at"],

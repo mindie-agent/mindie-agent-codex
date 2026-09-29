@@ -147,18 +147,24 @@ class RemoteReceipts:
     def _db(self):
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         db = sqlite3.connect(self.path, timeout=0.2)
-        os.chmod(self.path, 0o600)
-        db.execute("PRAGMA cache_size=-2048")
-        db.execute("CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY, failures INTEGER NOT NULL, paused INTEGER NOT NULL)")
-        db.execute("INSERT OR IGNORE INTO state(id, failures, paused) VALUES(1, 0, 0)")
-        columns = {row[1] for row in db.execute("PRAGMA table_info(state)")}
-        if "next_check" not in columns:
-            # The retired permanent pause becomes a bounded automatic backoff.
-            db.execute("ALTER TABLE state ADD COLUMN next_check REAL NOT NULL DEFAULT 0")
-            db.execute("UPDATE state SET paused=0 WHERE id=1")
-        db.execute("CREATE TABLE IF NOT EXISTS attempts (identity TEXT PRIMARY KEY, started REAL NOT NULL, status TEXT NOT NULL)")
-        db.commit()
-        return db
+        try:
+            os.chmod(self.path, 0o600)
+            db.execute("PRAGMA cache_size=-2048")
+            db.execute("CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY, failures INTEGER NOT NULL, paused INTEGER NOT NULL)")
+            db.execute("INSERT OR IGNORE INTO state(id, failures, paused) VALUES(1, 0, 0)")
+            columns = {row[1] for row in db.execute("PRAGMA table_info(state)")}
+            if "next_check" not in columns:
+                # The retired permanent pause becomes a bounded automatic backoff.
+                db.execute("ALTER TABLE state ADD COLUMN next_check REAL NOT NULL DEFAULT 0")
+                db.execute("UPDATE state SET paused=0 WHERE id=1")
+            db.execute("CREATE TABLE IF NOT EXISTS attempts (identity TEXT PRIMARY KEY, started REAL NOT NULL, status TEXT NOT NULL)")
+            db.commit()
+            return db
+        except BaseException:
+            # _db can fail while opening corrupt or incompatible state, before
+            # claim/finish/recover receive a handle they could close.
+            db.close()
+            raise
 
     @classmethod
     def _backoff(cls, failures):
@@ -236,14 +242,14 @@ def _adapter_config():
             "MindIE adapter configuration is required to locate the runtime "
             "interpreter; remote execution fails closed"
         )
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding='utf-8'))
 
 
 class Gate:
     def __init__(self, surface):
         self.surface = surface
         self.sessions = Sessions() if surface == "knowledge" else None
-        self.tools = json.loads(CATALOG.read_text())[surface]
+        self.tools = json.loads(CATALOG.read_text(encoding='utf-8'))[surface]
         self.connection_id = uuid.uuid4().hex
 
     def call(self, request, cancel=None, *, timeout=None, cli_identity=None):
@@ -408,7 +414,7 @@ class Gate:
                 session, "mcp", self.connection_id + ":" + self._request_identity(request), token
             ):
                 raise ValueError("Duplicate MCP request; not executed again")
-            config = json.loads(self.sessions.config.read_text())
+            config = json.loads(self.sessions.config.read_text(encoding='utf-8'))
             payload = dict(
                 surface=self.surface,
                 name=name,
@@ -436,6 +442,7 @@ class Gate:
                     cancel=cancel,
                     env=generation_env(self.sessions.config),
                     max_output=KNOWLEDGE_MAX_OUTPUT,
+                    allow_service=True,
                 )
             except Exception as exc:
                 # A timeout or refused connection is availability, not a
@@ -488,7 +495,8 @@ def serve(surface):
 
     def send(value):
         with output_lock:
-            print(json.dumps(value, ensure_ascii=False), flush=True)
+            sys.stdout.buffer.write((json.dumps(value, ensure_ascii=False) + "\n").encode("utf-8"))
+            sys.stdout.buffer.flush()
 
     def respond(identifier, result):
         send(dict(jsonrpc="2.0", id=identifier, result=result))

@@ -2,7 +2,7 @@
 
 One daemon reader thread feeds stdout lines through a queue; a second thread
 only counts stderr bytes. This works on POSIX (process groups) and Windows
-(new process group + taskkill tree kill; not yet verified on real hardware).
+(suspended spawn assigned to a kill-on-close Job before user code runs).
 POSIX additionally supports the service-owned maintenance group contract.
 """
 
@@ -11,12 +11,16 @@ import os
 import queue
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 
+import windows_process
+from mindie_knowledge.loop.limits import ORGANIZER_TIMEOUT
+
 MAX_OUTPUT = 128 * 1024
-TIMEOUT = 120
+TIMEOUT = ORGANIZER_TIMEOUT
 ALLOWED_ITEMS = {"agent_message", "reasoning"}
 POSIX = os.name == "posix"
 
@@ -37,8 +41,9 @@ class NativeStartError(OSError):
     """The native executable could not be started."""
 
 
-def run_codex(command, prompt):
+def run_codex(command, prompt, *, timeout=None):
     # The knowledge service owns one group for worker + Codex + descendants.
+    timeout = TIMEOUT if timeout is None else timeout
     inherited = (
         POSIX
         and os.environ.get("MINDIE_MAINTENANCE_GROUP") == "1"
@@ -57,13 +62,11 @@ def run_codex(command, prompt):
                     start_new_session=not inherited,
                 )
             else:
-                # Windows (unverified on real hardware).
-                process = subprocess.Popen(
+                process = windows_process.spawn(
                     command,
                     stdin=input_file,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
                 )
         except OSError as exc:
             raise NativeStartError("native executable could not start") from exc
@@ -105,7 +108,7 @@ def run_codex(command, prompt):
         ]
         for thread in threads:
             thread.start()
-        deadline = time.monotonic() + TIMEOUT
+        deadline = time.monotonic() + timeout
         turns = 0
 
         def check_line(line):
@@ -167,19 +170,21 @@ def run_codex(command, prompt):
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-            elif process.poll() is None:
-                # Windows (unverified on real hardware): /T covers descendants.
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(process.pid)],
-                    capture_output=True,
-                    timeout=5,
-                )
-            process.wait(timeout=1)
-            # An inherited group's grandchildren can still hold these pipes
-            # until the service kills its group. Closing a buffered stream while
-            # its reader holds the lock can deadlock the worker's own deadline.
-            # Daemon readers end with this short-lived worker; the outer group
-            # owner is responsible for all descendants on every exit path.
+            else:
+                windows_process.close_tree(process)
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                if os.name == "nt":
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
+                    process.wait(timeout=2)
+                else:
+                    raise
+            # A POSIX inherited group's descendants are closed by the outer
+            # core. Windows Job cleanup above closes every owned pipe holder.
             if not threads[0].is_alive():
                 process.stdout.close()
             if not threads[1].is_alive():

@@ -3,6 +3,7 @@
 import json
 import io
 import os
+from contextlib import closing
 from pathlib import Path
 import shutil
 import sqlite3
@@ -11,11 +12,14 @@ import sys
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
+from tests.process_fixtures import cleanup_temporary_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
+import auto_update
 from auto_update import Updater, atomic, read
 from session_gate import Sessions, bind_explicit_config
 from update_lock import update_lock
@@ -80,7 +84,9 @@ class LocalUpdater(Updater):
             return "{}"
         if args[0] == "fixture-uv":
             if args[1] == "venv":
-                runtime = Path(args[-1]) / "bin/python"
+                runtime = Path(args[-1]) / (
+                    "Scripts/python.exe" if os.name == "nt" else "bin/python"
+                )
                 runtime.parent.mkdir(parents=True)
                 runtime.touch()
                 self.builds += 1
@@ -89,7 +95,10 @@ class LocalUpdater(Updater):
             return json.dumps(dict(idle=self.idle))
         return super().command(args, **kwargs)
 
-    def probe_runtime(self, python):
+    def prepare_capture(self, candidate):
+        return dict(capture_mode="public-transcript", redactor_executable=str(Path(candidate["python"]).absolute()))
+
+    def probe_runtime(self, python, scripts=None):
         self.assert_runtime = Path(python).exists()
         if not self.assert_runtime:
             raise RuntimeError("runtime missing")
@@ -188,7 +197,7 @@ class AutoUpdateTests(unittest.TestCase):
             self.base / "codex/plugins/cache/mindie-agent/mindie-agent/old/scripts"
         )
         self.cache.mkdir(parents=True)
-        (self.cache / "bridge.py").write_text("retained safe entrypoint")
+        (self.cache / "bridge.py").write_text("retained safe entrypoint", encoding="utf-8")
         initial_version = read(self.remote / "plugins/mindie-agent/.codex-plugin/plugin.json")["version"]
         (self.cache.parent.parent / initial_version / "scripts").mkdir(parents=True)
         atomic(
@@ -217,7 +226,7 @@ class AutoUpdateTests(unittest.TestCase):
 
     def tearDown(self):
         bind_explicit_config(None)
-        self.temp.cleanup()
+        cleanup_temporary_directory(self.temp)
 
     def git(self, *args):
         return subprocess.check_output(
@@ -240,20 +249,20 @@ class AutoUpdateTests(unittest.TestCase):
         old_plugin = Path(first["current"]["plugin"])
         self.assertEqual(first["current"]["revision"], self.sha)
         skill = self.remote / "plugins/mindie-agent/skills/mindie-agent/SKILL.md"
-        skill.write_text(skill.read_text() + "\nRevision two marker\n")
+        skill.write_text(skill.read_text(encoding="utf-8") + "\nRevision two marker\n", encoding="utf-8")
         bridge = self.remote / "plugins/mindie-agent/scripts/bridge.py"
-        bridge.write_text(bridge.read_text() + "\n# Revision two marker\n")
+        bridge.write_text(bridge.read_text(encoding="utf-8") + "\n# Revision two marker\n", encoding="utf-8")
         second_sha = self.commit("second")
-        skill.write_text(skill.read_text() + "\nUncommitted developer work\n")
+        skill.write_text(skill.read_text(encoding="utf-8") + "\nUncommitted developer work\n", encoding="utf-8")
         result = self.check()
         self.assertEqual(result["status"], "installed")
         plugin = Path(result["current"]["plugin"])
         self.assertEqual(result["current"]["revision"], second_sha)
         self.assertIn(
-            "Revision two marker", (plugin / "skills/mindie-agent/SKILL.md").read_text()
+            "Revision two marker", (plugin / "skills/mindie-agent/SKILL.md").read_text(encoding="utf-8")
         )
         self.assertNotIn(
-            "Uncommitted", (plugin / "skills/mindie-agent/SKILL.md").read_text()
+            "Uncommitted", (plugin / "skills/mindie-agent/SKILL.md").read_text(encoding="utf-8")
         )
         mcp = read(plugin / ".mcp.json")["mcpServers"]["mindie-knowledge"]
         self.assertEqual(mcp["args"][0], str(plugin / "scripts/bridge.py"))
@@ -265,7 +274,7 @@ class AutoUpdateTests(unittest.TestCase):
         )
         self.assertTrue(old_plugin.exists())
         self.assertTrue((self.cache / "bridge.py").exists())
-        self.assertIn("Uncommitted", skill.read_text())
+        self.assertIn("Uncommitted", skill.read_text(encoding="utf-8"))
         installs = self.updater.installs
         self.assertEqual(self.check()["status"], "up_to_date")
         self.assertEqual(self.updater.installs, installs)
@@ -283,7 +292,7 @@ class AutoUpdateTests(unittest.TestCase):
         # A stale same-version cache copy is a hard failure, never a warning.
         victim = cache_dir / "scripts/bridge.py"
         original = victim.read_bytes()
-        victim.write_text("stale bytes from an older generation\n")
+        victim.write_text("stale bytes from an older generation\n", encoding="utf-8")
         try:
             with self.assertRaises(RuntimeError):
                 self.updater.verify_native(version, str(plugin))
@@ -292,6 +301,52 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(
             self.updater.verify_native(version, str(plugin))["version"], version
         )
+
+    def test_explicit_summary_worker_moves_with_runtime_generation(self):
+        engine = read(self.engine)
+        engine['summary_command'] = ['old-python', str(SCRIPTS / 'agent_worker.py'), '--model', 'explicit-nonthinking-model']
+        atomic(self.engine, engine)
+        result = self.check()
+        self.assertEqual(result['status'], 'installed')
+        selected = read(self.config)
+        updated = read(selected['engine_config'])
+        self.assertEqual(updated['summary_command'], [selected['python'],
+            str(Path(selected['runtime_scripts']) / 'agent_worker.py'), '--model', 'explicit-nonthinking-model', '--reasoning-effort', 'none'])
+
+    def test_summary_model_and_effort_survive_runtime_update(self):
+        engine = read(self.engine)
+        engine['summary_command'] = ['old-python', str(SCRIPTS / 'agent_worker.py'),
+                                     '--model', 'gpt-6-luna', '--reasoning-effort', 'low']
+        atomic(self.engine, engine)
+        result = self.check()
+        self.assertEqual(result['status'], 'installed')
+        selected = read(self.config)
+        updated = read(selected['engine_config'])
+        self.assertEqual(updated['summary_command'], [selected['python'],
+            str(Path(selected['runtime_scripts']) / 'agent_worker.py'),
+            '--model', 'gpt-6-luna', '--reasoning-effort', 'low'])
+
+    def test_native_inventory_without_source_type_updates_owned_marketplace(self):
+        first = self.check()
+        self.assertEqual(first["status"], "installed")
+        inventory = self.root / "fixture-marketplace.json"
+        # Observed Windows codex-cli 0.158.0-alpha.2.1 list response.
+        atomic(inventory, dict(name="mindie-agent", root=str(self.root / "marketplace")))
+        worker = self.remote / "plugins/mindie-agent/scripts/agent_worker.py"
+        worker.write_text(worker.read_text(encoding="utf-8") + "\n# updated worker\n", encoding="utf-8")
+        revision = self.commit("updated worker")
+        result = self.check()
+        self.assertEqual(result["status"], "installed")
+        self.assertEqual(result["current"]["revision"], revision)
+        self.assertEqual(self.updater.verify_native(result["current"]["version"], result["current"]["plugin"])["version"], result["current"]["version"])
+
+    def test_unknown_external_marketplace_rejected_before_service_stop(self):
+        external = dict(name="mindie-agent", root=str(self.remote))
+        with patch.object(self.updater, 'marketplace', return_value=external), patch.object(self.updater, 'command') as command:
+            with self.assertRaises(auto_update.Incompatible):
+                self.updater.install(dict(revision='candidate'))
+        command.assert_not_called()
+        self.assertFalse((self.root / 'transaction.json').exists())
 
     def test_package_binds_installation_config_into_mcp_and_hook(self):
         result = self.check()
@@ -311,7 +366,7 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertIn(expected, command)
         self.assertIn("stop", command)
         hook = read(plugin / "hooks/hooks.json")["hooks"]["Stop"][0]["hooks"][0]
-        self.assertEqual(hook["timeout"], 2)
+        self.assertEqual(hook["timeout"], 5)
         other = str(self.base / "other-adapter.json")
         import bridge as bridge_mod
         from session_gate import config_path as live_config
@@ -327,6 +382,10 @@ class AutoUpdateTests(unittest.TestCase):
             bind_explicit_config(None)
         binding = read(plugin / "scripts/installation.json")
         self.assertEqual(binding, {"adapter_config": expected})
+        self.assertEqual(
+            (plugin / "scripts/windows_process.py").read_bytes(),
+            (SCRIPTS / "windows_process.py").read_bytes(),
+        )
 
     def test_generated_bridge_init_binds_installation_config_without_env(self):
         result = self.check()
@@ -350,7 +409,7 @@ class AutoUpdateTests(unittest.TestCase):
                     runtime_scripts=str(plugin / "scripts"),
                 )
             )
-        )
+        , encoding="utf-8")
         other = self.base / "other-adapter.json"
         atomic(
             other,
@@ -363,9 +422,15 @@ class AutoUpdateTests(unittest.TestCase):
         )
         env = {
             "HOME": str(home),
+            # pathlib.Path.home() uses USERPROFILE on Windows; overriding only
+            # HOME leaves subprocesses pointed at the real user profile.
+            "USERPROFILE": str(home),
             "PATH": os.environ.get("PATH", ""),
             "TMPDIR": str(self.base / "tmp"),
         }
+        for name in ("SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP"):
+            if name in os.environ:
+                env[name] = os.environ[name]
         (self.base / "tmp").mkdir(exist_ok=True)
         bridge = plugin / "scripts/bridge.py"
         init = subprocess.run(
@@ -375,7 +440,7 @@ class AutoUpdateTests(unittest.TestCase):
             timeout=15,
             env=env,
         )
-        self.assertEqual(init.returncode, 0, init.stderr)
+        self.assertEqual(init.returncode, 0, init.stderr or init.stdout)
         payload = json.loads(init.stdout)
         self.assertEqual(payload["adapter"]["config"], expected)
         status = subprocess.run(
@@ -416,7 +481,7 @@ class AutoUpdateTests(unittest.TestCase):
             lease = sessions.activate()
             result = self.check()
             self.assertEqual(result["status"], "installed")
-            with sqlite3.connect(self.admission) as db:
+            with closing(sqlite3.connect(self.admission)) as db, db:
                 row = db.execute(
                     "SELECT session, enabled, token FROM leases WHERE session=?",
                     ("fixture-manual",),
@@ -491,7 +556,7 @@ class AutoUpdateTests(unittest.TestCase):
         first = self.check()
         before = read(Path(first["current"]["plugin"]) / "hooks/hooks.json")
         remote = self.remote / "plugins/mindie-agent/scripts/remote_bridge.py"
-        remote.write_text(remote.read_text() + "\n# Remote-only revision\n")
+        remote.write_text(remote.read_text(encoding="utf-8") + "\n# Remote-only revision\n", encoding="utf-8")
         self.commit("remote-only")
         second = self.check()
         self.assertEqual(second["status"], "installed")
@@ -504,9 +569,9 @@ class AutoUpdateTests(unittest.TestCase):
             "hooks"
         ][0]["command"]
         self.assertIn(str(previous / "scripts/bridge.py"), previous_command)
-        for name in ("diagnostic_support.py", "diagnostic_fallback.py"):
+        for name in ("diagnostic_support.py", "diagnostic_fallback.py", "windows_process.py"):
             path = self.remote / "plugins/mindie-agent/scripts" / name
-            path.write_text(path.read_text() + f"\n# {name} stop behavior\n")
+            path.write_text(path.read_text(encoding="utf-8") + f"\n# {name} stop behavior\n", encoding="utf-8")
             self.commit(name)
             result = self.check()
             self.assertEqual(result["status"], "installed")
@@ -519,13 +584,33 @@ class AutoUpdateTests(unittest.TestCase):
             self.assertNotEqual(command, previous_command)
             previous, previous_command = plugin, command
 
+    def test_wrapper_change_replaces_stop_even_with_identical_helpers(self):
+        first = self.check()
+        previous = Path(first["current"]["plugin"])
+        hook_path = previous / "hooks/hooks.json"
+        legacy = read(hook_path)
+        legacy["hooks"]["Stop"][0]["hooks"][0]["commandWindows"] = (
+            'python "legacy-bridge.py" stop >NUL 2>&1 & echo {}'
+        )
+        atomic(hook_path, legacy)
+        remote = self.remote / "plugins/mindie-agent/scripts/remote_bridge.py"
+        remote.write_text(remote.read_text(encoding="utf-8") + "\n# Next revision\n", encoding="utf-8")
+        self.commit("wrapper migration")
+        result = self.check()
+        self.assertEqual(result["status"], "installed")
+        plugin = Path(result["current"]["plugin"])
+        hook = read(plugin / "hooks/hooks.json")["hooks"]["Stop"][0]["hooks"][0]
+        self.assertIn(str(plugin / "scripts/bridge.py"), hook["command"])
+        self.assertIn("-EncodedCommand", hook["commandWindows"])
+        self.assertNotEqual(hook["commandWindows"], legacy["hooks"]["Stop"][0]["hooks"][0]["commandWindows"])
+
     def test_uncoordinated_caches_are_retained_untouched(self):
         # No compatibility shim: cached entrypoints of loaded tasks keep their
         # exact bytes; the updater only retains/restores them across switches.
         self.check()
-        self.assertEqual((self.cache / "bridge.py").read_text(), "retained safe entrypoint")
+        self.assertEqual((self.cache / "bridge.py").read_text(encoding="utf-8"), "retained safe entrypoint")
         retained = self.root / "retained-caches/old/scripts/bridge.py"
-        self.assertEqual(retained.read_text(), "retained safe entrypoint")
+        self.assertEqual(retained.read_text(encoding="utf-8"), "retained safe entrypoint")
         self.assertFalse((self.root / "legacy-caches-original").exists())
 
     def test_knowledge_sync_runs_on_every_schedule_and_failure_is_isolated(self):
@@ -541,7 +626,7 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(result["knowledge_status"], "sync_failed")
         self.assertIn("knowledge_error", result)
         self.updater.fail_knowledge = False
-        self.remote.joinpath("marker").write_text("new revision")
+        self.remote.joinpath("marker").write_text("new revision", encoding="utf-8")
         self.commit("failing candidate")
         for _ in range(3):
             self.updater.fail_install = True
@@ -551,10 +636,10 @@ class AutoUpdateTests(unittest.TestCase):
 
     def test_unreadable_admission_bytes_do_not_block_update(self):
         sessions = Sessions(self.config)
-        sessions.path.write_text("not a sqlite database")
+        sessions.path.write_text("not a sqlite database", encoding="utf-8")
         result = self.check()
         self.assertEqual(result["status"], "installed")
-        self.assertEqual(sessions.path.read_text(), "not a sqlite database")
+        self.assertEqual(sessions.path.read_text(encoding="utf-8"), "not a sqlite database")
         self.assertGreater(self.updater.installs, 0)
 
     def test_install_verifies_native_selection_while_retaining_old_entrypoints(self):
@@ -563,7 +648,7 @@ class AutoUpdateTests(unittest.TestCase):
         # the old entrypoint must keep its exact bytes and path.
         old = self.updater.native_cache() / "0.1.0+codex.20260919061330608250/scripts"
         old.mkdir(parents=True)
-        (old / "bridge.py").write_text("old loaded-task entrypoint")
+        (old / "bridge.py").write_text("old loaded-task entrypoint", encoding="utf-8")
         result = self.check()
         self.assertEqual(result["status"], "installed")
         candidate_version = result["current"]["version"]
@@ -574,7 +659,7 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(native["version"], candidate_version)
         self.assertTrue(native["installed"] and native["enabled"])
         retained = self.updater.native_cache() / "0.1.0+codex.20260919061330608250/scripts/bridge.py"
-        self.assertEqual(retained.read_text(), "old loaded-task entrypoint")
+        self.assertEqual(retained.read_text(encoding="utf-8"), "old loaded-task entrypoint")
 
     def test_no_fake_installed_when_retained_cache_wins_native_discovery(self):
         # A candidate whose build metadata sorts BELOW a retained cache (the
@@ -582,7 +667,7 @@ class AutoUpdateTests(unittest.TestCase):
         # installed: readback verification fails and rolls back.
         old = self.updater.native_cache() / "0.1.0+codex.20260919061330608250/scripts"
         old.mkdir(parents=True)
-        (old / "bridge.py").write_text("old loaded-task entrypoint")
+        (old / "bridge.py").write_text("old loaded-task entrypoint", encoding="utf-8")
         with patch("auto_update.datetime") as clock:
             clock.now.return_value.strftime.return_value = "20260920055301"
             result = self.check()
@@ -596,7 +681,7 @@ class AutoUpdateTests(unittest.TestCase):
         native = self.updater.native_list()["installed"][0]
         self.assertEqual(native["version"], "0.1.0+codex.20260919061330608250")
         self.assertEqual(
-            (self.updater.native_cache() / "0.1.0+codex.20260919061330608250/scripts/bridge.py").read_text(),
+            (self.updater.native_cache() / "0.1.0+codex.20260919061330608250/scripts/bridge.py").read_text(encoding="utf-8"),
             "old loaded-task entrypoint",
         )
         # Bounded: a repeated check consumes attempts, never loops adds.
@@ -649,6 +734,35 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(launcher.read_bytes(), before)
         self.assertFalse((self.root / "launcher.next").exists())
 
+    def test_manual_enable_installs_native_plugin_and_persists_manual_state(self):
+        args = SimpleNamespace(
+            source_root=self.remote,
+            root=self.root,
+            settings=self.settings,
+            channel="main",
+            schedule="manual",
+        )
+        with (
+            patch("auto_update.Updater", LocalUpdater),
+            patch("auto_update.schedule_enable") as schedule,
+        ):
+            result = auto_update.enable(args)
+        schedule.assert_not_called()
+        self.assertEqual(result["status"], "manual")
+        self.assertEqual(result["schedule"]["mode"], "manual")
+        self.assertIs(result["schedule"]["registered"], False)
+        launcher = Path(result["schedule"]["check_command"][1])
+        self.assertTrue(launcher.is_file())
+        settings = read(self.settings)
+        self.assertEqual(settings["schedule_mode"], "manual")
+        self.assertEqual(settings["schedule"], result["schedule"])
+        state = read(self.root / "state.json")
+        current = state["current"]
+        verified = LocalUpdater(self.settings).verify_native(
+            current["version"], current["plugin"]
+        )
+        self.assertEqual(verified["version"], current["version"])
+
 
 class UpdateIdleTests(unittest.TestCase):
     def test_missing_service_is_idle(self):
@@ -656,7 +770,7 @@ class UpdateIdleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             engine = Path(tmp) / "engine.json"
-            engine.write_text(json.dumps(dict(root=tmp, domain="test")))
+            engine.write_text(json.dumps(dict(root=tmp, domain="test")), encoding="utf-8")
             self.assertTrue(service_handoff.stop(str(engine)))
 
     def test_absent_stop_if_idle_fails_closed(self):
@@ -664,7 +778,7 @@ class UpdateIdleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             engine = Path(tmp) / "engine.json"
-            engine.write_text(json.dumps(dict(root=tmp, domain="test")))
+            engine.write_text(json.dumps(dict(root=tmp, domain="test")), encoding="utf-8")
             with (
                 patch(
                     "service_handoff.connect",
@@ -675,26 +789,8 @@ class UpdateIdleTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     service_handoff.stop(str(engine))
 
-    def test_authenticated_idle_result_is_used(self):
-        import service_handoff
-
-        with tempfile.TemporaryDirectory() as tmp:
-            engine = Path(tmp) / "engine.json"
-            engine.write_text(json.dumps(dict(root=tmp, domain="test")))
-            with (
-                patch(
-                    "service_handoff.connect",
-                    return_value=dict(url="http://127.0.0.1:9", token="t"),
-                ),
-                patch(
-                    "service_handoff.rpc",
-                    side_effect=[dict(idle=True, status="stopping"),
-                                 dict(admission_frozen=True), ConnectionRefusedError()],
-                ) as rpc,
-            ):
-                self.assertTrue(service_handoff.stop(str(engine)))
-                self.assertEqual([c.args[1] for c in rpc.call_args_list],
-                                 ["stop_if_idle", "status", "status"])
+    # Authenticated acknowledgement and real lifetime release are exercised
+    # by test_service_handoff; a canned sequence of TCP results cannot prove it.
 
 
 if __name__ == "__main__":

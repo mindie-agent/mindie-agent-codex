@@ -53,19 +53,86 @@ to setup and `MINDIE_AGENT_CONFIG` to the one-time updater enable command.
 The generated Skill, MCP and Hook entries retain that configuration binding;
 ordinary later tasks do not need to export it.
 
-Windows installation, process handling and Task Scheduler paths are implemented.
-The user will validate and advance them on a dedicated Windows machine **after
-this change is merged**. Windows hardware acceptance is not this merge's gate.
+## Install on Windows PowerShell
+
+Requires Python 3.11+, Git, `uv`, and an authenticated Codex CLI with native
+plugin support. Run these commands from the downloaded repository in PowerShell;
+the default schedule uses the current user's Windows Task Scheduler task.
+
+```powershell
+$Repo = (Get-Location).Path
+$Data = Join-Path $env:LOCALAPPDATA 'MindIEAgent'
+$Bootstrap = Join-Path $Data 'codex-bootstrap\runtime'
+$Config = Join-Path $Data 'codex.json'
+$UpdaterSettings = Join-Path $Data 'updater.json'
+New-Item -ItemType Directory -Force -Path $Data | Out-Null
+uv venv --python 3.11 $Bootstrap
+uv pip install --python (Join-Path $Bootstrap 'Scripts\python.exe') `
+  -r (Join-Path $Repo 'runtime-requirements.txt')
+$env:MINDIE_AGENT_CONFIG = $Config
+& (Join-Path $Bootstrap 'Scripts\python.exe') `
+  (Join-Path $Repo 'plugins\mindie-agent\scripts\setup.py') install `
+  --knowledge-python (Join-Path $Bootstrap 'Scripts\python.exe') `
+  --config $Config --root $Data
+& (Join-Path $Bootstrap 'Scripts\python.exe') `
+  (Join-Path $Repo 'plugins\mindie-agent\scripts\auto_update.py') `
+  --settings $UpdaterSettings enable --source-root $Repo `
+  --root (Join-Path $Data 'updates') --channel main --schedule auto
+& (Join-Path $Bootstrap 'Scripts\python.exe') `
+  (Join-Path $Data 'updates\launcher.py') $UpdaterSettings status
+```
+
+The final command validates and installs the plugin through Codex's native
+plugin API before registering the task. To install and validate it without a
+periodic task, use `--schedule manual`; this mode persists and reports the
+manual check command. Windows CI exercises the pinned runtime and process
+contracts. A native Codex install and real Windows host acceptance still need
+to be recorded separately.
+
+## Install on WSL/Linux
+
+Use the same runtime prerequisites and shell setup as macOS. On Linux the
+default schedule is a per-user systemd timer, enabled only when that user's
+systemd manager responds. In WSL, this requires systemd to be enabled and the
+user manager to be available. If that scheduler is unavailable, use
+`--schedule manual`; it still performs the full runtime probe, native plugin
+install and selection readback, then saves a manual scheduling state.
+
+```sh
+MINDIE_DATA="${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent"
+MINDIE_BOOTSTRAP="$MINDIE_DATA/codex-bootstrap/runtime"
+MINDIE_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/codex.json"
+MINDIE_UPDATER_SETTINGS="${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/updater.json"
+uv venv --python 3.11 "$MINDIE_BOOTSTRAP"
+uv pip install --python "$MINDIE_BOOTSTRAP/bin/python" -r runtime-requirements.txt
+MINDIE_AGENT_CONFIG="$MINDIE_CONFIG" \
+  "$MINDIE_BOOTSTRAP/bin/python" plugins/mindie-agent/scripts/setup.py install \
+  --knowledge-python "$MINDIE_BOOTSTRAP/bin/python" \
+  --config "$MINDIE_CONFIG" --root "$MINDIE_DATA"
+MINDIE_AGENT_CONFIG="$MINDIE_CONFIG" \
+  "$MINDIE_BOOTSTRAP/bin/python" plugins/mindie-agent/scripts/auto_update.py \
+  --settings "$MINDIE_UPDATER_SETTINGS" enable --source-root "$PWD" \
+  --root "$MINDIE_DATA/updates" --channel main --schedule auto
+"$MINDIE_BOOTSTRAP/bin/python" "$MINDIE_DATA/updates/launcher.py" \
+  "$MINDIE_UPDATER_SETTINGS" status
+```
+
+Change the final option to `--schedule manual` on systems without a responding
+per-user systemd manager. Automatic Linux checks run as the same user every
+five minutes while that manager is running.
 
 ## First use and task boundaries
 
-Explicitly invoke `$mindie-agent`. Its offline status offers three choices:
-recommended public contribution for a named project/repository/account,
-read-only knowledge, or configuration later. There is no default consent.
-This choice is requested only on the first use after installation and is
-persisted for that installation. Later tasks, forks, restarts, updates and
-ordinary failures never request it again. Each entry binds only the current
-native task internally; users do not manage that binding.
+Explicitly invoke `$mindie-agent:mindie-agent` (the installed plugin's qualified
+Skill name). Its status distinguishes task binding from
+experience capture. Missing public destination and project scope are incomplete
+configuration; supply only those missing values through `bridge.py config`.
+Existing approved settings persist across tasks and updates. Configuration in
+an already-bound task prepares capture without a second activation.
+An explicit disable and legacy declined settings remain disabled until changed.
+Read-only/later product modes are removed; they are retained only as migration
+data. Inspect actual capture, organization and contribution receipts before
+claiming full-loop success.
 
 Knowledge tools require that entry binding. The host supplies task
 identity; public knowledge calls have no identity or capability argument.
@@ -84,10 +151,14 @@ See [activation details](plugins/mindie-agent/skills/mindie-agent/references/act
 With contribution off, there is no Stop capture, transcript reading, draft
 creation or organizer invocation. Plugin and public knowledge updates continue.
 
-With contribution on, an admitted Stop delivery records the current task's
-eligible public material for a separate, bounded local organizer. Hidden
-reasoning and inherited task history are excluded. The publication path checks
-scope and sensitive content before sending a Markdown contribution PR; raw
+With contribution on, an admitted Stop delivery saves the current task's user
+messages, public assistant progress and final answers in their original order.
+Tools, hidden reasoning, injected instructions and inherited task history are
+excluded. A local Gitleaks scanner and privacy rules redact the retained text
+before storage or any optional summary call. No model writes or rewrites the
+body. One task appends to one record within its authorized sharing generation;
+the body and read position commit together. The publication path checks scope
+and sensitive content before sending a Markdown contribution PR; raw
 transcripts are not uploaded. The existing external Grok Bot application owns
 repository review and merge. This plugin does not install a Grok CLI reviewer.
 
@@ -127,9 +198,12 @@ with reporting off. See the [shared diagnostics contract](https://github.com/min
 
 ## Updates and failures
 
-The macOS LaunchAgent checks the adapter's remote `main` and public knowledge
-feed every five minutes. This work does not open model tasks or activate
-knowledge. Runtime dependencies follow exact reviewed commits in
+The macOS LaunchAgent, Windows Task Scheduler task, or Linux systemd user timer
+checks the adapter's remote `main` and public knowledge feed every five
+minutes. On unsupported systems, or when Linux has no responding per-user
+systemd manager, explicit `--schedule manual` mode still installs the validated
+plugin and records that no scheduler is registered. This work does not open
+model tasks or activate knowledge. Runtime dependencies follow exact reviewed commits in
 `runtime-requirements.txt`; code, interpreter, configuration and plugin files
 switch as one generation.
 
@@ -141,18 +215,31 @@ and native package, with readback. Changed Hook dependencies require fresh
 native trust. No live entrypoint is automatically deleted.
 
 Business MCP calls and each admitted Stop delivery get one attempt, without an
-automatic model retry. The Stop Hook has a 1.5-second inner budget and a 2-second
-native timeout, always returns normal completion and cannot request another
-model turn. Missing/offline capture does not create an automatic repair task.
+automatic model retry. The Stop Hook has a 1.5-second inner budget on POSIX and
+1.3 seconds on Windows, within the 5-second native timeout. It always returns
+normal completion and cannot request another model turn. Missing/offline
+capture does not create an automatic repair task.
 MCP calls have bounded input, output and process deadlines; long remote work
 uses owned jobs with explicit status and cancellation.
 
-Optional organizer work is isolated from tools, plugins and other agents and
-has a 120-second model-process deadline. The shared runtime limits background
-admission per rolling hour and pauses consecutive failures. These limits bound
-optional background cost; they neither expire ordinary task authorization nor
-require a user-facing completion checklist. Exact status and recovery guidance
-are available through the entry Skill.
+Setup installs a checksum-pinned Gitleaks release once. Stop processing performs
+no downloads and has no model dependency. A missing or failed scanner leaves
+the input unread instead of publishing unredacted content. Public messages are
+not shortened to fit a model; the parser advances at complete message boundaries.
+
+The default title and search introduction are labeled source excerpts. An
+optional, separately configured model may replace only these two
+metadata fields. It does not inherit the business task's model or effort. The
+worker accepts a separately selected reasoning effort (default `low`), at most 24 KiB of summary source
+(explicitly labeled first/last excerpts for larger bodies), and has a 35-second
+native invocation deadline. The service bounds the entire invocation to 45
+seconds. One settled body version gets at most one attempt, including across
+restart; failure retains the excerpt and does not block saving, retrieval or
+publication. GPT-6-Luna with `low` is a supported choice on the tested account;
+other models and efforts may be selected independently. `none` is optional,
+not a prerequisite. The account must support the selected combination.
+See [the transcript contract](docs/public-transcript.md) for configuration and
+measured acceptance boundaries.
 
 The updater records preparation and install outcomes. A known temporary
 network failure keeps the installed generation and is retried by the existing
@@ -214,7 +301,7 @@ or hardware acceptance.
 ```sh
 # Pins match .github/workflows/tests.yml. Do not omit these: the contract
 # tests archive the commits below and fail, naming the variable, if unset.
-export MINDIE_CORE_REPO=/path/to/knowledge-checkout   # contains 0df968a03008a170bb52d4acade7c7226eb0d39b
+export MINDIE_CORE_REPO=/path/to/knowledge-checkout   # contains 68ed86579bcbf88ac8ed2817a2ca81756c351485
 export MINDIE_KIMI_REPO=/path/to/kimi-adapter-checkout  # contains 90f73e76c6087ce091570f2d151b709145c913bc
 .venv/bin/python -m unittest discover -s tests -p 'test_*.py'
 .venv/bin/python -m unittest tests.test_parallel_codex_contract -v

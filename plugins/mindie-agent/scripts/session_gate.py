@@ -54,7 +54,7 @@ def _installation_binding():
     if not path.is_file():
         raise ValueError("installation config binding is not a file")
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding='utf-8'))
     except (OSError, ValueError) as exc:
         raise ValueError("installation config binding is unreadable") from exc
     if not isinstance(data, dict):
@@ -112,6 +112,10 @@ def generation_env(config=None):
     interpreter's installed knowledge/remote-dev pins.
     """
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    # All adapter helpers exchange bounded UTF-8 JSON over pipes. Python on a
+    # Windows host can otherwise inherit a legacy console encoding from the
+    # user's profile, which disagrees with bounded_process's UTF-8 contract.
+    env["PYTHONIOENCODING"] = "utf-8"
     selected = str(Path(config or config_path()).absolute())
     env["MINDIE_AGENT_CONFIG"] = selected
     env[_DISPATCH_CONFIG] = selected
@@ -134,7 +138,7 @@ class Sessions:
         Construction does not create the file; activation does.
         """
         try:
-            value = json.loads(self.config.read_text()).get("admission_path")
+            value = json.loads(self.config.read_text(encoding='utf-8')).get("admission_path")
         except (OSError, ValueError):
             value = None
         if isinstance(value, str) and os.path.isabs(value):
@@ -143,7 +147,7 @@ class Sessions:
 
     def _config(self):
         try:
-            config = json.loads(self.config.read_text())
+            config = json.loads(self.config.read_text(encoding='utf-8'))
         except (OSError, ValueError) as exc:
             raise Inactive(f"MindIE adapter configuration is unreadable: {exc}")
         python = config.get("python")
@@ -167,6 +171,7 @@ class Sessions:
                     timeout=self.op_timeout,
                     max_output=32768,
                     env=generation_env(self.config),
+                    allow_service=operation == "stop_capture",
                 )
                 envelope = json.loads(output)
             except Inactive:

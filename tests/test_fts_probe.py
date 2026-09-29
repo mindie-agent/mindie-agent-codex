@@ -179,7 +179,7 @@ class UpdaterFtsProbeTests(unittest.TestCase):
         def command(argv, **kwargs):
             script = str(argv[2])
             at = script.rindex("import sqlite3\n")
-            child = script[at:]
+            child = "missing = []\n" + script[at:]
             child = child.replace("import sqlite3\n", "import sqlite3\n" + SQLITE_PATCH, 1)
             return run([str(argv[0]), "-c", child], "", **kwargs)
 

@@ -62,23 +62,28 @@ class SetupTests(unittest.TestCase):
             try:
                 __import__(module)
             except ImportError:
-                self.skipTest(f"pinned runtime not installed in {sys.executable}")
+                self.fail(f"pinned runtime not installed in {sys.executable}; run tests/preflight.py")
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             config = base / "codex.json"
             result = run_setup(sys.executable, "--config", config, "--root", base / "data")
             self.assertEqual(result.returncode, 0, result.stderr)
             engine = config.with_name("codex.engine.json")
-            self.assertEqual((config.stat().st_mode & 0o777), 0o600)
-            self.assertEqual((engine.stat().st_mode & 0o777), 0o600)
+            if os.name == "posix":
+                self.assertEqual((config.stat().st_mode & 0o777), 0o600)
+                self.assertEqual((engine.stat().st_mode & 0o777), 0o600)
+            else:
+                # Windows mode bits do not describe the inherited profile
+                # ACL; file ACL review remains part of native acceptance.
+                self.assertTrue(config.is_file())
+                self.assertTrue(engine.is_file())
             value = json.loads(engine.read_text())
             adapter = json.loads(config.read_text())
             self.assertEqual(value["domain"], "vllm-ascend")
-            self.assertTrue(value["agent_command"][1].endswith("agent_worker.py"))
-            self.assertEqual(
-                Path(value["agent_command"][0]).resolve(),
-                Path(sys.executable).resolve(),
-            )
+            self.assertEqual(value["capture_mode"], "public-transcript")
+            self.assertNotIn("agent_command", value)
+            self.assertTrue(Path(value["redactor_executable"]).is_file())
+            self.assertNotIn("summary_command", value)
             self.assertNotIn("session_activation", value)
             self.assertNotIn("session_activation", adapter)
             admission = config.with_name("codex.admission.sqlite3")
@@ -226,7 +231,12 @@ class SetupTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             community = config.with_name("mindie-community.json")
-            self.assertEqual((community.stat().st_mode & 0o777), 0o600)
+            if os.name == "posix":
+                self.assertEqual((community.stat().st_mode & 0o777), 0o600)
+            else:
+                # Windows inherits the temporary profile directory ACL; this
+                # test does not claim that the ACL is restrictive.
+                self.assertTrue(community.is_file())
             settings = json.loads(community.read_text())
             self.assertEqual(settings["schema"], "mindie-community-config/1")
             self.assertTrue(settings["enabled"])

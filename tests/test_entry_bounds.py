@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
+sys.path.insert(0, str(SCRIPTS))
 spec = importlib.util.spec_from_file_location(
     "process_guard", SCRIPTS / "process_guard.py"
 )
@@ -35,15 +36,40 @@ class EntryBoundsTests(unittest.TestCase):
             dict(event, extra="x" * 131072),
         ]
         with tempfile.TemporaryDirectory() as directory:
-            marker = Path(directory) / "called"
-            runtime = Path(directory) / "runtime"
-            runtime.write_text(f"#!/bin/sh\ntouch '{marker}'\n")
-            runtime.chmod(0o755)
+            root = Path(directory)
+            marker = root / "called"
+            runtime_scripts = root / "runtime-scripts"
+            runtime_scripts.mkdir()
+            (runtime_scripts / "admission_ops.py").write_text(
+                "import json\n"
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('called')\n"
+                "print(json.dumps({'ok': True, 'result': {}}))\n"
+            )
+            community = root / "community.json"
+            community.write_text(json.dumps({
+                "schema": "mindie-community-config/1",
+                "enabled": True,
+                "generation": "fixture",
+                "enabled_at": time.time(),
+                "repository": "mindie-agent/knowledge",
+                "branch": "main",
+                "project_roots": [str(root)],
+                "idle_seconds": 300,
+                "visibility": "public",
+            }))
             config = Path(directory) / "config.json"
             config.write_text(
-                json.dumps(dict(python=str(runtime), engine_config="unused"))
+                json.dumps(dict(
+                    python=sys.executable,
+                    engine_config=str(root / "engine.json"),
+                    runtime_scripts=str(runtime_scripts),
+                    community_config=str(community),
+                ))
             )
             for case in cases:
+                if isinstance(case, dict):
+                    case = dict(case, cwd=str(root))
                 result = subprocess.run(
                     [sys.executable, str(SCRIPTS / "bridge.py"), "stop"],
                     input=json.dumps(case),
@@ -95,7 +121,7 @@ class EntryBoundsTests(unittest.TestCase):
 
     def test_worker_input_rejected_before_model_start(self):
         result = subprocess.run(
-            [sys.executable, str(SCRIPTS / "agent_worker.py")],
+            [sys.executable, str(SCRIPTS / "agent_worker.py"), "--model", "synthetic-summary-model"],
             input="x" * 65537,
             text=True,
             capture_output=True,
@@ -103,7 +129,7 @@ class EntryBoundsTests(unittest.TestCase):
             env={**os.environ, "MINDIE_CODEX_BIN": "/missing/not-called"},
         )
         self.assertEqual(result.returncode, 65)
-        self.assertEqual(result.stderr.strip(), "organizer result was invalid")
+        self.assertEqual(result.stderr.strip(), "summary failed: invalid_result")
         self.assertNotIn("x" * 32, result.stderr)
 
     def test_session_start_is_not_registered(self):

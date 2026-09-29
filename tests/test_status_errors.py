@@ -1,4 +1,6 @@
 import json
+import sqlite3
+from contextlib import closing
 import os
 from pathlib import Path
 import subprocess
@@ -88,7 +90,6 @@ class ScopedStatus(unittest.TestCase):
     def test_paused_task_records_are_scoped_and_read_only(self):
         from mindie_knowledge.loop.activation import Admission
         from mindie_knowledge.loop.store import Store, session_key
-        import sqlite3
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -103,7 +104,7 @@ class ScopedStatus(unittest.TestCase):
             )))
             admission = Admission(engine["admission_path"])
             admission.activate("own-task", project_root=str(root))
-            with sqlite3.connect(engine["admission_path"]) as db:
+            with closing(sqlite3.connect(engine["admission_path"])) as db, db:
                 db.execute("UPDATE leases SET failures=3 WHERE session='own-task'")
             store = Store(engine["root"], "test")
             try:

@@ -28,51 +28,13 @@ import time
 
 from bounded_process import run
 import consent
+from runtime_probe import PROBE_MODULES, SETUP_FTS_PROBE as _FTS_PROBE, build_probe_script
 import sharing
 
 SCRIPTS = Path(__file__).parent.absolute()
 
-# The configured interpreter must carry the exact runtime pins,
-# matching the actual new package APIs; the updater's capability probe covers
-# deeper runtime behavior.
-PROBE_MODULES = (
-    "mindie_knowledge.loop.cli",
-    "mindie_knowledge.loop.documents",
-    "mindie_knowledge.loop.activation",
-    "remote_dev.mcp.server",
-)
+# Setup and updater use the same API and SQLite capability contract.
 PROBE_TIMEOUT = 15
-
-ADMISSION_METHODS = ("activate", "check", "resolve", "claim", "finish", "deactivate")
-
-# In-memory only. contentless_delete=1 is SQLite >= 3.43 and an FTS5 build.
-_FTS_PROBE = r"""
-import sqlite3
-_fts = None
-try:
-    _fts = sqlite3.connect(":memory:")
-    _fts.execute("CREATE VIRTUAL TABLE probe USING fts5(body, content='', contentless_delete=1)")
-    _fts.execute("INSERT INTO probe(rowid, body) VALUES (1, 'alpha')")
-    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'alpha'").fetchall() != [(1,)]:
-        raise RuntimeError("insert MATCH failed")
-    _fts.execute("UPDATE probe SET body='beta' WHERE rowid=1")
-    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'beta'").fetchall() != [(1,)]:
-        raise RuntimeError("update MATCH failed")
-    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'alpha'").fetchall():
-        raise RuntimeError("stale MATCH survived update")
-    _fts.execute("DELETE FROM probe WHERE rowid=1")
-    if _fts.execute("SELECT rowid FROM probe WHERE probe MATCH 'beta'").fetchall():
-        raise RuntimeError("delete MATCH failed")
-except Exception as exc:
-    missing.insert(0, (
-        "sqlite " + sqlite3.sqlite_version
-        + " lacks FTS5 contentless_delete=1 (SQLite >=3.43.0): "
-        + type(exc).__name__ + ": " + str(exc)[:160]
-    ))
-finally:
-    if _fts is not None:
-        _fts.close()
-"""
 
 
 def probe_runtime(python):
@@ -82,37 +44,7 @@ def probe_runtime(python):
     ``load_transcript_adapter`` (registers the module before exec). This
     process does not grow a second dynamic importer.
     """
-    adapter = str(SCRIPTS / "codex_transcript.py")
-    script = (
-        "import importlib, inspect\n"
-        "missing = []\n"
-        f"for name in {list(PROBE_MODULES)!r}:\n"
-        "    try:\n"
-        "        importlib.import_module(name)\n"
-        "    except Exception as exc:\n"
-        "        missing.append(f'{name} ({type(exc).__name__}: {exc})')\n"
-        "if not missing:\n"
-        "    from mindie_knowledge.loop.activation import Admission\n"
-        "    from mindie_knowledge.loop.cli import load_transcript_adapter\n"
-        "    if 'path' not in inspect.signature(Admission.__init__).parameters:\n"
-        "        missing.append('Admission does not take an explicit admission path')\n"
-        f"    for method in {ADMISSION_METHODS!r}:\n"
-        "        if not hasattr(Admission, method):\n"
-        "            missing.append('Admission lacks ' + method)\n"
-        f"    adapter = {adapter!r}\n"
-        "    try:\n"
-        "        module = load_transcript_adapter({'transcript_adapter': adapter})\n"
-        "        if module is None:\n"
-        "            missing.append('load_transcript_adapter returned None')\n"
-        "        else:\n"
-        "            for name in ('FileIdentity', 'identify', 'read_material'):\n"
-        "                if not hasattr(module, name):\n"
-        "                    missing.append('transcript adapter lacks ' + name)\n"
-        "    except Exception as exc:\n"
-        "        missing.append(f'transcript adapter ({type(exc).__name__}: {exc})')\n"
-        + _FTS_PROBE
-        + "print('MISSING: ' + '; '.join(missing) if missing else 'OK')\n"
-    )
+    script = build_probe_script(SCRIPTS / "codex_transcript.py")
     try:
         output = run([python, "-c", script], "", timeout=PROBE_TIMEOUT)
     except Exception as exc:
@@ -130,7 +62,7 @@ def probe_runtime(python):
 def write_private(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(descriptor, "w") as stream:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
         json.dump(value, stream, ensure_ascii=False, indent=2)
         stream.write("\n")
 
@@ -140,7 +72,7 @@ def replace_private(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(dir=path.parent, prefix=".mindie-")
     try:
-        with os.fdopen(fd, "w") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(value, stream, ensure_ascii=False, indent=2)
             stream.write("\n")
             stream.flush()
@@ -206,28 +138,24 @@ def community_settings(args, parser, python):
 
 
 def interactive_choice(args, parser):
-    """Optional installer prompt. No default yes; headless never calls this."""
+    """Confirm the supplied destination; there are no partial product modes."""
     print(sharing.CHOICES, file=sys.stderr)
     try:
-        line = input("Choice [1/2/3]: ").strip()
+        line = input("Configure the supplied public destination and scope? [yes/no]: ").strip()
     except EOFError:
-        parser.error("interactive setup requires an explicit 1, 2 or 3; no default")
-    if line == "1":
+        parser.error("interactive setup needs a response; configuration is incomplete")
+    if line.lower() == "yes":
         if not (
             args.community_repository
             and args.community_project_root
             and args.community_visibility == "public"
         ):
             parser.error(
-                "choice 1 requires --community-repository OWNER/REPO "
+                "configuration requires --community-repository OWNER/REPO "
                 "--community-project-root PATH --community-visibility public"
             )
         return "contribute"
-    if line == "2":
-        return "read-only"
-    if line == "3":
-        return "later"
-    parser.error("no default yes; choose 1, 2 or 3")
+    parser.error("configuration was not completed; no product mode was selected")
 
 
 def install(args, parser):
@@ -271,14 +199,12 @@ def install(args, parser):
     value = dict(
         root=str(args.root.expanduser().absolute()),
         domain=args.domain,
-        agent_command=[
-            python,
-            str(SCRIPTS / "agent_worker.py"),
-        ],
         admission_path=str(admission_path),
         transcript_adapter=transcript_adapter,
         community_config=str(community_config),
     )
+    from capture_config import prepare
+    value.update(prepare(python, SCRIPTS))
     if args.domain == "vllm-ascend" and not args.no_public_feed:
         value["feeds"] = [
             dict(
@@ -354,7 +280,7 @@ def configure(args, parser):
             "no existing configuration; run setup.py install "
             "--knowledge-python PYTHON first"
         )
-    adapter = json.loads(config.read_text())
+    adapter = json.loads(config.read_text(encoding='utf-8'))
     python = adapter.get("python")
     if not isinstance(python, str) or not python:
         parser.error("existing configuration has no runtime interpreter")
@@ -365,12 +291,11 @@ def configure(args, parser):
             "(--community-repository, --community-project-root, "
             "--community-visibility public)"
         )
-    # The explicit contribution choice lands in the consent authority; a
-    # damaged consent document refuses first so settings stay untouched.
-    try:
-        consent.record_choice("contribute", config)
-    except consent.ConsentError as exc:
-        parser.error(str(exc))
+    # Validate the consent authority first, but do not claim completed setup
+    # before the real configuration writes succeed.
+    saved = consent.load(config)
+    if saved["state"] in {"corrupt", "unreadable"}:
+        parser.error("saved setup state is damaged; configuration was not changed")
     with sharing.community_write_lock(config):
         # One context for the whole boundary: converge adapter/engine/worker
         # onto the profile-shared path, then resolve and re-read the current
@@ -426,7 +351,7 @@ def configure(args, parser):
     engine_path = Path(adapter.get("engine_config") or "")
     if engine_path.is_file():
         try:
-            engine = json.loads(engine_path.read_text())
+            engine = json.loads(engine_path.read_text(encoding='utf-8'))
         except (OSError, ValueError):
             engine = None
         if isinstance(engine, dict) and "session_activation" in engine:
@@ -437,6 +362,7 @@ def configure(args, parser):
                 engine["admission_path"] = adapter["admission_path"]
             replace_private(engine_path, engine)
     replace_private(config, adapter)
+    consent.record_choice("contribute", config)
     print(
         json.dumps(
             dict(

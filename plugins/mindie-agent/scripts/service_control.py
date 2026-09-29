@@ -24,19 +24,19 @@ def _hints(sharing_view, view):
     state = sharing_view.get("state")
     if sharing_view.get("first_use"):
         hints.append(sharing.CHOICES.replace("\n", " | "))
-    elif state in {"off", "disabled", "unconfigured", "malformed"}:
-        hints.append(
-            "community sharing is not enabled; for the recommended opt-in "
-            "contribution run scripts/setup.py configure --community-repository "
-            "OWNER/REPO --community-project-root PATH --community-visibility "
-            "public, or scripts/bridge.py sharing-choice read-only|later"
-        )
+    elif state in {"off", "unconfigured"}:
+        hints.append(sharing.CHOICES)
+    elif state == "disabled":
+        hints.append("Experience capture is explicitly disabled; the saved setting is preserved.")
+    elif state == "malformed":
+        hints.append("Experience capture is unavailable because its saved configuration is damaged.")
     for row in view["contributions"]:
         if row.get("status") in RECOVERABLE_BATCH:
             hints.append(
                 f"contribution {row.get('batch_id')} is {row.get('status')}; "
-                "use its listed inspect command; reconcile unknown writes "
-                "before any explicit retry"
+                "the worker handles eligible transient recovery automatically. "
+                "Inspect the listed record only for an actionable fault; "
+                "never blindly repeat an uncertain write"
             )
     return hints
 
@@ -46,7 +46,7 @@ def status():
     # Core imports belong here, never in the stdlib bootstrap or Stop path.
     from mindie_knowledge.loop.diagnostics import snapshot
 
-    adapter = json.loads(config_path().read_text())
+    adapter = json.loads(config_path().read_text(encoding='utf-8'))
     engine_config = adapter["engine_config"]
     import consent
 
@@ -68,7 +68,7 @@ def status():
     if view["configuration"].get("status") != "ok":
         commands["check_engine_json"] = [
             adapter["python"], "-c",
-            "import json,pathlib,sys; json.loads(pathlib.Path(sys.argv[1]).read_text()); print('JSON syntax valid')",
+            "import json,pathlib,sys; json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8')); print('JSON syntax valid')",
             engine_config,
         ]
     inspect = {
@@ -98,6 +98,10 @@ def status():
         diagnostics["choice"] = offer
     first_use = sharing_view.get("first_use")
     result = dict(
+        experience=("needs-configuration" if sharing_view.get("state") in {"off", "unconfigured"}
+                    else "disabled" if sharing_view.get("state") == "disabled"
+                    else "unavailable" if sharing_view.get("state") == "malformed"
+                    else "configured"),
         adapter=dict(
             config=str(config_path()),
             engine_config=engine_config,
@@ -116,12 +120,12 @@ def status():
         first_use=first_use,
         diagnostics=diagnostics,
     )
-    if first_use:
-        result["next"] = (
-            "Present the three choices to the user and wait; do not default "
-            "yes, do not edit JSON, do not reinstall. Then activate."
-        )
-    elif (view["configuration"].get("status") != "ok"
+    if sharing_view.get("state") in {"off", "unconfigured"}:
+        result["next"] = sharing.CHOICES
+    elif sharing_view.get("state") == "disabled":
+        result["next"] = "Experience capture is explicitly disabled. Task binding does not enable it."
+    elif (sharing_view.get("state") == "malformed"
+          or view["configuration"].get("status") != "ok"
           or view["startup"].get("status") in {"failed", "unavailable"}
           or view["store"].get("status") == "unavailable"
           or view["admission"].get("status") == "unavailable"):
@@ -153,7 +157,7 @@ def shutdown():
     from mindie_knowledge.loop.cli import config_at, connect
     from mindie_knowledge.loop.transport import rpc
 
-    config = json.loads(config_path().read_text())
+    config = json.loads(config_path().read_text(encoding='utf-8'))
     return rpc(connect(config_at(config["engine_config"])), "stop", timeout=2)
 
 

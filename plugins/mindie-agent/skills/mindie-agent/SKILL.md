@@ -5,14 +5,19 @@ description: The single MindIE Agent entry. Invoke this skill once in a vLLM-Asc
 
 # MindIE Agent
 
-This skill is the only entry a user needs (`$mindie-agent`). Invoking it in
+This skill is the only entry a user needs (`$mindie-agent:mindie-agent`, the
+qualified name exposed by Codex's plugin skill inventory). Invoking it in
 the current native Codex task binds the task internally and automatically —
 binding reuses the saved install-level choice and is not a consent step.
+That choice has no task/time expiry: new tasks, restarts and updates reuse it
+within the saved scope until the user disables sharing or changes that scope.
 Discussing the plugin or working in a relevant repository does not bind
 anything. The configured domain is initially `vllm-ascend`.
 
 Resolve `../../scripts/bridge.py` to an absolute path relative to this SKILL.md
-directory (`python` on Windows). The native shell supplies `CODEX_THREAD_ID`;
+directory. Use `python` on Windows and `python3` on macOS/Linux; Windows
+`python3` can be an uninstalled Microsoft Store alias. In the commands below,
+`<python>` means this platform's executable. The native shell supplies `CODEX_THREAD_ID`;
 do not set or override it. MCP calls need no identity or binding arguments.
 
 Only ever run the copy of this skill and its scripts that lives under the
@@ -28,46 +33,43 @@ the binding.
 
 ## First explicit invocation
 
-1. Run `python3 <bridge.py> activate`. This one call performs the internal
-   binding for the current task and returns status. It does not start a
-   model or collect anything by itself.
-2. If the result indicates first use (no choice was ever saved), present the
-   three choices to the user and wait for their answer. There is no default yes.
-   - Recommended: public community contribution for the current named
-     project/repository/account. Then run `python3 <bridge.py> config
-     --community-repository OWNER/REPO --community-project-root PATH
-     --community-visibility public` (optional `--community-account NAME`).
-     Do not reinstall and do not hand-edit JSON.
-   - Read-only knowledge, no contribution: `python3 <bridge.py> sharing-choice read-only`
-   - Configure later: `python3 <bridge.py> sharing-choice later`
-3. After a choice is recorded it persists for the installation: new tasks,
-   forks, restarts, upgrades and failure counts never re-ask it and never
-   revoke it; an explicitly disabled value stays disabled.
-4. On explicit disable of contribution, run `python3 <bridge.py> sharing-disable`.
-   `python3 <bridge.py> deactivate` only unbinds this task; invoking the
-   entry again rebinds it without any setup.
+1. Run `python "<bridge.py>" activate` on Windows, or
+   `python3 "<bridge.py>" activate` on macOS/Linux, once in the native task. Inspect
+   `experience` and `capture`; task binding alone is not capture readiness.
+2. If configuration is incomplete, reuse existing approved values and ask only
+   for the missing public destination/account/project scope. Run
+   `<python> "<bridge.py>" config --community-repository OWNER/REPO
+   --community-project-root PATH --community-visibility public`
+   (optional `--community-account NAME`). This attaches capture in the already
+   bound task; no second activation or reinstall is needed.
+3. Preserve explicit disable and legacy declined settings. They are disabled
+   configurations, not alternative product modes or successful acceptance.
+   Change them only when the user requests it. `sharing-disable` stops sharing;
+   `deactivate` unbinds this task.
 
-Headless install leaves sharing unconfigured/off. Knowledge retrieval, plugin
-updates and remote tools work with sharing off. Sharing off means no Stop
-capture, transcript reading, draft creation or background model work.
+The normal configured path captures and processes eligible Stop events
+automatically. Missing configuration, an out-of-scope task or a failed service
+must be reported as such. A configured or bound status is not a receipt that
+capture, organization or publication actually completed. Retrieval remains
+optional; remote tools work independently.
 
 ## Local diagnostics
 
-`python3 <bridge.py> reporting-status` reads local faults and reporter state;
+`<python> "<bridge.py>" reporting-status` reads local faults and reporter state;
 it does not upload or retry anything. Use a returned incident ID to locate the
 original failure and its `record_ref`, then continue the user's task as appropriate.
 
 On first configuration, `diagnostics.choice` describes optional automatic tool
 fault reporting. Offer it separately from community contribution; leaving it
 off does not block the task. Respect an existing choice. If the user enables it,
-run `python3 <bridge.py> reporting-enable`, then the returned `command_line`
+run `<python> "<bridge.py>" reporting-enable`, then the returned `command_line`
 once outside a Hook to prepare the shared reporter. On disable, run
-`python3 <bridge.py> reporting-disable`. Failure to prepare reporting is local
+`<python> "<bridge.py>" reporting-disable`. Failure to prepare reporting is local
 status, not a reason to replay the user's failed operation.
 
 ## Sharing and recovery
 
-- Status: `python3 <bridge.py> status` or `init` (offline). This is the normal way to see a sharing problem.
+- Status: `<python> "<bridge.py>" status` or `init` (offline). This is the normal way to see a sharing problem.
 - Toggle recorded sharing: `sharing-status`, `sharing-enable`, `sharing-disable`.
 - A transient local or network failure is recovered by the existing worker — a
   deadline-interrupted region gets one bounded background recovery. Do not
@@ -109,8 +111,8 @@ Details: [domain tooling](references/domain-skills.md).
 
 Hook and MCP deadlines, duplicate-request checks and background model budgets
 are enforced by the runtime. Stop capture must never request another model turn
-or block task completion. Do not reactivate a paused task to bypass a failure
-circuit; recover with deactivate then activate. Preserve unrelated tasks and
+or block task completion. Failures never revoke task binding. Do not deactivate/reactivate to recover
+a component failure; use its reported state and existing recovery path. Preserve unrelated tasks and
 remote workloads.
 
 The old domain Skill catalogue is retired; profiling analysis remains deferred.

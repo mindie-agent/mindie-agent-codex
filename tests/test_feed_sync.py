@@ -5,6 +5,7 @@ import sys
 import tempfile
 import time
 import unittest
+from tests.process_fixtures import cleanup_temporary_directory
 from pathlib import Path
 from unittest.mock import patch
 
@@ -100,7 +101,7 @@ class CheckKnowledgeTests(unittest.TestCase):
         self.updater.save("up_to_date", current={"revision": "abc"})
 
     def tearDown(self):
-        self.temp.cleanup()
+        cleanup_temporary_directory(self.temp)
 
     def test_records_results_and_clears_error(self):
         self.updater.save(

@@ -19,13 +19,19 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
-import stat
+from contextlib import closing
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from tests.process_fixtures import (
+    cleanup_temporary_directory,
+    copy_runtime_scripts,
+    extract_git_archive,
+    stop_owned_knowledge_service,
+)
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -33,8 +39,8 @@ SCRIPTS = REPO / "plugins/mindie-agent/scripts"
 
 
 KIMI_COMMIT = "90f73e76c6087ce091570f2d151b709145c913bc"
-CORE_COMMIT = "0df968a03008a170bb52d4acade7c7226eb0d39b"
-CONSENT_STORE_SHA256 = "c5caf974705ff08615fc33e49a0ec28dd5b070b55ff70d1beaff5c4fb0d8a65e"
+CORE_COMMIT = "466d031016b7ff1354c716c67fd4ca009f164706"
+CONSENT_STORE_SHA256 = "0a979620b415e1faf9f7366d23580d498ddee9089f34fc35e03614bff1166b94"
 
 
 def _require_checkout(env_name, purpose):
@@ -70,7 +76,7 @@ import session_gate  # noqa: E402
 import sharing  # noqa: E402
 from session_gate import Sessions  # noqa: E402
 
-CHOICE_PROMPT = "Community sharing is unconfigured."
+CHOICE_PROMPT = "Experience capture is not configured."
 SENTINEL = "CODEX-CONTRACT-SENTINEL-7f3a"
 PARENT_SECRET = "PARENT-ONLY-SECRET-9c2e"
 CHILD_FACT = "CHILD-FORK-FACT-1b80"
@@ -131,8 +137,27 @@ def _user(text, stamp):
     }
 
 
+_SCANNER_CACHE = tempfile.TemporaryDirectory(prefix="mindie-scanner-tests-")
+_SCANNER = None
+
+def installed_scanner():
+    global _SCANNER
+    if _SCANNER is None:
+        from mindie_knowledge.loop.transcript_redaction import install_scanner
+        _SCANNER = install_scanner(Path(_SCANNER_CACHE.name))
+    return _SCANNER
+
+
 class LaneCase(unittest.TestCase):
     def setUp(self):
+        self.platform_env = {
+            key: os.environ[key]
+            for key in (
+                "PATH", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT",
+                "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
+            )
+            if key in os.environ
+        }
         self.temp = tempfile.TemporaryDirectory(dir=_test_root())
         self.root = _refuse_user_config(self.temp.name)
         self.home = self.root / "home"
@@ -166,7 +191,8 @@ class LaneCase(unittest.TestCase):
             "admission_path": str(self.admission),
             "community_config": str(self.community),
             "transcript_adapter": str(SCRIPTS / "codex_transcript.py"),
-            "agent_command": [PY, str(self.double), str(self.model_log)],
+            "capture_mode": "public-transcript",
+            "redactor_executable": installed_scanner(),
         }
         self.engine.write_text(json.dumps(self.engine_doc))
         self.adapter = {
@@ -188,38 +214,27 @@ class LaneCase(unittest.TestCase):
         self.sessions = Sessions(self.config)
 
     def _stop_owned_engine(self):
-        """Stop a service this test's engine path started. Not a global pkill."""
-        engine = str(self.engine)
-        try:
-            listing = subprocess.run(
-                ["ps", "-ax", "-o", "pid=,command="],
-                capture_output=True, text=True, timeout=5, check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return
-        me = os.getpid()
-        for line in listing.stdout.splitlines():
-            pid_text, sep, command = line.strip().partition(" ")
-            if not sep:
-                continue
-            try:
-                pid = int(pid_text)
-            except ValueError:
-                continue
-            if pid == me or engine not in command:
-                continue
-            os.kill(pid, 15)
+        """Stop only the service reached through this fixture's engine file."""
+        # Fault tests deliberately corrupt the adapter's engine document.
+        # Cleanup retains the original store identity rather than treating
+        # that expected configuration failure as a second product failure.
+        cleanup_config = self.root / "cleanup-engine.json"
+        cleanup_config.write_text(json.dumps({
+            "root": self.engine_doc["root"], "domain": self.engine_doc["domain"],
+        }))
+        stop_owned_knowledge_service(cleanup_config)
 
     def tearDown(self):
         self._stop_owned_engine()
         session_gate.bind_explicit_config(None)
         tempfile.tempdir = None
         self.env_patch.stop()
-        self.temp.cleanup()
+        cleanup_temporary_directory(self.temp)
 
     def child_env(self, **extra):
-        env = {
-            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        env = dict(self.platform_env)
+        env.update({
+            "PATH": env.get("PATH", os.defpath),
             "HOME": str(self.home),
             "TMPDIR": str(self.root / "tmp"),
             "XDG_CONFIG_HOME": str(self.root / "xdg-config"),
@@ -233,7 +248,15 @@ class LaneCase(unittest.TestCase):
             "PYTHONNOUSERSITE": "1",
             "PYTHONDONTWRITEBYTECODE": "1",
             "CODEX_THREAD_ID": "task-main",
-        }
+        })
+        if os.name == "nt":
+            env.update(
+                USERPROFILE=str(self.home),
+                HOMEDRIVE=self.home.drive,
+                HOMEPATH=str(self.home)[len(self.home.drive):],
+                TMP=str(self.root / "tmp"),
+                TEMP=str(self.root / "tmp"),
+            )
         for key in ("MINDIE_KIMI_REPO", "MINDIE_CORE_REPO"):
             if key in os.environ:
                 env[key] = os.environ[key]
@@ -355,6 +378,14 @@ class LaneCase(unittest.TestCase):
             return ""
         return self.model_log.read_text()
 
+    def saved_text(self):
+        from mindie_knowledge.loop.store import Store
+        store = Store(self.root / "data", "test")
+        try:
+            return "\n".join(doc["content"] for doc in store.drafts_changed())
+        finally:
+            store.close()
+
     def drain_worker(self):
         from mindie_knowledge.loop.activation import Admission
         from mindie_knowledge.loop.cli import load_transcript_adapter
@@ -365,7 +396,7 @@ class LaneCase(unittest.TestCase):
         try:
             engine = Engine(
                 store,
-                agent_command=[PY, str(self.double), str(self.model_log)],
+                capture_mode="public-transcript", redactor_executable=installed_scanner(),
                 settings_path=str(self.community),
                 admission=Admission(str(self.admission)),
                 transcript_adapter=load_transcript_adapter(
@@ -391,6 +422,58 @@ class LaneCase(unittest.TestCase):
 
 
 class ConsentGateTests(LaneCase):
+    def test_corrupt_transcript_holds_public_body_and_cursor(self):
+        self.write_consent("contribute", reporting="disabled")
+        self.write_community(enabled=True)
+        self.open_store()
+        self.activate("task-main")
+        transcript = self.root / "corrupt-body.jsonl"
+        _jsonl(transcript, [_session_meta("task-main"),
+            _user("Must not declare complete", self.after_boundary("task-main", 30))])
+        with transcript.open('ab') as stream:
+            stream.write(b'{"type":broken}\n')
+        self.assertEqual(self.stop(self.event("task-main", transcript)).returncode, 0)
+        self.drain_worker()
+        self.assertEqual(self.saved_text(), '')
+        self.assertEqual(self.capture_rows()[0]['status'], 'failed')
+        from mindie_knowledge.loop.store import Store
+        store = Store(self.root / "data", "test")
+        try:
+            self.assertIsNone(store.cursor(str(transcript.resolve())))
+        finally:
+            store.close()
+
+    def test_stop_stores_public_body_and_export_without_tool_or_hidden_material(self):
+        self.write_consent("contribute", reporting="disabled")
+        self.write_community(enabled=True)
+        self.open_store()
+        self.activate("task-main")
+        transcript = self.root / "public-body.jsonl"
+        stamp = self.after_boundary("task-main", 30)
+        records = [_session_meta("task-main"), _user("Public request marker", stamp)]
+        for channel, text in (("analysis", "hidden-only-marker"), ("commentary", "Public progress marker"), ("final_answer", "Public result marker")):
+            records.append(dict(type="response_item", timestamp=stamp, payload=dict(type="message", role="assistant", phase=channel, content=[dict(type="output_text", text=text)])))
+        records.append(dict(type="response_item", timestamp=stamp, payload=dict(type="function_call_output", output="tool-only-marker")))
+        _jsonl(transcript, records)
+        result = self.stop(self.event("task-main", transcript))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.drain_worker()
+        expected = "### user\nPublic request marker\n\n### assistant:commentary\nPublic progress marker\n\n### assistant:final_answer\nPublic result marker"
+        self.assertEqual(self.saved_text(), expected)
+        self.assertEqual(self.model_text(), "")
+        from mindie_knowledge.loop.documents import parse_entry
+        from mindie_knowledge.loop.export import build_batch
+        from mindie_knowledge.loop.store import Store
+        from mindie_knowledge.loop import settings
+        store = Store(self.root / "data", "test")
+        try:
+            batch = build_batch(store, settings=settings.load(self.community))
+            self.assertIsNotNone(batch)
+            public = parse_entry(batch[2]["files"][0]["content"].encode("utf-8"))
+            self.assertEqual(public["content"], expected)
+        finally:
+            store.close()
+
     def test_disallowed_consent_does_not_capture_or_call_the_model(self):
         """community.enabled=true must not collect when consent is not contribute."""
         cases = {
@@ -458,13 +541,14 @@ class ConsentGateTests(LaneCase):
         self.assertEqual(rows[0]["session"], "task-main")
         self.drain_worker()
         called = self.model_text()
-        self.assertEqual(called.count("\n"), 1, called[:500])
-        self.assertIn(SENTINEL, called)
+        self.assertEqual(called, "")
+        self.assertEqual(self.saved_text().count(SENTINEL), 1)
         second = self.stop(self.event("task-main", transcript))
         self.assertEqual(second.returncode, 0, second.stderr)
         self.drain_worker()
         self.assertEqual(len(self.capture_rows()), 1, self.capture_rows())
-        self.assertEqual(self.model_text().count("\n"), 1, self.model_text()[:500])
+        self.assertEqual(self.model_text(), "")
+        self.assertEqual(self.saved_text().count(SENTINEL), 1)
         saved = [
             row["status"] for row in self.capture_rows()
         ]
@@ -519,7 +603,8 @@ class ConsentGateTests(LaneCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.capture_rows()), 1, self.capture_rows())
         self.drain_worker()
-        observed = self.model_text()
+        observed = self.saved_text()
+        self.assertEqual(self.model_text(), "")
         self.assertIn(CHILD_FACT, observed, observed[:600])
         self.assertNotIn(PARENT_SECRET, observed, observed[:600])
 
@@ -539,7 +624,7 @@ class ConsentGateTests(LaneCase):
         rows = self.capture_rows()
         if rows:
             self.drain_worker()
-        self.assertNotIn(PRE_ADMISSION, self.model_text())
+        self.assertNotIn(PRE_ADMISSION, self.saved_text())
         self.assertEqual(self.model_text(), "")
 
 
@@ -621,18 +706,17 @@ class AuthorityMigrationTests(LaneCase):
         path = self.write_consent("later", reporting="disabled")
         script = self.root / "race_update.py"
         script.write_text(
-            "import fcntl, os, sys, time\n"
+            "import os, sys, time\n"
             "from pathlib import Path\n"
             "sys.path.insert(0, sys.argv[1])\n"
             "os.environ['MINDIE_AGENT_CONFIG'] = sys.argv[2]\n"
             "op, value, root = sys.argv[3], sys.argv[4], Path(sys.argv[5])\n"
-            "real_flock = fcntl.flock\n"
-            "def watched(fd, flags):\n"
-            "    exclusive = bool(flags & fcntl.LOCK_EX)\n"
-            "    if exclusive:\n"
-            "        (root / f'try-{op}').write_text('1')\n"
-            "    real_flock(fd, flags)\n"
-            "    if exclusive:\n"
+            "import consent_store\n"
+            "real_lock = consent_store._lock_file_nb\n"
+            "def watched(fd):\n"
+            "    (root / f'try-{op}').write_text('1')\n"
+            "    real_lock(fd)\n"
+            "    if True:\n"
             "        (root / f'got-{op}').write_text('1')\n"
             "        if not (root / 'release').exists() and not (root / 'holder').exists():\n"
             "            (root / 'holder').write_text(op)\n"
@@ -641,7 +725,7 @@ class AuthorityMigrationTests(LaneCase):
             "                if time.time() > deadline:\n"
             "                    raise SystemExit('holder was not released')\n"
             "                time.sleep(0.01)\n"
-            "fcntl.flock = watched\n"
+            "consent_store._lock_file_nb = watched\n"
             "(root / f'entered-{op}').write_text('1')\n"
             "deadline = time.time() + 5\n"
             "while time.time() < deadline and len(list(root.glob('entered-*'))) < 2:\n"
@@ -665,9 +749,10 @@ class AuthorityMigrationTests(LaneCase):
                 ))
             holder = self.root / "holder"
             deadline = time.time() + 5
-            while time.time() < deadline and not holder.exists():
+            while time.time() < deadline and (not holder.exists() or len(list(self.root.glob("try-*"))) < 2):
                 time.sleep(0.01)
             self.assertTrue(holder.is_file(), "neither update took the consent lock")
+            self.assertEqual(len(list(self.root.glob("try-*"))), 2, "both writers must reach the real OS lock")
             self.assertEqual(len(list(self.root.glob("got-*"))), 1, "peer was not blocked on the lock")
             (self.root / "release").write_text("1")
             finished = [child.communicate(timeout=10) for child in children]
@@ -774,11 +859,7 @@ class AuthorityMigrationTests(LaneCase):
         )
         snapshot = self.root / "core-snapshot"
         snapshot.mkdir()
-        archived = subprocess.run(
-            ["git", "-C", str(core_repo), "archive", CORE_COMMIT],
-            check=True, capture_output=True,
-        )
-        subprocess.run(["tar", "-x", "-C", str(snapshot)], input=archived.stdout, check=True)
+        extract_git_archive(core_repo, CORE_COMMIT, snapshot)
         legacy = self.root / "legacy-enabled.json"
         legacy.write_text(json.dumps({
             "schema": "mindie-community-config/1",
@@ -1001,9 +1082,12 @@ class AuthorityMigrationTests(LaneCase):
         self.write_community(enabled=True)
         before = self.community.read_bytes()
         marker = self.root / "runtime-spawned"
-        wrapper = self.root / "not-a-runtime"
-        wrapper.write_text("#!/bin/sh\necho spawned >> '%s'\nexit 86\n" % marker)
-        wrapper.chmod(0o755)
+        wrapper = self.root / "not-a-runtime.py"
+        wrapper.write_text(
+            "from pathlib import Path\n"
+            f"Path({str(marker)!r}).open('a').write('spawned\\n')\n"
+            "raise SystemExit(86)\n"
+        )
         adapter = json.loads(self.config.read_text())
         adapter["python"] = str(wrapper)
         self.config.write_text(json.dumps(adapter))
@@ -1039,12 +1123,18 @@ class AuthorityMigrationTests(LaneCase):
         self.config.write_text(json.dumps(adapter))
         self.community.write_text("{not-the-other-file")
         # Specified shared path exists, so a reader must not go looking for
-        # the other enabled document. Force the shared path to be unreadable.
-        self.community.chmod(0)
-        try:
+        # the other enabled document. POSIX mode bits exercise unreadability;
+        # Windows mode bits cannot deny access, so malformed bytes below still
+        # cover fail-closed authority selection there. Native ACL denial stays
+        # an explicit Windows acceptance gap.
+        if os.name == "posix":
+            self.community.chmod(0)
+            try:
+                view = sharing.read(self.config)
+            finally:
+                self.community.chmod(0o600)
+        else:
             view = sharing.read(self.config)
-        finally:
-            self.community.chmod(0o600)
         self.assertIsNone(view)
         self.assertFalse(sharing.capture_allowed(
             {"project_root": str(self.work), "root_session": "t", "activated_at": 1},
@@ -1071,7 +1161,12 @@ class AuthorityMigrationTests(LaneCase):
         profile directory cannot create the shared sibling. It is not a
         fallback onto some third file, and it must not pretend migration ran.
         """
-        if os.geteuid() == 0:
+        if os.name != "posix":
+            self.skipTest(
+                "POSIX mode-bit write denial; Windows ACL denial is not exercised "
+                "by this fixture (authority and preservation checks run elsewhere)"
+            )
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
             self.skipTest("root ignores the directory mode used below")
         legacy = self.root / "legacy-enabled.json"
         self._legacy_enabled(legacy, [self.work])
@@ -1094,7 +1189,12 @@ class AuthorityMigrationTests(LaneCase):
         self.assertTrue(allowed)
 
     def test_explicit_migration_failure_does_not_claim_success(self):
-        if os.geteuid() == 0:
+        if os.name != "posix":
+            self.skipTest(
+                "POSIX mode-bit write denial; Windows ACL denial is not exercised "
+                "by this fixture (authority and preservation checks run elsewhere)"
+            )
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
             self.skipTest("root ignores the directory mode used to fail the copy")
         legacy = self.root / "outside" / "legacy-enabled.json"
         legacy.parent.mkdir()
@@ -1121,16 +1221,19 @@ class AuthorityMigrationTests(LaneCase):
         self.write_community(enabled=True, roots=[self.work])
         narrow_roots = json.loads(self.community.read_text())["project_roots"]
         self.config.write_text(json.dumps(dict(self.adapter, community_config=str(wide))))
-        self.community.chmod(0)
-        try:
-            self.assertIsNone(sharing.read(self.config))
-            self.assertFalse(sharing.capture_allowed(
-                {"project_root": str(self.work), "root_session": "t", "activated_at": 1.0},
-                str(self.work),
-                self.config,
-            ))
-        finally:
-            self.community.chmod(0o600)
+        if os.name == "posix":
+            self.community.chmod(0)
+            try:
+                self.assertIsNone(sharing.read(self.config))
+                self.assertFalse(sharing.capture_allowed(
+                    {"project_root": str(self.work), "root_session": "t", "activated_at": 1.0},
+                    str(self.work),
+                    self.config,
+                ))
+            finally:
+                self.community.chmod(0o600)
+        # On Windows the following malformed-byte case remains active; chmod
+        # does not provide a file ACL denial test.
         self.community.write_text("{not-json")
         self.assertIsNone(sharing.read(self.config))
         self.assertEqual(sharing.configured_path(self.config), self.community)
@@ -1209,9 +1312,12 @@ class CrossAdapterTests(LaneCase):
         blob = subprocess.check_output(
             ["git", "-C", str(core_repo), "show", f"{CORE_COMMIT}:mindie_knowledge/consent_store.py"],
         )
-        local = (SCRIPTS / "consent_store.py").read_bytes()
+        local = (SCRIPTS / "consent_store.py").read_text(encoding="utf-8")
         self.assertEqual(hashlib.sha256(blob).hexdigest(), CONSENT_STORE_SHA256)
-        self.assertEqual(local, blob)
+        # Git checkout/wheel line endings may be CRLF on Windows. Keep the
+        # canonical Git blob hash exact, and compare source text without only
+        # that checkout transformation; no whitespace/content is stripped.
+        self.assertEqual(local, blob.decode("utf-8").replace("\r\n", "\n"))
 
     def test_running_runtime_matches_the_declared_core(self):
         import mindie_knowledge
@@ -1238,7 +1344,11 @@ class CrossAdapterTests(LaneCase):
             blob = subprocess.check_output(
                 ["git", "-C", str(core_repo), "show", f"{CORE_COMMIT}:mindie_knowledge/{rel}"],
             )
-            self.assertEqual(installed.read_bytes(), blob, rel)
+            self.assertEqual(
+                installed.read_text(encoding="utf-8"),
+                blob.decode("utf-8").replace("\r\n", "\n"),
+                rel,
+            )
 
     def test_kimi_adapter_reads_the_same_profile_consent(self):
         self.write_consent("read-only", reporting="later")
@@ -1246,14 +1356,8 @@ class CrossAdapterTests(LaneCase):
             "MINDIE_KIMI_REPO",
             "loading the kimi adapter scripts at " + KIMI_COMMIT,
         )
-        archive = subprocess.run(
-            ["git", "-C", str(kimi_repo), "archive", KIMI_COMMIT, "scripts"],
-            check=True,
-            capture_output=True,
-        )
         extracted = self.root / "kimi-adapter"
-        extracted.mkdir()
-        subprocess.run(["tar", "-x", "-C", str(extracted)], input=archive.stdout, check=True)
+        extract_git_archive(kimi_repo, KIMI_COMMIT, extracted, "scripts")
         sibling = self.root / "kimi.json"
         sibling.write_text("{}\n")
 
@@ -1303,9 +1407,9 @@ class EntryReuseTests(LaneCase):
         opened = json.loads(first.stdout)
         visible = json.dumps(self._visible(opened))
         self.assertIn(CHOICE_PROMPT, visible, visible)
-        chosen = self.bridge("sharing-choice", "later", thread="task-first")
+        chosen = self.bridge("sharing-disable", thread="task-first")
         self.assertEqual(chosen.returncode, 0, chosen.stderr)
-        self.assertEqual(json.loads(chosen.stdout)["sharing_choice"], "later")
+        self.assertEqual(json.loads(chosen.stdout)["sharing_choice"], "disabled")
         for thread in ("task-second", "fork-of-first"):
             with self.subTest(thread=thread):
                 again = self.bridge("status", thread=thread)
@@ -1315,7 +1419,7 @@ class EntryReuseTests(LaneCase):
                 self.assertNotIn(CHOICE_PROMPT, shown, shown)
                 self.assertIsNone(payload.get("first_use"), shown)
         saved = json.loads((self.root / "mindie-consent.json").read_text())
-        self.assertEqual(saved["choice"], "later")
+        self.assertEqual(saved["choice"], "disabled")
 
     def test_corrupt_consent_status_is_not_a_fresh_install(self):
         self.write_community(enabled=False)
@@ -1369,30 +1473,20 @@ class RemoteIsolationTests(LaneCase):
     def test_remote_survives_knowledge_failure_and_forks_do_not_share_receipts(self):
         import mcp_gate
 
-        wrapper = self.root / "runtime-python"
+        scripts = copy_runtime_scripts(self.root / "runtime-fixture")
         marker = self.root / "runtime-calls.jsonl"
-        real = PY
-        wrapper.write_text(
-            "#!" + real + "\n"
-            "import json, os, sys\n"
-            "from pathlib import Path\n"
-            f"real = {real!r}\n"
-            f"marker = Path({str(marker)!r})\n"
-            "argv = sys.argv[1:]\n"
-            "if argv and str(argv[0]).endswith('runtime_call.py'):\n"
-            "    raw = sys.stdin.read()\n"
-            "    marker.open('a').write(raw + '\\n')\n"
-            "    payload = json.loads(raw)\n"
-            "    if payload.get('surface') == 'remote':\n"
-            "        print(json.dumps({'content': [{'type': 'text', 'text': 'remote-ok'}], 'isError': False}))\n"
-            "    else:\n"
-            "        print(json.dumps({'content': [{'type': 'text', 'text': 'knowledge-down'}], 'isError': True}))\n"
-            "    raise SystemExit(0)\n"
-            "os.execv(real, [real, *argv])\n"
+        (scripts / "runtime_call.py").write_text(
+            "import json, sys\nfrom pathlib import Path\n"
+            "raw = sys.stdin.read()\n"
+            f"Path({str(marker)!r}).open('a').write(raw + '\\n')\n"
+            "payload = json.loads(raw)\n"
+            "if payload.get('surface') == 'remote':\n"
+            "    print(json.dumps({'content': [{'type': 'text', 'text': 'remote-ok'}], 'isError': False}))\n"
+            "else:\n"
+            "    print(json.dumps({'content': [{'type': 'text', 'text': 'knowledge-down'}], 'isError': True}))\n"
         )
-        wrapper.chmod(wrapper.stat().st_mode | stat.S_IEXEC)
         adapter = json.loads(self.config.read_text())
-        adapter["python"] = str(wrapper)
+        adapter["runtime_scripts"] = str(scripts)
         self.config.write_text(json.dumps(adapter))
         self.sessions = Sessions(self.config)
 
@@ -1439,8 +1533,10 @@ class RemoteIsolationTests(LaneCase):
         child_db = self.remote_state / "gate" / "child-task.sqlite3"
         self.assertTrue(parent_db.is_file(), list((self.remote_state / "gate").glob("*")))
         self.assertTrue(child_db.is_file())
-        parent_ids = sqlite3.connect(parent_db).execute("SELECT identity FROM attempts").fetchall()
-        child_ids = sqlite3.connect(child_db).execute("SELECT identity FROM attempts").fetchall()
+        with closing(sqlite3.connect(parent_db)) as db:
+            parent_ids = db.execute("SELECT identity FROM attempts").fetchall()
+        with closing(sqlite3.connect(child_db)) as db:
+            child_ids = db.execute("SELECT identity FROM attempts").fetchall()
         self.assertTrue(parent_ids)
         self.assertTrue(child_ids)
         self.assertEqual(set(parent_ids) & set(child_ids), set())
@@ -1471,7 +1567,7 @@ class CandidateResolutionTests(LaneCase):
         }
 
     def test_same_version_old_bytes_fail_acceptance(self):
-        from auto_update import Updater, atomic
+        from auto_update import Updater, atomic, stop_hook_commands
 
         candidate = self.root / "candidate-plugin"
         cache_version = self.codex_home / "plugins/cache/mindie-agent/mindie-agent/1.4.0"
@@ -1510,13 +1606,16 @@ class CandidateResolutionTests(LaneCase):
             accepted = None
             refusal = f"{type(exc).__name__}: {exc}"
         resolved = self._hashes(cache_version)
-        hook = json.loads((PLUGIN / "hooks/hooks.json").read_text())["hooks"]["Stop"][0]["hooks"][0]
+        hook = stop_hook_commands(
+            [PY, str(cache_version / "scripts/bridge.py"), "stop"]
+        )
         ran = subprocess.run(
-            ["/bin/sh", "-c", hook["command"]],
+            hook["commandWindows" if os.name == "nt" else "command"],
             input="{}",
             text=True,
             capture_output=True,
             timeout=5,
+            shell=True,
             env=self.child_env(PLUGIN_ROOT=str(cache_version)),
         )
         self.assertEqual(ran.returncode, 0, ran.stderr)

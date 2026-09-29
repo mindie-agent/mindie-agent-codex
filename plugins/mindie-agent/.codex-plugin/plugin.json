@@ -13,7 +13,7 @@
     "developerName": "MindIE Agent contributors",
     "category": "Productivity",
     "capabilities": [],
-    "defaultPrompt": "Use MindIE Agent to help with this vLLM-Ascend task."
+    "defaultPrompt": "Use $mindie-agent:mindie-agent to help with this vLLM-Ascend task."
   },
   "mcpServers": "./.mcp.json"
 }

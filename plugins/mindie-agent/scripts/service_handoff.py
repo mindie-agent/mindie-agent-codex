@@ -7,11 +7,13 @@ invocation confirmed stopping its previous endpoint. Output contains no token.
 import json
 import sys
 import time
+from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import urlparse
 
 from mindie_knowledge.loop.cli import config_at, connect, ensure_service, rpc
 from mindie_knowledge.loop.activation import Admission
+from mindie_knowledge.loop.locks import lock_held
 
 
 def refused(exc):
@@ -22,6 +24,9 @@ def refused(exc):
 
 def stop(engine):
     config = config_at(engine)
+    consumer = Path(config["root"]) / config["domain"] / "consumer.lock"
+    if lock_held(consumer) is False:
+        return {"idle": True, "service": "absent"}
     try:
         connection = connect(config)
     except FileNotFoundError:
@@ -31,23 +36,20 @@ def stop(engine):
     try:
         result = rpc(connection, "stop_if_idle", timeout=1)
     except OSError as exc:
-        if refused(exc):
+        if refused(exc) and lock_held(consumer) is False:
             return {"idle": True, "service": "absent"}
         raise RuntimeError("stop acknowledgement unavailable; no restart") from None
     if not isinstance(result, dict) or type(result.get("idle")) is not bool:
         raise RuntimeError("invalid stop acknowledgement; no restart")
     if not result["idle"]:
         return {"idle": False, "service": "busy"}
-    # Probe the EXACT old endpoint, not a possibly replaced connection.json.
-    # A frozen status response is still alive. Only refused proves exit.
+    # The core holds this OS lock until listener and store cleanup completes.
+    # Windows TCP refusal can take longer than each bounded network probe.
+    # An idle acknowledgement alone is not proof of resource release.
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
-        try:
-            rpc(connection, "status", timeout=min(.3, deadline-time.monotonic()))
-        except OSError as exc:
-            if refused(exc):
-                return {"idle": True, "service": "stopped"}
-            # Reset can happen during socket close; it is not proof of exit.
+        if lock_held(consumer) is False:
+            return {"idle": True, "service": "stopped"}
         time.sleep(min(.1, max(0, deadline-time.monotonic())))
     raise RuntimeError("old service exit unconfirmed; no restart")
 

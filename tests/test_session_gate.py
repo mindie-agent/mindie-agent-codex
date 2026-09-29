@@ -3,8 +3,9 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
+from contextlib import closing
 from pathlib import Path
-import selectors
+import queue
 import sqlite3
 import subprocess
 import sys
@@ -13,6 +14,7 @@ import threading
 import time
 import unittest
 from unittest.mock import patch
+from tests.process_fixtures import cleanup_temporary_directory, stop_owned_knowledge_service, copy_runtime_scripts
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -45,9 +47,9 @@ class SessionGateTests(unittest.TestCase):
         self.sessions = Sessions()
 
     def tearDown(self):
-        subprocess.run(["pkill", "-f", str(self.engine)], check=False)
+        stop_owned_knowledge_service(self.engine)
         self.environment.stop()
-        self.temp.cleanup()
+        cleanup_temporary_directory(self.temp)
 
     def write_config(self, **extra):
         value = dict(
@@ -96,6 +98,7 @@ class SessionGateTests(unittest.TestCase):
         current = json.loads(self.config.read_text())
         self.write_config(
             python=current["python"],
+            runtime_scripts=current["runtime_scripts"],
             community_config=str(community),
             sharing_choice="contribute",
         )
@@ -129,35 +132,26 @@ class SessionGateTests(unittest.TestCase):
         )
 
     def runtime_fixture(self, *, delay=0, hook=False):
-        """Wrapper interpreter: admission_ops execs the real runtime; calls count.
-
-        Does not use PYTHONPATH to mask the configured interpreter.
-        """
+        """Keep Python executable; substitute only the selected runtime helper."""
         marker = self.root / "invocations"
-        wrapper = self.root / "runtime-python"
-        real = sys.executable
-        wrapper.write_text(
-            f"#!{real}\n"
-            "import os, sys, time\n"
-            "from pathlib import Path\n"
-            f"marker = Path({str(marker)!r})\n"
-            "argv = sys.argv[1:]\n"
-            "joined = ' '.join(argv)\n"
-            "op = argv[1] if len(argv) > 1 else ''\n"
-            f"delay = {delay}\n"
-            "if argv and argv[0].endswith('admission_ops.py') and (\n"
-            "    op != 'stop_capture' or delay <= 0\n"
-            "):\n"
-            f"    os.execv({real!r}, [{real!r}, *argv])\n"
-            "if 'mindie_knowledge.loop.settings' in joined:\n"
-            f"    os.execv({real!r}, [{real!r}, *argv])\n"
-            "marker.open('a').write('attempt\\n')\n"
+        scripts = copy_runtime_scripts(self.root / "runtime-fixture")
+        behavior = (
+            "import sys, time\nfrom pathlib import Path\n"
+            f"Path({str(marker)!r}).open('a').write('attempt\\n')\n"
             "sys.stdin.read()\n"
             f"time.sleep({delay})\n"
             "print('{}')\n"
         )
-        wrapper.chmod(0o755)
-        self.write_config(python=str(wrapper))
+        (scripts / "runtime_call.py").write_text(behavior)
+        if delay > 0:
+            (scripts / "admission_ops.py").write_text(
+                "import sys, runpy\n"
+                "if sys.argv[1] == 'stop_capture':\n"
+                + "\n".join("    " + line for line in behavior.splitlines())
+                + "\nelse:\n"
+                + f"    runpy.run_path({str(SCRIPTS / 'admission_ops.py')!r}, run_name='__main__')\n"
+            )
+        self.write_config(runtime_scripts=str(scripts))
         return marker
 
     def event(self, session="manual-A", turn="turn-1", cwd=None):
@@ -173,15 +167,15 @@ class SessionGateTests(unittest.TestCase):
         skill = SCRIPTS.parent / "skills/mindie-agent"
         self.assertIn(
             "allow_implicit_invocation: false",
-            (skill / "agents/openai.yaml").read_text(),
+            (skill / "agents/openai.yaml").read_text(encoding="utf-8"),
         )
         self.assertNotIn(
             "SessionStart",
             json.loads((SCRIPTS.parent / "hooks/hooks.json").read_text())["hooks"],
         )
-        skill = (skill / "SKILL.md").read_text()
+        skill = (skill / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("init", skill)
-        self.assertIn("sharing-choice", skill)
+        self.assertIn("experience", skill)
         self.assertIn("contribution-inspect", skill)
         self.assertNotIn("SessionStart", skill)
 
@@ -211,7 +205,12 @@ class SessionGateTests(unittest.TestCase):
         bound_again = json.loads(self.bridge("activate").stdout)
         self.assertEqual(marker.read_text().splitlines(), ["attempt", "attempt"])
         self.assertEqual(bound_again["mindie_activation"], bound["mindie_activation"])
-        self.assertEqual(self.sessions.path.stat().st_mode & 0o777, 0o600)
+        if os.name == "posix":
+            self.assertEqual(self.sessions.path.stat().st_mode & 0o777, 0o600)
+        else:
+            # Windows ACL enforcement is inherited from the profile directory
+            # and remains outside this mode-bit assertion.
+            self.assertTrue(self.sessions.path.is_file())
 
     def test_inactive_hooks_create_no_state_or_runtime(self):
         marker = self.runtime_fixture()
@@ -408,7 +407,7 @@ class SessionGateTests(unittest.TestCase):
                     for c in run.call_args_list
                 )
             )
-        with sqlite3.connect(self.sessions.path) as db:
+        with closing(sqlite3.connect(self.sessions.path)) as db:
             failures = db.execute(
                 "SELECT failures FROM leases WHERE session='manual-A'"
             ).fetchone()[0]
@@ -628,15 +627,22 @@ class SessionGateTests(unittest.TestCase):
         popen.assert_not_called()
 
     def test_timeout_kills_owned_descendants(self):
-        marker = self.root / "child-pid"
-        code = f"import os,time\npid=os.fork()\nif pid:\n open({str(marker)!r},'w').write(str(pid))\ntime.sleep(20)\n"
+        marker = self.root / "grandchild-survived"
+        child = (
+            "import time\n"
+            "from pathlib import Path\n"
+            "time.sleep(0.8)\n"
+            f"Path({str(marker)!r}).write_text('survived')\n"
+        )
+        code = (
+            "import subprocess,sys,time\n"
+            f"subprocess.Popen([sys.executable, '-c', {child!r}])\n"
+            "time.sleep(20)\n"
+        )
         with self.assertRaises(TimeoutError):
             bounded_process.run([sys.executable, "-c", code], "", timeout=0.3)
-        pid = marker.read_text()
-        result = subprocess.run(
-            ["ps", "-p", pid, "-o", "stat="], capture_output=True, text=True
-        )
-        self.assertTrue(result.returncode != 0 or result.stdout.strip().startswith("Z"))
+        time.sleep(1)
+        self.assertFalse(marker.exists(), "owned grandchild outlived timeout cleanup")
 
     def test_mcp_protocol_call_and_cancellation(self):
         marker = self.runtime_fixture(delay=20)
@@ -661,10 +667,14 @@ class SessionGateTests(unittest.TestCase):
             )
             process.stdin.write((json.dumps(cancel) + "\n").encode())
             process.stdin.flush()
-            with selectors.DefaultSelector() as selector:
-                selector.register(process.stdout, selectors.EVENT_READ)
-                self.assertTrue(selector.select(2))
-            result = json.loads(process.stdout.readline())
+            messages = queue.Queue()
+            reader = threading.Thread(
+                target=lambda: messages.put(process.stdout.readline()), daemon=True
+            )
+            reader.start()
+            line = messages.get(timeout=2)
+            self.assertTrue(line)
+            result = json.loads(line)
             self.assertTrue(result["result"]["isError"])
             self.assertEqual(marker.read_text().splitlines(), ["attempt"])
         finally:
@@ -713,15 +723,15 @@ class SessionGateTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["service"]["state"], "not-running")
         self.assertEqual(
-            payload["first_use"]["choices"], ["contribute", "read-only", "later"]
+            payload["first_use"]["choices"], []
         )
         self.assertFalse((self.root / "data").exists())
         init = self.bridge("init")
         self.assertEqual(init.returncode, 0, init.stderr)
         self.assertEqual(json.loads(init.stdout)["service"]["state"], "not-running")
-        recorded = self.bridge("sharing-choice", extra=["later"])
+        recorded = self.bridge("sharing-disable")
         self.assertEqual(recorded.returncode, 0, recorded.stderr)
-        self.assertEqual(json.loads(recorded.stdout)["sharing_choice"], "later")
+        self.assertEqual(json.loads(recorded.stdout)["sharing_choice"], "disabled")
         again = json.loads(self.bridge("init").stdout)
         self.assertIsNone(again["first_use"])
         self.assertFalse((self.root / "data").exists())
@@ -821,7 +831,7 @@ class SessionGateTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertFalse(payload["configured"])
         self.assertEqual(
-            payload["first_use"]["choices"], ["contribute", "read-only", "later"]
+            payload["first_use"]["choices"], []
         )
         self.assertIn("setup.py", payload["next"])
         self.assertEqual(payload["service"]["state"], "not-running")
