@@ -114,6 +114,7 @@ def status():
         maintenance=view["maintenance"],
         startup=view["startup"],
         captures=view["captures"],
+        summaries=view["summaries"],
         contributions=view["contributions"],
         recovery=_hints(sharing_view, view),
         commands=commands,

@@ -351,14 +351,13 @@ def read_material(path, start, *, session_id=None, not_before=None, expected=Non
                 except (ValueError, UnicodeDecodeError):
                     record = None
                 if not isinstance(record, dict):
-                    # A corrupt complete record is isolated, never exported.
-                    # Its byte position is retained without copying raw content.
+                    # A corrupt complete record makes this page incomplete.
+                    # Do not consume it or label later text as complete.
                     result.setdefault("discarded_records", []).append(
                         dict(start=offset, end=stream.tell(), reason="invalid record"))
-                    consumed.update(raw)
-                    result["end"] = stream.tell()
-                    result["skipped_records"] += 1
-                    continue
+                    result.update(status="invalid-record", end=start, text="",
+                                  coverage_note="invalid complete transcript record")
+                    return result
                 extracted = None
                 if isinstance(record, dict):
                     if record.get("type") in KNOWN:
@@ -378,14 +377,13 @@ def read_material(path, start, *, session_id=None, not_before=None, expected=Non
                 if extracted and extracted[1]:
                     stamp = _timestamp(record)
                     if not_before is not None and stamp is None:
-                        # Without a timestamp this record is not authorized.
-                        # Omit only this record; later dated messages can proceed.
+                        # An unknown authorization boundary is an error, not
+                        # permission to skip an unknown amount of experience.
                         result.setdefault("discarded_records", []).append(
                             dict(start=offset, end=stream.tell(), reason="missing public timestamp"))
-                        consumed.update(raw)
-                        result["end"] = stream.tell()
-                        result["skipped_records"] += 1
-                        continue
+                        result.update(status="invalid-record", end=start, text="",
+                                      coverage_note="missing public timestamp")
+                        return result
                     if not_before is not None and stamp < not_before:
                         extracted = None
                     else:

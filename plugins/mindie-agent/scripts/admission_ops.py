@@ -172,8 +172,8 @@ def operation(name, payload):
             # host, so the forwarded transcript artifact itself is the binding
             # evidence: a positive mismatch between the event's session and
             # the transcript owner is never captured. A missing/unreadable or
-            # unrecognizable transcript stays on the existing degrade path —
-            # the worker's parser remains the content-level backstop.
+            # unrecognizable transcript is reported by the worker's parser;
+            # it cannot be replaced by a successful summary-only capture.
             import codex_transcript
 
             probe = codex_transcript.read_material(
@@ -181,7 +181,7 @@ def operation(name, payload):
                 max_scan_bytes=1024, max_seconds=1.0, max_text_bytes=16384,
             )
             if probe.get("session_match") is False:
-                return dict(stage="inert", reason="wrong-task")
+                return dict(stage="rejected", reason="wrong-task")
         forwarded = dict(event, mindie_activation=lease["token"], harness="codex")
         from mindie_knowledge.loop.cli import capture_hook
 

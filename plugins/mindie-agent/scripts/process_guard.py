@@ -1,4 +1,4 @@
-"""Bound a single optional Codex execution; abort at the first error/tool event.
+"""Bound a single required Codex execution; abort at the first error/tool event.
 
 One daemon reader thread feeds stdout lines through a queue; a second thread
 only counts stderr bytes. This works on POSIX (process groups) and Windows
@@ -73,6 +73,7 @@ def run_codex(command, prompt, *, timeout=None):
         lines = queue.Queue()
         total = [0]
         flooded = []
+        read_errors = []
 
         def read_stdout():
             # In-memory accumulation stays below MAX_OUTPUT: once the cap is
@@ -102,9 +103,16 @@ def run_codex(command, prompt, *, timeout=None):
                     flooded.append(True)
                     return
 
+        def checked_reader(read):
+            try:
+                read()
+            except (OSError, ValueError) as exc:
+                read_errors.append(exc)
+                lines.put(None)
+
         threads = [
-            threading.Thread(target=read_stdout, daemon=True),
-            threading.Thread(target=read_stderr, daemon=True),
+            threading.Thread(target=checked_reader, args=(read_stdout,), daemon=True),
+            threading.Thread(target=checked_reader, args=(read_stderr,), daemon=True),
         ]
         for thread in threads:
             thread.start()
@@ -144,6 +152,8 @@ def run_codex(command, prompt, *, timeout=None):
 
         try:
             while True:
+                if read_errors:
+                    raise InvalidResultError("Codex output read failed") from read_errors[0]
                 if flooded or total[0] > MAX_OUTPUT:
                     raise OutputLimitExceeded("Codex maintenance output exceeds limit")
                 remaining = deadline - time.monotonic()
@@ -198,4 +208,6 @@ def run_codex(command, prompt, *, timeout=None):
                 process.stdout.close()
             if not threads[1].is_alive():
                 process.stderr.close()
+        if read_errors:
+            raise InvalidResultError("Codex output read failed") from read_errors[0]
         return usage

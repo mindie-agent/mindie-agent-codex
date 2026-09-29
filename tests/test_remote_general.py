@@ -248,6 +248,9 @@ class GeneralRemoteTests(unittest.TestCase):
         cases = [
             ('connection_unavailable', 'not_sent', True),
             ('rpc_timeout', 'uncertain', False),
+            ('stream_read', 'uncertain', False),
+            ('stream_write', 'uncertain', False),
+            ('local_state', 'not_sent', False),
             ('PRIVATE_ATTRIBUTE_MARKER', 'PRIVATE_ATTRIBUTE_MARKER', True),
         ]
         for category, delivery, retryable in cases:

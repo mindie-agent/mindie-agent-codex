@@ -368,7 +368,9 @@ def stop_hook_commands(argv):
     completion even when the child executable is absent or fails.
     """
     argv = [str(value) for value in argv]
-    posix = shlex.join(argv) + " >/dev/null 2>&1; printf '{}\\n'"
+    warning = "MindIE Stop capture failed before completion; inspect MindIE status."
+    posix = ("if ! " + shlex.join(argv) + " >/dev/null 2>&1; then printf '%s\\n' "
+             + shlex.quote(warning) + " >&2; fi; printf '{}\\n'")
     # Native Codex can dispatch Windows hooks through PowerShell. CMD's
     # `& echo` becomes a background job there and loses the event on stdin.
     # An encoded PowerShell command has one unambiguous argv under either
@@ -377,7 +379,10 @@ def stop_hook_commands(argv):
         if value.startswith("${PLUGIN_ROOT}/"):
             return "(Join-Path $env:PLUGIN_ROOT '" + value[len('${PLUGIN_ROOT}/'):].replace("'", "''") + "')"
         return "'" + value.replace("'", "''") + "'"
-    body = "try { & " + " ".join(ps_arg(arg) for arg in argv) + " 1>$null 2>$null } catch {} finally { [Console]::Out.WriteLine('{}') }; exit 0"
+    report = "[Console]::Error.WriteLine('" + warning + "')"
+    body = ("try { & " + " ".join(ps_arg(arg) for arg in argv)
+            + " 1>$null 2>$null; if ($LASTEXITCODE -ne 0) { " + report
+            + " } } catch { " + report + " } finally { [Console]::Out.WriteLine('{}') }; exit 0")
     windows = "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " + base64.b64encode(body.encode("utf-16le")).decode("ascii")
     # This host watchdog includes both shell and interpreter cold startup.
     # The bridge still limits actual handoff work to 1.3 s on Windows / 1.5 s
@@ -1215,8 +1220,9 @@ class Updater:
         maintenance = self.maintain_diagnostics()
         try:
             atomic(self.root / "diagnostics-maintenance.json", maintenance)
-        except Exception:
-            pass
+        except (OSError, ValueError) as exc:
+            maintenance = dict(maintenance, status="unavailable",
+                               error_type=type(exc).__name__, stage="persist_maintenance")
         return dict(result, diagnostics=maintenance)
 
     def check_knowledge(self):
@@ -2220,6 +2226,10 @@ def main():
     else:
         result = Updater(args.settings).check()
     print(json.dumps(result, indent=2))
+    if (result.get("status") in {"update_failed", "incompatible", "attempts_exhausted", "unavailable", "failed", "refused", "degraded", "action_required", "waiting_for_compatible_source", "partial"}
+            or result.get("knowledge_status") in {"sync_failed", "degraded", "failed", "unavailable", "invalid"}
+            or result.get("diagnostics", {}).get("status") in {"degraded", "unavailable", "configuration_unavailable", "failed", "error"}):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

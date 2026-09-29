@@ -226,7 +226,8 @@ class GateTests(SharingFixture):
                 elif state == "wrong-schema":
                     self.community.write_text(json.dumps(dict(schema="other/1")))
                 result = self.bridge("stop", self.event(last_assistant_message="Done"))
-                self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+                expected = 1 if state in {"malformed", "wrong-schema"} else 0
+                self.assertEqual((result.returncode, json.loads(result.stdout)), (expected, {}))
                 self.assertEqual(self.attempts(), 0)
 
     def test_scope_comes_from_the_lease_not_the_event_cwd(self):
@@ -238,7 +239,7 @@ class GateTests(SharingFixture):
         result = self.bridge(
             "stop", self.event(cwd="relative/path", last_assistant_message="Done")
         )
-        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
         self.assertEqual(self.attempts(), 0)
         self.prepare_store()
         # An absolute event cwd outside the scope does not block capture: the
@@ -307,7 +308,7 @@ class GateTests(SharingFixture):
             + "\n"
         )
         result = self.bridge("stop", self.event(transcript_path=str(foreign)))
-        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
         self.assertEqual(self.captures(), 0)
         self.assertEqual(self.attempts(), 0)
         # The task's own transcript captures normally.
@@ -334,16 +335,16 @@ class GateTests(SharingFixture):
         self.prepare_store()
         with patch.dict(os.environ, CODEX_THREAD_ID="child-task"):
             result = self.bridge("stop", self.event(last_assistant_message="Done"))
-        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
         self.assertEqual(self.captures(), 0)
         self.assertEqual(self.attempts(), 0)
 
 
-    def test_event_without_any_material_is_skipped(self):
+    def test_transcript_reference_without_ready_store_reports_failure(self):
         self.write_sharing()
         self.activate()
         result = self.bridge("stop", self.event())
-        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
         self.assertEqual(self.attempts(), 0)
 
     def test_held_open_stdin_still_forwards_once_under_native_budget(self):
@@ -386,7 +387,7 @@ class GateTests(SharingFixture):
             "manual-A",
         )
         result = self.bridge("stop", self.event(last_assistant_message="Done"))
-        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
         self.assertEqual(self.attempts(), 0)
 
     def test_sharing_toggle_does_not_invalidate_ordinary_activation(self):

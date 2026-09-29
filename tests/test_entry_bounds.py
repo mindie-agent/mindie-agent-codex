@@ -76,7 +76,7 @@ class EntryBoundsTests(unittest.TestCase):
                     community_config=str(community),
                 ))
             )
-            for case in cases:
+            for index, case in enumerate(cases):
                 if isinstance(case, dict):
                     case = dict(case, cwd=str(root))
                 result = subprocess.run(
@@ -87,7 +87,7 @@ class EntryBoundsTests(unittest.TestCase):
                     env={**os.environ, "MINDIE_AGENT_CONFIG": str(config)},
                     timeout=3,
                 )
-                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.returncode, 1 if index == 2 else 0)
                 self.assertEqual(json.loads(result.stdout), {})
                 self.assertFalse(marker.exists())
 

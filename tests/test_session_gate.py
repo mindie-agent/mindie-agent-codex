@@ -555,7 +555,8 @@ class SessionGateTests(unittest.TestCase):
         store.close()
         for event in [self.event("other"), self.event(), self.event()]:
             result = self.bridge("stop", event)
-            self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+            expected = 1 if event['session_id'] == 'other' else 0
+            self.assertEqual((result.returncode, json.loads(result.stdout)), (expected, {}))
         db = sqlite3.connect(self.root / "data" / "test" / "store-v3.sqlite3")
         try:
             count = db.execute("SELECT count(*) FROM captures").fetchone()[0]
@@ -594,7 +595,7 @@ class SessionGateTests(unittest.TestCase):
         started = time.monotonic()
         result = self.bridge("stop", self.event(), timeout=3)
         self.assertLess(time.monotonic() - started, 1.9)
-        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
         self.assertEqual(marker.read_text().splitlines(), ["attempt"])
 
     def test_corrupt_activation_state_fails_closed(self):
@@ -820,10 +821,12 @@ class SessionGateTests(unittest.TestCase):
             )
         )
         result = self.bridge("activate")
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 1, result.stderr)
         payload = json.loads(result.stdout)
         # Conflicting legacy evidence is diagnosed, never guessed; the
-        # read-only binding still succeeds and no consent is written.
+        # binding receipt survives, capture fails and no consent is written.
+        self.assertEqual(payload['status'], 'degraded')
+        self.assertEqual(payload['capture'], 'unavailable')
         self.assertEqual(payload["migration"]["consent"]["status"], "conflict")
         self.assertFalse((self.root / "mindie-consent.json").exists())
         self.assertEqual(payload["migration"]["community"]["status"], "adopted")

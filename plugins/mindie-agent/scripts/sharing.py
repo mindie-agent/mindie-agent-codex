@@ -377,7 +377,7 @@ def read(config_file=None):
     try:
         raw = json.loads(configured_path(config_file).read_text(encoding='utf-8'))
         settings = validate(raw)
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return None
     if not settings["enabled"]:
         return None
@@ -413,11 +413,13 @@ def consent_allows(settings, config_file=None):
     if ref is None:
         return None
     if not isinstance(ref, str) or not os.path.isabs(ref):
-        return False
+        raise SharingError("invalid consent authority path")
     import consent_store
 
     view = consent_store.read(ref)
-    return view["state"] == "ok" and view["choice"] == "contribute"
+    if view["state"] != "ok":
+        raise SharingError("consent authority is unavailable: " + view["state"])
+    return view["choice"] == "contribute"
 
 
 def capture_allowed(lease, cwd, config_file=None):
@@ -437,11 +439,11 @@ def capture_allowed(lease, cwd, config_file=None):
         lease.get(key) is None
         for key in ("project_root", "root_session", "activated_at")
     ):
-        return False
+        raise SharingError("capture lease metadata is incomplete")
     try:
         root = Path(lease["project_root"]).resolve().as_posix()
-    except (OSError, ValueError):
-        return False
+    except (OSError, ValueError) as exc:
+        raise SharingError("capture lease scope is unreadable") from exc
     return any(
         root == allowed or root.startswith(allowed + "/")
         for allowed in settings["project_roots"]

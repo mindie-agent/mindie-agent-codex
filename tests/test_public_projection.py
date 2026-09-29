@@ -66,8 +66,8 @@ class PublicProjectionTests(unittest.TestCase):
                 with self.subTest(record=invalid):
                     path.write_bytes(path.read_bytes()[:boundary] + invalid)
                     result = transcript.read_material(path, 0, session_id='task-1')
-                    self.assertEqual(result['status'], 'ok')
-                    self.assertEqual(result['end'], path.stat().st_size)
+                    self.assertEqual(result['status'], 'invalid-record')
+                    self.assertEqual(result['end'], 0)
                     self.assertEqual(result['discarded_records'], [dict(
                         start=boundary, end=path.stat().st_size, reason='invalid record')])
                     self.assertFalse(result['text'])
@@ -79,9 +79,9 @@ class PublicProjectionTests(unittest.TestCase):
             undated.pop('timestamp', None)
             write_jsonl(path, [meta(), undated])
             result = transcript.read_material(path, 0, session_id='task-1', not_before=0)
-            self.assertEqual(result['status'], 'ok')
+            self.assertEqual(result['status'], 'invalid-record')
             self.assertFalse(result['text'])
-            self.assertEqual(result['end'], path.stat().st_size)
+            self.assertEqual(result['end'], 0)
             self.assertEqual(result['discarded_records'][0]['reason'], 'missing public timestamp')
 
     def test_native_text_shapes_share_filters_and_safe_attachment_placeholders(self):
