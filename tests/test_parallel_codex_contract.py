@@ -773,7 +773,7 @@ class AuthorityMigrationTests(LaneCase):
         disabled; a stale enabled rewrite is a lost update.
         """
         self.write_consent("contribute", reporting="disabled")
-        self.write_community(enabled=True)
+        self.write_community(enabled=True, consent_config=None)
         script = self.root / "settings_race.py"
         script.write_text(
             "import os, sys, time\n"
@@ -795,7 +795,7 @@ class AuthorityMigrationTests(LaneCase):
             "import sharing\n"
             "(root / f'entered-{role}').write_text('1')\n"
             "if role == 'stamp':\n"
-            "    sharing.set_enabled(True)\n"
+            "    sharing.migrate_community_path()\n"
             "else:\n"
             "    sharing.set_enabled(False)\n"
             "(root / f'done-{role}').write_text('1')\n"
