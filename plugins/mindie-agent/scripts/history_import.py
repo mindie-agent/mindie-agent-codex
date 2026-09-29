@@ -12,6 +12,10 @@ from pathlib import Path
 from admission_ops import admission, native_session, read_config
 
 
+class ConfigurationError(ValueError):
+    """Static diagnostics for missing parts of the Codex import pipeline."""
+
+
 def arguments(argv):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', action='append', required=True,
@@ -45,6 +49,10 @@ def run_imports(sources, *, emit):
         raise ValueError('history import requires the configured admission store')
     if engine_config.get('capture_mode') != 'public-transcript':
         raise ValueError('history import requires public-transcript mode')
+    summary_command = engine_config.get('summary_command')
+    if (not isinstance(summary_command, list) or not summary_command
+            or not all(isinstance(part, str) and part for part in summary_command)):
+        raise ConfigurationError('history import requires the configured summary worker; source excerpts are not a substitute')
     parser = load_transcript_adapter(engine_config)
     if not callable(getattr(parser, 'history_source', None)):
         raise ValueError('the installed transcript adapter does not support history import')
@@ -53,7 +61,7 @@ def run_imports(sources, *, emit):
         engine = Engine(store, settings_path=engine_config.get('community_config'),
                         admission=authority, transcript_adapter=parser,
                         capture_mode='public-transcript',
-                        summary_command=engine_config.get('summary_command'),
+                        summary_command=summary_command,
                         redactor_executable=engine_config['redactor_executable'])
         generation = engine._settings().generation
         for source in sources:
@@ -71,6 +79,11 @@ def run_imports(sources, *, emit):
                     source_session=info['session_id'], source_scope=info['project_root'],
                     identity=info['identity'], namespace='codex',
                 )
+                if result['status'] in {'imported', 'extended', 'unchanged'}:
+                    summary = result.get('summary') or dict(status='missing')
+                    if summary.get('status') in {'missing', 'excerpt', 'failed', 'cancelled'}:
+                        failed += 1
+                    result['summary'] = summary
                 changed += result['status'] in {'imported', 'extended'}
                 accepted += result['status'] in {'imported', 'extended', 'unchanged'}
             except Exception as exc:
@@ -105,7 +118,8 @@ def main(argv=None):
         return run_imports(args.source, emit=emit)
     except Exception as exc:
         emit(dict(status='not-started', error=type(exc).__name__,
-                  detail='Check current MindIE activation, saved contribution scope and runtime configuration.'))
+                  detail=str(exc) if isinstance(exc, ConfigurationError) else
+                  'Check current MindIE activation, saved contribution scope and runtime configuration.'))
         return 1
 
 

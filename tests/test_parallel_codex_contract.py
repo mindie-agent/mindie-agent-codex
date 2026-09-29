@@ -39,7 +39,7 @@ SCRIPTS = REPO / "plugins/mindie-agent/scripts"
 
 
 KIMI_COMMIT = "90f73e76c6087ce091570f2d151b709145c913bc"
-CORE_COMMIT = "1a88233f2d780eb9467c55bab6fa4b816a3dca0a"
+CORE_COMMIT = "e19f248a43612adbdc05aa995aa3949e6af366e4"
 CONSENT_STORE_SHA256 = "679c6483a2edbf2d093de2ca38b00bfb73418b1179bcef9cdf6f34b5f9ed6b4c"
 
 
@@ -386,7 +386,7 @@ class LaneCase(unittest.TestCase):
         finally:
             store.close()
 
-    def drain_worker(self):
+    def drain_worker(self, *, summarize=False):
         from mindie_knowledge.loop.activation import Admission
         from mindie_knowledge.loop.cli import load_transcript_adapter
         from mindie_knowledge.loop.engine import Engine
@@ -397,6 +397,7 @@ class LaneCase(unittest.TestCase):
             engine = Engine(
                 store,
                 capture_mode="public-transcript", redactor_executable=installed_scanner(),
+                summary_command=[PY, '-c', 'print(\'{"title":"Synthetic summary","summary":"Reported public observations."}\')'] if summarize else None,
                 settings_path=str(self.community),
                 admission=Admission(str(self.admission)),
                 transcript_adapter=load_transcript_adapter(
@@ -406,6 +407,12 @@ class LaneCase(unittest.TestCase):
             for row in self.capture_rows():
                 if row["status"] in {"queued", "pending", "deferred"}:
                     engine._process(row["id"])
+            if summarize:
+                from mindie_knowledge.loop.transcript_capture import summarize_due
+                engine.last_activity = time.monotonic() - 10
+                with store._write_txn():
+                    store.db.execute('UPDATE transcript_tasks SET summary_due=0')
+                summarize_due(engine)
         finally:
             store.close()
 
@@ -462,7 +469,7 @@ class ConsentGateTests(LaneCase):
         _jsonl(transcript, records)
         result = self.stop(self.event("task-main", transcript))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.drain_worker()
+        self.drain_worker(summarize=True)
         expected = "### user\nPublic request marker\n\n### assistant:commentary\nPublic progress marker\n\n### assistant:final_answer\nPublic result marker"
         self.assertEqual(self.saved_text(), expected)
         self.assertEqual(self.model_text(), "")
@@ -476,6 +483,7 @@ class ConsentGateTests(LaneCase):
             self.assertIsNotNone(batch)
             public = parse_entry(batch[2]["files"][0]["content"].encode("utf-8"))
             self.assertEqual(public["content"], expected)
+            self.assertEqual(public['title'], 'Synthetic summary')
         finally:
             store.close()
 

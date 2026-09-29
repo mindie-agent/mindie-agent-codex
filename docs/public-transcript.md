@@ -34,13 +34,17 @@ The existing outbox and exact remote receipts own publication. After compaction,
 a continuation restores the authoritative body through its receipt; a closed,
 unmerged or withdrawn contribution is not silently recreated.
 
-Setup and updates automatically install the optional title/summary worker.
+Setup and updates automatically install the required title/summary worker.
 The adapter owns its fixed GPT-6-Luna / low policy; there is no user-facing
 model or effort setting and no inheritance from the business task. A separate
 worker reads the complete redacted body. It can only update title and summary;
 it cannot rewrite the body or hold up later captures. The native invocation
 deadline is 35 seconds, with a 45-second outer cancellation deadline. A failed
-or superseded attempt leaves the source excerpt and full body available.
+or superseded attempt keeps the body locally but does not qualify it for a new
+export batch. Missing worker configuration is a visible error, not a normal
+excerpt mode. Local saving, summary completion and publication are separate
+states. Current worker input is still the full body; token-aware incremental
+organization for long material is not implemented.
 Updates replace obsolete model arguments with the installed adapter policy.
 
 CI validates actual stored/exported content, atomic rollback, duplicate/restart

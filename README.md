@@ -159,7 +159,7 @@ automatically and reuses the saved contribution choice and project scope.
 
 Tools, hidden reasoning, injected instructions and inherited task history are
 excluded. A local Gitleaks scanner and privacy rules redact the retained text
-before storage or any optional summary call. No model writes or rewrites the
+before storage or the required summary call. No model writes or rewrites the
 body. One task appends to one record within its authorized sharing generation;
 the body and read position commit together. The publication path checks scope
 and sensitive content before sending a Markdown contribution PR; raw
@@ -231,13 +231,17 @@ no downloads and has no model dependency. A missing or failed scanner leaves
 the input unread instead of publishing unredacted content. Public messages are
 not shortened to fit a model; the parser advances at complete message boundaries.
 
-Setup and updates automatically install the optional title/summary worker.
+Setup and updates automatically install the required title/summary worker.
 The adapter owns its fixed GPT-6-Luna / low policy; there is no user-facing
 model or effort setting and no inheritance from the business task. A separate
 worker reads the complete redacted body. It can only update title and summary;
 it cannot rewrite the body or hold up later captures. The native invocation
 deadline is 35 seconds, with a 45-second outer cancellation deadline. A failed
-or superseded attempt leaves the source excerpt and full body available.
+or superseded attempt keeps the body locally but does not qualify it for a new
+export batch. Missing worker configuration is a visible error, not a normal
+excerpt mode. Local saving, summary completion and publication are separate
+states. Current worker input is still the full body; token-aware incremental
+organization for long material is not implemented.
 Updates replace obsolete model arguments with the installed adapter policy.
 See [the transcript contract](docs/public-transcript.md).
 

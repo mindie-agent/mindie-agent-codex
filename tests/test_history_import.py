@@ -29,6 +29,7 @@ class HistoryImportTests(SharingFixture):
         engine = json.loads(self.engine.read_text())
         engine.update(capture_mode='public-transcript',
                       transcript_adapter=str(SCRIPTS / 'codex_transcript.py'),
+                      summary_command=[sys.executable, '-c', 'print(\'{"title":"Synthetic case","summary":"Synthetic reported result."}\')'],
                       redactor_executable=str(self.root / 'not-needed-for-empty-source'))
         self.engine.write_text(json.dumps(engine))
 
@@ -70,6 +71,23 @@ class HistoryImportTests(SharingFixture):
         self.assertEqual(consent.consent_path().read_bytes(), saved)
         self.assertFalse((self.root / 'data').exists())
 
+    def test_missing_summary_configuration_errors_before_source_or_store(self):
+        self.activate()
+        engine = json.loads(self.engine.read_text())
+        del engine['summary_command']
+        self.engine.write_text(json.dumps(engine))
+        with patch('mindie_knowledge.loop.cli.load_transcript_adapter', side_effect=AssertionError('no parser')):
+            with self.assertRaisesRegex(history_import.ConfigurationError, 'summary worker'):
+                self.run_import()
+        self.assertFalse((self.root / 'data').exists())
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / 'bridge.py'), '--config', str(self.config),
+             'history-import', '--source', str(self.source)],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('summary worker', json.loads(result.stdout)['detail'])
+
     def test_source_scope_is_checked_before_public_messages(self):
         self.activate()
         self.make_source('out-of-scope canary', root=self.root / 'other-project')
@@ -96,7 +114,9 @@ class HistoryImportTests(SharingFixture):
             second = self.run_import()
         self.assertEqual(first[0], 0, first)
         self.assertEqual(first[1][0]['status'], 'imported')
+        self.assertEqual(first[1][0]['summary']['status'], 'pending')
         self.assertEqual(second[1][0]['status'], 'unchanged')
+        self.assertEqual(second[1][0]['summary']['status'], 'pending')
         self.assertEqual(first[1][-1]['publication'], 'pending')
         self.assertEqual(service.call_count, 2)
         self.assertEqual(consent.consent_path().read_bytes(), saved)

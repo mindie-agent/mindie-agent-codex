@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Optional metadata worker; no body output or business-model inheritance.
+"""Required transcript metadata worker; no body output or business-model inheritance.
 
 The adapter owns the model choice. It never inherits business-task settings
 or asks the user to configure a second model.
