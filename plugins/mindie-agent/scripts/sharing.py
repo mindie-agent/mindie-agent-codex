@@ -257,7 +257,7 @@ def migrate_community_path(config_file=None):
 
 
 def canonical_root(value):
-    if not isinstance(value, str) or not value or len(value) > 1024:
+    if not isinstance(value, str) or not value:
         raise SharingError("community project roots must be path strings")
     if not os.path.isabs(value):
         raise SharingError("community project roots must be absolute: " + value[:80])

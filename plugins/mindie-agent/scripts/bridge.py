@@ -405,9 +405,7 @@ def offline_status():
                 if not stat.S_ISREG(os.fstat(fd).st_mode):
                     raise ValueError("adapter config must be a regular file")
                 with os.fdopen(fd, "rb", closefd=False) as stream:
-                    raw = stream.read(64 * 1024 + 1)
-                if len(raw) > 64 * 1024:
-                    raise ValueError("adapter config exceeds bound")
+                    raw = stream.read()
                 config = json.loads(raw)
             finally:
                 os.close(fd)
@@ -671,11 +669,9 @@ def _adapter_python(config_file):
             if not stat.S_ISREG(os.fstat(fd).st_mode):
                 raise ValueError("adapter config must be a regular file")
             with os.fdopen(fd, "rb", closefd=False) as stream:
-                raw = stream.read(64 * 1024 + 1)
+                raw = stream.read()
         finally:
             os.close(fd)
-        if len(raw) > 64 * 1024:
-            raise ValueError("adapter config exceeds bound")
         config = json.loads(raw)
         if not isinstance(config, dict):
             raise ValueError("adapter config must be an object")

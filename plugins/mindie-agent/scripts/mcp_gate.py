@@ -25,7 +25,6 @@ from diagnostic_support import failure as diagnostic_failure
 from session_gate import IDENTITY, Sessions, config_path, generation_env, runtime_scripts
 from update_lock import update_lock
 
-MAX_INPUT = 128 * 1024
 KNOWLEDGE_TIMEOUT = 15
 REMOTE_TIMEOUT = 65
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
@@ -511,11 +510,8 @@ def serve(surface):
 
     try:
         while True:
-            raw = sys.stdin.buffer.readline(MAX_INPUT + 1)
+            raw = sys.stdin.buffer.readline()
             if not raw:
-                break
-            if len(raw) > MAX_INPUT:
-                # Close this transport instead of reading/allocating an unbounded frame.
                 break
             try:
                 message = json.loads(raw)
@@ -553,7 +549,6 @@ def serve(surface):
                     with pending_lock:
                         if (
                             (identifier in seen if surface != "remote" else identifier in pending)
-                            or (surface != "remote" and len(seen) >= 4096)
                             or not capacity.acquire(blocking=False)
                         ):
                             respond(
@@ -581,7 +576,7 @@ def serve(surface):
                     dict(
                         jsonrpc="2.0",
                         id=None,
-                        error=dict(code=-32600, message="Invalid bounded MCP request"),
+                        error=dict(code=-32600, message="Invalid MCP request"),
                     )
                 )
     finally:

@@ -57,6 +57,7 @@ class StatusErrors(unittest.TestCase):
             path.write_text(json.dumps(dict(
                 python=sys.executable, engine_config=str(root / "engine.json"),
                 runtime_scripts=str(root),
+                extension='public configuration ' * 65536,
             )))
             process, payload = self.call(path)
             self.assertEqual(process.returncode, 1)
@@ -76,7 +77,7 @@ class StatusErrors(unittest.TestCase):
             self.assertEqual(payload["error"]["stage"], "config_read")
             self.assertIsNone(payload["first_use"])
 
-    def test_oversized_configuration_is_a_safe_config_error(self):
+    def test_non_object_configuration_is_a_safe_config_error(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "adapter.json"
             path.write_text('"' + 'PRIVATE_MARKER' * 6000 + '"')
