@@ -376,7 +376,29 @@ class SessionGateTests(unittest.TestCase):
             payload = json.loads(run.call_args.args[1])
             self.assertEqual(payload["arguments"]["session_id"], "remote-job-7")
             self.assertEqual(payload["remote_session_id"], "manual-A")
-            self.assertEqual(run.call_args.kwargs["timeout"], 65)
+            self.assertEqual(run.call_args.kwargs["timeout"], 120)
+
+    def test_artifact_transfer_timeout_is_rejected_before_runtime_dispatch(self):
+        gate = mcp_gate.Gate("remote")
+        for name in ("remote_artifact_push", "remote_artifact_pull"):
+            for key in ("timeout_ms", "timeout"):
+                with self.subTest(name=name, key=key), patch.object(mcp_gate, "run") as run:
+                    arguments = {"remote_path": "/tmp/file", key: 120001}
+                    if name == "remote_artifact_push":
+                        arguments["local_path"] = "/tmp/file"
+                    result = gate.call(self.request(name=name, **arguments))
+                    self.assertTrue(result["isError"])
+                    self.assertEqual(result["structuredContent"]["code"], "invalid_arguments")
+                    self.assertEqual(result["structuredContent"]["execution"], "not_started")
+                    self.assertIn("120000 ms", result["structuredContent"]["message"])
+                    run.assert_not_called()
+
+    def test_artifact_transfer_timeout_at_limit_is_forwarded(self):
+        request = self.request(name="remote_artifact_pull", remote_path="/tmp/file", timeout_ms=120000)
+        with patch.object(mcp_gate, "run", return_value='{"content":[],"isError":false}') as run:
+            self.assertFalse(mcp_gate.Gate("remote").call(request)["isError"])
+            self.assertEqual(run.call_args.kwargs["timeout"], 120)
+            self.assertEqual(json.loads(run.call_args.args[1])["arguments"]["timeout_ms"], 120000)
 
     def test_rejected_reads_do_not_consume_the_failure_circuit(self):
         lease = self.activate()

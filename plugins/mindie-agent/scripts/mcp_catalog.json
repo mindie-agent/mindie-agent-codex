@@ -931,10 +931,14 @@
             "type": "string"
           },
           "timeout_ms": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 120000
           },
           "timeout": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 120000
           }
         },
         "required": [
@@ -1003,10 +1007,14 @@
             "type": "string"
           },
           "timeout_ms": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 120000
           },
           "timeout": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 120000
           }
         },
         "required": [
