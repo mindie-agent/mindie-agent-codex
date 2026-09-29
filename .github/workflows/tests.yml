@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
   pull_request:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   # Package/unit CI: bounded, model-free checks against the exact pinned
   # runtime and domain dependencies. Linux and Windows run the same component
@@ -32,7 +35,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: mindie-agent/knowledge
-          ref: 466d031016b7ff1354c716c67fd4ca009f164706
+          ref: ec05a65c6841ca77ec55c7ea32232efa6699f342
           path: .ci/core
       - name: Checkout pinned peer adapter
         uses: actions/checkout@v4

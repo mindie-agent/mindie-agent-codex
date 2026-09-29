@@ -96,7 +96,8 @@ class LocalUpdater(Updater):
         return super().command(args, **kwargs)
 
     def prepare_capture(self, candidate):
-        return dict(capture_mode="public-transcript", redactor_executable=str(Path(candidate["python"]).absolute()))
+        return dict(capture_mode="public-transcript", redactor_executable=str(Path(candidate["python"]).absolute()),
+                    summary_command=[candidate["python"], str(Path(candidate["plugin"]) / "scripts/agent_worker.py")])
 
     def probe_runtime(self, python, scripts=None):
         self.assert_runtime = Path(python).exists()
@@ -167,6 +168,11 @@ class AutoUpdateTests(unittest.TestCase):
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.name", "Fixture")
         self.git("config", "user.email", "fixture@example.invalid")
+        # This disposable repository is a local server fixture. New Git
+        # versions may launch maintenance after commit as well as fetch;
+        # detached writers must not outlive its test-owned directory.
+        self.git("config", "maintenance.auto", "false")
+        self.git("config", "gc.auto", "0")
         self.sha = self.commit("first")
         self.root = self.base / "updates"
         self.root.mkdir()
@@ -302,7 +308,7 @@ class AutoUpdateTests(unittest.TestCase):
             self.updater.verify_native(version, str(plugin))["version"], version
         )
 
-    def test_explicit_summary_worker_moves_with_runtime_generation(self):
+    def test_summary_worker_moves_with_runtime_generation(self):
         engine = read(self.engine)
         engine['summary_command'] = ['old-python', str(SCRIPTS / 'agent_worker.py'), '--model', 'explicit-nonthinking-model']
         atomic(self.engine, engine)
@@ -311,9 +317,9 @@ class AutoUpdateTests(unittest.TestCase):
         selected = read(self.config)
         updated = read(selected['engine_config'])
         self.assertEqual(updated['summary_command'], [selected['python'],
-            str(Path(selected['runtime_scripts']) / 'agent_worker.py'), '--model', 'explicit-nonthinking-model', '--reasoning-effort', 'none'])
+            str(Path(selected['runtime_scripts']) / 'agent_worker.py')])
 
-    def test_summary_model_and_effort_survive_runtime_update(self):
+    def test_legacy_model_arguments_are_replaced_by_owned_policy(self):
         engine = read(self.engine)
         engine['summary_command'] = ['old-python', str(SCRIPTS / 'agent_worker.py'),
                                      '--model', 'gpt-6-luna', '--reasoning-effort', 'low']
@@ -323,8 +329,7 @@ class AutoUpdateTests(unittest.TestCase):
         selected = read(self.config)
         updated = read(selected['engine_config'])
         self.assertEqual(updated['summary_command'], [selected['python'],
-            str(Path(selected['runtime_scripts']) / 'agent_worker.py'),
-            '--model', 'gpt-6-luna', '--reasoning-effort', 'low'])
+            str(Path(selected['runtime_scripts']) / 'agent_worker.py')])
 
     def test_native_inventory_without_source_type_updates_owned_marketplace(self):
         first = self.check()

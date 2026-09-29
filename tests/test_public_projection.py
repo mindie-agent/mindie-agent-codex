@@ -57,7 +57,7 @@ class PublicProjectionTests(unittest.TestCase):
             result = transcript.read_material(path, 0, session_id='task-1')
             self.assertEqual(result['text'], '### user\nfirst\nsecond\nthird')
 
-    def test_invalid_complete_record_is_not_consumed_as_noise(self):
+    def test_invalid_complete_record_is_isolated_with_a_diagnostic(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'native.jsonl'
             write_jsonl(path, [meta()])
@@ -66,9 +66,10 @@ class PublicProjectionTests(unittest.TestCase):
                 with self.subTest(record=invalid):
                     path.write_bytes(path.read_bytes()[:boundary] + invalid)
                     result = transcript.read_material(path, 0, session_id='task-1')
-                    self.assertEqual(result['status'], 'invalid-record')
-                    self.assertEqual(result['end'], boundary)
-                    self.assertTrue(result['coverage'])
+                    self.assertEqual(result['status'], 'ok')
+                    self.assertEqual(result['end'], path.stat().st_size)
+                    self.assertEqual(result['discarded_records'], [dict(
+                        start=boundary, end=path.stat().st_size, reason='invalid record')])
                     self.assertFalse(result['text'])
 
     def test_public_timestamp_is_required_even_when_no_dated_message_follows(self):
@@ -78,9 +79,10 @@ class PublicProjectionTests(unittest.TestCase):
             undated.pop('timestamp', None)
             write_jsonl(path, [meta(), undated])
             result = transcript.read_material(path, 0, session_id='task-1', not_before=0)
-            self.assertEqual(result['status'], 'invalid-record')
+            self.assertEqual(result['status'], 'ok')
             self.assertFalse(result['text'])
-            self.assertLess(result['end'], path.stat().st_size)
+            self.assertEqual(result['end'], path.stat().st_size)
+            self.assertEqual(result['discarded_records'][0]['reason'], 'missing public timestamp')
 
     def test_native_text_shapes_share_filters_and_safe_attachment_placeholders(self):
         with tempfile.TemporaryDirectory() as tmp:

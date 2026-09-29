@@ -157,6 +157,7 @@ class SessionGateTests(unittest.TestCase):
     def event(self, session="manual-A", turn="turn-1", cwd=None):
         return dict(
             hook_event_name="Stop",
+            transcript_path=str(self.root / "synthetic-transcript.jsonl"),
             session_id=session,
             turn_id=turn,
             cwd=str(cwd or self.root),
@@ -643,6 +644,21 @@ class SessionGateTests(unittest.TestCase):
             bounded_process.run([sys.executable, "-c", code], "", timeout=0.3)
         time.sleep(1)
         self.assertFalse(marker.exists(), "owned grandchild outlived timeout cleanup")
+
+    def test_large_mcp_frames_keep_the_connection_usable(self):
+        messages = [dict(jsonrpc="2.0", id=index, method="ping",
+                         params=dict(public_text="x" * size))
+                    for index, size in enumerate((129 * 1024, 1024 * 1024, 10 * 1024 * 1024), 1)]
+        messages.append(dict(jsonrpc="2.0", id=4, method="ping"))
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "bridge.py"), "mcp"],
+            input=''.join(json.dumps(message) + '\n' for message in messages),
+            text=True, capture_output=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        replies = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual([reply['id'] for reply in replies], [1, 2, 3, 4])
+        self.assertTrue(all(reply.get('result') == {} for reply in replies), replies)
 
     def test_mcp_protocol_call_and_cancellation(self):
         marker = self.runtime_fixture(delay=20)

@@ -113,6 +113,7 @@ class SharingFixture(unittest.TestCase):
     def event(self, cwd=None, **extra):
         event = dict(
             hook_event_name="Stop",
+            transcript_path=str(self.root / "synthetic-transcript.jsonl"),
             session_id="manual-A",
             turn_id="turn-1",
             cwd=str(cwd or self.scope),
@@ -166,6 +167,47 @@ class SharingFixture(unittest.TestCase):
 
 
 class GateTests(SharingFixture):
+    def test_large_native_stop_forwards_reference_without_copying_body(self):
+        from capture_config import prepare
+        from datetime import datetime, timezone
+        from contextlib import closing
+        from mindie_knowledge.loop.store import Store
+        self.write_sharing()
+        self.activate()
+        self.prepare_store()
+        config = json.loads(self.engine.read_text())
+        config.update(prepare(sys.executable, SCRIPTS))
+        config['transcript_adapter'] = str(SCRIPTS / 'codex_transcript.py')
+        config.pop('summary_command')  # This case verifies body delivery, with zero model calls.
+        self.engine.write_text(json.dumps(config))
+        transcript_path = Path(self.event()['transcript_path'])
+        transcript_path.write_text(json.dumps(dict(type='session_meta', payload=dict(id='manual-A'))) + '\n', encoding='utf-8')
+        for size in (129 * 1024, 1024 * 1024, 10 * 1024 * 1024):
+            message = dict(type='response_item', timestamp=datetime.now(timezone.utc).isoformat(),
+                           payload=dict(type='message', role='user', content=[dict(type='input_text', text=f'public-marker-{size}')]))
+            with transcript_path.open('a', encoding='utf-8') as stream:
+                stream.write(json.dumps(message) + '\n')
+            event = self.event(turn_id=f'large-{size}', last_assistant_message='公开结果' * (size // 12))
+            result = self.bridge('stop', event, timeout=5)
+            self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        path = self.root / 'data/test/store-v3.sqlite3'
+        db = sqlite3.connect(path)
+        try:
+            rows = db.execute('SELECT summary, transcript FROM captures').fetchall()
+        finally:
+            db.close()
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(all(summary == '' for summary, _ in rows))
+        self.assertTrue(any(transcript == event['transcript_path'] for _, transcript in rows))
+        with closing(Store(self.root / 'data', 'test')) as store:
+            until = time.monotonic() + 5
+            while time.monotonic() < until:
+                docs = store.drafts_changed()
+                if docs and docs[0]['content'].count('public-marker-') == 3:
+                    break
+                time.sleep(.05)
+            self.assertEqual(docs[0]['content'].count('public-marker-'), 3)
+
     def test_missing_disabled_and_malformed_config_skip_before_any_claim(self):
         self.activate()
         states = [

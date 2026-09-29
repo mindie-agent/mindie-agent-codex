@@ -35,8 +35,6 @@ from session_gate import config_path, generation_env
 from update_lock import update_lock
 
 SCHEMA = "mindie-community-config/1"
-MAX_ROOTS = 64
-MAX_EXTENSION_BYTES = 4096
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]{1,128}\Z")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")
 CORE_KEYS = {
@@ -59,9 +57,11 @@ CHOICES = (
 )
 NORMALIZE_SCRIPT = """
 import json, sys
-from mindie_knowledge.loop.settings import normalize
+from mindie_knowledge.loop.settings import normalize, transition
 try:
-    value = normalize(json.loads(sys.stdin.read()))
+    request = json.loads(sys.stdin.read())
+    value = (normalize(request['settings']) if request['previous'] is None
+             else transition(request['previous'], request['settings']))
 except ValueError as exc:
     print(json.dumps({"rejected": str(exc)[:240]}, ensure_ascii=False))
 else:
@@ -257,7 +257,7 @@ def migrate_community_path(config_file=None):
 
 
 def canonical_root(value):
-    if not isinstance(value, str) or not value or len(value) > 1024:
+    if not isinstance(value, str) or not value:
         raise SharingError("community project roots must be path strings")
     if not os.path.isabs(value):
         raise SharingError("community project roots must be absolute: " + value[:80])
@@ -305,8 +305,6 @@ def validate(settings):
         raise SharingError("community project_roots must be a unique list")
     if enabled and not roots:
         raise SharingError("community project_roots must be a non-empty unique list")
-    if len(roots) > MAX_ROOTS:
-        raise SharingError("community project_roots exceeds adapter bound")
     roots = [canonical_root(root) for root in roots]
     consent_config = settings.get("consent_config")
     if consent_config is not None and not (
@@ -331,15 +329,13 @@ def validate(settings):
     for key, value in settings.items():
         if key in CORE_KEYS or value is None:
             continue
-        if not isinstance(key, str) or len(key) > 64:
+        if not isinstance(key, str):
             raise SharingError("community extension key is invalid")
-        if len(json.dumps(value, ensure_ascii=False)) > MAX_EXTENSION_BYTES:
-            raise SharingError("community extension value exceeds limit: " + key)
         result[key] = value
     return result
 
 
-def normalize_with_runtime(settings, python, config_file=None):
+def normalize_with_runtime(settings, python, config_file=None, *, previous=None):
     """Definitive shared-core normalize through the committed interpreter.
 
     A document the core rejects raises a SharingError naming the rejection;
@@ -349,11 +345,12 @@ def normalize_with_runtime(settings, python, config_file=None):
     if not isinstance(python, str) or not python:
         raise SharingError("adapter configuration has no runtime interpreter")
     try:
+        request = json.dumps(dict(settings=settings, previous=previous))
         output = run(
             [python, "-c", NORMALIZE_SCRIPT],
-            json.dumps(settings),
+            request,
             timeout=10,
-            max_output=65536,
+            max_output=max(65536, len(request.encode('utf-8')) * 2),
             env=generation_env(config_file) if config_file is not None else {
                 key: value for key, value in os.environ.items() if key != "PYTHONPATH"
             },
@@ -544,26 +541,20 @@ def set_enabled(enable, config_file=None):
                 "again — a damaged authority is never silently replaced"
             ) from None
         settings = validate(parsed)
-        was_enabled = settings["enabled"]
+        desired_choice = "contribute" if enable else "disabled"
+        saved = consent.load(config_file)
+        if settings['enabled'] == bool(enable) and saved.get('choice') == desired_choice:
+            return settings  # Already in the requested state: do not mutate.
         settings["enabled"] = bool(enable)
-        # Match the shared core write() semantics: enabled_at refreshes only
-        # on an off->on edge (a redundant enable must not manufacture a
-        # capture gap); disabling clears it. Generation always refreshes —
-        # it is the core-observed cancellation signal.
-        settings["enabled_at"] = (
-            time.time()
-            if enable and not was_enabled
-            else settings["enabled_at"] if enable else None
-        )
-        settings["generation"] = secrets.token_hex(8)
         # Keep the consent-authority pointer wired on this user-intent
         # boundary; an explicit value pointing elsewhere is left for the
         # migration boundary to correct.
         settings.setdefault(
             "consent_config", str(consent.consent_path_for(config_file))
         )
-        normalized = normalize_with_runtime(settings, python, config_file)
-        write(path, normalized)
+        normalized = normalize_with_runtime(settings, python, config_file, previous=parsed)
+        if normalized != parsed:
+            write(path, normalized)
     consent.record_choice(
         "contribute" if enable else "disabled", config_file
     )

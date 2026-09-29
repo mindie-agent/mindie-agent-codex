@@ -41,14 +41,16 @@ class ServiceHandoffTests(unittest.TestCase):
                     deadline = time.monotonic() + 8
                     while time.monotonic() < deadline:
                         self.assertIsNone(process.poll(), "service exited before readiness")
-                        if lock_held(consumer) is True:
-                            try:
-                                connection = service_handoff.connect(config)
-                                status = rpc(connection, "status", timeout=.3)
-                                if status.get("admission_frozen") is False:
-                                    break
-                            except (OSError, ValueError):
-                                pass
+                        # A lock probe briefly takes a free lock. Do not make
+                        # the readiness observer compete with service startup.
+                        try:
+                            connection = service_handoff.connect(config)
+                            status = rpc(connection, "status", timeout=.3)
+                            if status.get("admission_frozen") is False:
+                                self.assertIs(lock_held(consumer), True)
+                                break
+                        except (OSError, ValueError):
+                            pass
                         time.sleep(.05)
                     else:
                         self.fail("service readiness deadline")

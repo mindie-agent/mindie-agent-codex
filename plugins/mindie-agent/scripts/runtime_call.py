@@ -273,9 +273,7 @@ def redispatch():
 if __name__ == "__main__":
     redispatch()
     try:
-        raw = sys.stdin.buffer.read(128 * 1024 + 1)
-        if len(raw) > 128 * 1024:
-            raise ValueError("call exceeds limit")
+        raw = sys.stdin.buffer.read()
         sys.stdout.buffer.write((json.dumps(call(json.loads(raw)), ensure_ascii=False) + "\n").encode("utf-8"))
         sys.stdout.buffer.flush()
     except Exception as exc:

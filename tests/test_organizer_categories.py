@@ -42,7 +42,7 @@ def _worker_cli(payload, *, binary=None, extra_env=None, raw=None, timeout=5):
         env.update(extra_env)
     data = raw if raw is not None else json.dumps(payload)
     return subprocess.run(
-        [sys.executable, str(SCRIPTS / "agent_worker.py"), "--model", "synthetic-summary-model"],
+        [sys.executable, str(SCRIPTS / "agent_worker.py")],
         input=data,
         text=True,
         capture_output=True,
@@ -71,11 +71,11 @@ def _worker_cli_with_invoker(payload, behavior, *, timeout=5):
         " if behavior == 'malformed':\n"
         "  Path(output).write_text('not-json', encoding='utf-8')\n"
         " elif behavior == 'over-limit':\n"
-        "  Path(output).write_text('x' * 40000, encoding='utf-8')\n"
+        "  raise process_guard.OutputLimitExceeded('synthetic output flood')\n"
         " else:\n"
         "  raise AssertionError('unknown fixture behavior')\n"
         "process_guard.run_codex = invoke\n"
-        "sys.argv = [worker_path, '--model', 'synthetic-summary-model']\n"
+        "sys.argv = [worker_path]\n"
         "runpy.run_path(worker_path, run_name='__main__')\n"
     )
     return subprocess.run(
@@ -163,7 +163,7 @@ class OrganizerCategoryTests(unittest.TestCase):
             f"sys.path.insert(0, {str(SCRIPTS)!r})\n"
             "import process_guard\n"
             "process_guard.run_codex = lambda *a, **k: (_ for _ in ()).throw(RuntimeError('secret-token'))\n"
-            "sys.argv = ['agent_worker.py', '--model', 'synthetic-summary-model']\n"
+            "sys.argv = ['agent_worker.py']\n"
             f"runpy.run_path({str(SCRIPTS / 'agent_worker.py')!r}, run_name='__main__')\n"
         )
         result = subprocess.run(

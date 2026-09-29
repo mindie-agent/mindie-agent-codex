@@ -21,7 +21,6 @@ import re
 import sys
 
 IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
-MAX_INPUT = 48 * 1024
 
 
 def config_path():
@@ -87,7 +86,7 @@ def operation(name, payload):
     store = admission(config)
     if name == "activate":
         root = payload.get("project_root")
-        if not isinstance(root, str) or not os.path.isabs(root) or len(root) > 1024:
+        if not isinstance(root, str) or not os.path.isabs(root):
             raise ValueError("project_root must be an absolute path")
         # Lineage is unknown at binding: the native task itself is the root.
         # Known inherited Fork/subagent histories are not new scopes. This is
@@ -197,9 +196,7 @@ def main():
             raise ValueError("one admission operation required")
         if len(sys.argv) == 3:
             os.environ["MINDIE_AGENT_CONFIG"] = sys.argv[2]
-        raw = sys.stdin.buffer.read(MAX_INPUT + 1)
-        if len(raw) > MAX_INPUT:
-            raise ValueError("admission payload exceeds limit")
+        raw = sys.stdin.buffer.read()
         payload = json.loads(raw) if raw.strip() else {}
         if not isinstance(payload, dict):
             raise ValueError("admission payload must be one object")

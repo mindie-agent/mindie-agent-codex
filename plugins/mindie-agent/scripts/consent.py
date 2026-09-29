@@ -130,7 +130,7 @@ def legacy_candidates(config_file=None) -> dict:
             problems.append(dict(source=str(path), state="unreadable"))
             continue
         try:
-            data = json.loads(raw) if len(raw) <= consent_store.MAX_BYTES else None
+            data = json.loads(raw)
         except ValueError:
             data = None
         if not isinstance(data, dict):

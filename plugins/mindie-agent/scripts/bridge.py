@@ -40,8 +40,6 @@ from session_gate import (
 import sharing
 from update_lock import update_lock
 
-MAX_HOOK_BYTES = 128 * 1024
-MAX_SUMMARY = 32768
 OPERATIONS = {
     "stop",
     "mcp",
@@ -78,17 +76,17 @@ WINDOWS_HOOK_BUDGET = 1.3
 
 
 def _bounded_path(value, name):
-    if not isinstance(value, str) or not 0 < len(value) <= 1024:
+    if not isinstance(value, str) or not value:
         raise ValueError(f"invalid {name}")
     if not os.path.isabs(value):
         raise ValueError(f"{name} must be absolute")
     return value
 
 
-def _read_hook_stdin(limit, timeout):
+def _read_hook_stdin(timeout):
     """Deadline-bounded raw fd read; never buffered I/O (shutdown can hang).
 
-    Stops at EOF, the byte cap, the deadline, or the first complete JSON
+    Stops at EOF, the deadline, or the first complete JSON
     value so a held-open pipe cannot consume the helper's remaining time.
     Windows native select is sockets-only; a daemon os.read thread is the
     portable bound (code-only on Windows; not natively verified).
@@ -104,20 +102,18 @@ def _read_hook_stdin(limit, timeout):
         try:
             fd = sys.stdin.fileno()
             while True:
-                with lock:
-                    if len(buf) > limit:
-                        return
-                    room = limit + 1 - len(buf)
                 try:
-                    chunk = os.read(fd, min(8192, room))
+                    chunk = os.read(fd, 65536)
                 except (OSError, ValueError):
                     return
                 if not chunk:
                     return
                 with lock:
                     buf.extend(chunk)
-                    if len(buf) > limit:
-                        return
+                    # Native Stop is one object. Avoid reparsing a growing
+                    # final answer after every chunk (quadratic work).
+                    if not chunk.rstrip().endswith((b'}', b']')):
+                        continue
                     try:
                         json.loads(bytes(buf))
                     except ValueError:
@@ -136,14 +132,12 @@ def _read_hook_stdin(limit, timeout):
 
 
 def hook_event(raw):
-    """Validate one bounded native Stop envelope; whitelist forwarding fields.
+    """Validate native identity and forward only the transcript reference.
 
     A valid transcript event is never rejected for a missing final summary:
     transcript_path alone is enough. The transcript itself is never opened
-    here; only its location and the bounded summary cross the boundary.
+    here. The optional final-answer copy has no role in transcript capture.
     """
-    if len(raw) > MAX_HOOK_BYTES:
-        raise ValueError("hook input exceeds limit")
     event = json.loads(raw)
     if not isinstance(event, dict) or event.get("hook_event_name") != "Stop":
         raise ValueError("unexpected hook event")
@@ -153,21 +147,7 @@ def hook_event(raw):
     if event.get("stop_hook_active", False) is not False:
         raise ValueError("recursive Stop is not a capture")
     cwd = _bounded_path(event.get("cwd"), "cwd")
-    transcript = event.get("transcript_path")
-    if transcript is not None:
-        transcript = _bounded_path(transcript, "transcript_path")
-    summary = event.get("last_assistant_message")
-    if summary is not None and not isinstance(summary, str):
-        raise ValueError("invalid final summary")
-    if isinstance(summary, str) and len(summary) > MAX_SUMMARY:
-        # The optional summary is not the capture. A transcript reference remains.
-        if transcript is None:
-            raise ValueError("invalid final summary")
-        summary = None
-    if isinstance(summary, str) and not summary.strip():
-        summary = None
-    if transcript is None and summary is None:
-        raise ValueError("no transcript or summary to forward")
+    transcript = _bounded_path(event.get("transcript_path"), "transcript_path")
     forwarded = dict(
         hook_event_name="Stop",
         identity_kind="turn",
@@ -175,10 +155,7 @@ def hook_event(raw):
         turn_id=event["turn_id"],
         cwd=cwd,
     )
-    if transcript is not None:
-        forwarded["transcript_path"] = transcript
-    if summary is not None:
-        forwarded["last_assistant_message"] = summary
+    forwarded["transcript_path"] = transcript
     return forwarded
 
 
@@ -428,9 +405,7 @@ def offline_status():
                 if not stat.S_ISREG(os.fstat(fd).st_mode):
                     raise ValueError("adapter config must be a regular file")
                 with os.fdopen(fd, "rb", closefd=False) as stream:
-                    raw = stream.read(64 * 1024 + 1)
-                if len(raw) > 64 * 1024:
-                    raise ValueError("adapter config exceeds bound")
+                    raw = stream.read()
                 config = json.loads(raw)
             finally:
                 os.close(fd)
@@ -504,7 +479,7 @@ def stop():
             print("{}")
             return
         event = hook_event(
-            _read_hook_stdin(MAX_HOOK_BYTES, deadline - time.monotonic())
+            _read_hook_stdin(deadline - time.monotonic())
         )
         # This host delivers no native thread identity to the hook process
         # (verified on codex-cli 0.153.4: the hook env carries CODEX_HOME
@@ -694,11 +669,9 @@ def _adapter_python(config_file):
             if not stat.S_ISREG(os.fstat(fd).st_mode):
                 raise ValueError("adapter config must be a regular file")
             with os.fdopen(fd, "rb", closefd=False) as stream:
-                raw = stream.read(64 * 1024 + 1)
+                raw = stream.read()
         finally:
             os.close(fd)
-        if len(raw) > 64 * 1024:
-            raise ValueError("adapter config exceeds bound")
         config = json.loads(raw)
         if not isinstance(config, dict):
             raise ValueError("adapter config must be an object")

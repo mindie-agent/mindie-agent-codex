@@ -227,19 +227,15 @@ no downloads and has no model dependency. A missing or failed scanner leaves
 the input unread instead of publishing unredacted content. Public messages are
 not shortened to fit a model; the parser advances at complete message boundaries.
 
-The default title and search introduction are labeled source excerpts. An
-optional, separately configured model may replace only these two
-metadata fields. It does not inherit the business task's model or effort. The
-worker accepts a separately selected reasoning effort (default `low`), at most 24 KiB of summary source
-(explicitly labeled first/last excerpts for larger bodies), and has a 35-second
-native invocation deadline. The service bounds the entire invocation to 45
-seconds. One settled body version gets at most one attempt, including across
-restart; failure retains the excerpt and does not block saving, retrieval or
-publication. GPT-6-Luna with `low` is a supported choice on the tested account;
-other models and efforts may be selected independently. `none` is optional,
-not a prerequisite. The account must support the selected combination.
-See [the transcript contract](docs/public-transcript.md) for configuration and
-measured acceptance boundaries.
+Setup and updates automatically install the optional title/summary worker.
+The adapter owns its fixed GPT-6-Luna / low policy; there is no user-facing
+model or effort setting and no inheritance from the business task. A separate
+worker reads the complete redacted body. It can only update title and summary;
+it cannot rewrite the body or hold up later captures. The native invocation
+deadline is 35 seconds, with a 45-second outer cancellation deadline. A failed
+or superseded attempt leaves the source excerpt and full body available.
+Updates replace obsolete model arguments with the installed adapter policy.
+See [the transcript contract](docs/public-transcript.md).
 
 The updater records preparation and install outcomes. A known temporary
 network failure keeps the installed generation and is retried by the existing

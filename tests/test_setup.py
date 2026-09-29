@@ -83,7 +83,7 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(value["capture_mode"], "public-transcript")
             self.assertNotIn("agent_command", value)
             self.assertTrue(Path(value["redactor_executable"]).is_file())
-            self.assertNotIn("summary_command", value)
+            self.assertEqual(value["summary_command"], [sys.executable, str(SCRIPTS / "agent_worker.py")])
             self.assertNotIn("session_activation", value)
             self.assertNotIn("session_activation", adapter)
             admission = config.with_name("codex.admission.sqlite3")
