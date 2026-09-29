@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: mindie-agent/knowledge
-          ref: 466d031016b7ff1354c716c67fd4ca009f164706
+          ref: e099a80fd99a6d895579b5d016aecf2a96851559
           path: .ci/core
       - name: Checkout pinned peer adapter
         uses: actions/checkout@v4

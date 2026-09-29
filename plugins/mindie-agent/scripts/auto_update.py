@@ -1077,20 +1077,8 @@ class Updater:
                 # instead of kept as a second name.
                 engine.pop("session_activation", None)
                 engine.pop("agent_command", None)
-                # Move our optional worker with the interpreter/parser, while
-                # retaining its explicit model. Independent custom commands
-                # are configuration owned by their caller.
-                summary = engine.get("summary_command")
-                old_scripts = adapter.get("runtime_scripts")
-                if (isinstance(summary, list) and len(summary) in (4, 6) and old_scripts
-                    and summary[1] == str(Path(old_scripts) / "agent_worker.py")
-                    and summary[2] == "--model"
-                    and (len(summary) == 4 or summary[4] == "--reasoning-effort")):
-                    # Four-argument workers predate selectable effort and
-                    # always meant none. Preserve that existing choice.
-                    options = summary[2:] if len(summary) == 6 else [*summary[2:], "--reasoning-effort", "none"]
-                    engine["summary_command"] = [candidate["python"],
-                        str(Path(candidate["plugin"]) / "scripts/agent_worker.py"), *options]
+                # Metadata policy belongs to the installed adapter. Capture
+                # config replaces retired user-selected worker arguments.
                 engine.update(
                     transcript_adapter=str(
                         Path(candidate["plugin"]) / "scripts/codex_transcript.py"

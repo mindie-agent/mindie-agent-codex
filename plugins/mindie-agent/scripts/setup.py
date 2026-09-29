@@ -254,7 +254,7 @@ def install(args, parser):
                     None
                     if community is not None
                     else "sharing is off/unconfigured; first explicit invocation "
-                    "offers three choices, or run scripts/setup.py configure "
+                    "asks only for missing destination and scope, or run scripts/setup.py configure "
                     "--community-repository OWNER/REPO "
                     "--community-project-root PATH --community-visibility public"
                 ),
@@ -317,6 +317,7 @@ def configure(args, parser):
                 f"the designated file explicitly ({type(exc).__name__})"
             )
         extensions = {}
+        old = {}
         if raw is not None:
             try:
                 old = json.loads(raw)
@@ -340,11 +341,12 @@ def configure(args, parser):
                 if key not in sharing.CORE_KEYS and key != "consent_config"
             }
         merged = sharing.normalize_with_runtime(
-            {**extensions, **community}, python, config
+            {**extensions, **community}, python, config, previous=old
         )
         merged["consent_config"] = str(consent.consent_path_for(config))
         community_config.parent.mkdir(parents=True, exist_ok=True)
-        sharing.write(community_config, merged)
+        if merged != old:
+            sharing.write(community_config, merged)
     adapter["community_config"] = str(community_config)
     adapter.pop("sharing_choice", None)  # retired migration source
     adapter.pop("session_activation", None)

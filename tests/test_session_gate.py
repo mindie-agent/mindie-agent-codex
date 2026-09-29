@@ -157,6 +157,7 @@ class SessionGateTests(unittest.TestCase):
     def event(self, session="manual-A", turn="turn-1", cwd=None):
         return dict(
             hook_event_name="Stop",
+            transcript_path=str(self.root / "synthetic-transcript.jsonl"),
             session_id=session,
             turn_id=turn,
             cwd=str(cwd or self.root),

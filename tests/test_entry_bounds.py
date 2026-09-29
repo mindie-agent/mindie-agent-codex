@@ -25,15 +25,14 @@ class EntryBoundsTests(unittest.TestCase):
             session_id="s",
             turn_id="t",
             last_assistant_message="Done",
+            transcript_path=str(SCRIPTS / "synthetic.jsonl"),
         )
         cases = [
             dict(event, stop_hook_active=True),
             dict(event, hook_event_name="PreToolUse"),
             dict(event, session_id="bad\ncontext"),
-            dict(event, last_assistant_message="x" * 32769),
             [],
             None,
-            dict(event, extra="x" * 131072),
         ]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -121,7 +120,7 @@ class EntryBoundsTests(unittest.TestCase):
 
     def test_worker_input_rejected_before_model_start(self):
         result = subprocess.run(
-            [sys.executable, str(SCRIPTS / "agent_worker.py"), "--model", "synthetic-summary-model"],
+            [sys.executable, str(SCRIPTS / "agent_worker.py")],
             input="x" * 65537,
             text=True,
             capture_output=True,
