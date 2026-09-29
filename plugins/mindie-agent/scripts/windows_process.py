@@ -14,8 +14,6 @@ from ctypes import wintypes
 _CREATE_SUSPENDED = 0x00000004
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
-_TH32CS_SNAPTHREAD = 0x00000004
-_THREAD_SUSPEND_RESUME = 0x0002
 
 
 def spawn(command, *, allow_service=False, **kwargs):
@@ -32,7 +30,7 @@ def spawn(command, *, allow_service=False, **kwargs):
     process = subprocess.Popen(command, **kwargs)
     try:
         _assign_job(process, allow_service=allow_service)
-        _resume_primary_thread(process)
+        _resume_windows_process(process)
     except BaseException:
         # The suspended process has no descendants unless it was successfully
         # resumed. If it has a Job, closing that Job also handles partial setup.
@@ -136,69 +134,26 @@ def _assign_job(process, *, allow_service=False):
     process._mindie_windows_job = (kernel, job)
 
 
-def _resume_primary_thread(process):
-    """Resume the suspended primary thread using Win32 Toolhelp APIs."""
-    class ThreadEntry32(ctypes.Structure):
-        _fields_ = [
-            ("dwSize", wintypes.DWORD),
-            ("cntUsage", wintypes.DWORD),
-            ("th32ThreadID", wintypes.DWORD),
-            ("th32OwnerProcessID", wintypes.DWORD),
-            ("tpBasePri", wintypes.LONG),
-            ("tpDeltaPri", wintypes.LONG),
-            ("dwFlags", wintypes.DWORD),
-        ]
+def _resume_windows_process(process):
+    """Resume only the owned, suspended child after Job assignment.
 
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
-    kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-    kernel.Thread32First.argtypes = [
-        wintypes.HANDLE,
-        ctypes.POINTER(ThreadEntry32),
-    ]
-    kernel.Thread32First.restype = wintypes.BOOL
-    kernel.Thread32Next.argtypes = [
-        wintypes.HANDLE,
-        ctypes.POINTER(ThreadEntry32),
-    ]
-    kernel.Thread32Next.restype = wintypes.BOOL
-    kernel.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    kernel.OpenThread.restype = wintypes.HANDLE
-    kernel.ResumeThread.argtypes = [wintypes.HANDLE]
-    kernel.ResumeThread.restype = wintypes.DWORD
-    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-    kernel.CloseHandle.restype = wintypes.BOOL
+    NtResumeProcess is also used by psutil's Windows resume implementation.
+    The retained Popen handle avoids PID reuse and system-wide thread scans.
+    NTSTATUS is converted explicitly; GetLastError is not its error channel.
+    """
+    import ctypes
+    from ctypes import wintypes
 
-    snapshot = kernel.CreateToolhelp32Snapshot(_TH32CS_SNAPTHREAD, 0)
-    if snapshot == wintypes.HANDLE(-1).value:
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        entry = ThreadEntry32()
-        entry.dwSize = ctypes.sizeof(entry)
-        more = kernel.Thread32First(snapshot, ctypes.byref(entry))
-        while more:
-            if entry.th32OwnerProcessID == process.pid:
-                thread = kernel.OpenThread(
-                    _THREAD_SUSPEND_RESUME,
-                    False,
-                    entry.th32ThreadID,
-                )
-                if not thread:
-                    raise ctypes.WinError(ctypes.get_last_error())
-                try:
-                    previous = kernel.ResumeThread(thread)
-                    if previous == 0xFFFFFFFF:
-                        raise ctypes.WinError(ctypes.get_last_error())
-                finally:
-                    kernel.CloseHandle(thread)
-                if previous == 1:
-                    return
-                if previous > 1:
-                    raise OSError("owned primary thread has an unexpected suspend count")
-            more = kernel.Thread32Next(snapshot, ctypes.byref(entry))
-        raise OSError("owned suspended process has no primary thread")
-    finally:
-        kernel.CloseHandle(snapshot)
+    native = ctypes.WinDLL("ntdll")
+    resume = native.NtResumeProcess
+    resume.argtypes = [wintypes.HANDLE]
+    resume.restype = wintypes.LONG
+    status = resume(int(process._handle))
+    if status < 0:
+        convert = native.RtlNtStatusToDosError
+        convert.argtypes = [wintypes.LONG]
+        convert.restype = wintypes.ULONG
+        raise ctypes.WinError(convert(status))
 
 
 def close_tree(process):
