@@ -1173,10 +1173,7 @@ class Updater:
                 return {"status": "deferred", "error_type": "missing_runtime"}
             import consent as _consent
 
-            if _consent.load(self.config).get("reporting") != "enabled":
-                # The saved reporting choice constrains the real service:
-                # maintenance only runs while reporting is explicitly enabled.
-                return {"status": "deferred", "error_type": "reporting_not_enabled"}
+            reporting_enabled = _consent.load(self.config).get("reporting") == "enabled"
             # Pass the REAL remaining window: the CLI's 75s default includes
             # offline work and skips the upgrade unless a full 60s handoff
             # plus 1s exit remains; 2s is this parent's exit/startup margin.
@@ -1184,9 +1181,14 @@ class Updater:
                             self.command_deadline - time.monotonic())
             if available <= 0:
                 return {"status": "deferred", "error_type": "insufficient_budget"}
+            command = [python, "-m", "mindie_diagnostics.cli", "reporting", "maintain",
+                       "--budget-seconds", str(max(0, available - 2))]
+            # Local retention also runs when reporting is off. Only the saved
+            # reporting choice permits handing off an existing reporter.
+            if reporting_enabled:
+                command.append("--update-running")
             output = self.command(
-                [python, "-m", "mindie_diagnostics.cli", "reporting", "maintain",
-                 "--update-running", "--budget-seconds", str(max(0, available - 2))],
+                command,
                 timeout=available,
                 allowed_returncodes=(0, 1),
             )
