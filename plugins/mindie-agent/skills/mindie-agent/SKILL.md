@@ -5,7 +5,8 @@ description: The single MindIE Agent entry. Invoke this skill once in a vLLM-Asc
 
 # MindIE Agent
 
-This skill is the only entry a user needs (`$mindie-agent`). Invoking it in
+This skill is the only entry a user needs (`$mindie-agent:mindie-agent`, the
+qualified name exposed by Codex's plugin skill inventory). Invoking it in
 the current native Codex task binds the task internally and automatically —
 binding reuses the saved install-level choice and is not a consent step.
 Discussing the plugin or working in a relevant repository does not bind

@@ -123,7 +123,8 @@ five minutes while that manager is running.
 
 ## First use and task boundaries
 
-Explicitly invoke `$mindie-agent`. Its status distinguishes task binding from
+Explicitly invoke `$mindie-agent:mindie-agent` (the installed plugin's qualified
+Skill name). Its status distinguishes task binding from
 experience capture. Missing public destination and project scope are incomplete
 configuration; supply only those missing values through `bridge.py config`.
 Existing approved settings persist across tasks and updates. Configuration in
