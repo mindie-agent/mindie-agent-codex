@@ -37,18 +37,22 @@ unmerged or withdrawn contribution is not silently recreated.
 
 The default metadata is a source excerpt. To enable the optional native summary
 worker, explicitly configure the engine's `summary_command` as the selected
-runtime Python, selected scripts/agent_worker.py, `--model`, and a model name
-that this account supports with reasoning effort `none`. Setup does not infer
-this from business configuration. A service restart loads the change; updates
-retain explicit summary configuration. No credentials belong in this argv.
+runtime Python, selected scripts/agent_worker.py, `--model gpt-6-luna`, and
+`--reasoning-effort low`. Model and effort are configurable independently of
+the business task; `none` is allowed when supported, not required. The worker
+defaults to `low` if no effort is supplied. A service restart loads the change;
+updates retain explicit model/effort and relocate the worker with its runtime.
+Existing four-argument worker commands meant `none`; updates preserve that
+prior choice explicitly. No credentials belong in this argv.
 The summary subprocess has no tools, hooks, inherited rules or body-writing
 field. Only `title` and `summary` are accepted, redacted again and applied if the
 body version still matches. New observations coalesce before another attempt.
 An interrupted or failed attempt is recorded and the body remains usable.
 
-At validation time, the available ChatGPT Codex account rejected GPT-5.4, and
-its advertised GPT-6 models did not offer effort `none`. That is an unavailable
-optional summary channel, not a successful non-thinking-model acceptance.
+The earlier acceptance used source excerpts because its worker required `none`.
+That restriction has been removed: the account advertises GPT-6-Luna with `low`
+through `max`. Provider errors still retain the body and excerpt; they never
+silently select a different model or rewrite the body.
 
 CI validates actual stored/exported content, atomic rollback, duplicate/restart
 behavior, summary failure and unauthorized fields, real Gitleaks positives and

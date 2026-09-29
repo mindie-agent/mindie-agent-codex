@@ -311,7 +311,20 @@ class AutoUpdateTests(unittest.TestCase):
         selected = read(self.config)
         updated = read(selected['engine_config'])
         self.assertEqual(updated['summary_command'], [selected['python'],
-            str(Path(selected['runtime_scripts']) / 'agent_worker.py'), '--model', 'explicit-nonthinking-model'])
+            str(Path(selected['runtime_scripts']) / 'agent_worker.py'), '--model', 'explicit-nonthinking-model', '--reasoning-effort', 'none'])
+
+    def test_summary_model_and_effort_survive_runtime_update(self):
+        engine = read(self.engine)
+        engine['summary_command'] = ['old-python', str(SCRIPTS / 'agent_worker.py'),
+                                     '--model', 'gpt-6-luna', '--reasoning-effort', 'low']
+        atomic(self.engine, engine)
+        result = self.check()
+        self.assertEqual(result['status'], 'installed')
+        selected = read(self.config)
+        updated = read(selected['engine_config'])
+        self.assertEqual(updated['summary_command'], [selected['python'],
+            str(Path(selected['runtime_scripts']) / 'agent_worker.py'),
+            '--model', 'gpt-6-luna', '--reasoning-effort', 'low'])
 
     def test_native_inventory_without_source_type_updates_owned_marketplace(self):
         first = self.check()

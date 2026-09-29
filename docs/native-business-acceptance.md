@@ -16,7 +16,7 @@ modules in a second discovery pass. A failed boundary stops the run early.
 | Independent boundary | Observable invariant |
 | --- | --- |
 | Setup | Failed config writes do not save completion; existing task binding gains capture after successful config |
-| Body and metadata | Public body survives without any model; optional metadata uses an explicit non-thinking model and cannot change content |
+| Body and metadata | Public body survives without any model; optional metadata uses an independent model/effort and cannot change content |
 | Windows shell | Both CMD and PowerShell deliver the original Stop stdin once; child failure remains benign. The 5 s host watchdog includes cold shell/interpreter launch; bridge work remains bounded to 1.3 s on Windows, independent of transcript size |
 | Process lifetime | Entry helper has exited before service readiness is checked; cold Stop is consumed after its helper exits |
 | Process ownership | Ordinary descendants die at completion/timeout even in a service-capable launcher |

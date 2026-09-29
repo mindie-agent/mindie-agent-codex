@@ -2,7 +2,7 @@
 import subprocess
 
 
-def prepare(python, scripts, summary_model=None):
+def prepare(python, scripts, summary_model=None, summary_effort='low'):
     result = subprocess.run(
         [str(python), '-m', 'mindie_knowledge.loop.transcript_redaction'],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90,
@@ -16,5 +16,6 @@ def prepare(python, scripts, summary_model=None):
         raise RuntimeError('installed transcript redactor is missing')
     value = dict(capture_mode='public-transcript', redactor_executable=path)
     if summary_model:
-        value['summary_command'] = [str(python), str(Path(scripts) / 'agent_worker.py'), '--model', summary_model]
+        value['summary_command'] = [str(python), str(Path(scripts) / 'agent_worker.py'),
+                                    '--model', summary_model, '--reasoning-effort', summary_effort]
     return value

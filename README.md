@@ -216,7 +216,7 @@ native trust. No live entrypoint is automatically deleted.
 
 Business MCP calls and each admitted Stop delivery get one attempt, without an
 automatic model retry. The Stop Hook has a 1.5-second inner budget on POSIX and
-1.3 seconds on Windows, within the 2-second native timeout. It always returns
+1.3 seconds on Windows, within the 5-second native timeout. It always returns
 normal completion and cannot request another model turn. Missing/offline
 capture does not create an automatic repair task.
 MCP calls have bounded input, output and process deadlines; long remote work
@@ -228,15 +228,16 @@ the input unread instead of publishing unredacted content. Public messages are
 not shortened to fit a model; the parser advances at complete message boundaries.
 
 The default title and search introduction are labeled source excerpts. An
-optional, separately configured non-thinking model may replace only these two
+optional, separately configured model may replace only these two
 metadata fields. It does not inherit the business task's model or effort. The
-worker uses reasoning effort `none`, accepts at most 24 KiB of summary source
+worker accepts a separately selected reasoning effort (default `low`), at most 24 KiB of summary source
 (explicitly labeled first/last excerpts for larger bodies), and has a 35-second
 native invocation deadline. The service bounds the entire invocation to 45
 seconds. One settled body version gets at most one attempt, including across
 restart; failure retains the excerpt and does not block saving, retrieval or
-publication. The selected account must actually support that model and effort;
-`low` and disabled reasoning display are not substitutes for non-thinking mode.
+publication. GPT-6-Luna with `low` is a supported choice on the tested account;
+other models and efforts may be selected independently. `none` is optional,
+not a prerequisite. The account must support the selected combination.
 See [the transcript contract](docs/public-transcript.md) for configuration and
 measured acceptance boundaries.
 

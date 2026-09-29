@@ -1082,11 +1082,15 @@ class Updater:
                 # are configuration owned by their caller.
                 summary = engine.get("summary_command")
                 old_scripts = adapter.get("runtime_scripts")
-                if (isinstance(summary, list) and len(summary) == 4 and old_scripts
+                if (isinstance(summary, list) and len(summary) in (4, 6) and old_scripts
                     and summary[1] == str(Path(old_scripts) / "agent_worker.py")
-                    and summary[2] == "--model"):
+                    and summary[2] == "--model"
+                    and (len(summary) == 4 or summary[4] == "--reasoning-effort")):
+                    # Four-argument workers predate selectable effort and
+                    # always meant none. Preserve that existing choice.
+                    options = summary[2:] if len(summary) == 6 else [*summary[2:], "--reasoning-effort", "none"]
                     engine["summary_command"] = [candidate["python"],
-                        str(Path(candidate["plugin"]) / "scripts/agent_worker.py"), *summary[2:]]
+                        str(Path(candidate["plugin"]) / "scripts/agent_worker.py"), *options]
                 engine.update(
                     transcript_adapter=str(
                         Path(candidate["plugin"]) / "scripts/codex_transcript.py"

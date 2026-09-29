@@ -26,19 +26,27 @@ class SummaryModelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, CODEX_HOME=tmp):
             Path(tmp, 'config.toml').write_text('model="gpt-6-luna"\nmodel_reasoning_effort="max"\n', encoding='utf-8')
             expected = dict(title='Synthetic example', summary='Public test observation.')
-            value, (command, prompt, options) = self.invoke(expected, model='configured-non-thinking-model')
+            value, (command, prompt, options) = self.invoke(expected, model='gpt-6-luna')
             self.assertEqual(value, expected)
-            self.assertNotIn('gpt-6-luna', command)
-            self.assertIn('model_reasoning_effort="none"', command)
+            self.assertIn('gpt-6-luna', command)
+            self.assertIn('model_reasoning_effort="low"', command)
+            self.assertNotIn('model_reasoning_effort="max"', command)
             self.assertIn('--ignore-user-config', command)
             self.assertIn('--ignore-rules', command)
             self.assertIn('features.hooks=false', command)
             self.assertIn('features.shell_tool=false', command)
             self.assertEqual(options['timeout'], 35)
 
-    def test_missing_nonthinking_configuration_never_silently_falls_back(self):
+    def test_explicit_effort_is_forwarded_without_rewriting_the_body(self):
+        expected = dict(title='Example', summary='Observed public result.')
+        for effort in ('none', 'low', 'medium', 'max'):
+            value, (command, _, _) = self.invoke(expected, model='selected-model', reasoning_effort=effort)
+            self.assertEqual(value, expected)
+            self.assertIn(f'model_reasoning_effort="{effort}"', command)
+
+    def test_missing_or_invalid_configuration_never_silently_falls_back(self):
         with patch.object(agent_worker, 'run_codex') as native:
-            for kwargs in ({}, dict(model='business-model', reasoning_effort='low'), dict(model='business-model', reasoning_effort='max')):
+            for kwargs in ({}, dict(model=''), dict(model='summary-model', reasoning_effort='invented')):
                 with self.assertRaises(agent_worker.ConfigurationError):
                     agent_worker.run(dict(role='summarize', text='source'), **kwargs)
         native.assert_not_called()

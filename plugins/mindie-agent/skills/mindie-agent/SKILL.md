@@ -9,6 +9,8 @@ This skill is the only entry a user needs (`$mindie-agent:mindie-agent`, the
 qualified name exposed by Codex's plugin skill inventory). Invoking it in
 the current native Codex task binds the task internally and automatically —
 binding reuses the saved install-level choice and is not a consent step.
+That choice has no task/time expiry: new tasks, restarts and updates reuse it
+within the saved scope until the user disables sharing or changes that scope.
 Discussing the plugin or working in a relevant repository does not bind
 anything. The configured domain is initially `vllm-ascend`.
 

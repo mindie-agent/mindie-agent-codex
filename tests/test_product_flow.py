@@ -4,6 +4,7 @@ Only the external service attachment is fault-injected. Real configuration,
 consent, native-task binding and status paths run; this is not native E2E proof.
 """
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -37,6 +38,23 @@ class ProductFlowTests(SharingFixture):
     def test_saved_contribution_does_not_hide_missing_configuration(self):
         consent.record_choice("contribute")
         self.assertEqual(self.enter()["experience"], "needs-configuration")
+
+    def test_saved_contribution_is_reused_across_new_tasks_without_reauthorization(self):
+        self.write_sharing(enabled_at=946684800.0)
+        consent.record_choice('contribute')
+        with patch.object(bridge, 'bind', return_value='bound'):
+            first = self.enter()
+            before = consent.load()
+            generation = sharing.read()['generation']
+            with patch.object(consent, 'record_choice', side_effect=AssertionError('must reuse saved choice')):
+                with patch.dict(os.environ, CODEX_THREAD_ID='manual-B'):
+                    second = self.enter()
+                    resumed = self.enter()
+        self.assertEqual([first['experience'], second['experience'], resumed['experience']], ['capture-ready'] * 3)
+        self.assertNotEqual(first['mindie_session_id'], second['mindie_session_id'])
+        self.assertEqual(second['mindie_activation'], resumed['mindie_activation'])
+        self.assertEqual(consent.load(), before)
+        self.assertEqual(sharing.read()['generation'], generation)
 
     def test_legacy_decline_is_preserved_without_enabling_capture(self):
         self.write_sharing()

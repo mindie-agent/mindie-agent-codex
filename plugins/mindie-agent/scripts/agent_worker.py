@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Optional metadata worker; no body output or business-model inheritance.
 
-A separately configured model must support reasoning effort none. The
-default installation saves a deterministic excerpt and calls no model.
+Model and effort are independent of the business task. The optional worker
+defaults to low effort; accounts supporting none may select that explicitly.
 """
 import argparse
 import json
@@ -16,6 +16,7 @@ from process_guard import InvalidResultError, NativeFailure, NativeStartError, O
 
 MAX_INPUT = 32 * 1024
 MAX_RESULT = 4096
+EFFORTS = ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra')
 SCHEMA = dict(type='object', additionalProperties=False,
               properties=dict(title=dict(type='string', maxLength=240), summary=dict(type='string', maxLength=2048)),
               required=['title', 'summary'])
@@ -32,9 +33,9 @@ class ConfigurationError(ValueError):
     pass
 
 
-def run(payload, *, model=None, reasoning_effort='none'):
-    if not isinstance(model, str) or not model.strip() or reasoning_effort != 'none':
-        raise ConfigurationError('a separately configured non-thinking summary model is required')
+def run(payload, *, model=None, reasoning_effort='low'):
+    if not isinstance(model, str) or not model.strip() or reasoning_effort not in EFFORTS:
+        raise ConfigurationError('an explicit summary model and supported effort are required')
     if not isinstance(payload, dict):
         raise InvalidResultError('invalid summary input')
     if payload.get('role') != 'summarize':
@@ -47,7 +48,7 @@ def run(payload, *, model=None, reasoning_effort='none'):
         schema, output = Path(directory) / 'schema.json', Path(directory) / 'result.json'
         schema.write_text(json.dumps(SCHEMA), encoding='utf-8')
         command = [os.environ.get('MINDIE_CODEX_BIN', 'codex'), 'exec', '--model', model,
-                   '-c', 'model_reasoning_effort="none"', '--ignore-user-config', '--ignore-rules',
+                   '-c', f'model_reasoning_effort="{reasoning_effort}"', '--ignore-user-config', '--ignore-rules',
                    '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check', '-C', directory,
                    '-c', 'features.hooks=false', '-c', 'features.apps=false',
                    '-c', 'features.shell_tool=false', '-c', 'features.multi_agent=false',
@@ -80,13 +81,14 @@ def run(payload, *, model=None, reasoning_effort='none'):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model', required=True)
+    parser.add_argument('--reasoning-effort', choices=EFFORTS, default='low')
     args = parser.parse_args()
     category = 'unknown'
     try:
         raw = sys.stdin.buffer.read(MAX_INPUT + 1)
         if len(raw) > MAX_INPUT:
             raise InvalidResultError('summary input exceeds limit')
-        sys.stdout.buffer.write((json.dumps(run(json.loads(raw), model=args.model), ensure_ascii=False) + '\n').encode('utf-8'))
+        sys.stdout.buffer.write((json.dumps(run(json.loads(raw), model=args.model, reasoning_effort=args.reasoning_effort), ensure_ascii=False) + '\n').encode('utf-8'))
         return 0
     except (ConfigurationError, NativeStartError):
         category = 'configuration'
