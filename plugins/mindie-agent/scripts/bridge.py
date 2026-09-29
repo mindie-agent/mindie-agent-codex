@@ -24,7 +24,7 @@ import threading
 import time
 
 # Start the hook's deadline before loading its project modules. On a cold
-# Windows interpreter those imports are part of the native two-second Stop
+# Windows interpreter those imports are part of the native Stop
 # window just as much as helper dispatch and stdin parsing.
 _ENTRYPOINT_STARTED_AT = time.monotonic()
 
@@ -71,9 +71,8 @@ CONTRIBUTION_OPERATIONS = {
 }
 IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
 BATCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
-# Native Stop budget is 2s. The Windows allowance reserves more of that host
-# window for cold interpreter startup; all loaded-module, stdin and helper time
-# stays bounded by the platform's inner allowance.
+# The native watchdog also covers cold shell/interpreter startup. Actual
+# handoff work keeps its independent bound; input length cannot extend it.
 HOOK_BUDGET = 1.5
 WINDOWS_HOOK_BUDGET = 1.3
 

@@ -49,6 +49,7 @@ SYSTEMD_SERVICE = "mindie-agent-updater.service"
 SYSTEMD_TIMER = "mindie-agent-updater.timer"
 INTERVAL = 300
 TOTAL_TIMEOUT = 240
+STOP_HOST_TIMEOUT = 5
 ATTEMPTS = 3
 _RETRYABLE = frozenset({"temporary_network", "rate_limited"})
 _ACTIONABLE = frozenset({"authentication", "permission", "hook_trust", "certificate"})
@@ -378,7 +379,10 @@ def stop_hook_commands(argv):
         return "'" + value.replace("'", "''") + "'"
     body = "try { & " + " ".join(ps_arg(arg) for arg in argv) + " 1>$null 2>$null } catch {} finally { [Console]::Out.WriteLine('{}') }; exit 0"
     windows = "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " + base64.b64encode(body.encode("utf-16le")).decode("ascii")
-    return {"command": posix, "commandWindows": windows, "timeout": 2}
+    # This host watchdog includes both shell and interpreter cold startup.
+    # The bridge still limits actual handoff work to 1.3 s on Windows / 1.5 s
+    # elsewhere; transcript size never enters this hook's work or budget.
+    return {"command": posix, "commandWindows": windows, "timeout": STOP_HOST_TIMEOUT}
 
 
 class Updater:
@@ -501,7 +505,7 @@ class Updater:
         if set(hooks) != {"Stop"} or len(hooks["Stop"]) != 1:
             raise Incompatible("only one bounded Stop hook is supported")
         entries = hooks["Stop"][0]["hooks"]
-        if len(entries) != 1 or not 0 < entries[0]["timeout"] <= 2:
+        if len(entries) != 1 or not 0 < entries[0]["timeout"] <= STOP_HOST_TIMEOUT:
             raise Incompatible("invalid hook deadline")
         for name in (
             "session_gate.py",

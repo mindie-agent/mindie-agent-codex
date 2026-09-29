@@ -353,7 +353,7 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertIn(expected, command)
         self.assertIn("stop", command)
         hook = read(plugin / "hooks/hooks.json")["hooks"]["Stop"][0]["hooks"][0]
-        self.assertEqual(hook["timeout"], 2)
+        self.assertEqual(hook["timeout"], 5)
         other = str(self.base / "other-adapter.json")
         import bridge as bridge_mod
         from session_gate import config_path as live_config
