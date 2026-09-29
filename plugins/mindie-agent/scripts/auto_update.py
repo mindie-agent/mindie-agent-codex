@@ -871,7 +871,10 @@ class Updater:
             raise RuntimeError("candidate plugin tree is missing: " + str(candidate))
         mismatches = []
         for path in sorted(candidate.rglob("*")):
-            if not path.is_file():
+            # Python imports may create bytecode after the source was
+            # packaged. It is excluded from packaging and is not a shipped
+            # file; source and installed dependency bytes remain verified.
+            if "__pycache__" in path.relative_to(candidate).parts or not path.is_file():
                 continue
             relative = path.relative_to(candidate)
             other = resolved / relative
@@ -1002,7 +1005,11 @@ class Updater:
             try:
                 idle = json.loads(
                     self.command(
-                        [adapter["python"], idle_helper, "stop", adapter["engine_config"]],
+                        # The handoff helper belongs to this updater and
+                        # imports its pinned core API (including lock_held).
+                        # The old runtime may predate that API. Inspect the
+                        # old endpoint with the validated candidate runtime.
+                        [candidate["python"], idle_helper, "stop", adapter["engine_config"]],
                         timeout=5,
                     )
                 )
