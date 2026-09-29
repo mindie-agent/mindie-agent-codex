@@ -13,7 +13,9 @@ Discussing the plugin or working in a relevant repository does not bind
 anything. The configured domain is initially `vllm-ascend`.
 
 Resolve `../../scripts/bridge.py` to an absolute path relative to this SKILL.md
-directory (`python` on Windows). The native shell supplies `CODEX_THREAD_ID`;
+directory. Use `python` on Windows and `python3` on macOS/Linux; Windows
+`python3` can be an uninstalled Microsoft Store alias. In the commands below,
+`<python>` means this platform's executable. The native shell supplies `CODEX_THREAD_ID`;
 do not set or override it. MCP calls need no identity or binding arguments.
 
 Only ever run the copy of this skill and its scripts that lives under the
@@ -29,11 +31,12 @@ the binding.
 
 ## First explicit invocation
 
-1. Run `python3 <bridge.py> activate` once in the native task. Inspect
+1. Run `python "<bridge.py>" activate` on Windows, or
+   `python3 "<bridge.py>" activate` on macOS/Linux, once in the native task. Inspect
    `experience` and `capture`; task binding alone is not capture readiness.
 2. If configuration is incomplete, reuse existing approved values and ask only
    for the missing public destination/account/project scope. Run
-   `python3 <bridge.py> config --community-repository OWNER/REPO
+   `<python> "<bridge.py>" config --community-repository OWNER/REPO
    --community-project-root PATH --community-visibility public`
    (optional `--community-account NAME`). This attaches capture in the already
    bound task; no second activation or reinstall is needed.
@@ -50,21 +53,21 @@ optional; remote tools work independently.
 
 ## Local diagnostics
 
-`python3 <bridge.py> reporting-status` reads local faults and reporter state;
+`<python> "<bridge.py>" reporting-status` reads local faults and reporter state;
 it does not upload or retry anything. Use a returned incident ID to locate the
 original failure and its `record_ref`, then continue the user's task as appropriate.
 
 On first configuration, `diagnostics.choice` describes optional automatic tool
 fault reporting. Offer it separately from community contribution; leaving it
 off does not block the task. Respect an existing choice. If the user enables it,
-run `python3 <bridge.py> reporting-enable`, then the returned `command_line`
+run `<python> "<bridge.py>" reporting-enable`, then the returned `command_line`
 once outside a Hook to prepare the shared reporter. On disable, run
-`python3 <bridge.py> reporting-disable`. Failure to prepare reporting is local
+`<python> "<bridge.py>" reporting-disable`. Failure to prepare reporting is local
 status, not a reason to replay the user's failed operation.
 
 ## Sharing and recovery
 
-- Status: `python3 <bridge.py> status` or `init` (offline). This is the normal way to see a sharing problem.
+- Status: `<python> "<bridge.py>" status` or `init` (offline). This is the normal way to see a sharing problem.
 - Toggle recorded sharing: `sharing-status`, `sharing-enable`, `sharing-disable`.
 - A transient local or network failure is recovered by the existing worker — a
   deadline-interrupted region gets one bounded background recovery. Do not
