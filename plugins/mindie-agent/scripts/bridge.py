@@ -58,6 +58,7 @@ OPERATIONS = {
     "reporting-disable",
     "reporting-ensure",
     "reporting-maintain",
+    "history-import",
 }
 # Deterministic core recovery surface (documented exact names; each takes one
 # existing contribution batch id and never reruns organizer/model work).
@@ -590,6 +591,24 @@ def contribution(operation, batch_id):
     return json.loads(output) if output.strip() else dict(status="no-output")
 
 
+def history_import(argv):
+    """Foreground, explicitly requested import; no timer or Hook dispatch.
+
+    Stream per-file receipts rather than buffering a whole library or imposing
+    a Hook deadline on a user-requested bulk operation. Ctrl-C stops the import.
+    The generation lock keeps scripts and interpreter coherent until it exits.
+    """
+    import subprocess
+
+    config_file = config_path()
+    with update_lock(config_file):
+        config = json.loads(config_file.read_text(encoding='utf-8'))
+        return subprocess.call(
+            [config['python'], str(Path(runtime_scripts(config)) / 'history_import.py'), *argv],
+            stdin=subprocess.DEVNULL, env=generation_env(config_file),
+        )
+
+
 def configure(argv):
     """Post-install sharing configuration; never refuses an existing engine."""
     config_file = config_path()
@@ -827,6 +846,8 @@ def main():
         print("Unsupported MindIE entry operation", file=sys.stderr)
         raise SystemExit(1)
     operation = argv[0]
+    if operation == "history-import":
+        raise SystemExit(history_import(argv[1:]))
     if operation == "config":
         try:
             print(json.dumps(configure(argv[1:])))

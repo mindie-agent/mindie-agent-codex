@@ -20,6 +20,11 @@ class SchedulerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
+        # OS simulations must never write to the real user's scheduler files,
+        # even when a simulated platform branch is incomplete or regresses.
+        self.home = patch.object(Path, 'home', return_value=self.root)
+        self.home.start()
+        self.addCleanup(self.home.stop)
         self.updates = self.root / "updates"
         self.updates.mkdir()
         self.settings = self.root / "updater.json"
@@ -114,6 +119,7 @@ class SchedulerTests(unittest.TestCase):
             raise AssertionError(argv)
 
         with (
+            patch.object(auto_update.sys, 'platform', 'win32'),
             patch.object(
                 auto_update,
                 "os",

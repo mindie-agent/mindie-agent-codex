@@ -71,6 +71,7 @@ else:
         from mindie_knowledge.loop.process import spawn_service
         from mindie_knowledge.loop.engine import Engine
         from mindie_knowledge.loop.transcript_redaction import install_scanner
+        from mindie_knowledge.loop.history_import import import_transcript
         from mindie_knowledge.loop.transport import Service
         from mindie_knowledge.loop import documents, locks
         from mindie_knowledge.community import submit_batch, reconcile_batch
@@ -80,6 +81,8 @@ else:
     else:
         if not callable(load_transcript_adapter):
             missing.append("load_transcript_adapter is unavailable")
+        if not callable(import_transcript):
+            missing.append("explicit history import is unavailable")
         if not (0 < ORGANIZER_TIMEOUT < ORGANIZER_PROCESS_TIMEOUT < ORGANIZER_LEASE_SECONDS):
             missing.append("organizer lifetime bounds are inconsistent")
         if not callable(getattr(locks, "lock_held", None)):
@@ -117,7 +120,7 @@ else:
             missing.append("MAX_STARTUP_PROBES must be an integer")
         try:
             module = load_transcript_adapter({{"transcript_adapter": {adapter!r}}})
-            if module is None or not all(hasattr(module, name) for name in ("FileIdentity", "identify", "read_material")):
+            if module is None or not all(hasattr(module, name) for name in ("FileIdentity", "identify", "read_material", "history_source")):
                 missing.append("transcript adapter API is incomplete")
         except Exception as exc:
             missing.append(f"transcript adapter ({{type(exc).__name__}}: {{exc}})")

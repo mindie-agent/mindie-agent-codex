@@ -47,6 +47,10 @@ class RuntimeCompatibilityTests(unittest.TestCase):
                 "A.inspect = None"
             ).probe_runtime(sys.executable)
 
+    def test_missing_history_import_is_rejected_before_installation(self):
+        with self.assertRaisesRegex(RuntimeError, 'explicit history import is unavailable'):
+            Probe('import mindie_knowledge.loop.history_import as H; H.import_transcript = None').probe_runtime(sys.executable)
+
     def test_unmodified_pinned_runtime_passes_setup_and_update_probes(self):
         # This is deliberately the real installed interpreter and unmodified
         # pinned core API. No injected compatibility attributes are present.

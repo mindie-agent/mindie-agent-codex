@@ -516,6 +516,7 @@ class Updater:
             "runtime_call.py",
             "admission_ops.py",
             "codex_transcript.py",
+            "history_import.py",
             "agent_worker.py",
             "capture_config.py",
             "service_handoff.py",

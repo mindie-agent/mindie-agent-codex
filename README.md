@@ -153,6 +153,10 @@ creation or organizer invocation. Plugin and public knowledge updates continue.
 
 With contribution on, an admitted Stop delivery saves the current task's user
 messages, public assistant progress and final answers in their original order.
+Users can explicitly [contribute selected historical transcripts](docs/history-import.md).
+This is separate from activation and Stop capture; it never scans past sessions
+automatically and reuses the saved contribution choice and project scope.
+
 Tools, hidden reasoning, injected instructions and inherited task history are
 excluded. A local Gitleaks scanner and privacy rules redact the retained text
 before storage or any optional summary call. No model writes or rewrites the
