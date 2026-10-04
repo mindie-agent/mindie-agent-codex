@@ -28,14 +28,13 @@ class Probe:
 
 class RuntimeCompatibilityTests(unittest.TestCase):
     def test_reviewed_positive_bounds_are_not_frozen_at_old_tuning(self):
-        Probe('S.SUMMARY_TIMEOUT=60; S.MAX_PROMPT_BYTES=65536; '
-              'S.MAX_RESPONSE_BYTES=16384; C.STARTUP_TIMEOUT=9; C.MAX_STARTUP_PROBES=5').probe_runtime(sys.executable)
+        Probe('S.MAX_PROMPT_BYTES=65536; S.MAX_RESPONSE_BYTES=16384').probe_runtime(sys.executable)
 
     def test_missing_or_unbounded_safety_contract_still_fails(self):
         for tuning in (
-            'S.SUMMARY_TIMEOUT=0', 'S.MAX_PROMPT_BYTES=-1', 'S.SUMMARY_TIMEOUT=True',
-            'S.SUMMARY_TIMEOUT=float("inf")', 'C.STARTUP_TIMEOUT=float("nan")',
-            'C.MAX_STARTUP_PROBES=0', 'S.SummaryLedger.record=None',
+            'S.MAX_PROMPT_BYTES=-1', 'S.MAX_PROMPT_BYTES=True',
+            'S.MAX_PROMPT_BYTES=float("inf")', 'C.ensure_service=None',
+            'S.SummaryLedger.record=None',
             'S.MAX_RESPONSE_BYTES=2*S.MAX_PROMPT_BYTES',
         ):
             with self.subTest(tuning=tuning), self.assertRaises(RuntimeError):

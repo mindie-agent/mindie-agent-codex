@@ -10,6 +10,7 @@ Codex acceptance remains to be recorded separately.
 
 import argparse
 import base64
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import json
@@ -39,8 +40,6 @@ WIN_TASK = "MindIE Agent Plugin Updater"
 SYSTEMD_SERVICE = "mindie-agent-updater.service"
 SYSTEMD_TIMER = "mindie-agent-updater.timer"
 INTERVAL = 300
-TOTAL_TIMEOUT = 240
-STOP_HOST_TIMEOUT = 5
 ATTEMPTS = 3
 _RETRYABLE = frozenset({"temporary_network", "rate_limited"})
 _ACTIONABLE = frozenset({"authentication", "permission", "hook_trust", "certificate"})
@@ -56,11 +55,8 @@ _STATIC_FAILURE = {
     "resolver": "dependency resolver conflict",
     "bad_content": "package content rejected",
 }
-# Knowledge sync is model-free and independently budgeted: it runs inside the
-# same 300 s scheduler slot but before any plugin build work, so a slow or
-# stuck plugin candidate can never starve it. The knowledge core persists its
-# own 30 s/3-attempt per-candidate budget; this is only the outer call bound.
-KNOWLEDGE_TIMEOUT = 45
+# Scheduler cadence is not an execution budget. The process-owned checker
+# lock coalesces concurrent ticks while a healthy update or sync continues.
 
 
 class Incompatible(ValueError):
@@ -228,7 +224,6 @@ def link(path, target):
             ["cmd", "/d", "/c", "mklink", "/J", str(temporary), str(target)],
             check=True,
             capture_output=True,
-            timeout=10,
         )
         _remove_link(path)
         os.replace(temporary, path)
@@ -385,9 +380,7 @@ def stop_hook_commands(argv):
     completion even when the child executable is absent or fails.
     """
     argv = [str(value) for value in argv]
-    warning = "MindIE Stop capture failed before completion; inspect MindIE status."
-    posix = ("if ! " + shlex.join(argv) + " >/dev/null 2>&1; then printf '%s\\n' "
-             + shlex.quote(warning) + " >&2; fi; printf '{}\\n'")
+    posix = shlex.join(argv) + " >/dev/null 2>&1 || :; printf '{}\\n'"
     # Native Codex can dispatch Windows hooks through PowerShell. CMD's
     # `& echo` becomes a background job there and loses the event on stdin.
     # An encoded PowerShell command has one unambiguous argv under either
@@ -396,15 +389,12 @@ def stop_hook_commands(argv):
         if value.startswith("${PLUGIN_ROOT}/"):
             return "(Join-Path $env:PLUGIN_ROOT '" + value[len('${PLUGIN_ROOT}/'):].replace("'", "''") + "')"
         return "'" + value.replace("'", "''") + "'"
-    report = "[Console]::Error.WriteLine('" + warning + "')"
     body = ("try { & " + " ".join(ps_arg(arg) for arg in argv)
-            + " 1>$null 2>$null; if ($LASTEXITCODE -ne 0) { " + report
-            + " } } catch { " + report + " } finally { [Console]::Out.WriteLine('{}') }; exit 0")
+            + " 1>$null 2>$null } catch { } finally { [Console]::Out.WriteLine('{}') }; exit 0")
+
     windows = "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " + base64.b64encode(body.encode("utf-16le")).decode("ascii")
-    # This host watchdog includes both shell and interpreter cold startup.
-    # The bridge still limits actual handoff work to 1.3 s on Windows / 1.5 s
-    # elsewhere; transcript size never enters this hook's work or budget.
-    return {"command": posix, "commandWindows": windows, "timeout": STOP_HOST_TIMEOUT}
+    return {"command": posix, "commandWindows": windows}
+
 
 
 class Updater:
@@ -415,13 +405,8 @@ class Updater:
         self.config = Path(self.settings["adapter_config"])
         self.state_path = self.root / "state.json"
         self.state = read(self.state_path, {})
-        self.deadline = time.monotonic() + TOTAL_TIMEOUT
-        self.command_deadline = self.deadline
 
-    def command(self, args, *, timeout=30, data="", allowed_returncodes=(0,), transport=False, allow_service=False, max_output=1024 * 1024, on_failure=None):
-        remaining = min(self.deadline, self.command_deadline) - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("update deadline reached")
+    def command(self, args, *, timeout=None, data="", allowed_returncodes=(0,), transport=False, allow_service=False, max_output=1024 * 1024, on_failure=None):
         # Disable implicit download/transport retries. Each scheduler run gets one attempt.
         env = {
             key: value
@@ -431,14 +416,13 @@ class Updater:
         env.update(
             GIT_TERMINAL_PROMPT="0",
             UV_HTTP_RETRIES="0",
-            UV_HTTP_TIMEOUT="20",
             UV_NO_PROGRESS="1",
             MINDIE_AGENT_CONFIG=str(self.config),
             CODEX_HOME=self.settings["codex_home"],
             MINDIE_CODEX_BIN=self.settings["codex"],
         )
         return run(
-            [str(arg) for arg in args], data, timeout=min(timeout, remaining), env=env,
+            [str(arg) for arg in args], data, timeout=timeout, env=env,
             allowed_returncodes=allowed_returncodes, transport=transport,
             allow_service=allow_service,
             max_output=max_output, on_failure=on_failure,
@@ -455,7 +439,7 @@ class Updater:
     def _read_release(self, request):
         """Read release JSON. Failure text is classified and then discarded."""
         try:
-            with urllib.request.urlopen(request, timeout=10) as response:
+            with urllib.request.urlopen(request) as response:
                 return response.read(256 * 1024 + 1)
         except urllib.error.HTTPError as exc:
             try:
@@ -497,7 +481,6 @@ class Updater:
             raise ValueError("unsupported update channel")
         output = self.command(
             ["git", "ls-remote", self.settings["repository"], ref, ref + "^{}"],
-            timeout=15,
             transport=True,
         )
         refs = dict(line.split()[::-1] for line in output.splitlines())
@@ -528,9 +511,13 @@ class Updater:
                 raise Incompatible("prepared generation identity differs from its source")
             return candidate
         if generation.exists():
+            marker = read(generation / "ownership.json", {})
+            if marker != {"schema": "mindie-runtime-generation/2", "revision": sha}:
+                raise Incompatible("incomplete generation has no verified ownership record")
             shutil.rmtree(generation)  # Only our uncommitted, incomplete staging area.
         source = generation / "source"
         source.mkdir(parents=True)
+        atomic(generation / "ownership.json", {"schema": "mindie-runtime-generation/2", "revision": sha})
         self.command(["git", "init", "-q", source])
         self.command(
             [
@@ -543,7 +530,6 @@ class Updater:
                 self.settings["repository"],
                 sha,
             ],
-            timeout=45,
             transport=True,
         )
         self.command(["git", "-C", source, "checkout", "--detach", "-q", "FETCH_HEAD"])
@@ -554,7 +540,6 @@ class Updater:
         uv = self.settings["uv"]
         self.command(
             [uv, "venv", "--python", self.settings["python"], generation / "venv"],
-            timeout=15,
         )
         self.command(
             [
@@ -566,7 +551,6 @@ class Updater:
                 "-r",
                 source / "runtime-requirements.txt",
             ],
-            timeout=120,
             transport=True,
         )
         validation = self.probe_runtime(python, source / "plugins/mindie-agent/scripts", revision=sha)
@@ -598,7 +582,8 @@ class Updater:
             + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
         )
         atomic(manifest_path, manifest)
-        # A loaded task keeps an immutable entrypoint even if Codex removes its cache.
+        # Native tasks retain this installation-level path across updates.
+        atomic(generation / "ownership.json", {"schema": "mindie-runtime-generation/2", "revision": generation.name})
         config_value = str(Path(self.config).expanduser().absolute())
         atomic(
             plugin / "scripts" / "installation.json",
@@ -609,10 +594,11 @@ class Updater:
             {"revision": revision, "version": manifest["version"]},
         )
         mcp = read(plugin / ".mcp.json")
-        for server in mcp["mcpServers"].values():
+        for name, server in mcp["mcpServers"].items():
             server["command"] = self.settings["python"]
-            server["args"][0] = str(plugin / server["args"][0])
-            server["cwd"] = str(plugin)
+            role = {"mindie-knowledge": "knowledge-mcp", "mindie-remote-dev": "remote-mcp"}[name]
+            server["args"] = [str(self.root / "runtime_launcher.py"), "--config", config_value, role]
+            server["cwd"] = str(self.root)
             env = dict(server.get("env") or {})
             env["MINDIE_AGENT_CONFIG"] = config_value
             server["env"] = env
@@ -620,7 +606,7 @@ class Updater:
         atomic(plugin / ".mcp.json", mcp)
         argv = [
             self.settings["python"],
-            str(plugin / "scripts/bridge.py"),
+            str(self.root / "runtime_launcher.py"),
             "--config",
             config_value,
             "stop",
@@ -639,37 +625,6 @@ class Updater:
                 }
             },
         )
-        previous = self.state.get("current", {}).get("plugin")
-        if previous:
-            previous = Path(previous)
-            # Preserve the immutable reviewed Stop executable only when its
-            # complete local execution dependency set is byte-identical.
-            # Stop imports these helpers, including diagnostic_support via
-            # bridge._record_stop and diagnostic_fallback via its _record.
-            # diagnostic-build.json is metadata and does not change that
-            # logic, so it must not invalidate an identical Stop command.
-            # A changed executable dependency still requires native review.
-            files = {
-                "bridge.py", "bounded_process.py", "session_gate.py",
-                "sharing.py", "update_lock.py", "installation.json",
-                "diagnostic_support.py", "diagnostic_fallback.py",
-                "windows_process.py",
-            }
-            old_commands = stop_hook_commands([
-                self.settings["python"], str(previous / "scripts/bridge.py"),
-                "--config", config_value, "stop",
-            ])
-            old_hooks = read(previous / "hooks/hooks.json", {})
-            wrapper_matches = old_hooks == {"hooks": {"Stop": [{"hooks": [
-                {"type": "command", **old_commands},
-            ]}]}}
-            if wrapper_matches and all(
-                (previous / "scripts" / name).is_file()
-                and (plugin / "scripts" / name).read_bytes()
-                == (previous / "scripts" / name).read_bytes()
-                for name in files
-            ):
-                shutil.copy2(previous / "hooks/hooks.json", plugin / "hooks/hooks.json")
         result = dict(
             revision=revision,
             source=str(source),
@@ -746,8 +701,7 @@ class Updater:
                         "--marketplace",
                         "mindie-agent",
                     ],
-                    timeout=20,
-                )
+                        )
             )
         except Exception as exc:
             raise RuntimeError("native plugin inventory could not be read") from exc
@@ -852,31 +806,6 @@ class Updater:
                 + ", ".join(mismatches)
             )
 
-    def preserve_caches(self):
-        # Loaded native tasks may still execute cached entrypoints: retain
-        # their exact bytes untouched. There is no compatibility shim for
-        # pre-contract caches — they are kept inert, never rewritten.
-        cache = (
-            Path(self.settings["codex_home"])
-            / "plugins/cache/mindie-agent/mindie-agent"
-        )
-        backup = self.root / "retained-caches"
-        backup.mkdir(exist_ok=True)
-        if cache.exists():
-            for version in cache.iterdir():
-                if version.is_dir() and not (backup / version.name).exists():
-                    shutil.copytree(version, backup / version.name)
-
-    def restore_caches(self):
-        cache = (
-            Path(self.settings["codex_home"])
-            / "plugins/cache/mindie-agent/mindie-agent"
-        )
-        cache.mkdir(parents=True, exist_ok=True)
-        for version in (self.root / "retained-caches").glob("*"):
-            if not (cache / version.name).exists():
-                shutil.copytree(version, cache / version.name)
-
     def project_publication(self, declaration):
         """Journal one contract field under the shared settings write lock."""
         import sharing
@@ -931,7 +860,6 @@ class Updater:
             return
         journal = read(journal_path)
         if self.state.get("current", {}).get("revision") == journal.get("candidate"):
-            self.restore_caches()
             self.verify_native(
                 self.state["current"]["version"],
                 self.state["current"].get("plugin"),
@@ -959,7 +887,6 @@ class Updater:
                     "--json",
                 ]
             )
-        self.restore_caches()
         # Retained caches must not pollute the rollback either: the native
         # selection after recovery has to be the version the journal restored.
         if journal.get("marketplace") and journal.get("previous_version"):
@@ -974,7 +901,7 @@ class Updater:
             selected = read(self.config)
             output = self.command(
                 [selected["python"], Path(selected["runtime_scripts"]) / "service_handoff.py",
-                 "restore", selected["engine_config"]], timeout=8, allow_service=True)
+                 "restore", selected["engine_config"]], allow_service=True)
             result = json.loads(output)
             if result.get("status") not in {"restored", "not-needed"}:
                 raise RuntimeError("invalid restoration result")
@@ -984,7 +911,7 @@ class Updater:
 
     def prepare_capture(self, candidate):
         helper = Path(candidate["plugin"]) / "scripts/capture_config.py"
-        output = self.command([candidate["python"], helper], timeout=90)
+        output = self.command([candidate["python"], helper])
         result = json.loads(output)
         if not isinstance(result, dict) or result.get("capture_mode") != "public-transcript":
             raise ValueError("candidate capture preparation returned an invalid receipt")
@@ -1016,8 +943,7 @@ class Updater:
             idle_helper = Path(candidate["plugin"]) / "scripts/service_handoff.py"
             if not idle_helper.is_file():
                 raise Incompatible("updater is missing service_handoff.py")
-            if self.deadline - time.monotonic() < 43:
-                raise TimeoutError("insufficient time for stop, rollback and restore")
+            self.publish_runtime_launcher(candidate)
             previous_handoff = self.state.get("service_handoff")
             self.save(self.state.get("status", "preparing"), service_handoff=dict(
                 status="pending", error="interrupted-stop-or-restore-needs-attention"))
@@ -1027,8 +953,7 @@ class Updater:
                         # Handoff implementation and interpreter belong to
                         # the same candidate generation.
                         [candidate["python"], idle_helper, "stop", adapter["engine_config"]],
-                        timeout=5,
-                    )
+                                )
                 )
             except Exception:
                 self.save("update_failed", service_handoff=dict(
@@ -1042,12 +967,9 @@ class Updater:
             stopped = idle.get("service") == "stopped"
             installed = False
             final_proven = True  # prior native state, before any install mutation
-            # Leave a bounded rollback + restoration tail inside this check.
-            self.command_deadline = self.deadline - 38
             try:
                 market = self.root / "marketplace"
                 plugin_link = market / "plugins/mindie-agent"
-                self.preserve_caches()
                 previous_native = self.native_plugin_entry()
                 journal = dict(
                     adapter=adapter,
@@ -1088,8 +1010,7 @@ class Updater:
                         "--json",
                     ]
                 )
-                self.restore_caches()
-                # The add receipt is not proof: retained caches compete in
+                    # The add receipt is not proof: retained caches compete in
                 # native discovery. Verify the actual resolved version AND
                 # its bytes or roll back instead of reporting a fake
                 # installed state.
@@ -1169,7 +1090,6 @@ class Updater:
                 return result
             except Exception as install_exc:
                 final_proven = False
-                self.command_deadline = self.deadline - 8
                 try:
                     self.recover()
                 except Exception as rollback_exc:
@@ -1189,12 +1109,10 @@ class Updater:
                     pass
                 raise
             finally:
-                self.command_deadline = self.deadline
                 if stopped:
                     self.restore_service(final_proven)
                 if installed:
                     self.save("installed")
-                self.restore_caches()
 
     def maintain_diagnostics(self):
         """One offline maintenance call plus a bounded handoff request for an
@@ -1212,22 +1130,15 @@ class Updater:
             import consent as _consent
 
             reporting_enabled = _consent.load(self.config).get("reporting") == "enabled"
-            # Pass the REAL remaining window: the CLI's 75s default includes
-            # offline work and skips the upgrade unless a full 60s handoff
-            # plus 1s exit remains; 2s is this parent's exit/startup margin.
-            available = min(75, self.deadline - time.monotonic(),
-                            self.command_deadline - time.monotonic())
-            if available <= 0:
-                return {"status": "deferred", "error_type": "insufficient_budget"}
-            command = [python, "-m", "mindie_diagnostics.cli", "reporting", "maintain",
-                       "--budget-seconds", str(max(0, available - 2))]
+            # The diagnostics component owns maintenance scheduling. A host
+            # check never kills it because an unrelated plugin step was slow.
+            command = [python, "-m", "mindie_diagnostics.cli", "reporting", "maintain"]
             # Local retention also runs when reporting is off. Only the saved
             # reporting choice permits handing off an existing reporter.
             if reporting_enabled:
                 command.append("--update-running")
             output = self.command(
                 command,
-                timeout=available,
                 allowed_returncodes=(0, 1),
             )
             if len(output.encode()) > 1024 * 1024:
@@ -1247,6 +1158,9 @@ class Updater:
             with file_lock(self.root / "checker.lock", exclusive=True):
                 self.state = read(self.state_path, {})
                 result = self._check_locked()
+                retention = self.collect_generations()
+                self.state["retention"] = retention
+                atomic(self.state_path, self.state)
         except BlockingIOError:
             return dict(status="already_running")
         maintenance = self.maintain_diagnostics()
@@ -1255,7 +1169,92 @@ class Updater:
         except (OSError, ValueError) as exc:
             maintenance = dict(maintenance, status="unavailable",
                                error_type=type(exc).__name__, stage="persist_maintenance")
-        return dict(result, diagnostics=maintenance)
+        return dict(result, retention=retention, diagnostics=maintenance)
+
+    def publish_runtime_launcher(self, candidate):
+        """Stable, reviewed entry bytes; native tasks never name old env paths."""
+        scripts = Path(candidate["plugin"]) / "scripts"
+        for name in ("update_lock.py", "runtime_launcher.py", "diagnostic_support.py",
+                     "diagnostic_fallback.py", "agent_diagnostics.py", "diagnostic-build.json"):
+            atomic_text(self.root / name, (scripts / name).read_text(encoding="utf-8"))
+
+    def collect_generations(self, *, exclusive=False):
+        """Reclaim only owned, unreachable generations with no process lease.
+
+        Old untracked installations are reported, never inferred dead from
+        age. Their native tasks may still contain an absolute entry path.
+        A fresh v2 installation needs no retained native-cache copies.
+        """
+        result = dict(status="complete", removed=[], kept=[], untracked=[])
+        try:
+            with update_lock(self.config, exclusive=exclusive):
+                # GC must never interpret a lost state file as first use.
+                state = read(self.state_path)
+                if not isinstance(state, dict):
+                    raise ValueError("generation state is not an object")
+                current = state.get("current")
+                if current is not None and not isinstance(current, dict):
+                    raise ValueError("invalid committed generation")
+                keep = {state.get("candidate"), (current or {}).get("revision")}
+                adapter = read(self.config)
+                if not isinstance(adapter, dict) or not isinstance(adapter.get("runtime_scripts"), str):
+                    raise ValueError("runtime pointer is missing or invalid")
+                scripts = Path(adapter["runtime_scripts"]).resolve(strict=True)
+                generations = (self.root / "generations").resolve()
+                pointed_generation = scripts.parent.parent
+                if pointed_generation.parent == generations:
+                    if scripts != pointed_generation / "plugin/scripts":
+                        raise ValueError("invalid runtime pointer layout")
+                    keep.add(pointed_generation.name)
+                    if current and current.get("revision") != pointed_generation.name:
+                        return dict(result, status="failed", stage="generation_cleanup",
+                                    error_type="StateMismatch", error="runtime pointer differs from committed state")
+                journal_path = self.root / "transaction.json"
+                if journal_path.exists():
+                    read(journal_path)  # Malformed recovery state must stay visible.
+                    # Interrupted transactions keep all generations until
+                    # reconciliation establishes the committed state.
+                    return dict(result, status="deferred", reason="transaction_pending")
+                executing = Path(__file__).resolve().parents[2]
+                if executing.parent == (self.root / "generations").resolve():
+                    keep.add(executing.name)
+                directory = self.root / "generations"
+                locks = self.root / "generation-locks"
+                locks.mkdir(exist_ok=True)
+                for generation in sorted(directory.iterdir()) if directory.exists() else []:
+                    if generation.is_symlink() or not generation.is_dir():
+                        result["untracked"].append(generation.name)
+                        continue
+                    marker = read(generation / "ownership.json", {})
+                    if marker != {"schema": "mindie-runtime-generation/2", "revision": generation.name}:
+                        result["untracked"].append(generation.name)
+                        continue
+                    if generation.name in keep:
+                        result["kept"].append(generation.name)
+                        continue
+                    try:
+                        with file_lock(locks / (generation.name + ".lock"), exclusive=True):
+                            shutil.rmtree(generation)
+                            result["removed"].append(generation.name)
+                        (locks / (generation.name + ".lock")).unlink(missing_ok=True)
+                    except BlockingIOError:
+                        result["kept"].append(generation.name)
+                # These are updater-made duplicates, not host-managed caches.
+                backup = self.root / "retained-caches"
+                if backup.exists() and not backup.is_symlink():
+                    shutil.rmtree(backup)
+                attempts = state.get("attempts")
+                if isinstance(attempts, dict):
+                    protected = set(result["kept"]) | set(result["untracked"]) | keep
+                    self.state["attempts"] = {key: value for key, value in attempts.items() if key in protected}
+        except BlockingIOError:
+            return dict(result, status="deferred", reason="runtime_switch_in_progress")
+        except (OSError, ValueError, TypeError) as exc:
+            return dict(result, status="failed", stage="generation_cleanup", error_type=type(exc).__name__,
+                        error=str(exc)[:240])
+        if result["untracked"]:
+            result["status"] = "untracked_retained"
+        return result
 
     def check_knowledge(self):
         """Model-free knowledge sync on the same 300 s schedule.
@@ -1277,7 +1276,6 @@ class Updater:
                     "--config",
                     adapter["engine_config"],
                 ],
-                timeout=KNOWLEDGE_TIMEOUT,
             )
         aggregate, rows, summary = fold_feed_results(output)
         self.save(
@@ -1565,30 +1563,20 @@ class Updater:
             )
 
 
-def _native_run(updater, argv, timeout):
-    """One bounded native scheduler control command with a KNOWN return code.
+def _native_run(updater, argv, timeout=None):
+    """Run native scheduler control and retain its actual exit status.
 
-    bounded_process.run returns stdout only, but scheduler truth needs the
-    returncode (launchctl print exit 113 is positive missing-service
-    evidence; anything else is not absence) and a capped stderr diagnostic.
-    These are fixed small-output OS control commands (launchctl/PowerShell),
-    so a plain bounded subprocess.run suffices. Bounded by the updater's
-    absolute deadline. Returns (returncode, stdout, stderr); raises
-    TimeoutError when the updater budget is spent, subprocess.TimeoutExpired
-    past the bounded deadline, and OSError when the manager executable
-    itself is unavailable.
+    No default execution deadline. Cleanup callers may explicitly bound their
+    teardown/readback window; failures remain distinct from proven absence.
     """
-    remaining = min(updater.deadline, updater.command_deadline) - time.monotonic()
-    if remaining <= 0:
-        raise TimeoutError("update deadline reached")
     completed = subprocess.run(
         [str(arg) for arg in argv], stdin=subprocess.DEVNULL,
         capture_output=True, text=True, errors="replace",
-        timeout=min(timeout, remaining))
+        timeout=timeout)
     return completed.returncode, completed.stdout or "", completed.stderr or ""
 
 
-def _launchd_state(updater, label, timeout=5):
+def _launchd_state(updater, label, timeout=None):
     """Actual launchd state for the exact service target.
 
     "absent" ONLY on positive missing-service evidence (launchctl print
@@ -1607,7 +1595,7 @@ def _launchd_state(updater, label, timeout=5):
     return "unknown", (stderr or "").strip()[:240] or f"launchctl print exited {code}"
 
 
-def _task_state(updater, task, timeout=20):
+def _task_state(updater, task, timeout=None):
     """Exact scheduled-task state via structured PowerShell enumeration.
 
     ErrorAction Stop makes a manager error exit nonzero; a successful
@@ -1637,7 +1625,7 @@ def _task_state(updater, task, timeout=20):
     return ("present" if count else "absent"), ""
 
 
-def _systemd_state(updater, timer=SYSTEMD_TIMER, timeout=5):
+def _systemd_state(updater, timer=SYSTEMD_TIMER, timeout=None):
     """Read exact user timer state; manager or parse faults stay unknown."""
     try:
         code, stdout, stderr = _native_run(
@@ -1759,11 +1747,11 @@ def _schedule_systemd_enable(updater, launcher, settings_path, *, schedule_root=
     ))
     atomic_text(service_path, service_text)
     atomic_text(timer_path, timer_text)
-    code, _, stderr = _native_run(updater, ["systemctl", "--user", "daemon-reload"], 10)
+    code, _, stderr = _native_run(updater, ["systemctl", "--user", "daemon-reload"])
     if code:
         raise RuntimeError("systemd daemon-reload failed: " + (stderr or "").strip()[:200])
     code, _, stderr = _native_run(
-        updater, ["systemctl", "--user", "enable", "--now", timer], 15
+        updater, ["systemctl", "--user", "enable", "--now", timer]
     )
     state, detail = _systemd_state(updater, timer)
     if state != "active":
@@ -1796,16 +1784,16 @@ def schedule_enable(updater, launcher, settings_path, *, schedule_root=None):
             plistlib.dump(content, stream)
         try:
             updater.command(
-                ["launchctl", "print", f"gui/{os.getuid()}/{LABEL}"], timeout=5
+                ["launchctl", "print", f"gui/{os.getuid()}/{LABEL}"]
             )
         except RuntimeError:
             pass
         else:
             updater.command(
-                ["launchctl", "bootout", f"gui/{os.getuid()}/{LABEL}"], timeout=10
+                ["launchctl", "bootout", f"gui/{os.getuid()}/{LABEL}"]
             )
         updater.command(
-            ["launchctl", "bootstrap", f"gui/{os.getuid()}", plist], timeout=10
+            ["launchctl", "bootstrap", f"gui/{os.getuid()}", plist]
         )
         return str(plist)
     if os.name == "nt":
@@ -1824,7 +1812,6 @@ def schedule_enable(updater, launcher, settings_path, *, schedule_root=None):
                 f'"{sys.executable}" "{launcher}" "{settings_path}"',
                 "/F",
             ],
-            timeout=15,
         )
         state, detail = _task_state(updater, WIN_TASK)
         if state != "present":
@@ -1977,7 +1964,7 @@ def schedule_disable(updater, *, label=None, plist_path=None, schedule_root=None
         timer_file.unlink(missing_ok=True)
         service_file.unlink(missing_ok=True)
         code, _, stderr = _native_run(
-            updater, ["systemctl", "--user", "daemon-reload"], 10
+            updater, ["systemctl", "--user", "daemon-reload"]
         )
         if code:
             raise RuntimeError(
@@ -2105,113 +2092,85 @@ def schedule_status(updater):
 
 
 def uninstall(args):
-    """Remove updater scheduling and updater-owned state, never the live plugin.
+    """Remove updater scheduling while retaining every reachable runtime.
 
-    Order: preflight every active reference first (in-flight calls, live
-    generation, interrupted transaction); a refusal deletes nothing. Idle
-    task authorizations do not block uninstall: the neutral admission store
-    is adapter-owned state outside the updater root and is left untouched.
-    Scheduling removal is reported separately from state removal. Retained
-    native caches are never deleted here: loaded tasks may still execute
-    those trusted entrypoints. Rollback/recovery metadata (state.json,
-    transaction.json) is preserved unless --purge runs with no live
-    references.
+    Selection, process-lease checks and deletion share the exclusive update
+    lock. A completed schedule cancellation is reported separately from a
+    deferred or failed cleanup. Native plugin removal remains a host action.
     """
     updater = Updater(args.settings)
+    with file_lock(updater.root / "checker.lock", exclusive=True), ExitStack() as locks:
+        try:
+            locks.enter_context(update_lock(updater.config, exclusive=True))
+        except BlockingIOError:
+            return dict(status="refused", reason="an admitted MindIE call is in flight; retry when idle",
+                        removed=[], removed_generations=[], kept_generations=[])
+        return _uninstall_locked(args, updater)
+
+
+def _uninstall_locked(args, updater):
     root = updater.root
-    with file_lock(root / "checker.lock", exclusive=True):
-        # Preflight: refuse only while an actual call holds the operation
-        # lock; idle authorizations are not active references.
-        try:
-            with update_lock(updater.config, exclusive=True):
-                pass
-        except (BlockingIOError, OSError):
-            return dict(
-                status="refused",
-                reason="an admitted MindIE call is in flight; retry when idle",
-                removed=[],
-            )
-        current = updater.state.get("current", {})
-        live = (
-            Path(current["plugin"]).resolve() if current.get("plugin") else None
-        )
-        interrupted = (root / "transaction.json").exists()
+    try:
+        schedule_disable(updater)
+        schedule_note = "schedule removed"
+    except Exception as exc:
+        # Unknown cancellation cannot authorize any executable/state removal.
+        schedule_note = f"schedule removal failed: {type(exc).__name__}: {exc}"
+        return dict(status="refused", reason="schedule state is unproven; no updater-owned files were removed",
+                    schedule=schedule_note, removed_generations=[], kept_generations=[],
+                    retained_caches="preserved (native tasks may still execute them)",
+                    recovery_metadata="preserved", errors=[schedule_note])
 
-        errors = []
-        try:
-            schedule_disable(updater)
-            schedule_note = "schedule removed"
-        except Exception as exc:
-            # The schedule state is unproven: refuse BEFORE any executable
-            # or material removal. Generations, controller, launcher,
-            # config, and recovery metadata stay exactly as they were; no
-            # best-effort continued destruction. The shared reporter is
-            # never touched in any uninstall path.
-            schedule_note = f"schedule removal failed: {type(exc).__name__}: {exc}"
-            return dict(
-                status="refused",
-                reason="schedule state is unproven; no updater-owned files "
-                       "were removed",
-                schedule=schedule_note,
-                removed_generations=[],
-                kept_generations=[],
-                retained_caches="preserved (native tasks may still execute them)",
-                recovery_metadata="preserved",
-                errors=[schedule_note],
-            )
+    retention = updater.collect_generations(exclusive=True)
+    removed = [str(root / "generations" / name) for name in retention['removed']]
+    kept = [str(root / "generations" / name) for name in [*retention['kept'], *retention['untracked']]]
+    if retention['status'] in {'failed', 'deferred'}:
+        # Recovery may need any generation, and failed cleanup may already
+        # have removed a subset. Preserve the precise separate outcomes.
+        return dict(status="partial", schedule=schedule_note, retention=retention,
+                    removed_generations=removed, kept_generations=kept or None,
+                    remaining_generations="preserved; cleanup did not finish evaluating all references",
+                    retained_caches="preserved", recovery_metadata="preserved",
+                    errors=[retention.get('error') or retention.get('reason') or 'generation cleanup failed'])
 
-        removed, kept = [], []
-        generations = root / "generations"
-        if generations.exists():
-            for path in sorted(generations.glob("*")):
-                target = (path / "plugin").resolve()
-                if live is not None and target == live:
-                    kept.append(str(path))
-                    continue
-                try:
-                    shutil.rmtree(path)
-                    removed.append(str(path))
-                except OSError as exc:
-                    errors.append(f"cannot remove {path}: {exc}")
-                    kept.append(str(path))
-        for extra in ("controller",):
+    errors = []
+    for extra in ("controller",):
+        try:
+            shutil.rmtree(root / extra)
+        except OSError as exc:
+            if (root / extra).exists():
+                errors.append(f"cannot remove {extra}: {exc}")
+    try:
+        (root / "launcher.py").unlink(missing_ok=True)
+    except OSError as exc:
+        errors.append(f"cannot remove updater launcher: {exc}")
+    # Keep the checker inode while this and competing processes can name it.
+    # Unlinking a held lock would let another caller lock a replacement inode.
+    purged = False
+    if args.purge:
+        if kept:
+            errors.append("refusing --purge: current, candidate, executing, leased or untracked generations remain")
+        elif errors:
+            errors.append("refusing --purge: earlier updater cleanup failed")
+        else:
             try:
-                shutil.rmtree(root / extra)
-            except OSError as exc:
-                if (root / extra).exists():
-                    errors.append(f"cannot remove {extra}: {exc}")
-        for extra in ("launcher.py", "checker.lock"):
-            (root / extra).unlink(missing_ok=True)
-        purged = False
-        if args.purge:
-            if live is not None:
-                errors.append(
-                    "refusing --purge: the installed plugin still points at "
-                    + str(live)
-                    + "; uninstall the Codex plugin first"
-                )
-            elif interrupted:
-                errors.append(
-                    "refusing --purge: transaction.json holds recovery metadata "
-                    "for an interrupted install; run a check to recover first"
-                )
-            else:
                 shutil.rmtree(root)
                 purged = True
                 args.settings.unlink(missing_ok=True)
-        status = "uninstalled" if not errors else "partial"
-        result = dict(
-            status=status,
-            schedule=schedule_note,
-            removed_generations=removed,
-            kept_generations=kept,
-            retained_caches="preserved (native tasks may still execute them)",
-            recovery_metadata="purged" if purged else "preserved",
-            errors=errors,
-        )
-        if not purged:
-            atomic(updater.state_path, dict(updater.state, status=status, errors=errors or None))
-        return result
+            except OSError as exc:
+                errors.append(f"updater purge failed: {exc}")
+    status = "uninstalled" if not errors else "partial"
+    result = dict(status=status, schedule=schedule_note, retention=retention,
+                  removed_generations=removed, kept_generations=kept,
+                  retained_caches="host-managed caches preserved",
+                  recovery_metadata="purged" if purged else "preserved", errors=errors)
+    if not purged:
+        try:
+            atomic(updater.state_path, dict(updater.state, status=status, errors=errors or None, retention=retention))
+        except OSError as exc:
+            result.update(status="partial", state_persistence="failed")
+            result["errors"].append("uninstall outcome persistence failed: " + type(exc).__name__)
+    return result
 
 
 def main():

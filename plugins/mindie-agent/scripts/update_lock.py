@@ -17,6 +17,8 @@ from pathlib import Path
 import threading
 
 _tls = threading.local()
+_generation_guard = threading.Lock()
+_generation_fds = set()
 
 if os.name == "posix":
     import fcntl
@@ -29,7 +31,7 @@ if os.name == "posix":
                 descriptor,
                 (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB,
             )
-            yield
+            yield descriptor
         finally:
             os.close(descriptor)
 else:
@@ -117,3 +119,30 @@ def update_lock(config, *, exclusive=False):
             yield
         finally:
             locks.pop(key, None)
+
+
+@contextmanager
+def generation_lease(path):
+    """A process-held generation lease also inherited by owned POSIX helpers.
+
+    Only an actual acquired lease enters this in-memory registry. No caller
+    environment or supplied descriptor can bypass ownership validation in the
+    stable launcher's selection path. flock survives until every inherited
+    descriptor is closed, including after the launcher itself is killed.
+    """
+    with file_lock(path) as descriptor:
+        if os.name == 'posix':
+            with _generation_guard:
+                _generation_fds.add(descriptor)
+        try:
+            yield
+        finally:
+            if os.name == 'posix':
+                with _generation_guard:
+                    _generation_fds.remove(descriptor)
+
+
+def generation_descriptors():
+    """The stable launcher owns these descriptors for its entire call lifetime."""
+    with _generation_guard:
+        return tuple(_generation_fds)

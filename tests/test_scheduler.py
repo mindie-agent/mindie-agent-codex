@@ -46,7 +46,7 @@ class SchedulerTests(unittest.TestCase):
         state = {"load": "not-found", "active": "inactive", "enabled": ""}
         calls = []
 
-        def native(_updater, argv, timeout):
+        def native(_updater, argv, timeout=None):
             argv = list(map(str, argv))
             calls.append(argv)
             tail = argv[2:]

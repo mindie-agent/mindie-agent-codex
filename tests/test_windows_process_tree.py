@@ -81,8 +81,7 @@ class WindowsProcessTreeTests(unittest.TestCase):
             " except TimeoutError: timed_out = True\n"
             "elif api == 'process_guard':\n"
             " import process_guard\n"
-            " process_guard.TIMEOUT = 0.5\n"
-            " try: process_guard.run_codex([sys.executable, leader, *sys.argv[3:]], '')\n"
+            " try: process_guard.run_codex([sys.executable, leader, *sys.argv[3:]], '', timeout=0.5)\n"
             " except TimeoutError: timed_out = True\n"
             "else: raise SystemExit('unknown adapter')\n"
             "print(json.dumps({'timed_out': timed_out}), flush=True)\n",

@@ -106,13 +106,13 @@ class RuntimeProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'does not match'):
             self.invoke()
 
-    def test_candidate_output_and_lifetime_are_bounded(self):
+    def test_candidate_output_is_bounded_and_only_explicit_test_deadline_stops_it(self):
         self.validator.write_text("print('x' * 65537)")
         with self.assertRaises(ValueError):
             self.invoke()
         self.validator.write_text('import time; time.sleep(30)')
         def quick_command(argv, **kwargs):
-            self.assertEqual(kwargs['timeout'], product_contract.PROBE_TIMEOUT)
+            self.assertIsNone(kwargs['timeout'])
             self.assertEqual(kwargs['max_output'], 65536)
             return run(argv, '', **dict(kwargs, timeout=0.1))
         with self.assertRaises(TimeoutError):

@@ -349,7 +349,7 @@ def normalize_with_runtime(settings, python, config_file=None, *, previous=None)
         output = run(
             [python, "-c", NORMALIZE_SCRIPT],
             request,
-            timeout=10,
+            timeout=None,
             max_output=max(65536, len(request.encode('utf-8')) * 2),
             env=generation_env(config_file) if config_file is not None else {
                 key: value for key, value in os.environ.items() if key != "PYTHONPATH"

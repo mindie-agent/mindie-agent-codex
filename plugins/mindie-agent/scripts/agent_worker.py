@@ -66,7 +66,7 @@ class NativeSummaryModel:
                        "-c", "features.shell_tool=false", "-c", "features.multi_agent=false",
                        "-c", "features.unbounded_connection_retries=false", "-c", 'web_search="disabled"',
                        "--output-schema", str(schema), "--output-last-message", str(output), "--json", "-"]
-            run_codex(command, prompt, timeout=summarizer.SUMMARY_TIMEOUT, receipt=self.receipt)
+            run_codex(command, prompt, receipt=self.receipt, defer_cleanup=True)
             if not self.receipt["turn_completed"]:
                 raise NativeFailure("native execution did not report completion")
             try:
@@ -167,6 +167,7 @@ def main():
                 raise summarizer.SummaryInputError("summary request exceeds wire budget")
             value = run(json.loads(raw))
         sys.stdout.buffer.write((summarizer.canonical(value) + "\n").encode("utf-8"))
+        sys.stdout.buffer.flush()
         return 0
     except Exception as exc:
         category = _category(exc)

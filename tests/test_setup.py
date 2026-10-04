@@ -69,7 +69,7 @@ class SetupTests(unittest.TestCase):
                 "remote_dev.mcp.server",
             },
         )
-        self.assertGreater(setup_script.PROBE_TIMEOUT, 0)
+        self.assertFalse(hasattr(setup_script, 'PROBE_TIMEOUT'))
 
     def test_complete_runtime_writes_private_config_and_refuses_overwrite(self):
         for module in setup_script.PROBE_MODULES:

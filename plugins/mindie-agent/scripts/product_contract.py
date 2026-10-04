@@ -14,7 +14,6 @@ import re
 
 PRODUCT_SCHEMA = "mindie-product/1"
 RECEIPT_SCHEMA = "mindie-candidate-check/1"
-PROBE_TIMEOUT = 35
 HEX40 = re.compile(r"[0-9a-f]{40}\Z")
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
@@ -195,7 +194,7 @@ def probe(python, scripts, command, *, revision=None, verified_receipt=None):
         # Candidate source and installed runtime are checked again locally.
         validate_receipt(json.dumps(verified_receipt), expected)
         argv.extend(["--verified-receipt", json.dumps(verified_receipt, sort_keys=True)])
-    output = command(argv, timeout=PROBE_TIMEOUT, max_output=65536,
+    output = command(argv, timeout=None, max_output=65536,
                      on_failure=lambda output, code: failure_receipt(output, expected, code))
     receipt = validate_receipt(output, expected)
     if identity(source, revision) != expected:

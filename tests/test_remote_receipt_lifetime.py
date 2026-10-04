@@ -1,0 +1,100 @@
+"""Remote admission cost follows live work; elapsed age is not owner death."""
+from contextlib import closing
+import json
+import os
+from pathlib import Path
+import sqlite3
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
+sys.path.insert(0, str(SCRIPTS))
+import mcp_gate
+
+
+class ReceiptLifetimeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.objects = []
+        self.location = patch.object(mcp_gate, 'remote_state_dir', return_value=self.root)
+        self.location.start()
+
+    def tearDown(self):
+        for obj in self.objects:
+            obj._ownership.close()
+        self.location.stop()
+        self.temp.cleanup()
+
+    def receipts(self, session='task'):
+        obj = mcp_gate.RemoteReceipts(session)
+        self.objects.append(obj)
+        return obj
+
+    def test_claim_uses_only_running_index_despite_completed_history_growth(self):
+        costs = []
+        for count in (100, 10000):
+            obj = self.receipts('task-' + str(count))
+            with closing(obj._db()) as db, db:
+                db.executemany("INSERT INTO attempts(identity,started,status,owner) VALUES(?,0,'succeeded','')",
+                               ((str(i),) for i in range(count)))
+                for query in ("SELECT DISTINCT owner FROM attempts WHERE status='running'",
+                              "SELECT count(*) FROM attempts WHERE status='running'"):
+                    plan = db.execute('EXPLAIN QUERY PLAN ' + query).fetchall()
+                    self.assertIn('attempts_running_owner', str(plan))
+            original = obj._db
+            steps = [0]
+            def tracked():
+                db = original()
+                def tick():
+                    steps[0] += 1
+                    return 0
+                db.set_progress_handler(tick, 1)
+                return db
+            obj._db = tracked
+            self.assertTrue(obj.claim('new'))
+            costs.append(steps[0])
+            self.assertFalse(obj.claim('0'), 'old completed identity became reusable')
+            with closing(sqlite3.connect(obj.path)) as db:
+                self.assertEqual(db.execute('SELECT count(*) FROM attempts').fetchone()[0], count + 1)
+        self.assertLess(max(costs), 500, costs)
+        self.assertLessEqual(abs(costs[1] - costs[0]), 100, costs)
+
+    def test_old_live_attempt_survives_and_dead_owner_becomes_nonreplayable_unknown(self):
+        first = self.receipts()
+        self.assertTrue(first.claim('original'))
+        with closing(sqlite3.connect(first.path)) as db, db:
+            db.execute("UPDATE attempts SET started=1 WHERE identity='original'")
+        second = self.receipts()
+        self.assertTrue(second.claim('other'))
+        with closing(sqlite3.connect(first.path)) as db:
+            self.assertEqual(db.execute("SELECT status FROM attempts WHERE identity='original'").fetchone()[0], 'running')
+        first._ownership.close()  # The OS lease is released; no clock is advanced.
+        self.assertTrue(second.claim('after-owner-exit'))
+        with closing(sqlite3.connect(first.path)) as db:
+            self.assertEqual(db.execute("SELECT status FROM attempts WHERE identity='original'").fetchone()[0], 'unknown')
+        self.assertFalse(self.receipts().claim('original'))
+
+    def test_gate_constructs_one_receipt_owner_per_seen_task(self):
+        config = self.root / 'config.json'
+        config.write_text(json.dumps({'python': sys.executable, 'engine_config': '/absent/not-used'}))
+        factory = mcp_gate.RemoteReceipts
+        def request(identity):
+            return {'id': identity, 'params': {'name': 'remote_bash',
+                    'arguments': {'command': 'true', 'host': 'example.invalid'},
+                    '_meta': {'threadId': 'task', 'x-codex-turn-metadata': {
+                        'thread_id': 'task', 'session_id': 'task', 'turn_id': 'turn'}}}}
+        with patch.dict(os.environ, MINDIE_AGENT_CONFIG=str(config)), \
+             patch.object(mcp_gate, 'RemoteReceipts', wraps=factory) as constructor, \
+             patch.object(mcp_gate, 'run', return_value='{"content":[],"isError":false}'):
+            gate = mcp_gate.Gate('remote')
+            self.assertFalse(gate.call(request(1))['isError'])
+            self.assertFalse(gate.call(request(2))['isError'])
+            self.assertEqual(constructor.call_count, 1)
+            self.objects.extend(gate._remote_receipts.values())
+
+
+if __name__ == '__main__':
+    unittest.main()

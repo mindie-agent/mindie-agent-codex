@@ -118,9 +118,9 @@ class EntryBoundsTests(unittest.TestCase):
             self.assertLess(time.monotonic() - start, 2)
 
     def test_timeout_and_output_flood_are_bounded(self):
-        with patch.object(guard, "TIMEOUT", 0.2), self.assertRaises(TimeoutError):
+        with self.assertRaises(TimeoutError):
             guard.run_codex(
-                [sys.executable, "-c", "import time; time.sleep(10)"], "input"
+                [sys.executable, "-c", "import time; time.sleep(10)"], "input", timeout=0.2
             )
         with patch.object(guard, "MAX_OUTPUT", 4096), self.assertRaises(ValueError):
             guard.run_codex(

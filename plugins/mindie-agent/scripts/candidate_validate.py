@@ -52,16 +52,16 @@ def adapter_check(source):
     ):
         raise ValueError("plugin package exceeds 16 MiB")
     if (
-        "allow_implicit_invocation: false"
+        "allow_implicit_invocation: true"
         not in (plugin / "skills/mindie-agent/agents/openai.yaml").read_text(encoding='utf-8')
     ):
-        raise ValueError("implicit invocation is enabled")
+        raise ValueError("informational skill must be available on demand")
     hooks = read_json(plugin / "hooks/hooks.json")[0]["hooks"]
     if set(hooks) != {"Stop"} or len(hooks["Stop"]) != 1:
-        raise ValueError("only one bounded Stop hook is supported")
+        raise ValueError("only one Stop hook is supported")
     entries = hooks["Stop"][0]["hooks"]
-    if len(entries) != 1 or not 0 < entries[0]["timeout"] <= 5:
-        raise ValueError("invalid hook deadline")
+    if len(entries) != 1 or "timeout" in entries[0]:
+        raise ValueError("Stop must not impose an execution deadline")
     for name in (
         "session_gate.py",
         "mcp_gate.py",
@@ -80,6 +80,8 @@ def adapter_check(source):
         "auto_update.py",
         "update_launcher.py",
         "mcp_catalog.json",
+        "agent_diagnostics.py",
+        "runtime_launcher.py",
     ):
         if not (plugin / "scripts" / name).is_file():
             raise ValueError("missing bounded runtime entry: " + name)
@@ -126,13 +128,13 @@ def publication_contract(publication):
     with tempfile.TemporaryDirectory(prefix="mindie-publication-contract-") as directory:
         git = ["git", "-c", "core.hooksPath=" + os.devnull, "-C", directory]
         checked("publication_fetch", "fetch_failed", lambda: run(
-            git + ["init", "--bare", "--quiet"], "", timeout=3, env=env))
+            git + ["init", "--bare", "--quiet"], "", timeout=None, env=env))
         checked("publication_fetch", "fetch_failed", lambda: run(
             git + ["fetch", "--no-auto-maintenance", "--depth=1", "--no-tags",
                    "https://github.com/" + publication["repository"] + ".git",
-                   publication["verified_commit"]], "", timeout=15, env=env))
+                   publication["verified_commit"]], "", timeout=None, env=env))
         observed = checked("publication_fetch", "fetch_failed", lambda: run(
-            git + ["rev-parse", "FETCH_HEAD"], "", timeout=3, env=env)).strip()
+            git + ["rev-parse", "FETCH_HEAD"], "", timeout=None, env=env)).strip()
         if observed != publication["verified_commit"]:
             raise CheckFailure("publication_fetch", "revision_mismatch")
         try:

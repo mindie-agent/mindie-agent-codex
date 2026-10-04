@@ -9,6 +9,7 @@ bound task and a checked lease.
 """
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 import hashlib
 import json
 import os
@@ -18,15 +19,14 @@ import sqlite3
 import time
 import threading
 import uuid
+import weakref
 
 from bounded_process import run
 from diagnostic_support import attach as attach_diagnostic
 from diagnostic_support import failure as diagnostic_failure
 from session_gate import IDENTITY, Sessions, config_path, generation_env, runtime_scripts
-from update_lock import update_lock
+from update_lock import update_lock, file_lock
 
-KNOWLEDGE_TIMEOUT = 15
-REMOTE_TIMEOUT = 65
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
 KNOWLEDGE_MAX_OUTPUT = 1024 * 1024
 CATALOG = Path(__file__).with_name("mcp_catalog.json")
@@ -142,6 +142,27 @@ class RemoteReceipts:
 
     def __init__(self, session):
         self.path = remote_state_dir() / "gate" / (session + ".sqlite3")
+        self.owner = uuid.uuid4().hex
+        self._ownership = ExitStack()
+        self._owner_ready = False
+        weakref.finalize(self, self._ownership.close)
+
+    def _ensure_owner(self):
+        if not self._owner_ready:
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self._ownership.enter_context(file_lock(self.path.parent / (self.owner + ".owner.lock")))
+            self._owner_ready = True
+
+    def _owner_alive(self, owner):
+        if not owner:
+            return False
+        if owner == self.owner:
+            return self._owner_ready
+        try:
+            with file_lock(self.path.parent / (owner + ".owner.lock"), exclusive=True):
+                return False
+        except BlockingIOError:
+            return True
 
     def _db(self):
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -156,7 +177,12 @@ class RemoteReceipts:
                 # The retired permanent pause becomes a bounded automatic backoff.
                 db.execute("ALTER TABLE state ADD COLUMN next_check REAL NOT NULL DEFAULT 0")
                 db.execute("UPDATE state SET paused=0 WHERE id=1")
-            db.execute("CREATE TABLE IF NOT EXISTS attempts (identity TEXT PRIMARY KEY, started REAL NOT NULL, status TEXT NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS attempts (identity TEXT PRIMARY KEY, started REAL NOT NULL, status TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '')")
+            if "owner" not in {row[1] for row in db.execute("PRAGMA table_info(attempts)")}:
+                db.execute("ALTER TABLE attempts ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
+            # Admission scans only live attempts; durable completed identities
+            # remain indexed by their primary key without entering every call.
+            db.execute("CREATE INDEX IF NOT EXISTS attempts_running_owner ON attempts(owner) WHERE status='running'")
             db.commit()
             return db
         except BaseException:
@@ -170,13 +196,17 @@ class RemoteReceipts:
         return min(cls.BACKOFF_CAP, cls.BACKOFF_BASE * (2.0 ** min(max(0, failures - REMOTE_MAX_FAILURES), 6)))
 
     def claim(self, identity):
+        self._ensure_owner()
         db = self._db()
         try:
             with db:
                 db.execute("BEGIN IMMEDIATE")
                 # A killed gate leaves an uncertain, consumed receipt. It can
                 # contribute to the backoff but can never become dispatchable.
-                expired = db.execute("UPDATE attempts SET status='failed' WHERE status='running' AND started<?", (time.time() - REMOTE_TIMEOUT - 5,)).rowcount
+                expired = 0
+                for owner, in db.execute("SELECT DISTINCT owner FROM attempts WHERE status='running'").fetchall():
+                    if not self._owner_alive(owner):
+                        expired += db.execute("UPDATE attempts SET status='unknown' WHERE status='running' AND owner=?", (owner,)).rowcount
                 if expired:
                     db.execute("UPDATE state SET failures=failures+? WHERE id=1", (expired,))
                 failures, _, next_check = db.execute("SELECT failures, paused, next_check FROM state WHERE id=1").fetchone()
@@ -197,7 +227,7 @@ class RemoteReceipts:
                     return False
                 if db.execute("SELECT count(*) FROM attempts WHERE status='running'").fetchone()[0] >= 4:
                     raise ValueError("Remote task concurrency limit reached; no automatic retry")
-                db.execute("INSERT INTO attempts VALUES(?, ?, 'running')", (identity, time.time()))
+                db.execute("INSERT INTO attempts(identity,started,status,owner) VALUES(?, ?, 'running', ?)", (identity, time.time(), self.owner))
                 return True
         finally:
             db.close()
@@ -250,16 +280,16 @@ class Gate:
         self.sessions = Sessions() if surface == "knowledge" else None
         self.tools = json.loads(CATALOG.read_text(encoding='utf-8'))[surface]
         self.connection_id = uuid.uuid4().hex
+        self._remote_receipts = {}
 
     def call(self, request, cancel=None, *, timeout=None, cli_identity=None):
         if self.surface == "remote":
             # General remote path: no MindIE activation, lease, knowledge
             # service or capture state is consulted or created.
             return self._remote_call(request, cancel, timeout, cli_identity)
-        # Inactive discovery/calls must not create any local state.
-        # Domain CLI reuses this path: missing config, missing lease, and the
-        # bounded runtime all fail closed. There is no ungated development
-        # bypass around claim/finish or the 65s remote budget.
+        # Discovery does not create capture state. The native or trusted CLI
+        # boundary verifies task identity; ordinary reads need no capture lease.
+        # Runtime failures remain visible without an implicit execution TTL.
         try:
             if not config_path().is_file():
                 raise ValueError(
@@ -267,14 +297,11 @@ class Gate:
                 )
             if cli_identity is None:
                 session = native_identity(request)
-                # Exactly this native task's lease; identity never comes from
-                # arguments, and never from the most recently active lease.
-                self.sessions.check(session)
+                # Identity never comes from arguments or another task's lease.
             else:
                 # Domain CLI path: no host metadata exists outside MCP, so the
-                # explicit env-supplied activation is checked directly.
+                # explicit environment-supplied identity is checked directly.
                 session, token = cli_identity
-                self.sessions.check(session, token)
             with update_lock(self.sessions.config):
                 return self._call(request, session, cancel, timeout=timeout)
         except Exception as exc:
@@ -310,6 +337,7 @@ class Gate:
         stage = "admission"
         started = time.monotonic()
         name = None
+        result = None
         try:
             if cli_identity is None:
                 session = native_identity(request)
@@ -321,7 +349,10 @@ class Gate:
                 if not isinstance(session, str) or not IDENTITY.fullmatch(session):
                     raise ValueError("Valid native task identity required")
             name, args = self._tool_args(request)
-            receipts = RemoteReceipts(session)
+            receipts = self._remote_receipts.get(session)
+            if receipts is None:
+                receipts = RemoteReceipts(session)
+                self._remote_receipts[session] = receipts
             if cli_identity is None:
                 turn = request["params"]["_meta"]["x-codex-turn-metadata"].get("turn_id")
                 if not isinstance(turn, str) or not IDENTITY.fullmatch(turn):
@@ -348,9 +379,7 @@ class Gate:
                 arguments=args,
                 remote_session_id=session,
             )
-            bound = REMOTE_TIMEOUT
-            if timeout is not None:
-                bound = min(max(0.01, float(timeout)), bound)
+            bound = timeout
             with update_lock(config_path()):
                 config = _adapter_config()
                 stage = "helper_run"
@@ -397,8 +426,13 @@ class Gate:
             if admitted and receipts is not None:
                 try:
                     receipts.finish(identity, succeeded)
-                except Exception:
-                    pass
+                except Exception as accounting_error:
+                    if isinstance(result, dict):
+                        result["accounting"] = dict(status="failed", error_type=type(accounting_error).__name__,
+                                                    operation_outcome="preserved", automatic_retry=False)
+                        result["isError"] = True
+                        result["content"].append(dict(type="text", text=
+                            "Remote result preserved; local outcome accounting failed. Do not repeat the operation."))
 
     def _call(self, request, session, cancel=None, timeout=None):
         token = None
@@ -407,25 +441,15 @@ class Gate:
         name = None
         try:
             name, args = self._tool_args(request)
-            lease = self.sessions.check(session)
-            token = lease["token"]
-            if not self.sessions.claim(
-                session, "mcp", self.connection_id + ":" + self._request_identity(request), token
-            ):
-                raise ValueError("Duplicate MCP request; not executed again")
             config = json.loads(self.sessions.config.read_text(encoding='utf-8'))
             payload = dict(
                 surface=self.surface,
                 name=name,
                 arguments=args,
                 mindie_session_id=session,
-                mindie_activation=token,
+                native_session_verified=True,
             )
-            bound = (
-                KNOWLEDGE_TIMEOUT if self.surface == "knowledge" else REMOTE_TIMEOUT
-            )
-            if timeout is not None:
-                bound = min(max(0.01, float(timeout)), bound)
+            bound = timeout
             try:
                 # Exactly one committed generation: the recorded interpreter
                 # plus the recorded scripts directory, read in one config load
@@ -446,7 +470,7 @@ class Gate:
             except Exception as exc:
                 # A timeout or refused connection is availability, not a
                 # paused grant. Protocol and configuration failures still count.
-                if not (
+                if token is not None and not (
                     isinstance(exc, (TimeoutError, ConnectionError))
                     or type(exc).__name__ in {"URLError", "TimeoutExpired"}
                 ):
@@ -488,7 +512,7 @@ class Gate:
 def serve(surface):
     gate = Gate(surface)
     output_lock, pending_lock = threading.Lock(), threading.Lock()
-    pending, seen = {}, set()
+    pending = {}
     capacity = threading.BoundedSemaphore(4)
     executor = ThreadPoolExecutor(max_workers=4)
 
@@ -502,7 +526,10 @@ def serve(surface):
 
     def execute(message, cancel):
         try:
-            respond(message["id"], gate.call(message, cancel))
+            from diagnostic_support import attach_pending, acknowledge_pending
+            result = attach_pending(gate.call(message, cancel))
+            respond(message["id"], result)
+            acknowledge_pending(result)
         finally:
             with pending_lock:
                 pending.pop(message["id"], None)
@@ -548,7 +575,7 @@ def serve(surface):
                 elif method == "tools/call":
                     with pending_lock:
                         if (
-                            (identifier in seen if surface != "remote" else identifier in pending)
+                            identifier in pending
                             or not capacity.acquire(blocking=False)
                         ):
                             respond(
@@ -558,8 +585,6 @@ def serve(surface):
                                 ),
                             )
                             continue
-                        if surface != "remote":
-                            seen.add(identifier)
                         event = threading.Event()
                         pending[identifier] = event
                     executor.submit(execute, message, event)

@@ -34,7 +34,7 @@ def stop(engine):
     if urlparse(connection["url"]).hostname not in {"127.0.0.1", "localhost", "::1"}:
         raise RuntimeError("service endpoint is not loopback")
     try:
-        result = rpc(connection, "stop_if_idle", timeout=1)
+        result = rpc(connection, "stop_if_idle")
     except OSError as exc:
         if refused(exc) and lock_held(consumer) is False:
             return {"idle": True, "service": "absent"}
@@ -59,8 +59,8 @@ def restore(engine):
     path = config.get("admission_path")
     if not path or not Admission(path).leases():
         return {"status": "not-needed", "reason": "no-valid-lease"}
-    connection = ensure_service(engine)  # core: one spawn, 5 s, three probes
-    status = rpc(connection, "status", timeout=.5)
+    connection = ensure_service(engine)
+    status = rpc(connection, "status")
     if status.get("admission_frozen") is not False:
         raise RuntimeError("selected service remains frozen; no restart")
     return {"status": "restored"}

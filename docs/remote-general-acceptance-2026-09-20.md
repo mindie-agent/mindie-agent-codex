@@ -1,5 +1,9 @@
 # General remote-dev boundary and actual macOS acceptance
 
+Historical evidence for the revisions named below. Current task admission,
+execution lifetime and diagnostic delivery are described in the [README](../README.md);
+older activation requirements and elapsed-time limits here are not current policy.
+
 Candidate adapter: `27edad31975b1f5b0f3d785bfd666157177cf5d4`.
 Native installed version: `0.1.0+codex.20260920081831793374`.
 Codex native discovery confirmed this version and the unchanged Stop command as trusted.

@@ -1,10 +1,11 @@
-"""One attempt with an absolute deadline and bounded output; own the child tree.
+"""One owned attempt with bounded output and an optional caller deadline.
 
 POSIX reads pipes with a selector and kills the owned process group. Windows
 uses a suspended spawn and owned Job before child code can create descendants.
 """
 
 import os
+import math
 import re
 import subprocess
 import sys
@@ -23,6 +24,7 @@ if POSIX:
 
 def _spawn(command, stdin, env, *, allow_service=False):
     if POSIX:
+        from update_lock import generation_descriptors
         return subprocess.Popen(
             command,
             stdin=stdin,
@@ -30,6 +32,7 @@ def _spawn(command, stdin, env, *, allow_service=False):
             stderr=subprocess.PIPE,
             start_new_session=True,
             env=env,
+            pass_fds=generation_descriptors(),
         )
     # Windows assigns the process to its Job before resuming user code.
     return windows_process.spawn(
@@ -208,7 +211,7 @@ def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), t
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ, "out")
     selector.register(process.stderr, selectors.EVENT_READ, "err")
-    deadline = time.monotonic() + timeout
+    deadline = None if timeout is None else time.monotonic() + timeout
     output = bytearray()
     errors = bytearray() if transport else None
     cap = _Cap(max_output)
@@ -222,13 +225,18 @@ def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), t
         return err
 
     try:
-        while selector.get_map():
+        while selector.get_map() or process.poll() is None:
             if cancel is not None and cancel.is_set():
                 raise RuntimeError("MindIE request cancelled; not retried")
-            if time.monotonic() >= deadline:
+            if deadline is not None and time.monotonic() >= deadline:
                 raise timeout_error()
+            if process.poll() is not None:
+                # The owner exited: inherited pipes are not evidence of a
+                # running operation. Close its remaining descendants, then
+                # drain the already-produced output to EOF.
+                _kill_tree(process)
             for key, _ in selector.select(
-                min(0.05, max(0, deadline - time.monotonic()))
+                0.05 if deadline is None else min(0.05, max(0, deadline - time.monotonic()))
             ):
                 chunk = os.read(key.fileobj.fileno(), 8192)
                 if not chunk:
@@ -239,7 +247,9 @@ def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), t
                     output.extend(chunk)
                 elif errors is not None:
                     errors.extend(chunk)
-        process.wait(timeout=max(0.01, deadline - time.monotonic()))
+        # Both EOF and process exit are established. EOF alone must never
+        # hide cancellation in an uninterruptible wait.
+        process.wait()
         if process.returncode not in allowed_returncodes:
             # A protocol owner may map bounded stdout to a safe error. Raw
             # stderr never leaves this runner, and a nonzero exit still raises.
@@ -261,7 +271,7 @@ def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), t
 
 def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,), transport=False, on_failure=None):
     # Windows (unverified on real hardware): reader threads replace selectors.
-    deadline = time.monotonic() + timeout
+    deadline = None if timeout is None else time.monotonic() + timeout
     output = bytearray()
     errors = bytearray() if transport else None
     cap = _Cap(max_output)
@@ -278,7 +288,7 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
                     cap.add(chunk)
                     if dest is not None:
                         dest.extend(chunk)
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
             failure.append(exc)
 
     threads = [
@@ -288,22 +298,26 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
     for thread in threads:
         thread.start()
     try:
-        while any(thread.is_alive() for thread in threads):
+        while any(thread.is_alive() for thread in threads) or process.poll() is None:
             if cancel is not None and cancel.is_set():
                 raise RuntimeError("MindIE request cancelled; not retried")
-            if time.monotonic() >= deadline:
+            if deadline is not None and time.monotonic() >= deadline:
                 err = TimeoutError(
                     "MindIE request deadline exceeded; outcome may be unknown; not retried"
                 )
                 if transport:
                     _attach_transport(err, output, errors, timed_out=True)
                 raise err
+            if process.poll() is not None:
+                _kill_tree(process)
             if failure:
                 raise failure[0]
             time.sleep(0.02)
         if failure:
             raise failure[0]
-        process.wait(timeout=max(0.01, deadline - time.monotonic()))
+        # Both EOF and process exit are established. EOF alone must never
+        # hide cancellation in an uninterruptible wait.
+        process.wait()
         if process.returncode not in allowed_returncodes:
             # A protocol owner may map bounded stdout to a safe error. Raw
             # stderr never leaves this runner, and a nonzero exit still raises.
@@ -331,7 +345,10 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
             process.stderr.close()
 
 
-def run(command, data, *, timeout, max_output=1024 * 1024, cancel=None, env=None, allowed_returncodes=(0,), transport=False, allow_service=False, on_failure=None):
+def run(command, data, *, timeout=None, max_output=1024 * 1024, cancel=None, env=None, allowed_returncodes=(0,), transport=False, allow_service=False, on_failure=None):
+    if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                                or not math.isfinite(timeout) or timeout <= 0):
+        raise ValueError("an explicit execution timeout must be a positive finite number")
     if cancel is not None and cancel.is_set():
         raise RuntimeError("MindIE request cancelled before execution")
     with tempfile.TemporaryFile() as stream:

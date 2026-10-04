@@ -28,13 +28,12 @@ if missing_packages:
     missing.append("missing packages: " + ", ".join(missing_packages))
 else:
     try:
-        from mindie_knowledge.loop.cli import STARTUP_TIMEOUT, MAX_STARTUP_PROBES, load_transcript_adapter
+        from mindie_knowledge.loop.cli import ensure_service, load_transcript_adapter
         from mindie_knowledge.loop.activation import Admission
-        from mindie_knowledge.materials.summarizer import SummaryLedger, SUMMARY_TIMEOUT, MAX_PROMPT_BYTES, MAX_RESPONSE_BYTES, LANGMEM_VERSION
+        from mindie_knowledge.materials.summarizer import SummaryLedger, MAX_PROMPT_BYTES, MAX_RESPONSE_BYTES, LANGMEM_VERSION
         from mindie_knowledge.materials.reme_index import ReMeIndex
         from langmem.short_term import summarize_messages
-        from mindie_knowledge.loop.transcript_capture import SUMMARY_SECONDS
-        from mindie_knowledge.loop.process import spawn_service
+        from mindie_knowledge.loop.process import bounded_run, spawn_service
         from mindie_knowledge.loop.engine import Engine
         from mindie_knowledge.loop.store import Store
         from mindie_knowledge.publication_contract import read_git_contract, parse_contract
@@ -57,15 +56,14 @@ else:
             missing.append("load_transcript_adapter is unavailable")
         if not callable(import_transcript):
             missing.append("explicit history import is unavailable")
-        positive_bounds = (("SUMMARY_TIMEOUT", SUMMARY_TIMEOUT), ("SUMMARY_SECONDS", SUMMARY_SECONDS),
-                           ("MAX_PROMPT_BYTES", MAX_PROMPT_BYTES), ("MAX_RESPONSE_BYTES", MAX_RESPONSE_BYTES))
+        positive_bounds = (("MAX_PROMPT_BYTES", MAX_PROMPT_BYTES), ("MAX_RESPONSE_BYTES", MAX_RESPONSE_BYTES))
         for name, value in positive_bounds:
             if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
                 missing.append(name + " must be finite and positive")
         valid_bounds = all(type(value) in (int, float) and math.isfinite(value) and value > 0
                            for _, value in positive_bounds)
-        if valid_bounds and not SUMMARY_TIMEOUT < SUMMARY_SECONDS:
-            missing.append("summary invocation lifetime bounds are inconsistent")
+        if inspect.signature(bounded_run).parameters["timeout"].default is not None:
+            missing.append("summary invocation has an implicit execution deadline")
         if not callable(ReMeIndex) or not callable(summarize_messages):
             missing.append("material indexing dependencies are unavailable")
         if importlib.metadata.version("langmem") != LANGMEM_VERSION:
@@ -90,16 +88,13 @@ else:
             missing.append("community receipt API is incomplete")
         if "path" not in inspect.signature(Admission.__init__).parameters:
             missing.append("Admission does not take an explicit admission path")
-        methods = ("activate", "inspect", "check", "resolve", "claim", "finish", "deactivate", "capture_lease", "active_lease", "scope_root", "allows_hash", "leases")
+        methods = ("activate", "associate", "inspect", "check", "resolve", "claim", "finish", "deactivate", "capture_lease", "active_lease", "scope_root", "allows_hash", "leases")
         if not all(callable(getattr(Admission, name, None)) for name in methods):
             missing.append("Admission API is incomplete")
         if "admission" not in inspect.signature(Service).parameters:
             missing.append("Service does not accept admission")
-        for name, value in (("STARTUP_TIMEOUT", STARTUP_TIMEOUT), ("MAX_STARTUP_PROBES", MAX_STARTUP_PROBES)):
-            if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
-                missing.append(name + " must be finite and positive")
-        if type(MAX_STARTUP_PROBES) is not int:
-            missing.append("MAX_STARTUP_PROBES must be an integer")
+        if not callable(ensure_service):
+            missing.append("service lifecycle is unavailable")
         try:
             module = load_transcript_adapter({{"transcript_adapter": {adapter!r}}})
             if module is None or not all(hasattr(module, name) for name in ("FileIdentity", "identify", "read_material", "history_source")):

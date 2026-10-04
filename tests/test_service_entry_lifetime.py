@@ -42,8 +42,8 @@ class ServiceEntryLifetimeTests(SharingFixture):
         self.assertTrue(rpc(connect(engine), "status", timeout=1)["worker_alive"])
         stop_owned_knowledge_service(self.engine)
         from datetime import datetime, timezone
-        transcript = self.root / "public.jsonl"
-        transcript.write_text(json.dumps(dict(type="session_meta", payload=dict(id="manual-A"))) + "\n" +
+        transcript = self.native_transcript("public.jsonl")
+        transcript.write_text(transcript.read_text() +
             json.dumps(dict(type="response_item", timestamp=datetime.now(timezone.utc).isoformat(),
                 payload=dict(type="message", role="assistant", phase="final_answer",
                     content=[dict(type="output_text", text="Synthetic lifetime test: public body persisted.")]))) + "\n", encoding="utf-8")

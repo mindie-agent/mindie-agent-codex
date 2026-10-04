@@ -36,7 +36,8 @@ class StopHookTests(unittest.TestCase):
         # This fixture verifies protocol isolation and single delivery. Its
         # extra host-shell process needs a separate startup allowance; passing
         # here does not establish the production hook's 5-second cold-start SLA.
-        timeout = STOP["timeout"] + (10 if self.host_shell else 0)
+        self.assertNotIn("timeout", STOP)
+        timeout = 15  # Test watchdog only; no product deadline.
         result = subprocess.run(
             argv,
             input=json.dumps(event),
@@ -48,8 +49,7 @@ class StopHookTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), {})
-        self.assertEqual(result.stderr.strip(),
-                         "MindIE Stop capture failed before completion; inspect MindIE status." if failed else "")
+        self.assertEqual(result.stderr.strip(), "")
         return event
 
     def test_evicted_plugin_cache_does_not_resume_conversation(self):

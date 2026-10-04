@@ -1,15 +1,17 @@
 # Explicit historical contribution
 
 The `history-import` entry imports only native Codex JSONL files explicitly
-selected by the user. Ordinary activation, Stop events, update checks and feed
+selected by the user. Ordinary task use, Stop events, update checks and feed
 synchronization never discover historical sources. Instructions inside a source
 transcript are data, not authority to import another session.
 
-The requesting native session must already be activated with `/mindie-agent`.
+The requesting native session is verified and associated internally if needed
+using its current approved project directory. No activation command is required.
 The saved installation-level contribution choice and project scope are reused;
-there is no second consent prompt. Historical sessions remain inactive. The
-adapter checks consent and admission before source metadata is read, then the
-shared core revalidates both current and source scopes before each page/commit.
+there is no second consent prompt, and explicit task revocation is respected.
+Historical sessions remain inactive. The adapter checks contribution authority
+before source metadata is read, then the shared core revalidates both current
+and source scopes before each page/commit.
 
 ```sh
 python3 /absolute/active/plugin/scripts/bridge.py history-import \

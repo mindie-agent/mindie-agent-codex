@@ -249,6 +249,32 @@ def history_source(path):
                                       hashlib.sha256(anchor).hexdigest()))
 
 
+def capture_source(path, session_id):
+    """Verify only the current event's native profile artifact and its header."""
+    profile = Path(os.environ.get('CODEX_HOME') or Path.home() / '.codex').resolve()
+    selected = Path(path).resolve(strict=True)
+    if not any(selected.is_relative_to(profile / name) for name in ('sessions', 'archived_sessions')):
+        raise ValueError('capture transcript is outside the active native profile')
+    fd = os.open(selected, os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NONBLOCK', 0))
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not statmod.S_ISREG(info.st_mode):
+            raise ValueError('capture source must be a regular transcript file')
+        header = stream.readline(1024 * 1024 + 1)
+    if len(header) > 1024 * 1024 or not header.endswith(b'\n'):
+        raise ValueError('native task header is missing or exceeds its byte bound')
+    meta = json.loads(header)
+    if not isinstance(meta, dict) or _session_of(meta) != session_id:
+        raise ValueError('capture transcript belongs to another task')
+    payload = meta['payload']
+    scope = payload.get('cwd')
+    created = _timestamp({'timestamp': payload.get('timestamp')}) or _timestamp(meta)
+    if not isinstance(scope, str) or not Path(scope).is_absolute() or created is None:
+        raise ValueError('native task scope or creation boundary is unavailable')
+    return dict(session_id=session_id, project_root=str(Path(scope).resolve()),
+                created_at=created, transcript_path=str(selected))
+
+
 def read_material(path, start, *, session_id=None, not_before=None, expected=None,
                   max_scan_bytes=16777216, max_seconds=2.0, max_text_bytes=MAX_TEXT,
                   scan_until=None):

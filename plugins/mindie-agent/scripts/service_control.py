@@ -148,8 +148,8 @@ def status():
         )
     else:
         result["next"] = (
-            "Run scripts/bridge.py activate in this native task after the "
-            "user has a sharing choice; native CODEX_THREAD_ID is required."
+            "The next eligible native Stop associates this task automatically "
+            "using the saved contribution choice and project scope."
         )
     return result
 
@@ -159,7 +159,7 @@ def shutdown():
     from mindie_knowledge.loop.transport import rpc
 
     config = json.loads(config_path().read_text(encoding='utf-8'))
-    return rpc(connect(config_at(config["engine_config"])), "stop", timeout=2)
+    return rpc(connect(config_at(config["engine_config"])), "stop")
 
 
 if __name__ == "__main__":

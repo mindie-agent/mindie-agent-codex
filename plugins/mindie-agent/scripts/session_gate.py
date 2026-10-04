@@ -127,7 +127,7 @@ class Inactive(ValueError):
 
 
 class Sessions:
-    def __init__(self, path=None, *, op_timeout=5.0):
+    def __init__(self, path=None, *, op_timeout=None):
         self.config = Path(path or config_path())
         self.op_timeout = op_timeout
 
@@ -218,7 +218,7 @@ class Sessions:
         """
         if not isinstance(token, str) or not token:
             raise Inactive(
-                "Manual MindIE session activation required; continue without the plugin"
+                "MindIE operation requires its internal task-binding token"
             )
         return self._op("resolve", {"token": token})
 

@@ -59,10 +59,12 @@ def call(payload):
     # The internal activation token resolves the owning lease again inside the
     # runtime; it must agree with the gate-bound session, and no
     # caller-supplied identity is ever trusted on its own.
-    token = payload["mindie_activation"]
-    lease = resolve_lease(config, token)
-    session = lease["session"]
-    if session != payload.get("mindie_session_id"):
+    token = payload.get("mindie_activation")
+    lease = resolve_lease(config, token) if token else None
+    session = payload.get("mindie_session_id")
+    if (not isinstance(session, str) or not IDENTITY.fullmatch(session)
+            or lease is not None and lease['session'] != session
+            or lease is None and payload.get('native_session_verified') is not True):
         raise ValueError("MindIE runtime identity mismatch")
     args, name = payload["arguments"], payload["name"]
     if payload["surface"] != "knowledge":
@@ -86,7 +88,7 @@ def call(payload):
     if name == "knowledge_attach":
         # Admission is owned by the existing lease; startup needs no
         # second attach protocol or duplicate session registry.
-        value = rpc(connection, "status", timeout=5)
+        value = rpc(connection, "status")
         return dict(
             content=[dict(type="text", text=json.dumps(value, ensure_ascii=False))],
             structuredContent=value,
@@ -100,8 +102,7 @@ def call(payload):
             value = rpc(
                 connection,
                 name.removeprefix("knowledge_"),
-                dict(args, _session_id=session, _activation=token),
-                timeout=5,
+                dict(args, _session_id=session, _activation=token, _session_verified=True),
             )
             result = dict(
                 content=[dict(type="text", text=json.dumps(value, ensure_ascii=False))],
@@ -138,7 +139,7 @@ def call(payload):
         pending = sys.exc_info()[1]
         if pending is not None and _transient_unavailable(pending):
             neutral = True
-        if not neutral:
+        if token is not None and not neutral:
             try:
                 finish_outcome(config, session, token, succeeded)
             except Exception as exc:
@@ -178,9 +179,6 @@ def remote(payload):
     from remote_dev.mcp.server import tool_text
 
     args = dict(payload["arguments"])
-    args["connect_timeout_ms"] = min(args.get("connect_timeout_ms", 10000), 10000)
-    if "yield_time_ms" in args:
-        args["yield_time_ms"] = min(args["yield_time_ms"], 30000)
     try:
         value = call_tool(name, args)
         result = value.get("result", {}) if isinstance(value, dict) else {}

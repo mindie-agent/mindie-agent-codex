@@ -340,6 +340,13 @@ class LaneCase(unittest.TestCase):
         )
         return result
 
+    def session_meta(self, session, **payload):
+        return _session_meta(session, cwd=str(self.work),
+                             **dict({"timestamp": _iso_before(time.time(), 1)}, **payload))
+
+    def native_transcript(self, name):
+        return self.codex_home / 'sessions' / name
+
     def event(self, session, transcript, turn="turn-1"):
         return {
             "hook_event_name": "Stop",
@@ -427,8 +434,8 @@ class ConsentGateTests(LaneCase):
         self.write_community(enabled=True)
         self.open_store()
         self.activate("task-main")
-        transcript = self.root / "corrupt-body.jsonl"
-        _jsonl(transcript, [_session_meta("task-main"),
+        transcript = self.native_transcript("corrupt-body.jsonl")
+        _jsonl(transcript, [self.session_meta("task-main"),
             _user("Public before corruption", self.after_boundary("task-main", 30))])
         with transcript.open('ab') as stream:
             stream.write(b'{"type":broken}\n')
@@ -453,9 +460,9 @@ class ConsentGateTests(LaneCase):
         self.write_community(enabled=True)
         self.open_store()
         self.activate("task-main")
-        transcript = self.root / "public-body.jsonl"
+        transcript = self.native_transcript("public-body.jsonl")
         stamp = self.after_boundary("task-main", 30)
-        records = [_session_meta("task-main"), _user("Public request marker", stamp)]
+        records = [self.session_meta("task-main"), _user("Public request marker", stamp)]
         for channel, text in (("analysis", "hidden-only-marker"), ("commentary", "Public progress marker"), ("final_answer", "Public result marker")):
             records.append(dict(type="response_item", timestamp=stamp, payload=dict(type="message", role="assistant", phase=channel, content=[dict(type="output_text", text=text)])))
         records.append(dict(type="response_item", timestamp=stamp, payload=dict(type="function_call_output", output="tool-only-marker")))
@@ -505,7 +512,7 @@ class ConsentGateTests(LaneCase):
                 self.activate(thread)
                 transcript = self.root / f"{name}.jsonl"
                 _jsonl(transcript, [
-                    _session_meta(thread),
+                    self.session_meta(thread),
                     _user(SENTINEL, stamp=self.after_boundary(thread, 30)),
                 ])
                 result = self.stop(
@@ -539,9 +546,9 @@ class ConsentGateTests(LaneCase):
         self.write_community(enabled=True)
         self.open_store()
         self.activate("task-main")
-        transcript = self.root / "contribute.jsonl"
+        transcript = self.native_transcript("contribute.jsonl")
         _jsonl(transcript, [
-            _session_meta("task-main"),
+            self.session_meta("task-main"),
             _user(SENTINEL, stamp=self.after_boundary("task-main", 30)),
         ])
         first = self.stop(self.event("task-main", transcript))
@@ -571,9 +578,9 @@ class ConsentGateTests(LaneCase):
         self.open_store()
         self.activate("parent-task")
         self.activate("child-task")
-        transcript = self.root / "parent-secret.jsonl"
+        transcript = self.native_transcript("parent-secret.jsonl")
         _jsonl(transcript, [
-            _session_meta("parent-task"),
+            self.session_meta("parent-task"),
             _user(PARENT_SECRET, stamp=self.after_boundary("parent-task", 30)),
         ])
         result = self.stop(
@@ -599,8 +606,8 @@ class ConsentGateTests(LaneCase):
         self.activate("child-task")
         # Parent text is after admission and before the fork. Exclusion is the
         # fork cut, not the admission cut. The admission cut is its own test.
-        transcript = self.root / "fork.jsonl"
-        head = _session_meta(
+        transcript = self.native_transcript("fork.jsonl")
+        head = self.session_meta(
             "child-task",
             forked_from_id="parent-task",
             timestamp=self.after_boundary("child-task", 20),
@@ -625,9 +632,9 @@ class ConsentGateTests(LaneCase):
         self.write_community(enabled=True)
         self.open_store()
         self.activate("task-main")
-        transcript = self.root / "before-admission.jsonl"
+        transcript = self.native_transcript("before-admission.jsonl")
         _jsonl(transcript, [
-            _session_meta("task-main"),
+            self.session_meta("task-main"),
             _user(PRE_ADMISSION, stamp=self.before_boundary("task-main", 60)),
         ])
         result = self.stop(self.event("task-main", transcript))

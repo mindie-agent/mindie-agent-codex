@@ -35,7 +35,6 @@ import sharing
 SCRIPTS = Path(__file__).parent.absolute()
 
 # Setup and updater use the same material-index and runtime API contract.
-PROBE_TIMEOUT = product_contract.PROBE_TIMEOUT
 
 
 def probe_runtime(python):
