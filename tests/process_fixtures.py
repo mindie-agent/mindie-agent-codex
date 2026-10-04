@@ -37,16 +37,21 @@ def public_engine_config(root, domain="test", **extra):
 def stop_owned_knowledge_service(engine_config, *, timeout=8):
     """Request shutdown through the exact test engine endpoint and wait for it.
 
-    The shared runtime owns the service process. Tests ask its authenticated
-    adapter handoff to stop that engine instead of scanning or killing other
-    processes by command text.
+    The shared runtime owns the service process. This fixture owns the whole
+    isolated engine, so it requests explicit cancellation, including queued
+    work. An updater's stop-if-idle request deliberately refuses that work.
     """
+    from urllib.parse import urlparse
+    from mindie_knowledge.loop.cli import config_at, connect, rpc
+    from mindie_knowledge.loop.locks import lock_held
+
     engine_config = Path(engine_config)
     # A cold Stop returns before its detached starter publishes the service.
     # Wait for that exact test's starter to finish before asking the endpoint
     # to stop; an absent endpoint while startup is pending is not cleanup.
-    config = json.loads(engine_config.read_text(encoding="utf-8"))
-    wake_path = Path(config["root"]) / config["domain"] / "wake.json"
+    config = config_at(engine_config)
+    domain = Path(config["root"]) / config["domain"]
+    wake_path = domain / "wake.json"
     try:
         wake_pid = json.loads(wake_path.read_text(encoding="utf-8")).get("wake_pid")
     except FileNotFoundError:
@@ -56,21 +61,25 @@ def stop_owned_knowledge_service(engine_config, *, timeout=8):
         if time.monotonic() >= deadline:
             raise RuntimeError("owned test startup has not completed")
         time.sleep(.05)
+    consumer = domain / "consumer.lock"
+    if not consumer.exists() or lock_held(consumer) is False:
+        return
+    connection = connect(config)
+    if urlparse(connection["url"]).hostname not in {"127.0.0.1", "localhost", "::1"}:
+        raise RuntimeError("owned test service endpoint is not loopback")
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise RuntimeError("owned test startup exhausted the cleanup watchdog")
+    receipt = rpc(connection, "stop", timeout=remaining)
+    if receipt != {"status": "stopping"}:
+        raise RuntimeError("owned test service returned an invalid stop acknowledgement")
     while time.monotonic() < deadline:
-        result = subprocess.run(
-            [sys.executable, str(SCRIPTS / "service_handoff.py"), "stop", str(engine_config)],
-            capture_output=True, text=True, timeout=timeout, check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        if result.returncode == 0:
-            receipt = json.loads(result.stdout)
-            if receipt.get("idle") is True and receipt.get("service") in {"stopped", "absent"}:
-                return
-            if receipt.get("service") == "busy":
-                time.sleep(.1)
-                continue
-        raise RuntimeError("owned test service did not stop: " + (result.stdout + result.stderr).strip()[:500])
-    raise RuntimeError("owned test service remained busy; cleanup is not complete")
+        # The service owns this lock until listener and Store.close complete;
+        # the RPC acknowledgement alone does not permit deleting SQLite files.
+        if lock_held(consumer) is False:
+            return
+        time.sleep(min(.05, max(0, deadline - time.monotonic())))
+    raise RuntimeError("owned test service exit unconfirmed; cleanup is not complete")
 
 
 def _process_running(pid):

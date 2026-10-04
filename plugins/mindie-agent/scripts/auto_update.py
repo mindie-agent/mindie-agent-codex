@@ -22,6 +22,7 @@ import re
 import shlex
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -61,6 +62,32 @@ _STATIC_FAILURE = {
 
 class Incompatible(ValueError):
     pass
+
+
+def remove_owned_tree(path):
+    """Remove a verified updater tree, including Windows read-only Git objects.
+
+    This is only called after the operation establishes tree ownership and
+    generation reachability. Sharing violations and other access failures
+    remain errors; only a read-only regular file gets one corrected unlink.
+    """
+    def clear_readonly(function, failed_path, exc_info):
+        error = exc_info[1]
+        if not isinstance(error, PermissionError) or getattr(error, "winerror", None) != 5:
+            raise error
+        try:
+            mode = os.lstat(failed_path).st_mode
+            if not stat.S_ISREG(mode) or mode & stat.S_IWRITE:
+                raise error
+            os.chmod(failed_path, mode | stat.S_IWRITE)
+            function(failed_path)
+        except OSError as cleanup_error:
+            if cleanup_error is not error:
+                error.add_note("Read-only file cleanup also failed: " + type(cleanup_error).__name__)
+                raise error from cleanup_error
+            raise
+    # onerror also supports the documented Python 3.11 runtime baseline.
+    shutil.rmtree(path, onerror=clear_readonly)
 
 
 class InstallRollbackError(RuntimeError):
@@ -514,7 +541,7 @@ class Updater:
             marker = read(generation / "ownership.json", {})
             if marker != {"schema": "mindie-runtime-generation/2", "revision": sha}:
                 raise Incompatible("incomplete generation has no verified ownership record")
-            shutil.rmtree(generation)  # Only our uncommitted, incomplete staging area.
+            remove_owned_tree(generation)  # Only our uncommitted, incomplete staging area.
         source = generation / "source"
         source.mkdir(parents=True)
         atomic(generation / "ownership.json", {"schema": "mindie-runtime-generation/2", "revision": sha})
@@ -1234,7 +1261,7 @@ class Updater:
                         continue
                     try:
                         with file_lock(locks / (generation.name + ".lock"), exclusive=True):
-                            shutil.rmtree(generation)
+                            remove_owned_tree(generation)
                             result["removed"].append(generation.name)
                         (locks / (generation.name + ".lock")).unlink(missing_ok=True)
                     except BlockingIOError:
@@ -1242,7 +1269,7 @@ class Updater:
                 # These are updater-made duplicates, not host-managed caches.
                 backup = self.root / "retained-caches"
                 if backup.exists() and not backup.is_symlink():
-                    shutil.rmtree(backup)
+                    remove_owned_tree(backup)
                 attempts = state.get("attempts")
                 if isinstance(attempts, dict):
                     protected = set(result["kept"]) | set(result["untracked"]) | keep

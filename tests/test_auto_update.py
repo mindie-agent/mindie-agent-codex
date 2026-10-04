@@ -7,6 +7,7 @@ from contextlib import closing
 from pathlib import Path
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -283,6 +284,7 @@ class AutoUpdateTests(unittest.TestCase):
                 "command"
             ],
         )
+        self.assertEqual(result["retention"]["status"], "complete", result["retention"])
         self.assertFalse(old_plugin.exists())
         self.assertFalse((self.cache / "bridge.py").exists())
         self.assertIn("Uncommitted", skill.read_text(encoding="utf-8"))
@@ -853,7 +855,49 @@ class AutoUpdateTests(unittest.TestCase):
         self.updater.deadline = time.monotonic() - 1  # not an execution cap
         self.assertEqual(self.updater.command(
             [sys.executable, "-c", "import time; time.sleep(.1); print('complete')"]
-        ), "complete\n")
+        ).splitlines(), ["complete"])
+
+    def test_generation_cleanup_removes_readonly_git_objects_but_not_locked_files(self):
+        self.check()
+        generation = self.root / "generations" / "retired"
+        generation.mkdir()
+        atomic(generation / "ownership.json", {"schema": "mindie-runtime-generation/2", "revision": "retired"})
+        artifact = generation / "git-object"
+        artifact.write_bytes(b"owned readonly artifact")
+        artifact.chmod(stat.S_IREAD)
+        original_unlink = os.unlink
+
+        def windows_unlink(path, *args, **kwargs):
+            info = os.stat(path, dir_fd=kwargs.get("dir_fd"), follow_symlinks=False)
+            if not info.st_mode & stat.S_IWRITE:
+                error = PermissionError("read-only owned file")
+                error.winerror = 5
+                raise error
+            return original_unlink(path, *args, **kwargs)
+
+        with patch.object(auto_update.os, "unlink", side_effect=windows_unlink):
+            result = self.updater.collect_generations()
+        self.assertEqual(result["status"], "complete", result)
+        self.assertEqual(result["removed"], ["retired"])
+        self.assertFalse(generation.exists())
+
+        for code, mode in ((32, stat.S_IREAD), (5, stat.S_IREAD | stat.S_IWRITE)):
+            with self.subTest(winerror=code):
+                generation.mkdir()
+                atomic(generation / "ownership.json", {"schema": "mindie-runtime-generation/2", "revision": "retired"})
+                artifact.write_bytes(b"keep on actual access failure")
+                artifact.chmod(mode)
+                failure = PermissionError("owned file still in use or inaccessible")
+                failure.winerror = code
+                with patch.object(auto_update.shutil, "rmtree", side_effect=lambda path, *, onerror: onerror(os.unlink, str(artifact), (type(failure), failure, None))), \
+                     patch.object(auto_update.os, "chmod") as chmod:
+                    result = self.updater.collect_generations()
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["error_type"], "PermissionError")
+                self.assertEqual(artifact.read_bytes(), b"keep on actual access failure")
+                chmod.assert_not_called()
+                artifact.chmod(stat.S_IREAD | stat.S_IWRITE)
+                shutil.rmtree(generation)
 
 
     def test_generation_cleanup_requires_state_and_matching_runtime_pointer(self):

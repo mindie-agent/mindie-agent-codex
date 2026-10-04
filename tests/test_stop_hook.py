@@ -22,6 +22,59 @@ STOP = json.loads((PLUGIN / "hooks/hooks.json").read_text())["hooks"]["Stop"][0]
 ][0]
 sys.path.insert(0, str(ROOT / "plugins/mindie-agent/scripts"))
 from auto_update import stop_hook_commands
+import windows_process
+
+
+def run_owned_hook(argv, event, *, shell, env, timeout):
+    """Keep a timed-out host shell from leaking its nested PowerShell child."""
+    options = dict(stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                   stderr=subprocess.PIPE, text=True, shell=shell, env=env)
+    if os.name == "nt":
+        process = windows_process.spawn(argv, **options)
+    else:
+        process = subprocess.Popen(argv, start_new_session=True, **options)
+    primary = None
+    try:
+        stdout, stderr = process.communicate(json.dumps(event), timeout=timeout)
+        return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+    except BaseException as exc:
+        primary = exc
+        stage_path = env.get("HOOK_TEST_STAGE")
+        stage = "not-started-or-no-stage-fixture"
+        if stage_path:
+            try:
+                stage = Path(stage_path).read_text(encoding="utf-8")
+            except FileNotFoundError:
+                stage = "bridge-not-started"
+            except OSError as stage_error:
+                stage = "stage-unreadable:" + type(stage_error).__name__
+        exc.add_note(f"Hook host pid={process.pid}, returncode={process.poll()}, bridge stage={stage}")
+        raise
+    finally:
+        try:
+            if os.name == "nt":
+                windows_process.close_tree(process)
+            else:
+                import signal
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            # Reap the owned host and finish pipe readers after tree cleanup.
+            process.communicate(timeout=5)
+        except BaseException as cleanup_error:
+            if primary is None:
+                raise
+            primary.add_note("Hook process cleanup also failed: " + repr(cleanup_error))
+        finally:
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except OSError as close_error:
+                        if primary is None:
+                            raise
+                        primary.add_note("Hook pipe cleanup also failed: " + repr(close_error))
 
 
 class StopHookTests(unittest.TestCase):
@@ -35,14 +88,11 @@ class StopHookTests(unittest.TestCase):
         argv = [self.host_shell, '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command] if self.host_shell else command
         # This fixture verifies protocol isolation and single delivery. Its
         # extra host-shell process needs a separate startup allowance; passing
-        # here does not establish the production hook's 5-second cold-start SLA.
+        # here does not establish native hook latency.
         self.assertNotIn("timeout", STOP)
         timeout = 15  # Test watchdog only; no product deadline.
-        result = subprocess.run(
-            argv,
-            input=json.dumps(event),
-            text=True,
-            capture_output=True,
+        result = run_owned_hook(
+            argv, event,
             timeout=timeout,
             shell=self.host_shell is None,
             env={**os.environ, "PLUGIN_ROOT": str(plugin), **env},
@@ -69,13 +119,20 @@ class StopHookTests(unittest.TestCase):
                 plugin = Path(root) / "plugin with spaces"
                 scripts = plugin / "scripts"
                 scripts.mkdir(parents=True)
+                stage = Path(root) / "bridge-stage.txt"
                 (scripts / "bridge.py").write_text(
-                    "import sys\n"
+                    "import os, sys\n"
+                    "from pathlib import Path\n"
+                    "stage = Path(os.environ['HOOK_TEST_STAGE'])\n"
+                    "stage.write_text('bridge-started', encoding='utf-8')\n"
                     "print('{\"decision\": \"block\", \"reason\": \"repeat\"}')\n"
                     "print('capture failure', file=sys.stderr)\n"
+                    f"stage.write_text('bridge-exiting-{code}', encoding='utf-8')\n"
                     f"raise SystemExit({code})\n"
                 )
-                self.run_stop(plugin, python=sys.executable, failed=code != 0)
+                self.run_stop(plugin, python=sys.executable, failed=code != 0,
+                              HOOK_TEST_STAGE=str(stage))
+                self.assertEqual(stage.read_text(encoding="utf-8"), f"bridge-exiting-{code}")
 
     def test_success_still_delivers_event_once(self):
         with tempfile.TemporaryDirectory() as root:

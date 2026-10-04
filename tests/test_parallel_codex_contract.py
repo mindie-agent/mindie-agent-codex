@@ -217,11 +217,17 @@ class LaneCase(unittest.TestCase):
     def tearDown(self):
         try:
             self._stop_owned_engine()
+        except BaseException as exc:
+            # Preserve the shutdown failure and its files. Deleting a still
+            # owned SQLite tree can both damage the fixture and hide the cause.
+            self.temp._finalizer.detach()
+            exc.add_note(f"Test engine cleanup failed; retained {self.root}")
+            raise
         finally:
             session_gate.bind_explicit_config(None)
             tempfile.tempdir = None
             self.env_patch.stop()
-            cleanup_temporary_directory(self.temp)
+        cleanup_temporary_directory(self.temp)
 
     def child_env(self, **extra):
         env = dict(self.platform_env)
