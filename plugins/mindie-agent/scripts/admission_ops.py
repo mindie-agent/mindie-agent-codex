@@ -111,6 +111,11 @@ def operation(name, payload):
     if name == "check":
         lease = store.check(checked_session(payload), checked_token(payload))
         return dict(lease)
+    if name == "active_lease":
+        # None is normal absence or explicit revocation. A damaged required
+        # authority raises instead; do not infer this distinction from text.
+        lease = store.active_lease(checked_session(payload))
+        return dict(lease) if lease is not None else None
     if name == "resolve":
         token = checked_token(payload)
         if token is None:

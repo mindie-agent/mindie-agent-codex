@@ -523,11 +523,8 @@ def stop():
         )
         failed = not _observe_stop(result)
     except Inactive as exc:
-        message = str(exc)
-        if message not in {"session is not manually activated", "ValueError: session is not manually activated"}:
-            category = "timeout" if "TimeoutError" in message else "unavailable"
-            _record_stop("helper", category, exc)
-            failed = True
+        _record_stop("helper", "unavailable", exc)
+        failed = True
     except Exception as exc:
         # The hook never propagates a failure into the original task.
         _record_stop("helper", "unavailable", exc)
@@ -675,18 +672,21 @@ def _refresh_capture(result):
     session = os.environ.get("CODEX_THREAD_ID")
     if session:
         try:
-            lease = Sessions().check(session)
+            lease = Sessions().active_lease(session)
         except (Inactive, ValueError) as exc:
-            if str(exc) not in {"session is not manually activated", "ValueError: session is not manually activated"}:
-                result["status"] = "degraded"
-                result["activation"] = dict(status="unavailable", error=str(exc)[:240])
+            result["configuration_status"] = result["status"]
+            result["status"] = "degraded"
+            result["activation"] = dict(status="unavailable", error=str(exc)[:240])
         else:
+            if lease is None:
+                return result
             result["activation"] = _prepare_capture(dict(
                 status="active", mindie_session_id=lease["session"],
                 mindie_activation=lease["token"], activated_at=lease["activated_at"],
                 project_root=lease["project_root"],
             ))
             if result["activation"].get("status") == "degraded":
+                result["configuration_status"] = result["status"]
                 result["status"] = "degraded"
     return result
 

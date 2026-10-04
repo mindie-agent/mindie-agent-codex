@@ -42,9 +42,10 @@ class FailureVisibilityTests(unittest.TestCase):
             self.assertFalse(path.with_suffix('.admission.sqlite3').exists())
 
     def test_refresh_reports_admission_fault(self):
-        with patch.dict('os.environ', {'CODEX_THREAD_ID': 'native-task'}), patch.object(Sessions, 'check', side_effect=Inactive('MindIE admission is unavailable: OSError')):
+        with patch.dict('os.environ', {'CODEX_THREAD_ID': 'native-task'}), patch.object(Sessions, 'active_lease', side_effect=Inactive('MindIE admission is unavailable: OSError')):
             result = bridge._refresh_capture({'status': 'configured'})
         self.assertEqual(result['status'], 'degraded')
+        self.assertEqual(result['configuration_status'], 'configured')
         self.assertEqual(result['activation']['status'], 'unavailable')
 
     def test_config_command_returns_failure_for_incomplete_activation(self):

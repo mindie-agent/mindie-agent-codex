@@ -207,6 +207,12 @@ class Sessions:
             raise Inactive("Valid MindIE session identity required")
         return self._op("check", {"session": session, "token": token})
 
+    def active_lease(self, session):
+        """Read an existing binding, or None; authority faults stay visible."""
+        if not isinstance(session, str) or not IDENTITY.fullmatch(session):
+            raise Inactive("Valid MindIE session identity required")
+        return self._op("active_lease", {"session": session})
+
     def resolve(self, token):
         """Resolve an activation token to its owning valid lease.
 

@@ -427,6 +427,7 @@ class CommandTests(SharingFixture):
         started = time.monotonic()
         enabled = json.loads(self.bridge("sharing-enable").stdout)
         self.assertEqual(enabled["status"], "enabled")
+        self.assertFalse(self.admission.exists())
         first = enabled["generation"]
         self.assertGreaterEqual(enabled["enabled_at"], started)
         settings = sharing.validate(json.loads(self.community.read_text()))
@@ -451,6 +452,21 @@ class CommandTests(SharingFixture):
         status = json.loads(self.bridge("sharing-status").stdout)
         self.assertEqual(status["state"], "disabled")
         self.assertEqual(status["repository"], "mindie-agent/knowledge")
+
+    def test_enable_preserves_applied_choice_when_binding_authority_is_lost(self):
+        self.write_sharing(enabled=False, enabled_at=None)
+        self.activate()
+        marker = self.admission.with_name(self.admission.name + '.owner')
+        marker_before = marker.read_bytes()
+        self.admission.unlink()
+        enabled = json.loads(self.bridge('sharing-enable').stdout)
+        self.assertEqual(enabled['status'], 'degraded')
+        self.assertEqual(enabled['configuration_status'], 'enabled')
+        self.assertEqual(enabled['activation']['status'], 'unavailable')
+        self.assertIn('AdmissionUnavailable', enabled['activation']['error'])
+        self.assertTrue(sharing.read()['enabled'])
+        self.assertFalse(self.admission.exists())
+        self.assertEqual(marker.read_bytes(), marker_before)
 
     def test_reenable_uses_fresh_enabled_at_without_backfill(self):
         self.write_sharing(enabled=True, enabled_at=time.time() - 10000)
