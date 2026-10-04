@@ -39,7 +39,7 @@ SCRIPTS = REPO / "plugins/mindie-agent/scripts"
 
 
 KIMI_COMMIT = "90f73e76c6087ce091570f2d151b709145c913bc"
-CORE_COMMIT = "82f7d7dd4c52637e1448e3747262a20453f4bcb4"
+CORE_COMMIT = "d2a4ea3e018b93e601ce0d87b6b838fb5c276664"
 CONSENT_STORE_SHA256 = "679c6483a2edbf2d093de2ca38b00bfb73418b1179bcef9cdf6f34b5f9ed6b4c"
 
 
@@ -386,7 +386,7 @@ class LaneCase(unittest.TestCase):
         finally:
             store.close()
 
-    def drain_worker(self):
+    def drain_worker(self, *, summarize=False):
         from mindie_knowledge.loop.activation import Admission
         from mindie_knowledge.loop.cli import load_transcript_adapter
         from mindie_knowledge.loop.engine import Engine
@@ -397,6 +397,7 @@ class LaneCase(unittest.TestCase):
             engine = Engine(
                 store,
                 capture_mode="public-transcript", redactor_executable=installed_scanner(),
+                summary_command=[PY, '-c', 'print(\'{"title":"Synthetic summary","summary":"Reported public observations."}\')'] if summarize else None,
                 settings_path=str(self.community),
                 admission=Admission(str(self.admission)),
                 transcript_adapter=load_transcript_adapter(
@@ -406,6 +407,12 @@ class LaneCase(unittest.TestCase):
             for row in self.capture_rows():
                 if row["status"] in {"queued", "pending", "deferred"}:
                     engine._process(row["id"])
+            if summarize:
+                from mindie_knowledge.loop.transcript_capture import summarize_due
+                engine.last_activity = time.monotonic() - 10
+                with store._write_txn():
+                    store.db.execute('UPDATE transcript_tasks SET summary_due=0')
+                summarize_due(engine)
         finally:
             store.close()
 
@@ -422,7 +429,7 @@ class LaneCase(unittest.TestCase):
 
 
 class ConsentGateTests(LaneCase):
-    def test_corrupt_transcript_isolates_only_the_bad_record(self):
+    def test_corrupt_transcript_fails_without_claiming_complete_capture(self):
         self.write_consent("contribute", reporting="disabled")
         self.write_community(enabled=True)
         self.open_store()
@@ -435,14 +442,14 @@ class ConsentGateTests(LaneCase):
             stream.write((json.dumps(_user("Public after corruption", self.after_boundary("task-main", 31)))+'\n').encode())
         self.assertEqual(self.stop(self.event("task-main", transcript)).returncode, 0)
         self.drain_worker()
-        self.assertEqual(self.saved_text(), '### user\nPublic before corruption\n\n### user\nPublic after corruption')
-        self.assertEqual(self.capture_rows()[0]['status'], 'organized')
+        self.assertEqual(self.saved_text(), '')
+        self.assertEqual(self.capture_rows()[0]['status'], 'failed')
         from mindie_knowledge.loop.store import Store
         store = Store(self.root / "data", "test")
         try:
-            self.assertEqual(store.cursor(str(transcript.resolve()))['ok_finish'], transcript.stat().st_size)
+            self.assertIsNone(store.cursor(str(transcript.resolve())))
             row = store.capture_row(self.capture_rows()[0]['id'])
-            discarded = json.loads(row['detail'])['discarded_records']
+            discarded = json.loads(row['detail'])['records']
             self.assertEqual(len(discarded), 1)
             self.assertEqual(discarded[0]['reason'], 'invalid record')
         finally:
@@ -462,7 +469,7 @@ class ConsentGateTests(LaneCase):
         _jsonl(transcript, records)
         result = self.stop(self.event("task-main", transcript))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.drain_worker()
+        self.drain_worker(summarize=True)
         expected = "### user\nPublic request marker\n\n### assistant:commentary\nPublic progress marker\n\n### assistant:final_answer\nPublic result marker"
         self.assertEqual(self.saved_text(), expected)
         self.assertEqual(self.model_text(), "")
@@ -476,6 +483,7 @@ class ConsentGateTests(LaneCase):
             self.assertIsNotNone(batch)
             public = parse_entry(batch[2]["files"][0]["content"].encode("utf-8"))
             self.assertEqual(public["content"], expected)
+            self.assertEqual(public['title'], 'Synthetic summary')
         finally:
             store.close()
 
@@ -516,7 +524,7 @@ class ConsentGateTests(LaneCase):
                 observed = self.model_text()
                 self.assertEqual(
                     (result.returncode, len(rows), observed.count(SENTINEL), observed.count("{")),
-                    (0, 0, 0, 0),
+                    (1 if name in {"corrupt", "missing"} else 0, 0, 0, 0),
                     "\n".join([
                         f"consent={name}",
                         f"stop_rc={result.returncode}",
@@ -574,7 +582,7 @@ class ConsentGateTests(LaneCase):
             self.event("parent-task", transcript, turn="turn-parent"),
             thread="child-task",
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 1, result.stderr)
         rows = self.capture_rows()
         if rows:
             self.drain_worker()
@@ -1135,17 +1143,18 @@ class AuthorityMigrationTests(LaneCase):
         if os.name == "posix":
             self.community.chmod(0)
             try:
-                view = sharing.read(self.config)
+                with self.assertRaises((OSError, ValueError)):
+                    sharing.read(self.config)
             finally:
                 self.community.chmod(0o600)
         else:
-            view = sharing.read(self.config)
-        self.assertIsNone(view)
-        self.assertFalse(sharing.capture_allowed(
-            {"project_root": str(self.work), "root_session": "t", "activated_at": 1},
-            str(self.work),
-            self.config,
-        ))
+            with self.assertRaises(ValueError):
+                sharing.read(self.config)
+        with self.assertRaises(ValueError):
+            sharing.capture_allowed(
+                {"project_root": str(self.work), "root_session": "t", "activated_at": 1},
+                str(self.work), self.config,
+            )
 
     def _legacy_enabled(self, path, roots):
         path.write_text(json.dumps({
@@ -1229,18 +1238,20 @@ class AuthorityMigrationTests(LaneCase):
         if os.name == "posix":
             self.community.chmod(0)
             try:
-                self.assertIsNone(sharing.read(self.config))
-                self.assertFalse(sharing.capture_allowed(
-                    {"project_root": str(self.work), "root_session": "t", "activated_at": 1.0},
-                    str(self.work),
-                    self.config,
-                ))
+                with self.assertRaises(PermissionError):
+                    sharing.read(self.config)
+                with self.assertRaises(PermissionError):
+                    sharing.capture_allowed(
+                        {"project_root": str(self.work), "root_session": "t", "activated_at": 1.0},
+                        str(self.work), self.config,
+                    )
             finally:
                 self.community.chmod(0o600)
         # On Windows the following malformed-byte case remains active; chmod
         # does not provide a file ACL denial test.
         self.community.write_text("{not-json")
-        self.assertIsNone(sharing.read(self.config))
+        with self.assertRaises(ValueError):
+            sharing.read(self.config)
         self.assertEqual(sharing.configured_path(self.config), self.community)
         self.write_community(enabled=False, roots=[self.work])
         moved = sharing.migrate_community_path(self.config)

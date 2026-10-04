@@ -133,8 +133,16 @@ def call(payload):
         if not neutral:
             try:
                 finish_outcome(config, session, token, succeeded)
-            except Exception:
-                pass
+            except Exception as exc:
+                # The operation already ran. Expose the bookkeeping fault
+                # without telling the caller to repeat a successful mutation.
+                if pending is None:
+                    result["accounting"] = dict(status="failed", error_type=type(exc).__name__,
+                                                execution="completed", automatic_retry=False)
+                    result["content"].append(dict(type="text", text=
+                        "Knowledge operation completed; outcome accounting failed. Do not repeat the operation."))
+                else:
+                    pending.add_note("MindIE outcome accounting also failed: " + type(exc).__name__)
 
 
 def remote(payload):
@@ -213,6 +221,7 @@ def remote(payload):
             "connection_unavailable", "rpc_disconnected", "rpc_send", "rpc_timeout",
             "command_exit", "command_protocol", "command_timeout", "command_cancelled",
             "remote_worker", "worker_capacity",
+            "local_state", "stream_read", "stream_write",
         }
         category = raw.get("category")
         category = category if isinstance(category, str) and category in categories else "internal"

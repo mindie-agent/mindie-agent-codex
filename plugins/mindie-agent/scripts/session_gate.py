@@ -139,11 +139,11 @@ class Sessions:
         """
         try:
             value = json.loads(self.config.read_text(encoding='utf-8')).get("admission_path")
-        except (OSError, ValueError):
-            value = None
+        except FileNotFoundError:
+            return self.config.with_name(self.config.stem + ".admission.sqlite3")
         if isinstance(value, str) and os.path.isabs(value):
             return Path(value)
-        return self.config.with_name(self.config.stem + ".admission.sqlite3")
+        raise ValueError("MindIE adapter configuration lacks an absolute admission_path")
 
     def _config(self):
         try:

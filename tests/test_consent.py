@@ -113,10 +113,12 @@ class ConsentFixture(unittest.TestCase):
                  generation="g", enabled_at=1.0, repository="owner/repo",
                  project_roots=[str(self.root)], idle_seconds=300)
         ))
-        self.assertIsNone(sharing.read())
+        with self.assertRaises(ValueError):
+            sharing.read()
         lease = dict(project_root=str(self.root), root_session="t",
                      activated_at=1.0)
-        self.assertFalse(sharing.capture_allowed(lease, str(self.root)))
+        with self.assertRaises(ValueError):
+            sharing.capture_allowed(lease, str(self.root))
 
     def test_consent_config_gates_the_capture_write_path(self):
         # Settings carrying the consent authority: capture requires a saved
@@ -139,9 +141,11 @@ class ConsentFixture(unittest.TestCase):
             consent.record_choice(blocked)
             self.assertFalse(sharing.capture_allowed(lease, str(self.root)), blocked)
         authority.unlink()
-        self.assertFalse(sharing.capture_allowed(lease, str(self.root)), "missing")
+        with self.assertRaisesRegex(sharing.SharingError, 'missing'):
+            sharing.capture_allowed(lease, str(self.root))
         authority.write_text("{broken")
-        self.assertFalse(sharing.capture_allowed(lease, str(self.root)), "corrupt")
+        with self.assertRaisesRegex(sharing.SharingError, 'corrupt'):
+            sharing.capture_allowed(lease, str(self.root))
         # The field grants nothing by itself: enabled=false still wins.
         authority.unlink()
         consent.record_choice("contribute")

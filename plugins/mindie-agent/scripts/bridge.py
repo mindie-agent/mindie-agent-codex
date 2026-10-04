@@ -58,6 +58,7 @@ OPERATIONS = {
     "reporting-disable",
     "reporting-ensure",
     "reporting-maintain",
+    "history-import",
 }
 # Deterministic core recovery surface (documented exact names; each takes one
 # existing contribution batch id and never reruns organizer/model work).
@@ -265,21 +266,28 @@ def activate(operation):
 
 def _prepare_capture(result):
     """Report the effective loop state for this already verified binding."""
-    settings = sharing.read()
-    view = sharing.status()
-    if (
-        settings is not None
-        and settings["enabled"]
-        and sharing.consent_allows(settings) is not False
-    ):
-        if sharing.capture_allowed(dict(result, root_session=result["mindie_session_id"]), result.get("project_root")):
-            result["capture"] = bind(result)
+    try:
+        settings = sharing.read()
+        view = sharing.status()
+        if (
+            settings is not None
+            and settings["enabled"]
+            and sharing.consent_allows(settings) is not False
+        ):
+            if sharing.capture_allowed(dict(result, root_session=result["mindie_session_id"]), result.get("project_root")):
+                result["capture"] = bind(result)
+            else:
+                result["capture"] = "out-of-scope"
         else:
-            result["capture"] = "out-of-scope"
-    else:
-        # Sharing off/unconfigured or consent-blocked: ordinary activation
-        # only. No cold start, no bind, no collection preparation.
-        result["capture"] = "disabled"
+            # Sharing off/unconfigured or consent-blocked: ordinary activation
+            # only. No cold start, no bind, no collection preparation.
+            result["capture"] = "disabled"
+    except (OSError, ValueError) as exc:
+        # Binding may already exist. Preserve its receipt and migration details
+        # while reporting that required capture preparation did not complete.
+        return dict(result, status="degraded", capture="unavailable", experience="unavailable",
+                    error=dict(stage="capture-configuration", type=type(exc).__name__),
+                    next="Inspect the existing capture configuration; do not activate again to repair it.")
     result["sharing"] = view
     result["experience"] = (
         "capture-ready" if result["capture"] == "bound"
@@ -456,28 +464,38 @@ def _record_stop(stage, category, exc=None):
 def _observe_stop(result):
     if not isinstance(result, dict):
         _record_stop("handoff", "internal")
-        return
+        return False
     stage = result.get("stage")
-    if stage not in {"unavailable", "rejected"}:
-        return
+    if stage in {"inert", "organized", "no-new-material", "no-shareable-material",
+                 "cancelled", "discarded", "processing", "accepted-runtime",
+                 "apply-pending", "accepted-local"}:
+        return True
+    if stage not in {"unavailable", "rejected", "failed"}:
+        _record_stop("handoff", "internal")
+        return False
     reason = result.get("reason")
     if not isinstance(reason, str) or not reason.replace("-", "").replace("_", "").isalnum():
         reason = "handoff"
     if not reason[:1].isalpha():
         reason = "handoff"
     _record_stop(stage, reason)
+    return False
 
 
 def stop():
     budget = WINDOWS_HOOK_BUDGET if os.name == "nt" else HOOK_BUDGET
     deadline = _ENTRYPOINT_STARTED_AT + budget
     try:
-        # Cheap default-off before stdin: no helper, no lock, no lease DB.
-        # The consent gate applies too when the settings carry the authority.
         settings = sharing.read()
+        # Cheap default-off before stdin: no helper, no lock, no lease DB.
         if settings is None or sharing.consent_allows(settings) is False:
             print("{}")
-            return
+            return 0
+    except (OSError, ValueError) as exc:
+        _record_stop("configuration", "unavailable", exc)
+        print("{}")
+        return 1
+    try:
         event = hook_event(
             _read_hook_stdin(deadline - time.monotonic())
         )
@@ -491,22 +509,23 @@ def stop():
         if native and native != event["session_id"]:
             _record_stop("envelope", "identity_mismatch")
             print("{}")
-            return
+            return 1
     except ValueError as exc:
         if str(exc) in {"unexpected hook event", "recursive Stop is not a capture"}:
             print("{}")
-            return
+            return 0
         _record_stop("envelope", "invalid_envelope", exc)
         print("{}")
-        return
+        return 1
     except TimeoutError as exc:
         _record_stop("envelope", "timeout", exc)
         print("{}")
-        return
+        return 1
     except (OSError, TypeError, RecursionError) as exc:
         _record_stop("envelope", "invalid_envelope", exc)
         print("{}")
-        return
+        return 1
+    failed = False
     try:
         # Remaining helper time under the same whole-hook deadline.
         remaining = deadline - time.monotonic()
@@ -516,18 +535,24 @@ def stop():
             result = Sessions(op_timeout=remaining)._op(
                 "stop_capture", {"event": event, "session": event["session_id"]}
             )
-            _observe_stop(result)
+            failed = not _observe_stop(result)
         else:
             _record_stop("budget", "budget_exhausted")
+            failed = True
     except Inactive as exc:
         message = str(exc)
-        if message.startswith("MindIE admission is unavailable") or "unreadable" in message:
+        if message not in {"session is not manually activated", "ValueError: session is not manually activated"}:
             category = "timeout" if "TimeoutError" in message else "unavailable"
             _record_stop("helper", category, exc)
+            failed = True
     except Exception as exc:
         # The hook never propagates a failure into the original task.
         _record_stop("helper", "unavailable", exc)
+        failed = True
     print("{}")
+    # The installed wrapper always returns {} / exit 0 to the host and emits
+    # a static warning on this nonzero child result, even if diagnostics failed.
+    return 1 if failed else 0
 
 
 def sharing_operation(operation, extra=None):
@@ -587,7 +612,28 @@ def contribution(operation, batch_id):
             max_output=65536,
             env=generation_env(config_file),
         )
-    return json.loads(output) if output.strip() else dict(status="no-output")
+    result = json.loads(output)
+    if not isinstance(result, dict):
+        raise ValueError("contribution helper returned no result object")
+    return result
+
+
+def history_import(argv):
+    """Foreground, explicitly requested import; no timer or Hook dispatch.
+
+    Stream per-file receipts rather than buffering a whole library or imposing
+    a Hook deadline on a user-requested bulk operation. Ctrl-C stops the import.
+    The generation lock keeps scripts and interpreter coherent until it exits.
+    """
+    import subprocess
+
+    config_file = config_path()
+    with update_lock(config_file):
+        config = json.loads(config_file.read_text(encoding='utf-8'))
+        return subprocess.call(
+            [config['python'], str(Path(runtime_scripts(config)) / 'history_import.py'), *argv],
+            stdin=subprocess.DEVNULL, env=generation_env(config_file),
+        )
 
 
 def configure(argv):
@@ -609,7 +655,9 @@ def configure(argv):
             max_output=65536,
             env=generation_env(config_file),
         )
-    result = json.loads(output) if output.strip() else dict(status="configured")
+    result = json.loads(output)
+    if not isinstance(result, dict):
+        raise ValueError("configuration helper returned no result object")
     return _refresh_capture(result)
 
 
@@ -619,14 +667,18 @@ def _refresh_capture(result):
     if session:
         try:
             lease = Sessions().check(session)
-        except (Inactive, ValueError):
-            pass
+        except (Inactive, ValueError) as exc:
+            if str(exc) not in {"session is not manually activated", "ValueError: session is not manually activated"}:
+                result["status"] = "degraded"
+                result["activation"] = dict(status="unavailable", error=str(exc)[:240])
         else:
             result["activation"] = _prepare_capture(dict(
                 status="active", mindie_session_id=lease["session"],
                 mindie_activation=lease["token"], activated_at=lease["activated_at"],
                 project_root=lease["project_root"],
             ))
+            if result["activation"].get("status") == "degraded":
+                result["status"] = "degraded"
     return result
 
 
@@ -827,9 +879,14 @@ def main():
         print("Unsupported MindIE entry operation", file=sys.stderr)
         raise SystemExit(1)
     operation = argv[0]
+    if operation == "history-import":
+        raise SystemExit(history_import(argv[1:]))
     if operation == "config":
         try:
-            print(json.dumps(configure(argv[1:])))
+            result = configure(argv[1:])
+            print(json.dumps(result))
+            if result.get("status") in {"degraded", "failed", "unavailable", "error"}:
+                raise SystemExit(1)
         except Exception as exc:
             print(
                 f"MindIE config failed: {type(exc).__name__}: {exc}",
@@ -879,7 +936,10 @@ def main():
         return serve("knowledge")
     if operation in {"activate", "deactivate"}:
         try:
-            print(json.dumps(activate(operation)))
+            result = activate(operation)
+            print(json.dumps(result))
+            if result.get("status") == "degraded":
+                raise SystemExit(1)
         except Exception as exc:
             print(
                 f"MindIE session operation failed: {type(exc).__name__}: {exc}",
@@ -888,8 +948,7 @@ def main():
             raise SystemExit(1)
         return
     if operation == "stop":
-        stop()
-        return
+        raise SystemExit(stop())
     if operation.startswith("sharing-"):
         try:
             print(json.dumps(sharing_operation(operation)))
