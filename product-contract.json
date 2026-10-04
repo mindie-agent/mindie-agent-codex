@@ -5,7 +5,7 @@
     "repository": "mindie-agent/knowledge-vllm-ascend",
     "ref": "main",
     "domain": "vllm-ascend",
-    "verified_commit": "19bd5f2658ef8e321e9755fbf9549a1399071c4e",
-    "contract_sha256": "63fa56e67b87b657a234ca2d648e633f993f0e9e160ccc84075c625769ae158b"
+    "verified_commit": "f855cb0dd7b9098ad94e00c0daa239c35ba317d3",
+    "contract_sha256": "959cdd2ff79886b21755e3806fa4484209a77d7e66295899e5bb59baf526d742"
   }
 }
