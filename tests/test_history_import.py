@@ -1,10 +1,12 @@
 """Explicit entry and real local history import; all sources are synthetic."""
+import io
 import json
 import os
 import subprocess
 import sys
-from contextlib import closing
-from unittest.mock import patch
+from contextlib import closing, redirect_stderr
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from tests.test_sharing import SharingFixture, SCRIPTS
 from tests.test_parallel_codex_contract import installed_scanner
@@ -139,6 +141,57 @@ class HistoryImportTests(SharingFixture):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(json.loads(result.stdout)['status'], 'empty')
         self.assertFalse((self.root / 'data/test/connection.json').exists())
+
+    def test_service_start_failure_preserves_import_and_safe_os_error(self):
+        self.activate()
+        self.make_source('Synthetic import remains saved when service startup fails.')
+        error = PermissionError(13, 'private service path must not be reported')
+        error.winerror = 5
+        with patch('mindie_knowledge.loop.cli.ensure_service', side_effect=error) as service:
+            code, rows = self.run_import()
+        self.assertEqual(code, 1)
+        self.assertEqual(rows[0]['status'], 'imported')
+        self.assertEqual(rows[-1], dict(publication='pending', service='unavailable',
+                                       changed=1, stage='service-start',
+                                       error='PermissionError', errno=13, winerror=5))
+        self.assertNotIn('private service path', json.dumps(rows))
+        service.assert_called_once_with(str(self.engine))
+        with closing(Store(self.root / 'data', 'test')) as store:
+            self.assertEqual(len(store.drafts_changed()), 1)
+            self.assertEqual(store.db.execute('SELECT count(*) FROM transcript_tasks').fetchone()[0], 1)
+
+    def test_windows_helper_cleanup_preserves_exit_or_interruption(self):
+        import bridge
+        import windows_process
+        for outcome in (0, 7, KeyboardInterrupt()):
+            with self.subTest(outcome=type(outcome).__name__ if isinstance(outcome, BaseException) else outcome):
+                process = Mock()
+                if isinstance(outcome, BaseException):
+                    process.wait.side_effect = outcome
+                else:
+                    process.wait.return_value = outcome
+                output = io.StringIO()
+                with patch.object(bridge, 'os', SimpleNamespace(name='nt')), \
+                     patch.object(windows_process, 'spawn', return_value=process) as spawn, \
+                     patch.object(windows_process, 'close_tree', side_effect=PermissionError('private cleanup path')) as close, \
+                     redirect_stderr(output):
+                    if isinstance(outcome, BaseException):
+                        with self.assertRaises(KeyboardInterrupt) as raised:
+                            bridge.history_import(['--source', str(self.source)])
+                        self.assertIs(raised.exception, outcome)
+                        receipt = json.loads(outcome.__notes__[-1])
+                    else:
+                        code = bridge.history_import(['--source', str(self.source)])
+                        self.assertEqual(code, outcome or 1)
+                        receipt = json.loads(output.getvalue())
+                self.assertEqual(receipt['helper_exit_code'], None if isinstance(outcome, BaseException) else outcome)
+                self.assertEqual(receipt['status'], 'cleanup-failed')
+                self.assertEqual(receipt['error'], 'PermissionError')
+                self.assertNotIn('private cleanup path', json.dumps(receipt))
+                self.assertTrue(spawn.call_args.kwargs['allow_service'])
+                self.assertNotIn('stdout', spawn.call_args.kwargs)
+                self.assertNotIn('stderr', spawn.call_args.kwargs)
+                close.assert_called_once_with(process)
 
     def test_bridge_import_saves_body_and_prepares_real_knowledge_service(self):
         self.activate()

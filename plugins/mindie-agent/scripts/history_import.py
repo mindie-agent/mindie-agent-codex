@@ -108,8 +108,13 @@ def run_imports(sources, *, emit, retry_summary=False):
             ensure_service(config['engine_config'])
             emit(dict(publication='pending', service='ready', changed=changed))
         except Exception as exc:
-            emit(dict(publication='pending', service='unavailable', changed=changed,
-                      error=type(exc).__name__))
+            receipt = dict(publication='pending', service='unavailable', changed=changed,
+                           stage='service-start', error=type(exc).__name__)
+            for name in ('errno', 'winerror'):
+                value = getattr(exc, name, None)
+                if type(value) is int:
+                    receipt[name] = value
+            emit(receipt)
             failed += 1
     return 1 if failed else 0
 

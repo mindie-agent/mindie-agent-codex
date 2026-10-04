@@ -630,10 +630,36 @@ def history_import(argv):
     config_file = config_path()
     with update_lock(config_file):
         config = json.loads(config_file.read_text(encoding='utf-8'))
-        return subprocess.call(
-            [config['python'], str(Path(runtime_scripts(config)) / 'history_import.py'), *argv],
-            stdin=subprocess.DEVNULL, env=generation_env(config_file),
-        )
+        command = [config['python'], str(Path(runtime_scripts(config)) / 'history_import.py'), *argv]
+        options = dict(stdin=subprocess.DEVNULL, env=generation_env(config_file))
+        if os.name != 'nt':
+            return subprocess.call(command, **options)
+        # The explicit import may prepare the domain service. Give its helper
+        # the same narrow breakaway permission as knowledge_attach, retaining
+        # inherited output streams and the foreground operation's lifetime.
+        import windows_process
+        process = windows_process.spawn(command, allow_service=True, **options)
+        code = None
+        original_error = None
+        try:
+            code = process.wait()
+        except BaseException as exc:
+            original_error = exc
+            raise
+        finally:
+            try:
+                windows_process.close_tree(process)
+            except Exception as exc:
+                receipt = dict(status='cleanup-failed', stage='history-import-helper-cleanup',
+                               error=type(exc).__name__, helper_exit_code=code)
+                # Source receipts have already streamed to the caller. Keep
+                # their result and any original interruption ahead of cleanup.
+                if original_error is not None:
+                    original_error.add_note(json.dumps(receipt))
+                else:
+                    print(json.dumps(receipt), file=sys.stderr, flush=True)
+                    code = code or 1
+        return code
 
 
 def configure(argv):
