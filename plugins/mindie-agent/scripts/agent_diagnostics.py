@@ -50,8 +50,15 @@ def _open(create=False):
             marker.write_text(expected, encoding='utf-8')
             marker.chmod(0o600)
             db.execute('CREATE TABLE pending (key TEXT PRIMARY KEY, generation INTEGER NOT NULL, delivered INTEGER NOT NULL, value TEXT NOT NULL)')
-        elif not {'key', 'generation', 'delivered', 'value'} <= columns:
-            raise ValueError('diagnostic delivery schema is incomplete')
+        expected_columns = {
+            'key': ('key', 'TEXT', 0, None, 1),
+            'generation': ('generation', 'INTEGER', 1, None, 0),
+            'delivered': ('delivered', 'INTEGER', 1, None, 0),
+            'value': ('value', 'TEXT', 1, None, 0),
+        }
+        actual_columns = {row[1]: tuple(row[1:]) for row in db.execute('PRAGMA table_info(pending)')}
+        if any(actual_columns.get(name) != value for name, value in expected_columns.items()):
+            raise ValueError('diagnostic delivery schema or constraints are incomplete')
         if not marker.exists():
             marker.write_text(expected, encoding='utf-8')
             marker.chmod(0o600)
