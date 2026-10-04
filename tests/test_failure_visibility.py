@@ -54,14 +54,20 @@ class FailureVisibilityTests(unittest.TestCase):
 
     def test_updater_returns_nonzero_for_independent_maintenance_failure(self):
         import auto_update
-        for result in ({'status': 'up_to_date', 'knowledge_status': 'sync_failed'},
-                       {'status': 'up_to_date', 'knowledge_status': 'degraded'},
-                       {'status': 'up_to_date', 'diagnostics': {'status': 'unavailable'}},
-                       {'status': 'action_required'}):
-            with self.subTest(result=result), patch.object(sys, 'argv', ['auto_update.py', 'check']), patch.object(auto_update.Updater, 'check', return_value=result):
-                with self.assertRaises(SystemExit) as error:
-                    auto_update.main()
-                self.assertEqual(error.exception.code, 1)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings = root / 'updater.json'
+            settings.write_text(json.dumps({'root': str(root / 'updates'),
+                                             'adapter_config': str(root / 'adapter.json')}),
+                                encoding='utf-8')
+            for result in ({'status': 'up_to_date', 'knowledge_status': 'sync_failed'},
+                           {'status': 'up_to_date', 'knowledge_status': 'degraded'},
+                           {'status': 'up_to_date', 'diagnostics': {'status': 'unavailable'}},
+                           {'status': 'action_required'}):
+                with self.subTest(result=result), patch.object(sys, 'argv', ['auto_update.py', '--settings', str(settings), 'check']), patch.object(auto_update.Updater, 'check', return_value=result):
+                    with self.assertRaises(SystemExit) as error:
+                        auto_update.main()
+                    self.assertEqual(error.exception.code, 1)
 
     def test_corrupt_adapter_cannot_become_fresh_consent(self):
         import consent
