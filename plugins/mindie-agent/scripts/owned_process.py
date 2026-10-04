@@ -53,6 +53,8 @@ def main():
     if child.returncode < 0:
         # Mirror signal termination too; a caller must see the target's
         # negative Popen return code, not a synthetic shell-style status.
+        if -child.returncode not in (signal.SIGKILL, signal.SIGSTOP):
+            signal.signal(-child.returncode, signal.SIG_DFL)
         os.kill(os.getpid(), -child.returncode)
     return child.returncode
 

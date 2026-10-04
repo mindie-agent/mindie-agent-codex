@@ -62,9 +62,13 @@ class PipeLifetimeTests(unittest.TestCase):
                 self.assertEqual(process.returncode, 0)
 
     def test_target_signal_return_code_is_preserved(self):
-        result = bounded_process.run([sys.executable, '-c', 'import os,signal;os.kill(os.getpid(),signal.SIGTERM)'],
-                                     '', allowed_returncodes=None)
-        self.assertEqual(result.returncode, -15)
+        for name, expected in (('SIGTERM', -15), ('SIGPIPE', -13), ('SIGKILL', -9)):
+            with self.subTest(signal=name):
+                code = ('import os,signal;signum=signal.' + name + ';'
+                        + ('signal.signal(signum,signal.SIG_DFL);' if name != 'SIGKILL' else '')
+                        + 'os.kill(os.getpid(),signum)')
+                result = bounded_process.run([sys.executable, '-c', code], '', allowed_returncodes=None)
+                self.assertEqual(result.returncode, expected)
 
     def test_explicit_deadline_still_applies_after_pipe_eof(self):
         for runner in self.runners():
