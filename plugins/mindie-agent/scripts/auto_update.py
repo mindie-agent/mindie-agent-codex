@@ -2243,7 +2243,7 @@ def main():
     else:
         result = Updater(args.settings).check()
     print(json.dumps(result, indent=2))
-    if (result.get("status") in {"update_failed", "incompatible", "attempts_exhausted", "unavailable", "failed", "refused", "degraded", "action_required", "waiting_for_compatible_source", "partial"}
+    if (result.get("status") in {"check_failed", "update_failed", "incompatible", "attempts_exhausted", "unavailable", "failed", "refused", "degraded", "action_required", "waiting_for_compatible_source", "partial"}
             or result.get("knowledge_status") in {"sync_failed", "degraded", "failed", "unavailable", "invalid"}
             or result.get("diagnostics", {}).get("status") in {"degraded", "unavailable", "configuration_unavailable", "failed", "error"}):
         raise SystemExit(1)

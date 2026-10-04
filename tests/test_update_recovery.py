@@ -1,7 +1,9 @@
 """Launcher dispatch and temporary-network retry. No native install or network."""
 
 import json
+import io
 import os
+from contextlib import redirect_stdout
 from pathlib import Path
 import shutil
 import subprocess
@@ -468,6 +470,41 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(third["failure_class"], "temporary_network")
         self.assertEqual(third.get("check_failures"), 2)
         self.assertEqual(third.get("check_failure_at"), 1_700_000_000.0)
+
+    def test_cli_fails_when_plugin_check_fails_after_knowledge_sync(self):
+        feeds = [{"status": "synced", "commit": SHA, "entries": 1}]
+
+        def knowledge():
+            self.updater.save("unknown", knowledge_status="ok",
+                              knowledge_results=feeds, knowledge_error=None)
+
+        def resolve():
+            self.calls["resolve"] += 1
+            _run(BARE, transport=True)
+
+        self.updater.check_knowledge = knowledge
+        self.updater.resolve = resolve
+        output = io.StringIO()
+        with (
+            patch("auto_update.Updater", return_value=self.updater),
+            patch.object(self.updater, "prepare") as prepare,
+            patch.object(self.updater, "install") as install,
+            patch.object(sys, "argv", ["auto_update.py", "--settings",
+                                       str(self.settings), "check"]),
+            redirect_stdout(output),
+            self.assertRaises(SystemExit) as stopped,
+        ):
+            auto_update.main()
+        self.assertEqual(stopped.exception.code, 1)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["status"], "check_failed")
+        self.assertEqual(result["error"], "MindIE runtime failed; not retried")
+        self.assertEqual(result["knowledge_status"], "ok")
+        self.assertEqual(result["knowledge_results"], feeds)
+        self.assertIsNone(result["knowledge_error"])
+        self.assertEqual(self.calls["resolve"], 1)
+        prepare.assert_not_called()
+        install.assert_not_called()
 
 
 class LauncherTests(unittest.TestCase):
