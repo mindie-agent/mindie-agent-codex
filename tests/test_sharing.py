@@ -18,6 +18,8 @@ from unittest.mock import patch
 from tests.process_fixtures import stop_owned_knowledge_service
 
 ROOT = Path(__file__).resolve().parents[1]
+from tests.process_fixtures import public_engine_config
+
 SCRIPTS = ROOT / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
 
@@ -37,11 +39,7 @@ class SharingFixture(unittest.TestCase):
         self.admission = self.root / "codex.admission.sqlite3"
         self.engine.write_text(
             json.dumps(
-                dict(
-                    root=str(self.root / "data"),
-                    domain="test",
-                    admission_path=str(self.admission),
-                )
+                public_engine_config(self.root / "data", admission_path=str(self.admission))
             )
         )
         self.config.write_text(
@@ -62,9 +60,11 @@ class SharingFixture(unittest.TestCase):
         self.sessions = Sessions()
 
     def tearDown(self):
-        stop_owned_knowledge_service(self.engine)
-        self.environment.stop()
-        cleanup_temporary_directory(self.temp)
+        try:
+            stop_owned_knowledge_service(self.engine)
+        finally:
+            self.environment.stop()
+            cleanup_temporary_directory(self.temp)
 
     def settings(self, **overrides):
         value = dict(
@@ -94,7 +94,7 @@ class SharingFixture(unittest.TestCase):
         store.close()
 
     def captures(self):
-        path = self.root / "data" / "test" / "store-v3.sqlite3"
+        path = self.root / "data" / "test" / "state-v4.sqlite3"
         if not path.is_file():
             return 0
         db = sqlite3.connect(path)
@@ -190,7 +190,7 @@ class GateTests(SharingFixture):
             event = self.event(turn_id=f'large-{size}', last_assistant_message='公开结果' * (size // 12))
             result = self.bridge('stop', event, timeout=5)
             self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
-        path = self.root / 'data/test/store-v3.sqlite3'
+        path = self.root / 'data/test/state-v4.sqlite3'
         db = sqlite3.connect(path)
         try:
             rows = db.execute('SELECT summary, transcript FROM captures').fetchall()

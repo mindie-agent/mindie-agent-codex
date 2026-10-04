@@ -138,7 +138,7 @@ class EntryBoundsTests(unittest.TestCase):
             env={**os.environ, "MINDIE_CODEX_BIN": "/missing/not-called"},
         )
         self.assertEqual(result.returncode, 65)
-        self.assertEqual(result.stderr.strip(), "summary failed: invalid_result")
+        self.assertEqual(result.stderr.strip(), "summary protocol failed: invalid_result")
         self.assertNotIn("x" * 32, result.stderr)
 
     def test_session_start_is_not_registered(self):

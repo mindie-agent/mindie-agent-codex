@@ -16,7 +16,7 @@ modules in a second discovery pass. A failed boundary stops the run early.
 | Independent boundary | Observable invariant |
 | --- | --- |
 | Setup | Failed config writes do not save completion; existing task binding gains capture after successful config |
-| Body and metadata | Public body survives without any model; optional metadata uses an independent model/effort and cannot change content |
+| Body and metadata | Public body survives without any model; required indexes use an independent model/effort and cannot change content |
 | Windows shell | Both CMD and PowerShell deliver the original Stop stdin once; child failure remains benign. The 5 s host watchdog includes cold shell/interpreter launch; bridge work remains bounded to 1.3 s on Windows, independent of transcript size |
 | Process lifetime | Entry helper has exited before service readiness is checked; cold Stop is consumed after its helper exits |
 | Process ownership | Ordinary descendants die at completion/timeout even in a service-capable launcher |
@@ -42,7 +42,7 @@ rows or use contribution-retry as evidence of automatic publication. Inspect:
 
 1. The native session/turn has a corresponding real capture and bounded regions.
 2. A service remains alive after the caller exits; body capture makes zero
-   model calls. Optional summary configuration is independent of the requested
+   model calls. Required index configuration is independent of the requested
    business model. Do not inspect or export hidden reasoning.
 3. Compare draft content to the filtered, redacted public messages. It must
    preserve their order and text, contain the business result and exclude all
@@ -54,8 +54,9 @@ rows or use contribution-retry as evidence of automatic publication. Inspect:
 
 Never mark the whole transcript covered while a failed region, clipped field or
 unprocessed continuation remains. A later successful task does not erase that
-history. Legacy organizer gaps stay visible across migration. Do not reset
-cursors, counters or model settings to manufacture a pass.
+history. Version 3 databases remain inert; there is no automatic compatibility
+migration. Do not reset current cursors, counters or model settings to manufacture
+a pass.
 
 Hosted CI has no authorized native model credentials, public contribution scope
 or NPU reservation. Those are the prerequisites for this controlled run, not a

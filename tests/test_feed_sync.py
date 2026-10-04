@@ -66,6 +66,35 @@ class FoldFeedTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             fold_feed_results(json.dumps([_row("a", "mystery")]))
 
+    def test_partial_keeps_committed_effect_and_failed_stage(self):
+        payload = [_row("a", "partial", commit="new", metadata_committed=True,
+                        failed_stage="material-promotion", detail="current-file promotion failed")]
+        aggregate, rows, summary = fold_feed_results(json.dumps(payload))
+        self.assertEqual(aggregate, "degraded")
+        self.assertEqual(rows, payload)
+        self.assertIn("metadata committed", summary)
+        self.assertIn("stage=material-promotion", summary)
+
+    def test_completed_sync_with_cleanup_failure_is_not_ok(self):
+        for status in ("synced", "unchanged"):
+            with self.subTest(status=status):
+                payload = [_row("a", status, commit="new", cleanup_status="failed",
+                                cleanup_error="staging removal denied", cleanup_errors=["staging removal denied"])]
+                aggregate, rows, summary = fold_feed_results(json.dumps(payload))
+                self.assertEqual(aggregate, "degraded")
+                self.assertEqual(rows, payload)
+                self.assertIn("a:" + status, summary)
+                self.assertIn("cleanup failed: staging removal denied", summary)
+
+    def test_primary_and_cleanup_failure_are_both_visible(self):
+        payload = [_row("a", "invalid", detail="invalid package", retained_commit="old",
+                        cleanup_status="failed", cleanup_error="staging removal denied")]
+        aggregate, rows, summary = fold_feed_results(json.dumps(payload))
+        self.assertEqual(aggregate, "sync_failed")
+        self.assertEqual(rows, payload)
+        self.assertIn("invalid package", summary)
+        self.assertIn("cleanup failed", summary)
+
     def test_malformed(self):
         for raw in ("", "not-json", "{}", json.dumps(["x"]),
                     json.dumps([{"status": "synced"}]), "junk\n[]"):
@@ -118,6 +147,24 @@ class CheckKnowledgeTests(unittest.TestCase):
         self.assertIsNone(state["knowledge_error"])
         self.assertEqual(state["knowledge_results"][0]["repository"], "a")
         self.assertEqual(state["status"], "up_to_date")
+
+    def test_partial_effects_survive_plugin_check_and_persisted_state(self):
+        payloads = [
+            [_row("a", "partial", commit="new", metadata_committed=True,
+                  failed_stage="material-promotion", detail="current-file promotion failed")],
+            [_row("a", "synced", commit="new", cleanup_status="failed",
+                  cleanup_error="staging removal denied")],
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload), patch.object(self.updater, "command", return_value=json.dumps(payload)), \
+                 patch("auto_update.update_lock"), patch.object(self.updater, "_check_plugin", side_effect=lambda: self.updater.state) as plugin:
+                result = self.updater._check_locked()
+            plugin.assert_called_once()
+            self.assertEqual(result["status"], "up_to_date")
+            self.assertEqual(result["knowledge_status"], "degraded")
+            self.assertEqual(result["knowledge_results"], payload)
+            self.assertEqual(json.loads(self.updater.state_path.read_text())["knowledge_results"], payload)
+            self.assertTrue(result["knowledge_error"])
 
     def test_malformed_clears_stale_results_and_keeps_plugin_state(self):
         self.updater.save(

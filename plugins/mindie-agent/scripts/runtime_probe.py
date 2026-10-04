@@ -7,56 +7,20 @@ PROBE_MODULES = (
     "mindie_knowledge.loop.cli",
     "mindie_knowledge.loop.documents",
     "mindie_knowledge.loop.activation",
+    "mindie_knowledge.materials.reme_index",
+    "langmem.short_term",
     "remote_dev.mcp.server",
-)
-
-
-# One FTS capability check feeds both installation paths. The small public
-# wrappers below preserve focused checks for the setup/update call sites while
-# sharing this exact body with the complete runtime probe.
-FTS_PROBE_BODY = r"""
-db = None
-try:
-    db = sqlite3.connect(":memory:")
-    db.execute("CREATE VIRTUAL TABLE probe USING fts5(body, content='', contentless_delete=1)")
-    db.execute("INSERT INTO probe(rowid, body) VALUES (1, 'alpha')")
-    if db.execute("SELECT rowid FROM probe WHERE probe MATCH 'alpha'").fetchall() != [(1,)]:
-        raise RuntimeError("insert MATCH failed")
-    db.execute("UPDATE probe SET body='beta' WHERE rowid=1")
-    if db.execute("SELECT rowid FROM probe WHERE probe MATCH 'beta'").fetchall() != [(1,)]:
-        raise RuntimeError("update MATCH failed")
-    if db.execute("SELECT rowid FROM probe WHERE probe MATCH 'alpha'").fetchall():
-        raise RuntimeError("stale MATCH survived update")
-    db.execute("DELETE FROM probe WHERE rowid=1")
-    if db.execute("SELECT rowid FROM probe WHERE probe MATCH 'beta'").fetchall():
-        raise RuntimeError("delete MATCH failed")
-except Exception as exc:
-    missing.insert(0, (
-        "sqlite " + sqlite3.sqlite_version
-        + " lacks FTS5 contentless_delete=1 (SQLite >=3.43.0): "
-        + type(exc).__name__ + ": " + str(exc)[:160]
-    ))
-finally:
-    if db is not None:
-        db.close()
-"""
-
-SETUP_FTS_PROBE = "import sqlite3\n" + FTS_PROBE_BODY
-UPDATER_FTS_PROBE = (
-    "import sqlite3\nmissing = []\n" + FTS_PROBE_BODY
-    + "print('MISSING: ' + '; '.join(missing) if missing else 'OK')\n"
 )
 
 
 def build_probe_script(transcript_adapter):
     """Return a side-effect-free probe for the configured interpreter.
 
-    Keep setup and update acceptance on one contract. In particular,
-    MaintenanceBudget has per-session and per-hour quotas; it does not expose
-    a failure limit or a domain-wide failure pause.
+    Keep setup and update acceptance on the current complete-material queue,
+    summary ledger and bounded native worker contract.
     """
     adapter = os.fspath(transcript_adapter)
-    return f'''import importlib.util, inspect, math
+    return f'''import importlib.metadata, importlib.util, inspect, math
 missing = []
 missing_packages = [name for name in ("mindie_knowledge", "remote_dev")
                     if importlib.util.find_spec(name) is None]
@@ -66,8 +30,10 @@ else:
     try:
         from mindie_knowledge.loop.cli import STARTUP_TIMEOUT, MAX_STARTUP_PROBES, load_transcript_adapter
         from mindie_knowledge.loop.activation import Admission
-        from mindie_knowledge.loop.budget import MaintenanceBudget
-        from mindie_knowledge.loop.limits import ORGANIZER_TIMEOUT, ORGANIZER_PROCESS_TIMEOUT, ORGANIZER_LEASE_SECONDS
+        from mindie_knowledge.materials.summarizer import SummaryLedger, SUMMARY_TIMEOUT, MAX_PROMPT_BYTES, MAX_RESPONSE_BYTES, LANGMEM_VERSION
+        from mindie_knowledge.materials.reme_index import ReMeIndex
+        from langmem.short_term import summarize_messages
+        from mindie_knowledge.loop.transcript_capture import SUMMARY_SECONDS
         from mindie_knowledge.loop.process import spawn_service
         from mindie_knowledge.loop.engine import Engine
         from mindie_knowledge.loop.transcript_redaction import install_scanner
@@ -83,8 +49,23 @@ else:
             missing.append("load_transcript_adapter is unavailable")
         if not callable(import_transcript):
             missing.append("explicit history import is unavailable")
-        if not (0 < ORGANIZER_TIMEOUT < ORGANIZER_PROCESS_TIMEOUT < ORGANIZER_LEASE_SECONDS):
-            missing.append("organizer lifetime bounds are inconsistent")
+        positive_bounds = (("SUMMARY_TIMEOUT", SUMMARY_TIMEOUT), ("SUMMARY_SECONDS", SUMMARY_SECONDS),
+                           ("MAX_PROMPT_BYTES", MAX_PROMPT_BYTES), ("MAX_RESPONSE_BYTES", MAX_RESPONSE_BYTES))
+        for name, value in positive_bounds:
+            if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+                missing.append(name + " must be finite and positive")
+        valid_bounds = all(type(value) in (int, float) and math.isfinite(value) and value > 0
+                           for _, value in positive_bounds)
+        if valid_bounds and not SUMMARY_TIMEOUT < SUMMARY_SECONDS:
+            missing.append("summary invocation lifetime bounds are inconsistent")
+        if not callable(ReMeIndex) or not callable(summarize_messages):
+            missing.append("material indexing dependencies are unavailable")
+        if importlib.metadata.version("langmem") != LANGMEM_VERSION:
+            missing.append("LangMem version differs from the reviewed runtime")
+        if not all(callable(getattr(SummaryLedger, name, None)) for name in ("prepare", "claim", "record", "recover", "complete", "retry", "usage_totals")):
+            missing.append("summary outcome ledger API is incomplete")
+        if valid_bounds and not MAX_RESPONSE_BYTES <= MAX_PROMPT_BYTES:
+            missing.append("summary protocol byte bounds are inconsistent")
         if not callable(getattr(locks, "lock_held", None)):
             missing.append("core locks lacks lock_held")
         if not callable(call_tool):
@@ -106,13 +87,6 @@ else:
             missing.append("Admission API is incomplete")
         if "admission" not in inspect.signature(Service).parameters:
             missing.append("Service does not accept admission")
-        for name in ("SESSION_LIMIT", "HOURLY_LIMIT"):
-            value = getattr(MaintenanceBudget, name, None)
-            if type(value) is not int or value <= 0:
-                missing.append("MaintenanceBudget." + name + " must be a positive integer")
-        value = getattr(MaintenanceBudget, "SESSION_WINDOW", None)
-        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
-            missing.append("MaintenanceBudget.SESSION_WINDOW must be finite and positive")
         for name, value in (("STARTUP_TIMEOUT", STARTUP_TIMEOUT), ("MAX_STARTUP_PROBES", MAX_STARTUP_PROBES)):
             if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
                 missing.append(name + " must be finite and positive")
@@ -125,7 +99,5 @@ else:
         except Exception as exc:
             missing.append(f"transcript adapter ({{type(exc).__name__}}: {{exc}})")
 
-import sqlite3
-''' + FTS_PROBE_BODY + '''
 print("MISSING: " + "; ".join(missing) if missing else "OK", flush=True)
 '''

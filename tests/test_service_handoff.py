@@ -7,12 +7,13 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from tests.process_fixtures import public_engine_config
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
 
 def make_config(root):
     engine = root / "engine.json"
-    engine.write_text(json.dumps({"root": str(root / "data"), "domain": "test"}))
+    engine.write_text(json.dumps(public_engine_config(root / "data")))
     adapter = root / "adapter.json"
     adapter.write_text(json.dumps({"engine_config": str(engine)}))
     return adapter

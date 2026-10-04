@@ -17,10 +17,10 @@ import threading
 import time
 
 import windows_process
-from mindie_knowledge.loop.limits import ORGANIZER_TIMEOUT
+from mindie_knowledge.materials.summarizer import SUMMARY_TIMEOUT
 
 MAX_OUTPUT = 128 * 1024
-TIMEOUT = ORGANIZER_TIMEOUT
+TIMEOUT = SUMMARY_TIMEOUT
 ALLOWED_ITEMS = {"agent_message", "reasoning"}
 POSIX = os.name == "posix"
 
@@ -41,9 +41,27 @@ class NativeStartError(OSError):
     """The native executable could not be started."""
 
 
-def run_codex(command, prompt, *, timeout=None):
+def _rejected_model(event):
+    """Classify an explicit provider rejection without retaining its message."""
+    message = event.get('message')
+    error = event.get('error')
+    if not isinstance(message, str) and isinstance(error, dict):
+        message = error.get('message')
+    if not isinstance(message, str):
+        return False
+    message = message.lower()
+    return ('model' in message and ('not supported' in message or 'does not support' in message)
+            and ('chatgpt' in message or '400' in message))
+
+
+def run_codex(command, prompt, *, timeout=None, receipt=None):
     # The knowledge service owns one group for worker + Codex + descendants.
     timeout = TIMEOUT if timeout is None else timeout
+    started = time.monotonic()
+    receipt = {} if receipt is None else receipt
+    receipt.update(native_started=False, turn_started=False, turn_completed=False, turn_failed=False,
+                   request_rejected=False,
+                   usage=None, elapsed_ms=0, cleanup_failed=False)
     inherited = (
         POSIX
         and os.environ.get("MINDIE_MAINTENANCE_GROUP") == "1"
@@ -69,7 +87,9 @@ def run_codex(command, prompt, *, timeout=None):
                     stderr=subprocess.PIPE,
                 )
         except OSError as exc:
+            receipt['elapsed_ms'] = round((time.monotonic() - started) * 1000)
             raise NativeStartError("native executable could not start") from exc
+        receipt['native_started'] = True
         lines = queue.Queue()
         total = [0]
         flooded = []
@@ -129,12 +149,18 @@ def run_codex(command, prompt, *, timeout=None):
             if not isinstance(event, dict) or not isinstance(event.get("type"), str):
                 raise InvalidResultError("invalid Codex event")
             if event.get("type") in {"error", "turn.failed"}:
+                receipt['request_rejected'] = _rejected_model(event)
+                receipt['turn_failed'] = event.get('type') == 'turn.failed' or receipt['request_rejected']
                 raise NativeFailure("Codex maintenance failed; no retry")
             if event.get("type") == "turn.started":
                 turns += 1
+                receipt['turn_started'] = True
                 if turns > 1:
                     raise NativeFailure("maintenance attempted another turn")
             if event.get("type") == "turn.completed":
+                if receipt['turn_completed']:
+                    raise NativeFailure("maintenance completed another turn")
+                receipt['turn_completed'] = True
                 reported = event.get("usage")
                 if isinstance(reported, dict):
                     # Allowlisted counters only; never retain native events,
@@ -142,6 +168,7 @@ def run_codex(command, prompt, *, timeout=None):
                     usage = {key: reported[key] for key in
                              ("input_tokens", "cached_input_tokens", "output_tokens")
                              if type(reported.get(key)) is int and reported[key] >= 0}
+                    receipt['usage'] = usage
             item = event.get("item")
             if item is not None and not isinstance(item, dict):
                 raise InvalidResultError("invalid Codex item")
@@ -179,35 +206,67 @@ def run_codex(command, prompt, *, timeout=None):
                 raise TimeoutError("Codex maintenance deadline exceeded") from exc
             if code:
                 raise NativeFailure("Codex maintenance exited nonzero; no retry")
-        finally:
-            if inherited:
-                # The service kills this whole group after reading our result/error.
-                if process.poll() is None:
-                    process.kill()
-            elif POSIX:
+        except NativeFailure as error:
+            # A CLI can emit `error` immediately before `turn.failed`. Inspect
+            # only events already queued; never wait for/reconnect the model.
+            # Preserve the original failure while recognizing known terminal
+            # rejection and avoiding an incorrect unknown-paid-call receipt.
+            while True:
                 try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            else:
-                windows_process.close_tree(process)
+                    pending = lines.get_nowait()
+                except queue.Empty:
+                    break
+                if pending is None:
+                    continue
+                try:
+                    terminal = json.loads(pending)
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(terminal, dict) and terminal.get('type') == 'turn.failed':
+                    receipt['turn_failed'] = True
+                    receipt['request_rejected'] = receipt['request_rejected'] or _rejected_model(terminal)
+            if receipt['request_rejected']:
+                error.mindie_category = 'configuration'
+            raise
+        finally:
+            original_error = sys.exc_info()[1]
             try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                if os.name == "nt":
-                    try:
+                if inherited:
+                    # The service kills this whole group after reading our result/error.
+                    if process.poll() is None:
                         process.kill()
-                    except OSError:
+                elif POSIX:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
                         pass
-                    process.wait(timeout=2)
                 else:
+                    windows_process.close_tree(process)
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    if os.name == "nt":
+                        try:
+                            process.kill()
+                        except OSError:
+                            pass
+                        process.wait(timeout=2)
+                    else:
+                        raise
+                # A POSIX inherited group's descendants are closed by the outer
+                # core. Windows Job cleanup above closes every owned pipe holder.
+                if not threads[0].is_alive():
+                    process.stdout.close()
+                if not threads[1].is_alive():
+                    process.stderr.close()
+            except Exception:
+                receipt['cleanup_failed'] = True
+                if original_error is None:
                     raise
-            # A POSIX inherited group's descendants are closed by the outer
-            # core. Windows Job cleanup above closes every owned pipe holder.
-            if not threads[0].is_alive():
-                process.stdout.close()
-            if not threads[1].is_alive():
-                process.stderr.close()
+            finally:
+                receipt['elapsed_ms'] = round((time.monotonic() - started) * 1000)
+                if original_error is not None:
+                    original_error.mindie_native_receipt = dict(receipt)
         if read_errors:
             raise InvalidResultError("Codex output read failed") from read_errors[0]
         return usage

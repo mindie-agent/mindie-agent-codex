@@ -797,7 +797,9 @@ class UpdateIdleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             engine = Path(tmp) / "engine.json"
-            engine.write_text(json.dumps(dict(root=tmp, domain="test")), encoding="utf-8")
+            engine.write_text(json.dumps(dict(root=tmp, domain="test", capture_mode="public-transcript",
+                transcript_adapter=str(SCRIPTS / "codex_transcript.py"),
+                redactor_executable=str(Path(tmp) / "gitleaks"))), encoding="utf-8")
             self.assertTrue(service_handoff.stop(str(engine)))
 
     def test_absent_stop_if_idle_fails_closed(self):
@@ -805,7 +807,9 @@ class UpdateIdleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             engine = Path(tmp) / "engine.json"
-            engine.write_text(json.dumps(dict(root=tmp, domain="test")), encoding="utf-8")
+            engine.write_text(json.dumps(dict(root=tmp, domain="test", capture_mode="public-transcript",
+                transcript_adapter=str(SCRIPTS / "codex_transcript.py"),
+                redactor_executable=str(Path(tmp) / "gitleaks"))), encoding="utf-8")
             with (
                 patch(
                     "service_handoff.connect",

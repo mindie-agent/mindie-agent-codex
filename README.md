@@ -20,9 +20,9 @@ Old business Skills and profiling remain deferred.
 Requires Python 3.11+, Git, `uv`, and an authenticated Codex CLI with native
 plugin support.
 
-The knowledge interpreter also needs SQLite 3.43.0 or newer with FTS5 and
-`contentless_delete` support. Installation checks the actual SQLite library;
-the Python version alone does not establish this capability.
+Installation probes the actual pinned runtime, including ReMe, LangMem and the
+summary outcome ledger. SQLite stores metadata; retrieval does not require FTS5
+or `contentless_delete`.
 
 Sign in to Codex, then install from a downloaded copy:
 
@@ -235,18 +235,17 @@ no downloads and has no model dependency. A missing or failed scanner leaves
 the input unread instead of publishing unredacted content. Public messages are
 not shortened to fit a model; the parser advances at complete message boundaries.
 
-Setup and updates automatically install the required title/summary worker.
-The adapter owns its fixed GPT-6-Luna / low policy; there is no user-facing
-model or effort setting and no inheritance from the business task. A separate
-worker reads the complete redacted body. It can only update title and summary;
-it cannot rewrite the body or hold up later captures. The native invocation
-deadline is 35 seconds, with a 45-second outer cancellation deadline. A failed
-or superseded attempt keeps the body locally but does not qualify it for a new
-export batch. Missing worker configuration is a visible error, not a normal
-excerpt mode. Local saving, summary completion and publication are separate
-states. Current worker input is still the full body; token-aware incremental
-organization for long material is not implemented.
-Updates replace obsolete model arguments with the installed adapter policy.
+Setup and updates install the required LangMem index worker with the explicit
+`gpt-5.6-luna` / `low` native policy. It reads complete new blocks plus short
+previous navigation and returns block titles/summaries and updated navigation;
+it cannot rewrite source bodies. Blocks are at most 16 KiB and each serialized
+user prompt is at most 64 KiB. The native deadline is 90 seconds with a 100-second
+outer deadline. Native system/context overhead is included in recorded usage.
+Returned output survives local processing failures without another paid call.
+Failed or uncertain model calls require explicit retry and retain prior usage.
+Missing worker configuration blocks publication and remains a visible failure.
+Consumers reuse producer indexes without model calls. Explicit historical import
+uses the same incremental pipeline; there is no final full-transcript merge.
 See [the transcript contract](docs/public-transcript.md).
 
 The updater records preparation and install outcomes. A known temporary

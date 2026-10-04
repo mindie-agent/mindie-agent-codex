@@ -1,55 +1,52 @@
 # Public transcript capture
 
-Codex contributes a locally redacted conversation, not a model-authored case
-report. This is an explicit `capture_mode: public-transcript` in the selected
-engine configuration. Other adapters keep their existing behavior until they
-have their own parser and product acceptance.
+The Codex reader retains native `response_item` public user/assistant text,
+including attributed commentary and final messages. It excludes tools, hidden
+reasoning, system/developer messages, injected catalogs, duplicate wrappers and
+inherited fork history. Equal messages at different positions remain distinct.
+Missing timestamps, corrupt records and incomplete coverage fail visibly rather
+than advancing a cursor. Attachment placeholders never fetch their referenced
+files or URLs.
 
-The Codex reader retains only native `response_item` public user/assistant text.
-Assistant commentary and final-answer phases remain attributed. It excludes
-tools, internal reasoning, system/developer messages, known injected catalogs,
-duplicate event wrappers and inherited fork history. Equal public messages at
-different positions are retained. Reads page between records; a long public
-message is processed whole. Invalid input cannot be represented as complete coverage. No semantic shortening or model call belongs to this step.
-Missing public-message timestamps hold the cursor because the authorization
-boundary cannot be verified. Supported attachment types leave a safe placeholder;
-their URLs, files and binary data are never read. Both native text shapes use
-the same injection/citation filters, applied per content part.
+Gitleaks 8.30.1 and the existing privacy rules run locally. Setup/update install
+the fixed scanner release with its checked hash and license. Ambient scanner
+configuration and source `gitleaks:allow` comments cannot disable checks. The
+incremental scanner carries only open private-key state across pages; secret
+text is never buffered in that state. Stable HMAC replacements preserve equality
+for relevant privacy fields, and credentials use a canonical redaction marker.
+Mechanical rules do not establish that proprietary prose is public; the approved
+project scope remains the contribution boundary.
 
-Gitleaks 8.30.1 supplies secret rules; the existing privacy scanner supplements
-paths, addresses and identities. Setup/update download a fixed release with a
-committed SHA256 and retain its MIT license. Runtime scans are local and ignore
-ambient repository configuration and `gitleaks:allow` comments. Findings and
-credentials are never diagnostics. Replacements use stable HMAC placeholders
-with a private random key, preserving equality without storing a cleartext map.
-Rule scanning cannot establish whether proprietary prose or an algorithm is
-public: the already-approved project scope remains the contribution boundary.
-Repository review occurs after upload and cannot protect a secret leaked into
-an earlier commit.
+The core stores complete redacted material as stable Markdown blocks and commits
+its cursor, admission, manifest binding and index queue together. SQLite holds
+small state and receipts, not another body library. Duplicate native delivery
+cannot append the same range twice. Explicit historical import uses this same
+pipeline. Current published blocks remain the continuation base; withdrawn
+material is not resurrected from a stale PR.
 
-The existing service commits body, region, cursor and continuation in one SQLite
-transaction. If a write fails or the process stops before commit, the cursor
-does not advance. Native duplicate delivery cannot append the same bytes twice.
-The existing outbox and exact remote receipts own publication. After compaction,
-a continuation restores the authoritative body through its receipt; a closed,
-unmerged or withdrawn contribution is not silently recreated.
+Setup and updates install the LangMem summary worker. Its explicit policy is
+`gpt-5.6-luna` / `low`, using the native account without a second provider setup.
+Each invocation reads complete new blocks and short prior task navigation, then
+returns one index per block and updated navigation. Blocks are at most 16 KiB;
+the serialized user prompt is at most 64 KiB with at most eight blocks. Native
+system/context tokens are additional and are counted in reported usage. The
+native invocation deadline is 90 seconds with a 100-second outer deadline.
+There is no final full-transcript merge or repeated old-body input.
 
-Setup and updates automatically install the required title/summary worker.
-The adapter owns its fixed GPT-6-Luna / low policy; there is no user-facing
-model or effort setting and no inheritance from the business task. A separate
-worker reads the complete redacted body. It can only update title and summary;
-it cannot rewrite the body or hold up later captures. The native invocation
-deadline is 35 seconds, with a 45-second outer cancellation deadline. A failed
-or superseded attempt keeps the body locally but does not qualify it for a new
-export batch. Missing worker configuration is a visible error, not a normal
-excerpt mode. Local saving, summary completion and publication are separate
-states. Current worker input is still the full body; token-aware incremental
-organization for long material is not implemented.
-Updates replace obsolete model arguments with the installed adapter policy.
+The outcome ledger distinguishes returned, failed and unknown invocations and
+retains nullable native token usage. Returned outputs survive local scanner or
+apply failures without another model call. Failed/unknown calls are not repeated
+automatically. Missing worker configuration and incomplete indexes block export.
+Local saving, completed indexing, GitHub publication and cleanup have distinct
+receipts; none is inferred from process liveness.
 
-CI validates actual stored/exported content, atomic rollback, duplicate/restart
-behavior, summary failure and unauthorized fields, real Gitleaks positives and
-technical negatives, public projection and 1 MiB/10 MiB messages, cold service
-startup and native Windows console ownership. Native business acceptance also
-checks real Stop delivery, installed immutable runtime, actual remote PR bytes
-and retrieval. Component doubles do not prove those external boundaries.
+The current public format is a task manifest plus ordered blocks. Consumers
+reuse the producer's fallible indexes and rebuild local ReMe retrieval without
+model calls. Superseded fixed references expire; current Markdown files remain
+the body authority. Version 3 local databases are not read or migrated.
+
+Component checks cover actual parser/scanner behavior, atomic commits, duplicate
+and restart handling, index/outcome failures and bounded process ownership.
+Anonymous evidence from four selected real K3 histories is committed in the core
+repository. Native Stop delivery, immutable installed runtime, actual GitHub PR
+bytes and an independent public consumer are separate acceptance boundaries.

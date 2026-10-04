@@ -30,7 +30,7 @@ class HistoryImportTests(SharingFixture):
         engine.update(capture_mode='public-transcript',
                       transcript_adapter=str(SCRIPTS / 'codex_transcript.py'),
                       summary_command=[sys.executable, '-c', 'print(\'{"title":"Synthetic case","summary":"Synthetic reported result."}\')'],
-                      redactor_executable=str(self.root / 'not-needed-for-empty-source'))
+                      redactor_executable=installed_scanner())
         self.engine.write_text(json.dumps(engine))
 
     def tearDown(self):

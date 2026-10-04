@@ -12,7 +12,7 @@ import sys
 
 REPO = Path(__file__).resolve().parents[1]
 CHECKOUTS = (
-    ("MINDIE_CORE_REPO", "d2a4ea3e018b93e601ce0d87b6b838fb5c276664"),
+    ("MINDIE_CORE_REPO", "f72445403fe9069f0abaa224306943e7de608500"),
     ("MINDIE_KIMI_REPO", "90f73e76c6087ce091570f2d151b709145c913bc"),
 )
 

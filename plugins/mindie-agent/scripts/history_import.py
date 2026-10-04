@@ -20,6 +20,8 @@ def arguments(argv):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', action='append', required=True,
                         help='one user-selected native Codex JSONL file; repeat for more files')
+    parser.add_argument('--retry-summary', action='store_true',
+                        help='explicitly retry failed/unknown index calls; unknown calls may incur another charge')
     args = parser.parse_args(argv)
     for source in args.source:
         if not Path(source).is_absolute():
@@ -27,7 +29,7 @@ def arguments(argv):
     return args
 
 
-def run_imports(sources, *, emit):
+def run_imports(sources, *, emit, retry_summary=False):
     # Check these BEFORE even importing the parser, opening a source, or
     # creating a knowledge store. This operation never activates a session.
     config = read_config()
@@ -78,10 +80,11 @@ def run_imports(sources, *, emit):
                     engine, session_id=session, token=lease['token'], source=source,
                     source_session=info['session_id'], source_scope=info['project_root'],
                     identity=info['identity'], namespace='codex',
+                    retry_summary=retry_summary,
                 )
                 if result['status'] in {'imported', 'extended', 'unchanged'}:
                     summary = result.get('summary') or dict(status='missing')
-                    if summary.get('status') in {'missing', 'excerpt', 'failed', 'cancelled'}:
+                    if summary.get('status') in {'missing', 'failed', 'outcome_unknown', 'cancelled'}:
                         failed += 1
                     result['summary'] = summary
                 changed += result['status'] in {'imported', 'extended'}
@@ -115,7 +118,7 @@ def main(argv=None):
     args = arguments(argv)
     emit = lambda value: print(json.dumps(value, ensure_ascii=False), flush=True)
     try:
-        return run_imports(args.source, emit=emit)
+        return run_imports(args.source, emit=emit, retry_summary=args.retry_summary)
     except Exception as exc:
         emit(dict(status='not-started', error=type(exc).__name__,
                   detail=str(exc) if isinstance(exc, ConfigurationError) else

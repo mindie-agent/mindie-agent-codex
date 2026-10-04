@@ -29,11 +29,14 @@ import urllib.error
 import urllib.request
 
 from bounded_process import classify_transport_text, run
-from runtime_probe import UPDATER_FTS_PROBE as _FTS_PROBE, build_probe_script
+from runtime_probe import build_probe_script
 from session_gate import config_path, runtime_scripts
 from update_lock import file_lock, update_lock
 
 REPOSITORY = "https://github.com/mindie-agent/mindie-agent-codex.git"
+# The existing updater handshake retains the budget capability key. Current
+# summary rolling limits implement it; build_probe_script checks SummaryLedger
+# and the bounded worker, without requiring the retired MaintenanceBudget class.
 CONTRACT = dict(
     schema=1,
     session_admission=1,
@@ -79,7 +82,8 @@ class Incompatible(ValueError):
 _FEED_OK = frozenset({"synced", "unchanged"})
 _FEED_PENDING = frozenset({"busy", "deferred"})
 _FEED_ERROR = frozenset({"unavailable", "invalid", "exhausted"})
-_FEED_KNOWN = _FEED_OK | _FEED_PENDING | _FEED_ERROR
+_FEED_PARTIAL = frozenset({"partial"})
+_FEED_KNOWN = _FEED_OK | _FEED_PENDING | _FEED_ERROR | _FEED_PARTIAL
 
 
 def fold_feed_results(output):
@@ -88,8 +92,10 @@ def fold_feed_results(output):
     Empty list is ok. busy/deferred means not completed now, not a failed
     attempt: all-pending folds to deferred. Mix of completed (synced/unchanged)
     with pending or failed folds to degraded. No completed rows plus at least
-    one unavailable/invalid/exhausted folds to sync_failed. Every original
-    row is preserved. Unknown status or malformed stdout raises.
+    one unavailable/invalid/exhausted folds to sync_failed. A partial commit
+    or completed sync with failed cleanup folds to degraded; its original
+    completion, failure stage and cleanup receipt remain separate in the row.
+    Unknown status or malformed stdout raises.
     """
     text = (output or "").strip()
     if not text:
@@ -115,11 +121,12 @@ def fold_feed_results(output):
         rows.append(item)
     good = sum(1 for row in rows if row["status"] in _FEED_OK)
     pending = sum(1 for row in rows if row["status"] in _FEED_PENDING)
-    failed = sum(1 for row in rows if row["status"] in _FEED_ERROR)
-    if not rows or good == len(rows):
+    failed = sum(1 for row in rows if row["status"] in _FEED_ERROR or row.get("cleanup_status") == "failed")
+    partial = any(row["status"] in _FEED_PARTIAL for row in rows)
+    if not rows or (good == len(rows) and not failed):
         aggregate = "ok"
         summary = None
-    elif good and (pending or failed):
+    elif partial or (good and (pending or failed)):
         aggregate = "degraded"
         summary = _feed_error_summary(rows)
     elif failed:
@@ -137,10 +144,20 @@ def fold_feed_results(output):
 def _feed_error_summary(rows):
     parts = []
     for row in rows:
-        if row["status"] in _FEED_OK:
+        cleanup_failed = row.get("cleanup_status") == "failed"
+        if row["status"] in _FEED_OK and not cleanup_failed:
             continue
-        detail = row.get("detail") or row.get("cause") or ""
-        parts.append(f"{row['repository']}:{row['status']}:{str(detail)[:80]}")
+        details = []
+        if row.get("metadata_committed") is True:
+            details.append("metadata committed")
+        if row.get("failed_stage"):
+            details.append("stage=" + str(row["failed_stage"])[:80])
+        if cleanup_failed:
+            details.append("cleanup failed: " + str(row.get("cleanup_error") or "unknown cause")[:80])
+        detail = row.get("detail") or row.get("cause")
+        if detail:
+            details.append(str(detail)[:80])
+        parts.append(f"{row['repository']}:{row['status']}:" + ", ".join(details))
     return "; ".join(parts)[:240]
 
 

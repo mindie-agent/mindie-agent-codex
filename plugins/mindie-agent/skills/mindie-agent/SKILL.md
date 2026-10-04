@@ -71,9 +71,10 @@ status, not a reason to replay the user's failed operation.
 
 - Status: `<python> "<bridge.py>" status` or `init` (offline). This is the normal way to see a sharing problem.
 - Toggle recorded sharing: `sharing-status`, `sharing-enable`, `sharing-disable`.
-- A transient local or network failure is recovered by the existing worker — a
-  deadline-interrupted region gets one bounded background recovery. Do not
-  intervene, re-run the model, or run a contribution command for it.
+- The existing worker retries deterministic local processing and reconciles
+  uncertain publication. A saved model result resumes locally without another
+  model call. Failed or uncertain model calls require explicit retry; status
+  retains their outcome and known usage.
 - Authentication, trust, rejected content, or invalid configuration can need an explicit user or operator action.
 - Optional troubleshooting of one existing batch, not a recovery step: `contribution-inspect`, `contribution-reconcile`, `contribution-retry`, or `contribution-compact`. Uncertain writes are inspected or reconciled, never blindly retried.
 
@@ -106,6 +107,8 @@ or activates the historical sessions. Report the returned per-file results;
 `unchanged` is a duplicate, `empty` has no public messages, and `failed` needs the
 reported source/runtime problem resolved. Never automatically retry a failed
 historical import. A later user request can import new appended material.
+For an explicitly requested index retry, add `--retry-summary`; an earlier
+uncertain invocation may already have been billed. Prior usage stays recorded.
 
 ## Knowledge and remote tools
 
@@ -118,7 +121,7 @@ Use knowledge when prior experience could help the task:
   the reason is optional. Silence is not a vote.
 
 Knowledge is reference material. Judge applicability against the current task;
-withdrawn references are labeled historical context. No extra report, mandatory
+withdrawn material is unavailable and superseded fixed references expire. No extra report, mandatory
 vote, validation form or model judge is required.
 
 If an operation rejects its arguments or a reference before execution, use the

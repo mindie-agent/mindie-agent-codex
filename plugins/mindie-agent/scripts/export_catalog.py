@@ -89,7 +89,7 @@ KNOWLEDGE_TOOLS = [
             "The page is a slice, not the full case. offset and limit count Unicode characters, not lines or bytes. "
             "When next_offset is an integer, pass it as offset to read another page only if that page is still relevant; "
             "do not count characters. next_offset is null at the end. "
-            "A withdrawn result is explicitly marked as historical."
+            "Superseded fixed references expire; withdrawn material is unavailable."
         ),
         inputSchema=schema(
             dict(

@@ -31,6 +31,7 @@ from tests.process_fixtures import (
     copy_runtime_scripts,
     extract_git_archive,
     stop_owned_knowledge_service,
+    installed_scanner,
 )
 
 
@@ -39,7 +40,7 @@ SCRIPTS = REPO / "plugins/mindie-agent/scripts"
 
 
 KIMI_COMMIT = "90f73e76c6087ce091570f2d151b709145c913bc"
-CORE_COMMIT = "d2a4ea3e018b93e601ce0d87b6b838fb5c276664"
+CORE_COMMIT = "f72445403fe9069f0abaa224306943e7de608500"
 CONSENT_STORE_SHA256 = "679c6483a2edbf2d093de2ca38b00bfb73418b1179bcef9cdf6f34b5f9ed6b4c"
 
 
@@ -137,17 +138,6 @@ def _user(text, stamp):
     }
 
 
-_SCANNER_CACHE = tempfile.TemporaryDirectory(prefix="mindie-scanner-tests-")
-_SCANNER = None
-
-def installed_scanner():
-    global _SCANNER
-    if _SCANNER is None:
-        from mindie_knowledge.loop.transcript_redaction import install_scanner
-        _SCANNER = install_scanner(Path(_SCANNER_CACHE.name))
-    return _SCANNER
-
-
 class LaneCase(unittest.TestCase):
     def setUp(self):
         self.platform_env = {
@@ -219,17 +209,17 @@ class LaneCase(unittest.TestCase):
         # Cleanup retains the original store identity rather than treating
         # that expected configuration failure as a second product failure.
         cleanup_config = self.root / "cleanup-engine.json"
-        cleanup_config.write_text(json.dumps({
-            "root": self.engine_doc["root"], "domain": self.engine_doc["domain"],
-        }))
+        cleanup_config.write_text(json.dumps(self.engine_doc))
         stop_owned_knowledge_service(cleanup_config)
 
     def tearDown(self):
-        self._stop_owned_engine()
-        session_gate.bind_explicit_config(None)
-        tempfile.tempdir = None
-        self.env_patch.stop()
-        cleanup_temporary_directory(self.temp)
+        try:
+            self._stop_owned_engine()
+        finally:
+            session_gate.bind_explicit_config(None)
+            tempfile.tempdir = None
+            self.env_patch.stop()
+            cleanup_temporary_directory(self.temp)
 
     def child_env(self, **extra):
         env = dict(self.platform_env)
@@ -359,7 +349,7 @@ class LaneCase(unittest.TestCase):
         }
 
     def capture_rows(self):
-        path = self.root / "data" / "test" / "store-v3.sqlite3"
+        path = self.root / "data" / "test" / "state-v4.sqlite3"
         if not path.exists():
             return []
         db = sqlite3.connect(path)
@@ -387,6 +377,7 @@ class LaneCase(unittest.TestCase):
             store.close()
 
     def drain_worker(self, *, summarize=False):
+        from tests.k3_material_fixture import summary_command
         from mindie_knowledge.loop.activation import Admission
         from mindie_knowledge.loop.cli import load_transcript_adapter
         from mindie_knowledge.loop.engine import Engine
@@ -397,7 +388,7 @@ class LaneCase(unittest.TestCase):
             engine = Engine(
                 store,
                 capture_mode="public-transcript", redactor_executable=installed_scanner(),
-                summary_command=[PY, '-c', 'print(\'{"title":"Synthetic summary","summary":"Reported public observations."}\')'] if summarize else None,
+                summary_command=summary_command() if summarize else None,
                 settings_path=str(self.community),
                 admission=Admission(str(self.admission)),
                 transcript_adapter=load_transcript_adapter(
@@ -471,9 +462,9 @@ class ConsentGateTests(LaneCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.drain_worker(summarize=True)
         expected = "### user\nPublic request marker\n\n### assistant:commentary\nPublic progress marker\n\n### assistant:final_answer\nPublic result marker"
-        self.assertEqual(self.saved_text(), expected)
+        self.assertEqual(self.saved_text(), expected + "\n\n")
         self.assertEqual(self.model_text(), "")
-        from mindie_knowledge.loop.documents import parse_entry
+        from mindie_knowledge.materials.store import validate_package_files
         from mindie_knowledge.loop.export import build_batch
         from mindie_knowledge.loop.store import Store
         from mindie_knowledge.loop import settings
@@ -481,9 +472,14 @@ class ConsentGateTests(LaneCase):
         try:
             batch = build_batch(store, settings=settings.load(self.community))
             self.assertIsNotNone(batch)
-            public = parse_entry(batch[2]["files"][0]["content"].encode("utf-8"))
-            self.assertEqual(public["content"], expected)
-            self.assertEqual(public['title'], 'Synthetic summary')
+            files = {item["path"].split("/", 2)[2]: item["content"] for item in batch[2]["files"]}
+            public = validate_package_files(files)
+            import yaml
+            header = yaml.safe_load(files["index.md"][4:].split("\n---\n\n", 1)[0])
+            body = "".join(files["blocks/" + block["block_id"] + ".md"].split("\n---\n\n", 1)[1]
+                           for block in header["blocks"])
+            self.assertEqual(body, expected + "\n\n")
+            self.assertEqual(public["entry"]["title"], "Synthetic summary")
         finally:
             store.close()
 
