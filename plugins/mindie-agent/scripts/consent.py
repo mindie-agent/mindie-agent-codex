@@ -80,12 +80,18 @@ def record_reporting(value: str, config_file=None) -> str:
 
 
 def _read_adapter_config(config_file: Path) -> dict:
-    """One read of the adapter configuration; {} when absent or invalid."""
+    """Absence is a new installation; corrupt configuration is a fault."""
     try:
         data = json.loads(Path(config_file).read_text(encoding='utf-8'))
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return {}
-    return data if isinstance(data, dict) else {}
+    except OSError as exc:
+        raise ConsentError("adapter configuration is unreadable", state="unreadable") from exc
+    except ValueError as exc:
+        raise ConsentError("adapter configuration is corrupt", state="corrupt") from exc
+    if not isinstance(data, dict):
+        raise ConsentError("adapter configuration is not an object", state="corrupt")
+    return data
 
 
 def _legacy_community_files(config_file: Path, config: dict):

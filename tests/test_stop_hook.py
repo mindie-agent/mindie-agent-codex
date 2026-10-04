@@ -27,35 +27,40 @@ from auto_update import stop_hook_commands
 class StopHookTests(unittest.TestCase):
     host_shell = None
 
-    def run_stop(self, plugin, *, python=None, **env):
+    def run_stop(self, plugin, *, python=None, failed=False, **env):
         event = {"session_id": "hook-regression", "last_assistant_message": "Done"}
         command = stop_hook_commands(
             [python or sys.executable, str(plugin / "scripts/bridge.py"), "stop"]
         )["commandWindows" if os.name == "nt" else "command"]
         argv = [self.host_shell, '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command] if self.host_shell else command
+        # This fixture verifies protocol isolation and single delivery. Its
+        # extra host-shell process needs a separate startup allowance; passing
+        # here does not establish the production hook's 5-second cold-start SLA.
+        timeout = STOP["timeout"] + (10 if self.host_shell else 0)
         result = subprocess.run(
             argv,
             input=json.dumps(event),
             text=True,
             capture_output=True,
-            timeout=STOP["timeout"],
+            timeout=timeout,
             shell=self.host_shell is None,
             env={**os.environ, "PLUGIN_ROOT": str(plugin), **env},
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), {})
-        self.assertEqual(result.stderr, "")
+        self.assertEqual(result.stderr.strip(),
+                         "MindIE Stop capture failed before completion; inspect MindIE status." if failed else "")
         return event
 
     def test_evicted_plugin_cache_does_not_resume_conversation(self):
         with tempfile.TemporaryDirectory() as root:
-            self.run_stop(Path(root) / "missing cache")
+            self.run_stop(Path(root) / "missing cache", failed=True)
             self.assertEqual(list(Path(root).iterdir()), [])
     def test_missing_interpreter_does_not_resume_conversation(self):
         with tempfile.TemporaryDirectory() as root:
             self.run_stop(
                 PLUGIN,
-                python=str(Path(root) / "missing-python.exe"),
+                python=str(Path(root) / "missing-python.exe"), failed=True,
             )
 
     def test_bridge_failures_and_outputs_cannot_control_conversation(self):
@@ -70,7 +75,7 @@ class StopHookTests(unittest.TestCase):
                     "print('capture failure', file=sys.stderr)\n"
                     f"raise SystemExit({code})\n"
                 )
-                self.run_stop(plugin, python=sys.executable)
+                self.run_stop(plugin, python=sys.executable, failed=code != 0)
 
     def test_success_still_delivers_event_once(self):
         with tempfile.TemporaryDirectory() as root:
@@ -96,6 +101,14 @@ class StopHookTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             self.run_stop(PLUGIN, MINDIE_AGENT_CONFIG=str(Path(root) / "missing.json"))
             self.assertEqual(list(Path(root).iterdir()), [])
+
+    def test_real_bridge_corrupt_config_warns_without_resuming(self):
+        with tempfile.TemporaryDirectory() as root:
+            config = Path(root) / 'adapter.json'
+            config.write_text('{broken')
+            self.run_stop(PLUGIN, failed=True, MINDIE_AGENT_CONFIG=str(config),
+                          MINDIE_DIAGNOSTICS_ROOT=str(Path(root) / 'diagnostics'))
+            self.assertEqual(config.read_text(), '{broken')
 
 
 @unittest.skipUnless(os.name == 'nt', 'native PowerShell hook dispatch')

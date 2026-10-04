@@ -16,6 +16,8 @@ import unittest
 from unittest.mock import patch
 from tests.process_fixtures import cleanup_temporary_directory, stop_owned_knowledge_service, copy_runtime_scripts
 
+from tests.process_fixtures import public_engine_config
+
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
 from session_gate import Inactive, Sessions
@@ -32,11 +34,7 @@ class SessionGateTests(unittest.TestCase):
         self.admission = self.root / "codex.admission.sqlite3"
         self.engine.write_text(
             json.dumps(
-                dict(
-                    root=str(self.root / "data"),
-                    domain="test",
-                    admission_path=str(self.admission),
-                )
+                public_engine_config(self.root / "data", admission_path=str(self.admission))
             )
         )
         self.write_config()
@@ -47,9 +45,11 @@ class SessionGateTests(unittest.TestCase):
         self.sessions = Sessions()
 
     def tearDown(self):
-        stop_owned_knowledge_service(self.engine)
-        self.environment.stop()
-        cleanup_temporary_directory(self.temp)
+        try:
+            stop_owned_knowledge_service(self.engine)
+        finally:
+            self.environment.stop()
+            cleanup_temporary_directory(self.temp)
 
     def write_config(self, **extra):
         value = dict(
@@ -511,11 +511,7 @@ class SessionGateTests(unittest.TestCase):
         lease = self.activate()
         self.engine.write_text(
             json.dumps(
-                dict(
-                    root=str(self.root / "data"),
-                    domain="changed",
-                    admission_path=str(self.admission),
-                )
+                public_engine_config(self.root / "data", domain="changed", admission_path=str(self.admission))
             )
         )
         self.assertEqual(
@@ -555,8 +551,9 @@ class SessionGateTests(unittest.TestCase):
         store.close()
         for event in [self.event("other"), self.event(), self.event()]:
             result = self.bridge("stop", event)
-            self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
-        db = sqlite3.connect(self.root / "data" / "test" / "store-v3.sqlite3")
+            expected = 1 if event['session_id'] == 'other' else 0
+            self.assertEqual((result.returncode, json.loads(result.stdout)), (expected, {}))
+        db = sqlite3.connect(self.root / "data" / "test" / "state-v4.sqlite3")
         try:
             count = db.execute("SELECT count(*) FROM captures").fetchone()[0]
             other = db.execute(
@@ -579,7 +576,7 @@ class SessionGateTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 1.9)
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
         self.bridge("stop", self.event())
-        db = sqlite3.connect(self.root / "data" / "test" / "store-v3.sqlite3")
+        db = sqlite3.connect(self.root / "data" / "test" / "state-v4.sqlite3")
         try:
             count = db.execute("SELECT count(*) FROM captures").fetchone()[0]
         finally:
@@ -594,7 +591,7 @@ class SessionGateTests(unittest.TestCase):
         started = time.monotonic()
         result = self.bridge("stop", self.event(), timeout=3)
         self.assertLess(time.monotonic() - started, 1.9)
-        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
         self.assertEqual(marker.read_text().splitlines(), ["attempt"])
 
     def test_corrupt_activation_state_fails_closed(self):
@@ -820,10 +817,12 @@ class SessionGateTests(unittest.TestCase):
             )
         )
         result = self.bridge("activate")
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 1, result.stderr)
         payload = json.loads(result.stdout)
         # Conflicting legacy evidence is diagnosed, never guessed; the
-        # read-only binding still succeeds and no consent is written.
+        # binding receipt survives, capture fails and no consent is written.
+        self.assertEqual(payload['status'], 'degraded')
+        self.assertEqual(payload['capture'], 'unavailable')
         self.assertEqual(payload["migration"]["consent"]["status"], "conflict")
         self.assertFalse((self.root / "mindie-consent.json").exists())
         self.assertEqual(payload["migration"]["community"]["status"], "adopted")

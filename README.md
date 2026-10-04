@@ -20,9 +20,9 @@ Old business Skills and profiling remain deferred.
 Requires Python 3.11+, Git, `uv`, and an authenticated Codex CLI with native
 plugin support.
 
-The knowledge interpreter also needs SQLite 3.43.0 or newer with FTS5 and
-`contentless_delete` support. Installation checks the actual SQLite library;
-the Python version alone does not establish this capability.
+Installation probes the actual pinned runtime, including ReMe, LangMem and the
+summary outcome ledger. SQLite stores metadata; retrieval does not require FTS5
+or `contentless_delete`.
 
 Sign in to Codex, then install from a downloaded copy:
 
@@ -157,9 +157,13 @@ creation or organizer invocation. Plugin and public knowledge updates continue.
 
 With contribution on, an admitted Stop delivery saves the current task's user
 messages, public assistant progress and final answers in their original order.
+Users can explicitly [contribute selected historical transcripts](docs/history-import.md).
+This is separate from activation and Stop capture; it never scans past sessions
+automatically and reuses the saved contribution choice and project scope.
+
 Tools, hidden reasoning, injected instructions and inherited task history are
 excluded. A local Gitleaks scanner and privacy rules redact the retained text
-before storage or any optional summary call. No model writes or rewrites the
+before storage or the required summary call. No model writes or rewrites the
 body. One task appends to one record within its authorized sharing generation;
 the body and read position commit together. The publication path checks scope
 and sensitive content before sending a Markdown contribution PR; raw
@@ -231,14 +235,17 @@ no downloads and has no model dependency. A missing or failed scanner leaves
 the input unread instead of publishing unredacted content. Public messages are
 not shortened to fit a model; the parser advances at complete message boundaries.
 
-Setup and updates automatically install the optional title/summary worker.
-The adapter owns its fixed GPT-6-Luna / low policy; there is no user-facing
-model or effort setting and no inheritance from the business task. A separate
-worker reads the complete redacted body. It can only update title and summary;
-it cannot rewrite the body or hold up later captures. The native invocation
-deadline is 35 seconds, with a 45-second outer cancellation deadline. A failed
-or superseded attempt leaves the source excerpt and full body available.
-Updates replace obsolete model arguments with the installed adapter policy.
+Setup and updates install the required LangMem index worker with the explicit
+`gpt-5.6-luna` / `low` native policy. It reads complete new blocks plus short
+previous navigation and returns block titles/summaries and updated navigation;
+it cannot rewrite source bodies. Blocks are at most 16 KiB and each serialized
+user prompt is at most 64 KiB. The native deadline is 90 seconds with a 100-second
+outer deadline. Native system/context overhead is included in recorded usage.
+Returned output survives local processing failures without another paid call.
+Failed or uncertain model calls require explicit retry and retain prior usage.
+Missing worker configuration blocks publication and remains a visible failure.
+Consumers reuse producer indexes without model calls. Explicit historical import
+uses the same incremental pipeline; there is no final full-transcript merge.
 See [the transcript contract](docs/public-transcript.md).
 
 The updater records preparation and install outcomes. A known temporary

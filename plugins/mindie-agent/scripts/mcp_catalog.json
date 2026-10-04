@@ -29,7 +29,7 @@
     },
     {
       "name": "knowledge_explain",
-      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Read one page of a result's detailed case and cited evidence using its exact short ref. The page is a slice, not the full case. offset and limit count Unicode characters, not lines or bytes. When next_offset is an integer, pass it as offset to read another page only if that page is still relevant; do not count characters. next_offset is null at the end. A withdrawn result is explicitly marked as historical.",
+      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Read one page of a result's detailed case and cited evidence using its exact short ref. The page is a slice, not the full case. offset and limit count Unicode characters, not lines or bytes. When next_offset is an integer, pass it as offset to read another page only if that page is still relevant; do not count characters. next_offset is null at the end. Superseded fixed references expire; withdrawn material is unavailable.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -879,7 +879,7 @@
     },
     {
       "name": "remote_artifact_pull",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Pull a remote artifact through SSH streaming with hash verification.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Pull a remote artifact through SSH streaming with hash verification; reject local overwrite by default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -929,6 +929,11 @@
           },
           "local_dir": {
             "type": "string"
+          },
+          "overwrite": {
+            "type": "boolean",
+            "default": false,
+            "description": "Replace existing local files only when explicitly true. Hash-identical files are skipped."
           },
           "timeout_ms": {
             "type": "integer"

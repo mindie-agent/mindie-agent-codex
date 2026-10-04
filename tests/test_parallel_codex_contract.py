@@ -31,6 +31,7 @@ from tests.process_fixtures import (
     copy_runtime_scripts,
     extract_git_archive,
     stop_owned_knowledge_service,
+    installed_scanner,
 )
 
 
@@ -39,7 +40,7 @@ SCRIPTS = REPO / "plugins/mindie-agent/scripts"
 
 
 KIMI_COMMIT = "90f73e76c6087ce091570f2d151b709145c913bc"
-CORE_COMMIT = "82f7d7dd4c52637e1448e3747262a20453f4bcb4"
+CORE_COMMIT = "929bdcb918f2207aea38b02a14bd8e6219fabac4"
 CONSENT_STORE_SHA256 = "679c6483a2edbf2d093de2ca38b00bfb73418b1179bcef9cdf6f34b5f9ed6b4c"
 
 
@@ -137,17 +138,6 @@ def _user(text, stamp):
     }
 
 
-_SCANNER_CACHE = tempfile.TemporaryDirectory(prefix="mindie-scanner-tests-")
-_SCANNER = None
-
-def installed_scanner():
-    global _SCANNER
-    if _SCANNER is None:
-        from mindie_knowledge.loop.transcript_redaction import install_scanner
-        _SCANNER = install_scanner(Path(_SCANNER_CACHE.name))
-    return _SCANNER
-
-
 class LaneCase(unittest.TestCase):
     def setUp(self):
         self.platform_env = {
@@ -219,17 +209,17 @@ class LaneCase(unittest.TestCase):
         # Cleanup retains the original store identity rather than treating
         # that expected configuration failure as a second product failure.
         cleanup_config = self.root / "cleanup-engine.json"
-        cleanup_config.write_text(json.dumps({
-            "root": self.engine_doc["root"], "domain": self.engine_doc["domain"],
-        }))
+        cleanup_config.write_text(json.dumps(self.engine_doc))
         stop_owned_knowledge_service(cleanup_config)
 
     def tearDown(self):
-        self._stop_owned_engine()
-        session_gate.bind_explicit_config(None)
-        tempfile.tempdir = None
-        self.env_patch.stop()
-        cleanup_temporary_directory(self.temp)
+        try:
+            self._stop_owned_engine()
+        finally:
+            session_gate.bind_explicit_config(None)
+            tempfile.tempdir = None
+            self.env_patch.stop()
+            cleanup_temporary_directory(self.temp)
 
     def child_env(self, **extra):
         env = dict(self.platform_env)
@@ -359,7 +349,7 @@ class LaneCase(unittest.TestCase):
         }
 
     def capture_rows(self):
-        path = self.root / "data" / "test" / "store-v3.sqlite3"
+        path = self.root / "data" / "test" / "state-v4.sqlite3"
         if not path.exists():
             return []
         db = sqlite3.connect(path)
@@ -386,7 +376,8 @@ class LaneCase(unittest.TestCase):
         finally:
             store.close()
 
-    def drain_worker(self):
+    def drain_worker(self, *, summarize=False):
+        from tests.k3_material_fixture import summary_command
         from mindie_knowledge.loop.activation import Admission
         from mindie_knowledge.loop.cli import load_transcript_adapter
         from mindie_knowledge.loop.engine import Engine
@@ -397,6 +388,7 @@ class LaneCase(unittest.TestCase):
             engine = Engine(
                 store,
                 capture_mode="public-transcript", redactor_executable=installed_scanner(),
+                summary_command=summary_command() if summarize else None,
                 settings_path=str(self.community),
                 admission=Admission(str(self.admission)),
                 transcript_adapter=load_transcript_adapter(
@@ -406,6 +398,12 @@ class LaneCase(unittest.TestCase):
             for row in self.capture_rows():
                 if row["status"] in {"queued", "pending", "deferred"}:
                     engine._process(row["id"])
+            if summarize:
+                from mindie_knowledge.loop.transcript_capture import summarize_due
+                engine.last_activity = time.monotonic() - 10
+                with store._write_txn():
+                    store.db.execute('UPDATE transcript_tasks SET summary_due=0')
+                summarize_due(engine)
         finally:
             store.close()
 
@@ -422,7 +420,7 @@ class LaneCase(unittest.TestCase):
 
 
 class ConsentGateTests(LaneCase):
-    def test_corrupt_transcript_isolates_only_the_bad_record(self):
+    def test_corrupt_transcript_fails_without_claiming_complete_capture(self):
         self.write_consent("contribute", reporting="disabled")
         self.write_community(enabled=True)
         self.open_store()
@@ -435,14 +433,14 @@ class ConsentGateTests(LaneCase):
             stream.write((json.dumps(_user("Public after corruption", self.after_boundary("task-main", 31)))+'\n').encode())
         self.assertEqual(self.stop(self.event("task-main", transcript)).returncode, 0)
         self.drain_worker()
-        self.assertEqual(self.saved_text(), '### user\nPublic before corruption\n\n### user\nPublic after corruption')
-        self.assertEqual(self.capture_rows()[0]['status'], 'organized')
+        self.assertEqual(self.saved_text(), '')
+        self.assertEqual(self.capture_rows()[0]['status'], 'failed')
         from mindie_knowledge.loop.store import Store
         store = Store(self.root / "data", "test")
         try:
-            self.assertEqual(store.cursor(str(transcript.resolve()))['ok_finish'], transcript.stat().st_size)
+            self.assertIsNone(store.cursor(str(transcript.resolve())))
             row = store.capture_row(self.capture_rows()[0]['id'])
-            discarded = json.loads(row['detail'])['discarded_records']
+            discarded = json.loads(row['detail'])['records']
             self.assertEqual(len(discarded), 1)
             self.assertEqual(discarded[0]['reason'], 'invalid record')
         finally:
@@ -462,11 +460,11 @@ class ConsentGateTests(LaneCase):
         _jsonl(transcript, records)
         result = self.stop(self.event("task-main", transcript))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.drain_worker()
+        self.drain_worker(summarize=True)
         expected = "### user\nPublic request marker\n\n### assistant:commentary\nPublic progress marker\n\n### assistant:final_answer\nPublic result marker"
-        self.assertEqual(self.saved_text(), expected)
+        self.assertEqual(self.saved_text(), expected + "\n\n")
         self.assertEqual(self.model_text(), "")
-        from mindie_knowledge.loop.documents import parse_entry
+        from mindie_knowledge.materials.store import validate_package_files
         from mindie_knowledge.loop.export import build_batch
         from mindie_knowledge.loop.store import Store
         from mindie_knowledge.loop import settings
@@ -474,8 +472,14 @@ class ConsentGateTests(LaneCase):
         try:
             batch = build_batch(store, settings=settings.load(self.community))
             self.assertIsNotNone(batch)
-            public = parse_entry(batch[2]["files"][0]["content"].encode("utf-8"))
-            self.assertEqual(public["content"], expected)
+            files = {item["path"].split("/", 2)[2]: item["content"] for item in batch[2]["files"]}
+            public = validate_package_files(files)
+            import yaml
+            header = yaml.safe_load(files["index.md"][4:].split("\n---\n\n", 1)[0])
+            body = "".join(files["blocks/" + block["block_id"] + ".md"].split("\n---\n\n", 1)[1]
+                           for block in header["blocks"])
+            self.assertEqual(body, expected + "\n\n")
+            self.assertEqual(public["entry"]["title"], "Synthetic summary")
         finally:
             store.close()
 
@@ -516,7 +520,7 @@ class ConsentGateTests(LaneCase):
                 observed = self.model_text()
                 self.assertEqual(
                     (result.returncode, len(rows), observed.count(SENTINEL), observed.count("{")),
-                    (0, 0, 0, 0),
+                    (1 if name in {"corrupt", "missing"} else 0, 0, 0, 0),
                     "\n".join([
                         f"consent={name}",
                         f"stop_rc={result.returncode}",
@@ -574,7 +578,7 @@ class ConsentGateTests(LaneCase):
             self.event("parent-task", transcript, turn="turn-parent"),
             thread="child-task",
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 1, result.stderr)
         rows = self.capture_rows()
         if rows:
             self.drain_worker()
@@ -1135,17 +1139,18 @@ class AuthorityMigrationTests(LaneCase):
         if os.name == "posix":
             self.community.chmod(0)
             try:
-                view = sharing.read(self.config)
+                with self.assertRaises((OSError, ValueError)):
+                    sharing.read(self.config)
             finally:
                 self.community.chmod(0o600)
         else:
-            view = sharing.read(self.config)
-        self.assertIsNone(view)
-        self.assertFalse(sharing.capture_allowed(
-            {"project_root": str(self.work), "root_session": "t", "activated_at": 1},
-            str(self.work),
-            self.config,
-        ))
+            with self.assertRaises(ValueError):
+                sharing.read(self.config)
+        with self.assertRaises(ValueError):
+            sharing.capture_allowed(
+                {"project_root": str(self.work), "root_session": "t", "activated_at": 1},
+                str(self.work), self.config,
+            )
 
     def _legacy_enabled(self, path, roots):
         path.write_text(json.dumps({
@@ -1229,18 +1234,20 @@ class AuthorityMigrationTests(LaneCase):
         if os.name == "posix":
             self.community.chmod(0)
             try:
-                self.assertIsNone(sharing.read(self.config))
-                self.assertFalse(sharing.capture_allowed(
-                    {"project_root": str(self.work), "root_session": "t", "activated_at": 1.0},
-                    str(self.work),
-                    self.config,
-                ))
+                with self.assertRaises(PermissionError):
+                    sharing.read(self.config)
+                with self.assertRaises(PermissionError):
+                    sharing.capture_allowed(
+                        {"project_root": str(self.work), "root_session": "t", "activated_at": 1.0},
+                        str(self.work), self.config,
+                    )
             finally:
                 self.community.chmod(0o600)
         # On Windows the following malformed-byte case remains active; chmod
         # does not provide a file ACL denial test.
         self.community.write_text("{not-json")
-        self.assertIsNone(sharing.read(self.config))
+        with self.assertRaises(ValueError):
+            sharing.read(self.config)
         self.assertEqual(sharing.configured_path(self.config), self.community)
         self.write_community(enabled=False, roots=[self.work])
         moved = sharing.migrate_community_path(self.config)

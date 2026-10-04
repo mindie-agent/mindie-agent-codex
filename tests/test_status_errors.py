@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from tests.process_fixtures import public_engine_config
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
 
@@ -94,8 +95,7 @@ class ScopedStatus(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            engine = dict(root=str(root / "data"), domain="test",
-                          admission_path=str(root / "admission.sqlite3"))
+            engine = public_engine_config(root / "data", admission_path=str(root / "admission.sqlite3"))
             (root / "engine.json").write_text(json.dumps(engine))
             config = root / "adapter.json"
             config.write_text(json.dumps(dict(
@@ -128,7 +128,7 @@ class ScopedStatus(unittest.TestCase):
                                          (owner, "entry", "rev", "up", "private", 1, task + "-batch", 1))
             finally:
                 store.close()
-            state = root / "data/test/store-v3.sqlite3"
+            state = root / "data/test/state-v4.sqlite3"
             before = state.read_bytes(), Path(engine["admission_path"]).read_bytes()
             base_env = {key: value for key, value in os.environ.items()
                         if key not in {"CODEX_THREAD_ID", "PYTHONPATH"}}

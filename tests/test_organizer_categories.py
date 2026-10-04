@@ -1,196 +1,132 @@
-"""Typed organizer failure categories; local children only, no model calls."""
-import importlib.util
+"""K3-derived failure dimensions across the real worker protocol boundary.
+
+These are controlled native-process faults on anonymous case inputs, not copied
+history or claims that a K3 task experienced every injected failure.
+"""
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
+SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
 sys.path.insert(0, str(SCRIPTS))
-
-guard_spec = importlib.util.spec_from_file_location(
-    "process_guard", SCRIPTS / "process_guard.py"
-)
-guard = importlib.util.module_from_spec(guard_spec)
-guard_spec.loader.exec_module(guard)
-
-worker_spec = importlib.util.spec_from_file_location(
-    "agent_worker", SCRIPTS / "agent_worker.py"
-)
-worker = importlib.util.module_from_spec(worker_spec)
+import agent_worker as worker
+import process_guard as guard
+from mindie_knowledge.materials import summarizer
+from k3_material_fixture import request, completion
 
 
-def _load_worker():
-    with patch.object(sys, "path", [str(SCRIPTS), *sys.path]):
-        worker_spec.loader.exec_module(worker)
-    return worker
-
-
-ORGANIZE = {"role": "summarize", "text": "local synthetic probe", "partial": False}
-
-
-def _worker_cli(payload, *, binary=None, extra_env=None, raw=None, timeout=5):
-    env = {
-        **os.environ,
-        "MINDIE_CODEX_BIN": binary or "/missing/codex-not-called",
-    }
-    if extra_env:
-        env.update(extra_env)
-    data = raw if raw is not None else json.dumps(payload)
-    return subprocess.run(
-        [sys.executable, str(SCRIPTS / "agent_worker.py")],
-        input=data,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        env=env,
-    )
-
-
-def _worker_cli_with_invoker(payload, behavior, *, timeout=5):
-    """Run the actual worker CLI with its native invoker replaced by Python code.
-
-    The Codex binary is a native executable contract. These cases test worker
-    result classification, so a Python subprocess drives the real worker CLI
-    and substitutes only the native invocation boundary.
-    """
-    driver = (
-        "import json,runpy,sys\n"
-        "from pathlib import Path\n"
-        f"sys.path.insert(0, {str(SCRIPTS)!r})\n"
-        "import process_guard\n"
-        "behavior, worker_path = sys.argv[1], sys.argv[2]\n"
-        "def invoke(command, prompt, **kwargs):\n"
-        " if behavior == 'native-error':\n"
-        "  raise process_guard.NativeFailure('private fixture failure')\n"
-        " output = command[command.index('--output-last-message') + 1]\n"
-        " if behavior == 'malformed':\n"
-        "  Path(output).write_text('not-json', encoding='utf-8')\n"
-        " elif behavior == 'over-limit':\n"
-        "  raise process_guard.OutputLimitExceeded('synthetic output flood')\n"
-        " else:\n"
-        "  raise AssertionError('unknown fixture behavior')\n"
-        "process_guard.run_codex = invoke\n"
-        "sys.argv = [worker_path]\n"
-        "runpy.run_path(worker_path, run_name='__main__')\n"
-    )
-    return subprocess.run(
-        [sys.executable, "-c", driver, behavior, str(SCRIPTS / "agent_worker.py")],
-        input=json.dumps(payload),
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        env=dict(os.environ, MINDIE_CODEX_BIN="codex-fixture"),
-    )
+def process_with_events(events, wait=False):
+    program = 'import time\n' + '\n'.join(f'print({json.dumps(event)!r}, flush=True)' for event in events)
+    if wait:
+        program += '\ntime.sleep(10)'
+    return [sys.executable, '-c', program]
 
 
 class OrganizerCategoryTests(unittest.TestCase):
-    def test_guard_invalid_event_is_invalid_result(self):
-        with self.assertRaises(guard.InvalidResultError):
-            guard.run_codex(
-                [sys.executable, "-c", "print('not-json', flush=True)"],
-                "input",
-            )
+    def test_k3_01_known_model_rejection_is_not_unknown_paid_outcome(self):
+        payload = request(worker)
+        rejection = "HTTP 400: This model is not supported when using Codex with a ChatGPT account"
+        events = [dict(type='error', message=rejection), dict(type='turn.failed', error=dict(message=rejection))]
+        calls = []
+        def native(command, prompt, **options):
+            calls.append(command)
+            return guard.run_codex(process_with_events(events), prompt, **options)
+        with patch.object(worker, 'run_codex', native):
+            value = worker.run(payload)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(value['status'], 'failed')
+        self.assertEqual(value['error'], 'configuration')
+        self.assertEqual(value['billing_status'], 'rejected')
+        self.assertEqual(value['error_reason'], 'native_model_rejected')
+        self.assertEqual(value['model_calls'], 1)
+        self.assertIsNone(value['usage'])
+        self.assertFalse(value['usage_known'])
+        self.assertNotIn(rejection, json.dumps(value))
+        summarizer.validate_outcome(value, payload)
 
-    def test_guard_nonzero_exit_is_native(self):
-        with self.assertRaises(guard.NativeFailure):
-            guard.run_codex(
-                [sys.executable, "-c", "raise SystemExit(3)"],
-                "input",
-            )
+    def test_k3_04_terminal_failure_is_known_but_unreported_usage_stays_unknown(self):
+        payload = request(worker, 'K3-04')
+        def native(command, prompt, **options):
+            return guard.run_codex(process_with_events([dict(type='turn.failed', error=dict(message='SYNTHETIC_FAILURE'))]), prompt, **options)
+        with patch.object(worker, 'run_codex', native):
+            value = worker.run(payload)
+        self.assertEqual(value['status'], 'failed')
+        self.assertEqual(value['error'], 'native')
+        self.assertEqual(value['billing_status'], 'unknown')
+        self.assertIsNone(value['usage'])
 
-    def test_wait_timeout_is_deadline(self):
-        with patch.object(guard, "TIMEOUT", 0.15):
-            with self.assertRaises(TimeoutError):
-                guard.run_codex(
-                    [sys.executable, "-c", "import time; time.sleep(10)"],
-                    "input",
-                )
+    def test_k3_03_tool_attempt_aborts_without_waiting_for_more_progress(self):
+        payload = request(worker, 'K3-03')
+        def native(command, prompt, **options):
+            return guard.run_codex(process_with_events([
+                dict(type='item.started', item=dict(type='command_execution'))], wait=True), prompt, **options)
+        start = time.monotonic()
+        with patch.object(worker, 'run_codex', native):
+            value = worker.run(payload)
+        self.assertLess(time.monotonic() - start, 2)
+        self.assertEqual(value['status'], 'outcome_unknown')
+        self.assertEqual(value['error'], 'native')
+        self.assertEqual(value['model_calls'], 1)
 
-    def test_in_process_role_and_missing_bin_are_configuration(self):
-        loaded = _load_worker()
-        with self.assertRaises(loaded.ConfigurationError):
-            loaded.run({"role": "judge", "outcome": "x"})
-        with self.assertRaises(loaded.ConfigurationError):
-            loaded.run({"increment": "x"})
-        with self.assertRaises(loaded.ConfigurationError):
-            loaded.run({"role": []})
-        with patch.dict(os.environ, {"MINDIE_CODEX_BIN": "/no/such/codex"}):
-            with self.assertRaises(loaded.ConfigurationError):
-                loaded.run(dict(ORGANIZE))
+    def test_k3_02_invalid_return_keeps_completed_usage_without_repeating(self):
+        payload = request(worker, 'K3-02')
+        def native(command, prompt, **options):
+            completion(options['receipt'])
+            Path(command[command.index('--output-last-message') + 1]).write_text('not-json')
+        with patch.object(worker, 'run_codex', native):
+            value = worker.run(payload)
+        self.assertEqual(value['status'], 'failed')
+        self.assertEqual(value['error'], 'invalid_result')
+        self.assertEqual(value['raw_result'], 'not-json')
+        self.assertEqual(value['error_reason'], 'result_json_invalid')
+        self.assertEqual(value['usage']['input_tokens'], 120)
+        self.assertEqual(value['model_calls'], 1)
 
-    def test_cli_malformed_input_and_missing_bin(self):
-        bad = _worker_cli(None, raw="{")
-        self.assertEqual(bad.returncode, 65)
-        self.assertEqual(bad.stderr.strip(), "summary failed: invalid_result")
-        for raw in ("[]", "x" * 65537):
-            invalid = _worker_cli(None, raw=raw)
-            self.assertEqual(invalid.returncode, 65)
-            self.assertEqual(invalid.stderr.strip(), "summary failed: invalid_result")
-        missing = _worker_cli(ORGANIZE)
-        self.assertEqual(missing.returncode, 78)
-        self.assertEqual(missing.stderr.strip(), "summary failed: configuration")
-        self.assertNotIn("No such file", missing.stderr)
+    def test_k3_04_lost_native_stream_never_returns_empty_success(self):
+        payload = request(worker, 'K3-04')
+        def native(command, prompt, **options):
+            return guard.run_codex([sys.executable, '-c', 'pass'], prompt, **options)
+        with patch.object(worker, 'run_codex', native):
+            value = worker.run(payload)
+        self.assertEqual(value['status'], 'outcome_unknown')
+        self.assertEqual(value['error'], 'native')
+        self.assertIsNone(value['result'])
 
-    def test_cli_native_error_event(self):
-        result = _worker_cli_with_invoker(ORGANIZE, "native-error")
-        self.assertEqual(result.returncode, 70)
-        self.assertEqual(result.stderr.strip(), "summary failed: native")
-        self.assertNotIn("error", result.stdout)
+    def test_k3_01_cli_configuration_failure_is_explicit_envelope(self):
+        with patch.dict(os.environ, MINDIE_CODEX_BIN='/missing/k3-small-model'):
+            payload = request(worker)
+            completed = subprocess.run([sys.executable, str(SCRIPTS / 'agent_worker.py')],
+                                       input=json.dumps(payload), text=True, capture_output=True,
+                                       timeout=5, env=dict(os.environ))
+        self.assertEqual(completed.returncode, 0)
+        value = json.loads(completed.stdout)
+        self.assertEqual(value['status'], 'failed')
+        self.assertEqual(value['error'], 'configuration')
+        self.assertEqual(value['model_calls'], 0)
+        self.assertNotIn('No such file', completed.stderr)
 
-    def test_cli_malformed_result_file(self):
-        result = _worker_cli_with_invoker(ORGANIZE, "malformed")
-        self.assertEqual(result.returncode, 65)
-        self.assertEqual(result.stderr.strip(), "summary failed: invalid_result")
-        self.assertNotIn("not-json", result.stderr)
+    def test_k3_03_cli_rejects_raw_history_sized_wire_before_a_model(self):
+        completed = subprocess.run([sys.executable, str(SCRIPTS / 'agent_worker.py')],
+                                   input='x' * (worker.MAX_REQUEST_BYTES + 1), text=True,
+                                   capture_output=True, timeout=3,
+                                   env=dict(os.environ, MINDIE_CODEX_BIN='/missing/k3-not-called'))
+        self.assertEqual(completed.returncode, 65)
+        self.assertEqual(completed.stderr.strip(), 'summary protocol failed: invalid_result')
+        self.assertEqual(completed.stdout, '')
 
-    def test_cli_result_file_output_limit(self):
-        result = _worker_cli_with_invoker(ORGANIZE, "over-limit")
-        self.assertEqual(result.returncode, 75)
-        self.assertEqual(result.stderr.strip(), "summary failed: output_limit")
-        self.assertNotIn("xxxx", result.stderr)
-
-    def test_unexpected_failure_is_generic(self):
-        loaded = _load_worker()
-        self.assertTrue(callable(loaded.main))
-        self.assertFalse(isinstance(RuntimeError("secret-token"), loaded.ConfigurationError))
-        driver = (
-            "import runpy,sys\n"
-            f"sys.path.insert(0, {str(SCRIPTS)!r})\n"
-            "import process_guard\n"
-            "process_guard.run_codex = lambda *a, **k: (_ for _ in ()).throw(RuntimeError('secret-token'))\n"
-            "sys.argv = ['agent_worker.py']\n"
-            f"runpy.run_path({str(SCRIPTS / 'agent_worker.py')!r}, run_name='__main__')\n"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", driver],
-            input=json.dumps(ORGANIZE),
-            text=True,
-            capture_output=True,
-            timeout=3,
-        )
-        self.assertEqual(result.returncode, 2)
-        self.assertEqual(result.stderr.strip(), "summary failed: unknown")
-        self.assertNotIn("secret-token", result.stderr)
-        self.assertEqual(result.stdout, "")
-
-    def test_guard_invalid_item_shape(self):
-        with self.assertRaises(guard.InvalidResultError):
-            guard.run_codex([sys.executable, "-c", "print('{\"type\":\"item.started\",\"item\":[]}')"], "input")
-
-    def test_unlaunchable_format_is_configuration(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "not-an-executable-format.exe"
-            path.write_text("PRIVATE_INVALID_BINARY_MARKER")
-            result = _worker_cli(ORGANIZE, binary=str(path))
-        self.assertEqual(result.returncode, 78)
-        self.assertEqual(result.stderr.strip(), "summary failed: configuration")
-        self.assertNotIn("PRIVATE_INVALID_BINARY_MARKER", result.stderr)
+    def test_k3_04_unexpected_failure_does_not_expose_source_text(self):
+        payload = request(worker, 'K3-04')
+        with patch.object(worker, 'run_codex', side_effect=RuntimeError('PRIVATE_CASE_MARKER')):
+            value = worker.run(payload)
+        self.assertEqual(value['status'], 'failed')
+        self.assertEqual(value['error'], 'unknown')
+        self.assertNotIn('PRIVATE_CASE_MARKER', json.dumps(value))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

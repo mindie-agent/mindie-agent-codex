@@ -28,12 +28,12 @@ import time
 
 from bounded_process import run
 import consent
-from runtime_probe import PROBE_MODULES, SETUP_FTS_PROBE as _FTS_PROBE, build_probe_script
+from runtime_probe import PROBE_MODULES, build_probe_script
 import sharing
 
 SCRIPTS = Path(__file__).parent.absolute()
 
-# Setup and updater use the same API and SQLite capability contract.
+# Setup and updater use the same material-index and runtime API contract.
 PROBE_TIMEOUT = 15
 
 

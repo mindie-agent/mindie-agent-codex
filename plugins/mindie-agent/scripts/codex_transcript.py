@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+import stat as statmod
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -215,6 +216,39 @@ def _session_of(record):
     return ident if isinstance(ident, str) and ident else None
 
 
+def history_source(path):
+    """Describe exactly one explicitly selected historical source, never scan.
+
+    The caller must check current task admission and sharing before this read.
+    Native session metadata supplies the historical owner and project scope;
+    neither is inferred from a filename or the importing task's cwd.
+    """
+    path = Path(path).resolve()
+    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NONBLOCK', 0))
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not statmod.S_ISREG(info.st_mode):
+            raise ValueError('history source must be a regular transcript file')
+        anchor = stream.read(ANCHOR_BYTES)
+        stream.seek(0)
+        raw = stream.readline(info.st_size)
+    try:
+        meta = json.loads(raw)
+        if not isinstance(meta, dict):
+            raise ValueError('invalid metadata')
+        owner = _session_of(meta)
+        scope = meta['payload']['cwd']
+    except (ValueError, TypeError, KeyError):
+        raise ValueError('history source requires native session metadata and project scope') from None
+    if (not raw.endswith(b'\n') or not owner or not isinstance(scope, str)
+            or not Path(scope).is_absolute()):
+        raise ValueError('history source requires native session metadata and project scope')
+    return dict(session_id=owner, project_root=str(Path(scope).resolve()),
+                identity=FileIdentity(str(path), info.st_dev, info.st_ino,
+                                      info.st_size, info.st_mtime_ns, len(anchor),
+                                      hashlib.sha256(anchor).hexdigest()))
+
+
 def read_material(path, start, *, session_id=None, not_before=None, expected=None,
                   max_scan_bytes=16777216, max_seconds=2.0, max_text_bytes=MAX_TEXT,
                   scan_until=None):
@@ -317,14 +351,13 @@ def read_material(path, start, *, session_id=None, not_before=None, expected=Non
                 except (ValueError, UnicodeDecodeError):
                     record = None
                 if not isinstance(record, dict):
-                    # A corrupt complete record is isolated, never exported.
-                    # Its byte position is retained without copying raw content.
+                    # A corrupt complete record makes this page incomplete.
+                    # Do not consume it or label later text as complete.
                     result.setdefault("discarded_records", []).append(
                         dict(start=offset, end=stream.tell(), reason="invalid record"))
-                    consumed.update(raw)
-                    result["end"] = stream.tell()
-                    result["skipped_records"] += 1
-                    continue
+                    result.update(status="invalid-record", end=start, text="",
+                                  coverage_note="invalid complete transcript record")
+                    return result
                 extracted = None
                 if isinstance(record, dict):
                     if record.get("type") in KNOWN:
@@ -344,14 +377,13 @@ def read_material(path, start, *, session_id=None, not_before=None, expected=Non
                 if extracted and extracted[1]:
                     stamp = _timestamp(record)
                     if not_before is not None and stamp is None:
-                        # Without a timestamp this record is not authorized.
-                        # Omit only this record; later dated messages can proceed.
+                        # An unknown authorization boundary is an error, not
+                        # permission to skip an unknown amount of experience.
                         result.setdefault("discarded_records", []).append(
                             dict(start=offset, end=stream.tell(), reason="missing public timestamp"))
-                        consumed.update(raw)
-                        result["end"] = stream.tell()
-                        result["skipped_records"] += 1
-                        continue
+                        result.update(status="invalid-record", end=start, text="",
+                                      coverage_note="missing public timestamp")
+                        return result
                     if not_before is not None and stamp < not_before:
                         extracted = None
                     else:

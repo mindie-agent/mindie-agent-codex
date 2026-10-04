@@ -24,5 +24,5 @@ if __name__ == "__main__":
         unittest.defaultTestLoader.loadTestsFromName("tests." + name)
         for name in ordered
     )
-    result = unittest.TextTestRunner(verbosity=2, failfast=True).run(suite)
+    result = unittest.TextTestRunner(verbosity=2, failfast=False).run(suite)
     raise SystemExit(0 if result.wasSuccessful() else 1)

@@ -29,11 +29,14 @@ import urllib.error
 import urllib.request
 
 from bounded_process import classify_transport_text, run
-from runtime_probe import UPDATER_FTS_PROBE as _FTS_PROBE, build_probe_script
+from runtime_probe import build_probe_script
 from session_gate import config_path, runtime_scripts
 from update_lock import file_lock, update_lock
 
 REPOSITORY = "https://github.com/mindie-agent/mindie-agent-codex.git"
+# The existing updater handshake retains the budget capability key. Current
+# summary rolling limits implement it; build_probe_script checks SummaryLedger
+# and the bounded worker, without requiring the retired MaintenanceBudget class.
 CONTRACT = dict(
     schema=1,
     session_admission=1,
@@ -79,7 +82,8 @@ class Incompatible(ValueError):
 _FEED_OK = frozenset({"synced", "unchanged"})
 _FEED_PENDING = frozenset({"busy", "deferred"})
 _FEED_ERROR = frozenset({"unavailable", "invalid", "exhausted"})
-_FEED_KNOWN = _FEED_OK | _FEED_PENDING | _FEED_ERROR
+_FEED_PARTIAL = frozenset({"partial"})
+_FEED_KNOWN = _FEED_OK | _FEED_PENDING | _FEED_ERROR | _FEED_PARTIAL
 
 
 def fold_feed_results(output):
@@ -88,8 +92,10 @@ def fold_feed_results(output):
     Empty list is ok. busy/deferred means not completed now, not a failed
     attempt: all-pending folds to deferred. Mix of completed (synced/unchanged)
     with pending or failed folds to degraded. No completed rows plus at least
-    one unavailable/invalid/exhausted folds to sync_failed. Every original
-    row is preserved. Unknown status or malformed stdout raises.
+    one unavailable/invalid/exhausted folds to sync_failed. A partial commit
+    or completed sync with failed cleanup folds to degraded; its original
+    completion, failure stage and cleanup receipt remain separate in the row.
+    Unknown status or malformed stdout raises.
     """
     text = (output or "").strip()
     if not text:
@@ -115,11 +121,12 @@ def fold_feed_results(output):
         rows.append(item)
     good = sum(1 for row in rows if row["status"] in _FEED_OK)
     pending = sum(1 for row in rows if row["status"] in _FEED_PENDING)
-    failed = sum(1 for row in rows if row["status"] in _FEED_ERROR)
-    if not rows or good == len(rows):
+    failed = sum(1 for row in rows if row["status"] in _FEED_ERROR or row.get("cleanup_status") == "failed")
+    partial = any(row["status"] in _FEED_PARTIAL for row in rows)
+    if not rows or (good == len(rows) and not failed):
         aggregate = "ok"
         summary = None
-    elif good and (pending or failed):
+    elif partial or (good and (pending or failed)):
         aggregate = "degraded"
         summary = _feed_error_summary(rows)
     elif failed:
@@ -137,10 +144,20 @@ def fold_feed_results(output):
 def _feed_error_summary(rows):
     parts = []
     for row in rows:
-        if row["status"] in _FEED_OK:
+        cleanup_failed = row.get("cleanup_status") == "failed"
+        if row["status"] in _FEED_OK and not cleanup_failed:
             continue
-        detail = row.get("detail") or row.get("cause") or ""
-        parts.append(f"{row['repository']}:{row['status']}:{str(detail)[:80]}")
+        details = []
+        if row.get("metadata_committed") is True:
+            details.append("metadata committed")
+        if row.get("failed_stage"):
+            details.append("stage=" + str(row["failed_stage"])[:80])
+        if cleanup_failed:
+            details.append("cleanup failed: " + str(row.get("cleanup_error") or "unknown cause")[:80])
+        detail = row.get("detail") or row.get("cause")
+        if detail:
+            details.append(str(detail)[:80])
+        parts.append(f"{row['repository']}:{row['status']}:" + ", ".join(details))
     return "; ".join(parts)[:240]
 
 
@@ -368,7 +385,9 @@ def stop_hook_commands(argv):
     completion even when the child executable is absent or fails.
     """
     argv = [str(value) for value in argv]
-    posix = shlex.join(argv) + " >/dev/null 2>&1; printf '{}\\n'"
+    warning = "MindIE Stop capture failed before completion; inspect MindIE status."
+    posix = ("if ! " + shlex.join(argv) + " >/dev/null 2>&1; then printf '%s\\n' "
+             + shlex.quote(warning) + " >&2; fi; printf '{}\\n'")
     # Native Codex can dispatch Windows hooks through PowerShell. CMD's
     # `& echo` becomes a background job there and loses the event on stdin.
     # An encoded PowerShell command has one unambiguous argv under either
@@ -377,7 +396,10 @@ def stop_hook_commands(argv):
         if value.startswith("${PLUGIN_ROOT}/"):
             return "(Join-Path $env:PLUGIN_ROOT '" + value[len('${PLUGIN_ROOT}/'):].replace("'", "''") + "')"
         return "'" + value.replace("'", "''") + "'"
-    body = "try { & " + " ".join(ps_arg(arg) for arg in argv) + " 1>$null 2>$null } catch {} finally { [Console]::Out.WriteLine('{}') }; exit 0"
+    report = "[Console]::Error.WriteLine('" + warning + "')"
+    body = ("try { & " + " ".join(ps_arg(arg) for arg in argv)
+            + " 1>$null 2>$null; if ($LASTEXITCODE -ne 0) { " + report
+            + " } } catch { " + report + " } finally { [Console]::Out.WriteLine('{}') }; exit 0")
     windows = "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " + base64.b64encode(body.encode("utf-16le")).decode("ascii")
     # This host watchdog includes both shell and interpreter cold startup.
     # The bridge still limits actual handoff work to 1.3 s on Windows / 1.5 s
@@ -516,6 +538,7 @@ class Updater:
             "runtime_call.py",
             "admission_ops.py",
             "codex_transcript.py",
+            "history_import.py",
             "agent_worker.py",
             "capture_config.py",
             "service_handoff.py",
@@ -871,7 +894,10 @@ class Updater:
             raise RuntimeError("candidate plugin tree is missing: " + str(candidate))
         mismatches = []
         for path in sorted(candidate.rglob("*")):
-            if not path.is_file():
+            # Python imports may create bytecode after the source was
+            # packaged. It is excluded from packaging and is not a shipped
+            # file; source and installed dependency bytes remain verified.
+            if "__pycache__" in path.relative_to(candidate).parts or not path.is_file():
                 continue
             relative = path.relative_to(candidate)
             other = resolved / relative
@@ -1002,7 +1028,11 @@ class Updater:
             try:
                 idle = json.loads(
                     self.command(
-                        [adapter["python"], idle_helper, "stop", adapter["engine_config"]],
+                        # The handoff helper belongs to this updater and
+                        # imports its pinned core API (including lock_held).
+                        # The old runtime may predate that API. Inspect the
+                        # old endpoint with the validated candidate runtime.
+                        [candidate["python"], idle_helper, "stop", adapter["engine_config"]],
                         timeout=5,
                     )
                 )
@@ -1166,10 +1196,7 @@ class Updater:
                 return {"status": "deferred", "error_type": "missing_runtime"}
             import consent as _consent
 
-            if _consent.load(self.config).get("reporting") != "enabled":
-                # The saved reporting choice constrains the real service:
-                # maintenance only runs while reporting is explicitly enabled.
-                return {"status": "deferred", "error_type": "reporting_not_enabled"}
+            reporting_enabled = _consent.load(self.config).get("reporting") == "enabled"
             # Pass the REAL remaining window: the CLI's 75s default includes
             # offline work and skips the upgrade unless a full 60s handoff
             # plus 1s exit remains; 2s is this parent's exit/startup margin.
@@ -1177,9 +1204,14 @@ class Updater:
                             self.command_deadline - time.monotonic())
             if available <= 0:
                 return {"status": "deferred", "error_type": "insufficient_budget"}
+            command = [python, "-m", "mindie_diagnostics.cli", "reporting", "maintain",
+                       "--budget-seconds", str(max(0, available - 2))]
+            # Local retention also runs when reporting is off. Only the saved
+            # reporting choice permits handing off an existing reporter.
+            if reporting_enabled:
+                command.append("--update-running")
             output = self.command(
-                [python, "-m", "mindie_diagnostics.cli", "reporting", "maintain",
-                 "--update-running", "--budget-seconds", str(max(0, available - 2))],
+                command,
                 timeout=available,
                 allowed_returncodes=(0, 1),
             )
@@ -1205,8 +1237,9 @@ class Updater:
         maintenance = self.maintain_diagnostics()
         try:
             atomic(self.root / "diagnostics-maintenance.json", maintenance)
-        except Exception:
-            pass
+        except (OSError, ValueError) as exc:
+            maintenance = dict(maintenance, status="unavailable",
+                               error_type=type(exc).__name__, stage="persist_maintenance")
         return dict(result, diagnostics=maintenance)
 
     def check_knowledge(self):
@@ -2210,6 +2243,10 @@ def main():
     else:
         result = Updater(args.settings).check()
     print(json.dumps(result, indent=2))
+    if (result.get("status") in {"check_failed", "update_failed", "incompatible", "attempts_exhausted", "unavailable", "failed", "refused", "degraded", "action_required", "waiting_for_compatible_source", "partial"}
+            or result.get("knowledge_status") in {"sync_failed", "degraded", "failed", "unavailable", "invalid"}
+            or result.get("diagnostics", {}).get("status") in {"degraded", "unavailable", "configuration_unavailable", "failed", "error"}):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ class Probe(Updater):
     def __init__(self, tuning):
         self.tuning = tuning
     def command(self, argv, **kwargs):
-        prefix = ('from mindie_knowledge.loop.budget import MaintenanceBudget as B\n'
+        prefix = ('from mindie_knowledge.materials import summarizer as S\n'
                   'import mindie_knowledge.loop.cli as C\n' + self.tuning + '\n')
         result = subprocess.run([argv[0], '-c', prefix + argv[2]], env=os.environ,
                                 capture_output=True, text=True, timeout=kwargs['timeout'])
@@ -28,17 +28,26 @@ class Probe(Updater):
 
 class RuntimeCompatibilityTests(unittest.TestCase):
     def test_reviewed_positive_bounds_are_not_frozen_at_old_tuning(self):
-        Probe('B.SESSION_LIMIT=8; B.HOURLY_LIMIT=40; '
-              'B.SESSION_WINDOW=7200; C.STARTUP_TIMEOUT=9; C.MAX_STARTUP_PROBES=5').probe_runtime(sys.executable)
+        Probe('S.SUMMARY_TIMEOUT=60; S.MAX_PROMPT_BYTES=65536; '
+              'S.MAX_RESPONSE_BYTES=16384; C.STARTUP_TIMEOUT=9; C.MAX_STARTUP_PROBES=5').probe_runtime(sys.executable)
 
     def test_missing_or_unbounded_safety_contract_still_fails(self):
         for tuning in (
-            'B.SESSION_LIMIT=0', 'B.HOURLY_LIMIT=-1', 'B.SESSION_LIMIT=True',
-            'B.SESSION_WINDOW=float("inf")', 'C.STARTUP_TIMEOUT=float("nan")',
-            'C.MAX_STARTUP_PROBES=0', 'del B.SESSION_LIMIT',
+            'S.SUMMARY_TIMEOUT=0', 'S.MAX_PROMPT_BYTES=-1', 'S.SUMMARY_TIMEOUT=True',
+            'S.SUMMARY_TIMEOUT=float("inf")', 'C.STARTUP_TIMEOUT=float("nan")',
+            'C.MAX_STARTUP_PROBES=0', 'S.SummaryLedger.record=None',
+            'S.MAX_RESPONSE_BYTES=2*S.MAX_PROMPT_BYTES',
         ):
             with self.subTest(tuning=tuning), self.assertRaises(RuntimeError):
                 Probe(tuning).probe_runtime(sys.executable)
+
+    def test_missing_retrieval_dependency_is_rejected_before_installation(self):
+        with self.assertRaisesRegex(RuntimeError, "pinned runtime import"):
+            Probe("import sys; sys.modules['mindie_knowledge.materials.reme_index'] = None").probe_runtime(sys.executable)
+
+    def test_unreviewed_langmem_version_is_rejected_before_installation(self):
+        with self.assertRaisesRegex(RuntimeError, "LangMem version differs"):
+            Probe("S.LANGMEM_VERSION='0.0.0'").probe_runtime(sys.executable)
 
     def test_admission_inspection_is_part_of_the_runtime_contract(self):
         with self.assertRaisesRegex(RuntimeError, "Admission API is incomplete"):
@@ -46,6 +55,10 @@ class RuntimeCompatibilityTests(unittest.TestCase):
                 "from mindie_knowledge.loop.activation import Admission as A; "
                 "A.inspect = None"
             ).probe_runtime(sys.executable)
+
+    def test_missing_history_import_is_rejected_before_installation(self):
+        with self.assertRaisesRegex(RuntimeError, 'explicit history import is unavailable'):
+            Probe('import mindie_knowledge.loop.history_import as H; H.import_transcript = None').probe_runtime(sys.executable)
 
     def test_unmodified_pinned_runtime_passes_setup_and_update_probes(self):
         # This is deliberately the real installed interpreter and unmodified

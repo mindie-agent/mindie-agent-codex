@@ -8,10 +8,30 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
+
+
+_SCANNER_CACHE = tempfile.TemporaryDirectory(prefix="mindie-scanner-tests-")
+_SCANNER = None
+
+
+def installed_scanner():
+    global _SCANNER
+    if _SCANNER is None:
+        from mindie_knowledge.loop.transcript_redaction import install_scanner
+        _SCANNER = install_scanner(Path(_SCANNER_CACHE.name))
+    return _SCANNER
+
+
+def public_engine_config(root, domain="test", **extra):
+    """Current production configuration shape for isolated test services."""
+    return dict(root=str(root), domain=domain, capture_mode="public-transcript",
+                redactor_executable=installed_scanner(),
+                transcript_adapter=str(SCRIPTS / "codex_transcript.py"), **extra)
 
 
 def stop_owned_knowledge_service(engine_config, *, timeout=8):
