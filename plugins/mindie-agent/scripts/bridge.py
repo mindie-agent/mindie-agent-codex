@@ -959,7 +959,10 @@ def main():
         raise SystemExit(stop())
     if operation.startswith("sharing-"):
         try:
-            print(json.dumps(sharing_operation(operation)))
+            result = sharing_operation(operation)
+            print(json.dumps(result))
+            if result.get("status") in {"degraded", "failed", "unavailable", "error"}:
+                raise SystemExit(1)
         except Exception as exc:
             print(
                 f"MindIE sharing operation failed: {type(exc).__name__}: {exc}",
