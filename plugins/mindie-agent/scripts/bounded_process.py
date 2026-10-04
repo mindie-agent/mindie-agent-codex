@@ -99,9 +99,9 @@ def _spawn(command, stdin, env, *, allow_service=False):
         with os.fdopen(started, 'rb') as stream:
             receipt = stream.read(256)
         if receipt != b"started\n":
-            result = ProcessResult("not_started")
+            result = ProcessResult("not_started" if receipt == b"not_started\n" else "unknown")
             _cleanup(process, result)
-            error = OSError("owned command failed before execution")
+            error = OSError("owned command startup failed; execution " + result.execution)
             error.process_result = result
             raise error
         return process

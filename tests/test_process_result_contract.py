@@ -64,6 +64,19 @@ class ProcessResultTests(unittest.TestCase):
             bounded_process.run(['/definitely-absent/mindie-executable'], '')
         self.assertEqual(caught.exception.process_result.execution, 'not_started')
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX startup receipt')
+    def test_lost_start_receipt_after_effect_is_unknown(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'owned_process.py').write_text('import subprocess,sys;subprocess.run(sys.argv[4:],check=True)')
+            marker = root / 'effect'
+            command = f'from pathlib import Path;Path({str(marker)!r}).write_text("once")'
+            with patch.object(bounded_process, '__file__', str(root / 'bounded_process.py')):
+                with self.assertRaises(OSError) as caught:
+                    bounded_process.run([sys.executable, '-c', command], '')
+            self.assertEqual(marker.read_text(), 'once')
+            self.assertEqual(caught.exception.process_result.execution, 'unknown')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -45,6 +45,7 @@ def main():
     except OSError:
         # The caller gets an explicit failed start, without raw credentials or
         # arbitrary argv in stderr. Native target output is otherwise direct.
+        os.write(notify, b"not_started\n")
         os.close(notify)
         return 127
     os.write(notify, b"started\n")
