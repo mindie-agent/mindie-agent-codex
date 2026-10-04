@@ -9,20 +9,20 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'))
-from auto_update import Updater
+from runtime_probe import build_probe_script
 import setup as setup_script
 
 
-class Probe(Updater):
+class Probe:
     def __init__(self, tuning):
         self.tuning = tuning
-    def command(self, argv, **kwargs):
+    def probe_runtime(self, python):
         prefix = ('from mindie_knowledge.materials import summarizer as S\n'
                   'import mindie_knowledge.loop.cli as C\n' + self.tuning + '\n')
-        result = subprocess.run([argv[0], '-c', prefix + argv[2]], env=os.environ,
-                                capture_output=True, text=True, timeout=kwargs['timeout'])
-        if result.returncode:
-            raise RuntimeError(result.stderr)
+        result = subprocess.run([python, '-c', prefix + build_probe_script(Path(setup_script.SCRIPTS) / 'codex_transcript.py')], env=os.environ,
+                                capture_output=True, text=True, timeout=15)
+        if result.returncode or result.stdout.strip() != "OK":
+            raise RuntimeError(result.stderr + result.stdout)
         return result.stdout
 
 
@@ -60,20 +60,9 @@ class RuntimeCompatibilityTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'explicit history import is unavailable'):
             Probe('import mindie_knowledge.loop.history_import as H; H.import_transcript = None').probe_runtime(sys.executable)
 
-    def test_unmodified_pinned_runtime_passes_setup_and_update_probes(self):
-        # This is deliberately the real installed interpreter and unmodified
-        # pinned core API. No injected compatibility attributes are present.
-        setup_script.probe_runtime(sys.executable)
-        with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            settings = base / 'updater.json'
-            settings.write_text(json.dumps({
-                'root': str(base / 'updates'),
-                'adapter_config': str(base / 'codex.json'),
-                'codex_home': str(base / 'codex'),
-                'codex': 'codex-fixture',
-            }))
-            Updater(settings).probe_runtime(sys.executable)
+    def test_unmodified_pinned_runtime_passes_candidate_private_probe(self):
+        # The product envelope and setup boundary have independent tests.
+        self.assertEqual(Probe('').probe_runtime(sys.executable).strip(), 'OK')
 
     def test_missing_lifetime_observation_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "locks lacks lock_held"):

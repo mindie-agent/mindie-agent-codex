@@ -15,12 +15,23 @@ sys.path.insert(0, str(SCRIPTS))
 import setup as setup_script
 
 
-def run_setup(python, *args):
+def run_setup(python, *args, real_probe=False, env=None):
+    # Config-write cases isolate the product verification boundary. Candidate
+    # ownership, real subprocess failures and receipt identities have their
+    # own tests; no config unit case downloads publication history.
+    command = [sys.executable, str(SCRIPTS / "setup.py")]
+    if not real_probe:
+        helper = ("import sys; sys.path.insert(0, sys.argv.pop(1)); "
+                  "import setup,product_contract; "
+                  "setup.probe_runtime=lambda python: dict(product_contract.identity(product_contract.source_root(setup.SCRIPTS)),status=\"validated\"); "
+                  "setup.main()")
+        command = [sys.executable, "-c", helper, str(SCRIPTS)]
     return subprocess.run(
-        [sys.executable, str(SCRIPTS / "setup.py"), "--knowledge-python", str(python), *args],
+        [*command, "--knowledge-python", str(python), *map(str, args)],
         text=True,
         capture_output=True,
         timeout=30,
+        env=env,
     )
 
 
@@ -38,10 +49,11 @@ class SetupTests(unittest.TestCase):
             )
             python = bare / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
             config = base / "codex.json"
-            result = run_setup(python, "--config", config, "--root", base / "data")
+            result = run_setup(python, "--config", config, "--root", base / "data", real_probe=True)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("missing pinned dependencies", result.stderr + result.stdout)
-            self.assertIn("remote_dev", result.stderr + result.stdout)
+            self.assertIn("knowledge runtime probe failed", result.stderr + result.stdout)
+            self.assertIn("not retried", result.stderr + result.stdout)
+            self.assertIn("runtime_pins: package_missing", result.stderr + result.stdout)
             # Nothing may be written when the probe fails.
             self.assertEqual(list(base.iterdir()), [bare])
 
@@ -94,6 +106,10 @@ class SetupTests(unittest.TestCase):
             self.assertTrue(Path(value["transcript_adapter"]).is_absolute())
             self.assertTrue(value["transcript_adapter"].endswith("codex_transcript.py"))
             self.assertEqual(adapter["runtime_scripts"], str(SCRIPTS))
+            declaration, _ = setup_script.product_contract.product(ROOT)
+            self.assertEqual(value["feeds"], [setup_script.product_contract.publication_feed(declaration)])
+            self.assertEqual(adapter["product_validation"], value["product_validation"])
+            self.assertEqual(adapter["product_validation"]["publication"], declaration["publication"])
             self.assertNotIn("sharing_choice", adapter)
             # Community sharing defaults OFF: the pointer exists, the file not.
             community = config.with_name("mindie-community.json")
@@ -223,7 +239,7 @@ class SetupTests(unittest.TestCase):
                 "--root",
                 base / "data",
                 "--community-repository",
-                "mindie-agent/knowledge",
+                "mindie-agent/knowledge-vllm-ascend",
                 "--community-project-root",
                 str(scope),
                 "--community-account",
@@ -241,8 +257,10 @@ class SetupTests(unittest.TestCase):
                 self.assertTrue(community.is_file())
             settings = json.loads(community.read_text())
             self.assertEqual(settings["schema"], "mindie-community-config/1")
+            declaration, _ = setup_script.product_contract.product(ROOT)
+            self.assertEqual(settings["publication_contract_sha256"], declaration["publication"]["contract_sha256"])
             self.assertTrue(settings["enabled"])
-            self.assertEqual(settings["repository"], "mindie-agent/knowledge")
+            self.assertEqual(settings["repository"], "mindie-agent/knowledge-vllm-ascend")
             self.assertEqual(settings["project_roots"], [str(scope.resolve())])
             self.assertEqual(settings["account"], "contributor-1")
             self.assertEqual(settings["visibility"], "public")
@@ -257,6 +275,31 @@ class SetupTests(unittest.TestCase):
             )
             self.assertEqual(consent_doc["choice"], "contribute")
             self.assertNotIn("token", community.read_text().lower())
+
+    def test_first_configure_projects_product_and_repo_change_drops_old_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            config = base / "codex.json"
+            scope = base / "scope"
+            scope.mkdir()
+            installed = run_setup(sys.executable, "--config", config, "--root", base / "data")
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            declaration, _ = setup_script.product_contract.product(ROOT)
+            def configure(repository):
+                result = subprocess.run([sys.executable, str(SCRIPTS / "setup.py"), "configure",
+                                         "--config", str(config), "--community-repository", repository,
+                                         "--community-project-root", str(scope),
+                                         "--community-visibility", "public"],
+                                        text=True, capture_output=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return json.loads(config.with_name("mindie-community.json").read_text())
+            selected = configure(declaration["publication"]["repository"])
+            self.assertEqual(selected["publication_contract_sha256"], declaration["publication"]["contract_sha256"])
+            selected = configure("owner/custom")
+            self.assertNotIn("publication_contract_sha256", selected)
+            selected["publication_contract_sha256"] = "b" * 64
+            config.with_name("mindie-community.json").write_text(json.dumps(selected))
+            self.assertEqual(configure("owner/custom")["publication_contract_sha256"], "b" * 64)
 
     def test_partial_community_selection_fails_before_any_write(self):
         for module in setup_script.PROBE_MODULES:

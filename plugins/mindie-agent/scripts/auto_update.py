@@ -29,23 +29,11 @@ import urllib.error
 import urllib.request
 
 from bounded_process import classify_transport_text, run
-from runtime_probe import build_probe_script
+import product_contract
 from session_gate import config_path, runtime_scripts
 from update_lock import file_lock, update_lock
 
 REPOSITORY = "https://github.com/mindie-agent/mindie-agent-codex.git"
-# The existing updater handshake retains the budget capability key. Current
-# summary rolling limits implement it; build_probe_script checks SummaryLedger
-# and the bounded worker, without requiring the retired MaintenanceBudget class.
-CONTRACT = dict(
-    schema=1,
-    session_admission=1,
-    bounded_calls=1,
-    idle_update_lock=1,
-    maintenance_budget=1,
-    admission_path=1,
-    transcript_adapter=1,
-)
 LABEL = "org.mindie-agent.plugin-updater"
 WIN_TASK = "MindIE Agent Plugin Updater"
 SYSTEMD_SERVICE = "mindie-agent-updater.service"
@@ -77,6 +65,18 @@ KNOWLEDGE_TIMEOUT = 45
 
 class Incompatible(ValueError):
     pass
+
+
+class InstallRollbackError(RuntimeError):
+    """Keep both failed stages; an unproven rollback is never a transport retry."""
+    def __init__(self, original, rollback):
+        self.original_install_error = dict(stage="install", error=type(original).__name__,
+                                           message=str(original)[:240])
+        self.rollback_error = dict(stage="rollback", error=type(rollback).__name__,
+                                   message=str(rollback)[:240])
+        self.rollback_exception = rollback
+        super().__init__(f"install failed ({type(original).__name__}); "
+                         f"rollback failed ({type(rollback).__name__}); inspect both recorded stages")
 
 
 _FEED_OK = frozenset({"synced", "unchanged"})
@@ -418,7 +418,7 @@ class Updater:
         self.deadline = time.monotonic() + TOTAL_TIMEOUT
         self.command_deadline = self.deadline
 
-    def command(self, args, *, timeout=30, data="", allowed_returncodes=(0,), transport=False, allow_service=False):
+    def command(self, args, *, timeout=30, data="", allowed_returncodes=(0,), transport=False, allow_service=False, max_output=1024 * 1024, on_failure=None):
         remaining = min(self.deadline, self.command_deadline) - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("update deadline reached")
@@ -441,6 +441,7 @@ class Updater:
             [str(arg) for arg in args], data, timeout=min(timeout, remaining), env=env,
             allowed_returncodes=allowed_returncodes, transport=transport,
             allow_service=allow_service,
+            max_output=max_output, on_failure=on_failure,
         )
 
     def save(self, status, **values):
@@ -506,99 +507,26 @@ class Updater:
         return sha
 
     def validate_source(self, source):
-        if read(source / "update-contract.json", {}) != CONTRACT:
-            raise Incompatible(
-                "main lacks the manual-session, timeout and update-lock contract"
-            )
-        plugin = source / "plugins/mindie-agent"
-        if any(path.is_symlink() for path in plugin.rglob("*")):
-            raise Incompatible("plugin source must contain regular files")
-        if (
-            sum(p.stat().st_size for p in plugin.rglob("*") if p.is_file())
-            > 16 * 1024 * 1024
-        ):
-            raise Incompatible("plugin package exceeds 16 MiB")
-        if (
-            "allow_implicit_invocation: false"
-            not in (plugin / "skills/mindie-agent/agents/openai.yaml").read_text(encoding='utf-8')
-        ):
-            raise Incompatible("implicit invocation is enabled")
-        hooks = read(plugin / "hooks/hooks.json")["hooks"]
-        if set(hooks) != {"Stop"} or len(hooks["Stop"]) != 1:
-            raise Incompatible("only one bounded Stop hook is supported")
-        entries = hooks["Stop"][0]["hooks"]
-        if len(entries) != 1 or not 0 < entries[0]["timeout"] <= STOP_HOST_TIMEOUT:
-            raise Incompatible("invalid hook deadline")
-        for name in (
-            "session_gate.py",
-            "mcp_gate.py",
-            "update_lock.py",
-            "bounded_process.py",
-            "windows_process.py",
-            "runtime_call.py",
-            "admission_ops.py",
-            "codex_transcript.py",
-            "history_import.py",
-            "agent_worker.py",
-            "capture_config.py",
-            "service_handoff.py",
-            "auto_update.py",
-            "update_launcher.py",
-            "mcp_catalog.json",
-        ):
-            if not (plugin / "scripts" / name).is_file():
-                raise Incompatible("missing bounded runtime entry: " + name)
-        catalog = read(plugin / "scripts" / "mcp_catalog.json", {})
-        names = {tool.get("name") for tool in catalog.get("knowledge") or []}
-        if not {"knowledge_query", "knowledge_explain", "knowledge_feedback"} <= names:
-            raise Incompatible("adapter knowledge catalogue is incomplete")
-        if "knowledge_use" in names or "knowledge_judge" in names:
-            raise Incompatible("retired knowledge tools are advertised")
-        requirements = (source / "runtime-requirements.txt").read_text(encoding='utf-8').splitlines()
-        pattern = r"([a-z-]+) @ git\+https://github.com/mindie-agent/(knowledge|remote-dev)@([0-9a-f]{40})"
-        packages = {}
-        for line in requirements:
-            if not line.strip() or line.startswith("#"):
-                continue
-            match = re.fullmatch(pattern, line)
-            if not match or match[1] in packages:
-                raise Incompatible(
-                    "runtime dependencies require exact official commit pins"
-                )
-            packages[match[1]] = (match[2], match[3])
-        if (
-            set(packages) != {"mindie-knowledge", "remote-dev"}
-            or packages["mindie-knowledge"][0] != "knowledge"
-            or packages["remote-dev"][0] != "remote-dev"
-        ):
-            raise Incompatible("invalid runtime package combination")
+        try:
+            product_contract.identity(source)
+        except (OSError, ValueError) as exc:
+            raise Incompatible("invalid product combination: " + str(exc)) from exc
 
-    def probe_runtime(self, python, scripts=None):
-        """Check the full installed-runtime contract before any native install.
-
-        Setup and the updater share one probe definition. ``scripts`` selects
-        the source generation's adapter-owned transcript parser while a
-        candidate is being prepared.
-        """
-        scripts = Path(scripts or Path(__file__).parent)
-        output = self.command(
-            [
-                python,
-                "-c",
-                build_probe_script(scripts / "codex_transcript.py"),
-            ],
-            timeout=15,
-        )
-        text = output.strip()
-        last = text.splitlines()[-1].strip() if text else ""
-        if last != "OK":
-            raise RuntimeError(last or "MindIE runtime failed; not retried")
+    def probe_runtime(self, python, scripts=None, *, revision=None, verified_receipt=None):
+        """Execute the candidate's validator, never this updater's private probe."""
+        return product_contract.probe(python, scripts or Path(__file__).parent,
+                                      self.command, revision=revision, verified_receipt=verified_receipt)
 
     def prepare(self, sha):
         generation = self.root / "generations" / sha
         receipt = generation / "prepared.json"
         if receipt.exists():
-            return read(receipt)
+            candidate = read(receipt)
+            expected = product_contract.identity(generation / "source", sha)
+            product_contract.validate_receipt(json.dumps(candidate.get("validation")), expected)
+            if candidate.get("revision") != sha or candidate.get("source") != str(generation / "source"):
+                raise Incompatible("prepared generation identity differs from its source")
+            return candidate
         if generation.exists():
             shutil.rmtree(generation)  # Only our uncommitted, incomplete staging area.
         source = generation / "source"
@@ -641,16 +569,20 @@ class Updater:
             timeout=120,
             transport=True,
         )
-        self.probe_runtime(python, source / "plugins/mindie-agent/scripts")
-        return self.package(generation, source, python, sha)
+        validation = self.probe_runtime(python, source / "plugins/mindie-agent/scripts", revision=sha)
+        return self.package(generation, source, python, sha, validation)
 
-    def package(self, generation, source, python, revision):
+    def package(self, generation, source, python, revision, validation):
+        expected = product_contract.identity(source, validation.get("candidate_revision"))
+        product_contract.validate_receipt(json.dumps(validation), expected)
         plugin = generation / "plugin"
         shutil.copytree(
             source / "plugins/mindie-agent",
             plugin,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
+        for filename in ("product-contract.json", "runtime-requirements.txt"):
+            shutil.copy2(source / filename, plugin / filename)
         manifest_path = plugin / ".codex-plugin/plugin.json"
         manifest = read(manifest_path)
         if manifest["name"] != "mindie-agent":
@@ -740,6 +672,9 @@ class Updater:
                 shutil.copy2(previous / "hooks/hooks.json", plugin / "hooks/hooks.json")
         result = dict(
             revision=revision,
+            source=str(source),
+            validation=validation,
+            package_sha256=product_contract.source_identity(plugin),
             plugin=str(plugin),
             python=str(python),
             version=manifest["version"],
@@ -942,6 +877,54 @@ class Updater:
             if not (cache / version.name).exists():
                 shutil.copytree(version, cache / version.name)
 
+    def project_publication(self, declaration):
+        """Journal one contract field under the shared settings write lock."""
+        import sharing
+        with sharing.community_write_lock(self.config):
+            path = sharing.configured_path(self.config)
+            if not path.exists():
+                return
+            value = read(path)
+            if not isinstance(value, dict):
+                raise ValueError("community settings must be an object")
+            publication = declaration["publication"]
+            if value.get("repository") != publication["repository"]:
+                return
+            key = "publication_contract_sha256"
+            desired = publication["contract_sha256"]
+            if value.get(key) == desired:
+                return
+            journal_path = self.root / "transaction.json"
+            journal = read(journal_path)
+            journal["publication_projection"] = dict(
+                path=str(path), repository=publication["repository"],
+                present=key in value, previous=value.get(key), written=desired)
+            atomic(journal_path, journal)
+            value[key] = desired
+            atomic(path, value)
+
+    def restore_publication(self, journal):
+        import sharing
+        change = journal.get("publication_projection")
+        if not change:
+            return
+        with sharing.community_write_lock(self.config):
+            path = Path(change["path"])
+            value = read(path)
+            key = "publication_contract_sha256"
+            if not isinstance(value, dict) or value.get("repository") != change["repository"]:
+                raise RuntimeError("community authority changed during product rollback")
+            previous = change["previous"] if change["present"] else None
+            if value.get(key) == previous and (key in value) == change["present"]:
+                return  # Journal persisted before the field write, or already restored.
+            if value.get(key) != change["written"]:
+                raise RuntimeError("publication contract changed during product rollback")
+            if change["present"]:
+                value[key] = previous
+            else:
+                value.pop(key, None)
+            atomic(path, value)
+
     def recover(self):
         journal_path = self.root / "transaction.json"
         if not journal_path.exists():
@@ -961,6 +944,7 @@ class Updater:
             )
         journal["recoveries"] = journal.get("recoveries", 0) + 1
         atomic(journal_path, journal)
+        self.restore_publication(journal)
         atomic(self.config, journal["adapter"])
         if journal.get("link"):
             link(self.root / "marketplace/plugins/mindie-agent", journal["link"])
@@ -989,7 +973,7 @@ class Updater:
                 raise RuntimeError("native recovery is unproven")
             selected = read(self.config)
             output = self.command(
-                [selected["python"], Path(__file__).with_name("service_handoff.py"),
+                [selected["python"], Path(selected["runtime_scripts"]) / "service_handoff.py",
                  "restore", selected["engine_config"]], timeout=8, allow_service=True)
             result = json.loads(output)
             if result.get("status") not in {"restored", "not-needed"}:
@@ -999,8 +983,12 @@ class Updater:
         self.save(self.state.get("status", "update_failed"), service_handoff=result)
 
     def prepare_capture(self, candidate):
-        from capture_config import prepare
-        return prepare(candidate['python'], Path(candidate['plugin']) / 'scripts')
+        helper = Path(candidate["plugin"]) / "scripts/capture_config.py"
+        output = self.command([candidate["python"], helper], timeout=90)
+        result = json.loads(output)
+        if not isinstance(result, dict) or result.get("capture_mode") != "public-transcript":
+            raise ValueError("candidate capture preparation returned an invalid receipt")
+        return result
 
     def install(self, candidate):
         # Actual-idle switching: the exclusive operation lock waits for any
@@ -1014,10 +1002,18 @@ class Updater:
             existing = self.marketplace()
             # Validate before stopping a working service or writing a journal.
             self.validate_marketplace(existing)
+            expected = product_contract.identity(candidate["source"], candidate["validation"].get("candidate_revision"))
+            product_contract.validate_receipt(json.dumps(candidate["validation"]), expected)
+            if product_contract.source_identity(candidate["plugin"]) != candidate.get("package_sha256"):
+                raise Incompatible("prepared plugin bytes changed after validation")
+            self.probe_runtime(candidate["python"],
+                               Path(candidate["source"]) / "plugins/mindie-agent/scripts",
+                               revision=candidate["validation"].get("candidate_revision"),
+                               verified_receipt=candidate["validation"])
             # Dependency preparation happens only for an owned installation
             # and before stopping its service. Stop hooks never download.
             capture_config = self.prepare_capture(candidate)
-            idle_helper = Path(__file__).with_name("service_handoff.py")
+            idle_helper = Path(candidate["plugin"]) / "scripts/service_handoff.py"
             if not idle_helper.is_file():
                 raise Incompatible("updater is missing service_handoff.py")
             if self.deadline - time.monotonic() < 43:
@@ -1028,10 +1024,8 @@ class Updater:
             try:
                 idle = json.loads(
                     self.command(
-                        # The handoff helper belongs to this updater and
-                        # imports its pinned core API (including lock_held).
-                        # The old runtime may predate that API. Inspect the
-                        # old endpoint with the validated candidate runtime.
+                        # Handoff implementation and interpreter belong to
+                        # the same candidate generation.
                         [candidate["python"], idle_helper, "stop", adapter["engine_config"]],
                         timeout=5,
                     )
@@ -1116,6 +1110,12 @@ class Updater:
                     ),
                 )
                 engine.update(capture_config)
+                declaration, _ = product_contract.product(candidate["source"])
+                publication = declaration["publication"]
+                engine["product_validation"] = candidate["validation"]
+                for feed in engine.get("feeds", []):
+                    if feed.get("repository") == publication["repository"]:
+                        feed["contract_sha256"] = publication["contract_sha256"]
                 admission_path = engine.get("admission_path")
                 if not isinstance(admission_path, str):
                     admission_path = str(
@@ -1132,6 +1132,7 @@ class Updater:
                         engine_config=str(engine_path),
                         runtime_scripts=str(Path(candidate["plugin"]) / "scripts"),
                         admission_path=admission_path,
+                        product_validation=candidate["validation"],
                     ),
                 )
                 try:
@@ -1148,10 +1149,13 @@ class Updater:
                     self.state["settings_migration"] = (
                         "deferred: " + type(migration_exc).__name__
                     )
+                self.project_publication(declaration)
                 final_proven = True
                 result = self.save(
                     "installed",
                     error=None,
+                    original_install_error=None,
+                    rollback_error=None,
                     current=candidate,
                     candidate=candidate["revision"],
                     activation="task authorization preserved; refreshed host definitions load in new tasks; changed hooks require native trust review",
@@ -1163,10 +1167,21 @@ class Updater:
                 except Exception as exc:
                     self.state["launcher_error"] = type(exc).__name__
                 return result
-            except Exception:
+            except Exception as install_exc:
                 final_proven = False
                 self.command_deadline = self.deadline - 8
-                self.recover()
+                try:
+                    self.recover()
+                except Exception as rollback_exc:
+                    combined = InstallRollbackError(install_exc, rollback_exc)
+                    install_exc.add_note("Rollback also failed: " + type(rollback_exc).__name__)
+                    try:
+                        self.save("update_failed", error=str(combined),
+                                  original_install_error=combined.original_install_error,
+                                  rollback_error=combined.rollback_error)
+                    except Exception as record_exc:
+                        combined.add_note("Failure-state persistence also failed: " + type(record_exc).__name__)
+                    raise combined from install_exc
                 final_proven = True
                 try:
                     self.publish_stable_launcher()
@@ -2016,7 +2031,7 @@ def enable(args):
     candidate = updater.state.get("current")
     if not candidate:
         updater.validate_source(source)
-        updater.probe_runtime(
+        validation = updater.probe_runtime(
             read(updater.config)["python"],
             source / "plugins/mindie-agent/scripts",
         )
@@ -2028,7 +2043,7 @@ def enable(args):
         )
         generation.mkdir(parents=True)
         candidate = updater.package(
-            generation, source, read(updater.config)["python"], generation.name
+            generation, source, read(updater.config)["python"], generation.name, validation
         )
         result = updater.install(candidate)
         if result["status"] == "degraded":

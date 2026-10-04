@@ -1,4 +1,4 @@
-"""Shared installed-runtime contract used by setup and the updater."""
+"""Candidate-private runtime checks; the installed updater never imports this API."""
 
 import os
 
@@ -36,6 +36,8 @@ else:
         from mindie_knowledge.loop.transcript_capture import SUMMARY_SECONDS
         from mindie_knowledge.loop.process import spawn_service
         from mindie_knowledge.loop.engine import Engine
+        from mindie_knowledge.loop.store import Store
+        from mindie_knowledge.publication_contract import read_git_contract, parse_contract
         from mindie_knowledge.loop.transcript_redaction import install_scanner
         from mindie_knowledge.loop.history_import import import_transcript
         from mindie_knowledge.loop.transport import Service
@@ -45,6 +47,12 @@ else:
     except Exception as exc:
         missing.append(f"pinned runtime import ({{type(exc).__name__}}: {{exc}})")
     else:
+        if set(inspect.signature(Store.explain).parameters) != {{"self", "ref"}}:
+            missing.append("knowledge explain is not the ref-only block API")
+        if "continuation" not in inspect.signature(Store.query).parameters:
+            missing.append("knowledge query lacks related-result continuation")
+        if not callable(read_git_contract) or not callable(parse_contract):
+            missing.append("publication contract API is incomplete")
         if not callable(load_transcript_adapter):
             missing.append("load_transcript_adapter is unavailable")
         if not callable(import_transcript):

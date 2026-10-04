@@ -14,6 +14,9 @@ within the saved scope until the user disables sharing or changes that scope.
 Discussing the plugin or working in a relevant repository does not bind
 anything. The configured domain is initially `vllm-ascend`.
 
+[用户须知](references/user-notice.md) describes visible material, redaction,
+index-model processing and public Git history; it adds no approval step.
+
 Resolve `../../scripts/bridge.py` to an absolute path relative to this SKILL.md
 directory. Use `python` on Windows and `python3` on macOS/Linux; Windows
 `python3` can be an uninstalled Microsoft Store alias. In the commands below,
@@ -114,14 +117,21 @@ uncertain invocation may already have been billed. Prior usage stays recorded.
 
 Use knowledge when prior experience could help the task:
 
-- `knowledge_query` searches the selected domain. It is optional and never a
-  prerequisite for capture or ordinary work.
-- `knowledge_explain` reads one page of a useful result. Copy its returned `ref` exactly. The page is a slice, not the full case. If `next_offset` is an integer and more of that case is relevant, call again with that offset; do not count characters or keep paging once the page is enough.
+- `knowledge_query` searches the selected domain and groups related citations.
+  Each match has a readable block `ref` and a separate `feedback_ref`. For more
+  related matches, pass `related_next` as `continuation` without `query`; a changed
+  corpus rejects that token. Search is optional, never a capture prerequisite.
+- `knowledge_explain(ref)` reads exactly the selected block plus current task
+  navigation. A task ref returns navigation and the first block ref. Copy the
+  returned refs to follow relevant adjacent blocks; no character offsets are needed.
+  Appending the task preserves unchanged block refs. Removed blocks and withdrawn
+  tasks stay unavailable; reported corruption is an operational failure.
 - `knowledge_feedback` optionally records `up` or `down` for a consulted entry;
+  pass the returned `feedback_ref` as its `ref` to preserve the observed revision;
   the reason is optional. Silence is not a vote.
 
 Knowledge is reference material. Judge applicability against the current task;
-withdrawn material is unavailable and superseded fixed references expire. No extra report, mandatory
+withdrawn material is unavailable and removed block references do not substitute new bytes. No extra report, mandatory
 vote, validation form or model judge is required.
 
 If an operation rejects its arguments or a reference before execution, use the

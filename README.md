@@ -8,8 +8,12 @@ A native Codex plugin for NPU infrastructure work, initially the `vllm-ascend`
 domain. It inherits the [nine VAWS / MindIE principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md).
 The native task remains in charge; knowledge is optional reference material.
 
+Read the [用户须知 / contribution notice](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md)
+for the full visible-message sharing scope, deterministic redaction limits,
+model-provider processing and public Git history. It adds no authorization step.
+
 The plugin provides one explicit entry Skill, three knowledge tools
-(query, full-body read and optional feedback), and general remote-dev tools.
+(query, block reading and optional feedback), and general remote-dev tools.
 It owns Codex identity, transcript parsing, Hook translation and model execution.
 The shared knowledge runtime owns retrieval, task admission, contribution
 receipts and local cleanup. Claude Code and Kimi have independent adapters.
@@ -23,6 +27,16 @@ plugin support.
 Installation probes the actual pinned runtime, including ReMe, LangMem and the
 summary outcome ledger. SQLite stores metadata; retrieval does not require FTS5
 or `contentless_delete`.
+
+[product-contract.json](product-contract.json) binds the public content baseline,
+its declaration digest and candidate validation protocol. Runtime commit pins
+live only in [runtime-requirements.txt](runtime-requirements.txt). The candidate's
+own interpreter verifies its installed pins and APIs; the running updater checks
+a bounded receipt instead of importing a different runtime's private API.
+Content may advance under the same declaration without a plugin release.
+Changed declarations require a matching product combination and fail before
+installation, publication or feed promotion when they do not match. Cached
+candidates recheck local runtime and packaged bytes before installation.
 
 Sign in to Codex, then install from a downloaded copy:
 
@@ -170,9 +184,12 @@ and sensitive content before sending a Markdown contribution PR; raw
 transcripts are not uploaded. The existing external Grok Bot application owns
 repository review and merge. This plugin does not install a Grok CLI reviewer.
 
-The shared core retains small receipts for uncertain writes. Once the exact PR
-receipt is confirmed, submitted local bodies can be removed; a later task
-continuation retrieves the exact earlier revision when needed. PR construction
+The shared core retains small receipts for uncertain writes. An exact confirmed
+PR receipt permits send staging to be cleared; a matching published feed is
+required before the corresponding local candidate is retired. Continuation uses
+confirmed current remote material plus unsent blocks; it cannot restore text
+removed by a maintainer. A changed open PR head is an explicit conflict until
+its contribution can be reconciled safely. PR construction
 and receipt reconciliation use no model. Unknown writes are inspected before
 any explicit retry. Optional up/down feedback is never required to finish a task.
 

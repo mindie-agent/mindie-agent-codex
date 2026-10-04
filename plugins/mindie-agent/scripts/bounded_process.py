@@ -204,7 +204,7 @@ def _attach_transport(exc, stdout, stderr, *, timed_out):
         exc.category = "temporary_network"
 
 
-def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), transport=False):
+def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), transport=False, on_failure=None):
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ, "out")
     selector.register(process.stderr, selectors.EVENT_READ, "err")
@@ -241,7 +241,12 @@ def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), t
                     errors.extend(chunk)
         process.wait(timeout=max(0.01, deadline - time.monotonic()))
         if process.returncode not in allowed_returncodes:
-            err = RuntimeError("MindIE runtime failed; not retried")
+            # A protocol owner may map bounded stdout to a safe error. Raw
+            # stderr never leaves this runner, and a nonzero exit still raises.
+            err = (on_failure(bytes(output), process.returncode) if on_failure
+                   else RuntimeError("MindIE runtime failed; not retried"))
+            if not isinstance(err, Exception):
+                raise TypeError("process failure mapper must return an exception")
             if transport:
                 _attach_transport(err, output, errors, timed_out=False)
             raise err
@@ -254,7 +259,7 @@ def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), t
         process.stderr.close()
 
 
-def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,), transport=False):
+def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,), transport=False, on_failure=None):
     # Windows (unverified on real hardware): reader threads replace selectors.
     deadline = time.monotonic() + timeout
     output = bytearray()
@@ -300,7 +305,12 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
             raise failure[0]
         process.wait(timeout=max(0.01, deadline - time.monotonic()))
         if process.returncode not in allowed_returncodes:
-            err = RuntimeError("MindIE runtime failed; not retried")
+            # A protocol owner may map bounded stdout to a safe error. Raw
+            # stderr never leaves this runner, and a nonzero exit still raises.
+            err = (on_failure(bytes(output), process.returncode) if on_failure
+                   else RuntimeError("MindIE runtime failed; not retried"))
+            if not isinstance(err, Exception):
+                raise TypeError("process failure mapper must return an exception")
             if transport:
                 _attach_transport(err, output, errors, timed_out=False)
             raise err
@@ -321,7 +331,7 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
             process.stderr.close()
 
 
-def run(command, data, *, timeout, max_output=1024 * 1024, cancel=None, env=None, allowed_returncodes=(0,), transport=False, allow_service=False):
+def run(command, data, *, timeout, max_output=1024 * 1024, cancel=None, env=None, allowed_returncodes=(0,), transport=False, allow_service=False, on_failure=None):
     if cancel is not None and cancel.is_set():
         raise RuntimeError("MindIE request cancelled before execution")
     with tempfile.TemporaryFile() as stream:
@@ -330,8 +340,8 @@ def run(command, data, *, timeout, max_output=1024 * 1024, cancel=None, env=None
         process = _spawn(command, stream, env, allow_service=allow_service)
         if POSIX:
             return _run_posix(
-                process, timeout, max_output, cancel, allowed_returncodes, transport
+                process, timeout, max_output, cancel, allowed_returncodes, transport, on_failure
             )
         return _run_windows(
-            process, timeout, max_output, cancel, allowed_returncodes, transport
+            process, timeout, max_output, cancel, allowed_returncodes, transport, on_failure
         )

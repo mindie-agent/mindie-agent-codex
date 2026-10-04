@@ -112,6 +112,9 @@ def call(payload):
         except RequestRejected as exc:
             if name not in {"knowledge_query", "knowledge_explain"}:
                 raise
+            code = getattr(exc, "error_code", None)
+            if code == "material_corrupt":
+                raise  # Corrupt required bytes are an operational failure.
             # A rejected read never started execution and is not an uncertain
             # mutation. Keep the service's bounded validation reason so the
             # caller can understand a bad ref. The explicit not_started
@@ -119,12 +122,17 @@ def call(payload):
             # not consume the failure circuit. isError stays True.
             neutral = True
             message = f"Knowledge read rejected: {str(exc)[:240]}. No corpus change; no automatic retry."
+            allowed_codes = {"reference_invalid", "withdrawn", "removed_or_superseded",
+                             "continuation_invalid", "continuation_expired"}
             result = dict(content=[dict(type="text", text=message)],
-                          structuredContent=dict(code="read_rejected",
+                          structuredContent=dict(code=code if code in allowed_codes else "read_rejected",
                                                  execution="not_started",
                                                  message=message,
                                                  automatic_retry=False),
                           isError=True)
+            read_ref = getattr(exc, "read_ref", None)
+            if isinstance(read_ref, str) and read_ref.startswith("mindie://") and len(read_ref) <= 1024:
+                result["structuredContent"]["read_ref"] = read_ref
         return result
     finally:
         pending = sys.exc_info()[1]

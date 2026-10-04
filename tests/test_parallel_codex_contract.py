@@ -40,7 +40,9 @@ SCRIPTS = REPO / "plugins/mindie-agent/scripts"
 
 
 KIMI_COMMIT = "90f73e76c6087ce091570f2d151b709145c913bc"
-CORE_COMMIT = "929bdcb918f2207aea38b02a14bd8e6219fabac4"
+sys.path.insert(0, str(SCRIPTS))
+from product_contract import requirements
+CORE_COMMIT = requirements(REPO)[0]["mindie-knowledge"]
 CONSENT_STORE_SHA256 = "679c6483a2edbf2d093de2ca38b00bfb73418b1179bcef9cdf6f34b5f9ed6b4c"
 
 

@@ -74,28 +74,28 @@ KNOWLEDGE_TOOLS = [
         name="knowledge_query",
         description=(
             "Search the selected domain's published knowledge and experience. "
-            "Each advisory hit has a short pinned ref, title, summary and known software versions."
+            "Matches are grouped by a resolvable cited source without treating citation counts as evidence. "
+            "Each match has a directly readable block ref and a separate feedback_ref for the observed task revision. "
+            "To read more related matches, pass related_next as continuation without query; limit controls the next page. "
+            "A changed corpus rejects the continuation explicitly."
         ),
         inputSchema=schema(
-            dict(query=STRING, limit={"type": "integer", "minimum": 1, "maximum": 20}),
-            ["query"],
+            dict(query=STRING, limit={"type": "integer", "minimum": 1, "maximum": 20}, continuation=STRING),
+            [],
         ),
         annotations=READ_ONLY,
     ),
     dict(
         name="knowledge_explain",
         description=(
-            "Read one page of a result's detailed case and cited evidence using its exact short ref. "
-            "The page is a slice, not the full case. offset and limit count Unicode characters, not lines or bytes. "
-            "When next_offset is an integer, pass it as offset to read another page only if that page is still relevant; "
-            "do not count characters. next_offset is null at the end. "
-            "Superseded fixed references expire; withdrawn material is unavailable."
+            "Read one exact immutable block by its returned ref, with current task navigation and adjacent block refs. "
+            "A task ref returns current navigation, block count and first block ref without assembling the transcript. "
+            "An appended task keeps unchanged block refs readable. Removed or withdrawn material is unavailable. "
+            "Use feedback_ref only for feedback, never as a reading ref."
         ),
         inputSchema=schema(
             dict(
-                ref={"type": "string", "description": "Copy the pinned ref returned by knowledge_query exactly."},
-                offset={"type": "integer", "minimum": 0, "description": "Unicode character offset. Use the previous next_offset; omit for the first page."},
-                limit={"type": "integer", "minimum": 1, "maximum": 32768, "description": "Maximum Unicode characters in this page."},
+                ref={"type": "string", "description": "Copy a task or block ref returned by query/explain exactly; feedback_ref is not a reading ref."},
             ),
             ["ref"],
         ),
@@ -104,7 +104,7 @@ KNOWLEDGE_TOOLS = [
     dict(
         name="knowledge_feedback",
         description=(
-            "Optional: record one current up/down vote on a reference revision "
+            "Optional: copy feedback_ref from query/explain into ref to record an up/down vote on that observed revision "
             "with an optional one-line reason. Never required; silence is not a vote."
         ),
         inputSchema=schema(

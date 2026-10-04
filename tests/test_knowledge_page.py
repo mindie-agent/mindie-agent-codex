@@ -3,7 +3,7 @@
 Identity is the adapter resolve_lease seam: a missing or mismatched session
 fails before a service starts. The page is a local Store.explain fixture from the installed
 mindie_knowledge dependency, returned through runtime_call's real JSON shape,
-including next_offset.
+including adjacent block references and current task navigation.
 """
 
 import json
@@ -21,7 +21,7 @@ sys.path.insert(0, str(SCRIPTS))
 import bounded_process
 import mcp_gate
 
-PAGE = 32768
+PAGE = 4096
 SESSION = "component-session"
 
 HELPER = r"""
@@ -47,8 +47,8 @@ def rpc(connection, method, args, timeout=5):
         raise AssertionError(method)
     if args.get("ref") != os.environ["REF"]:
         raise AssertionError("ref")
-    if args.get("limit") != 32768:
-        raise AssertionError(args.get("limit"))
+    if "offset" in args or "limit" in args:
+        raise AssertionError("retired paging arguments reached runtime")
     if args.get("_session_id") != os.environ["SESSION"] and mode == "page":
         raise AssertionError("session was not the gate-bound id")
     return page
@@ -83,7 +83,7 @@ else:
 
 
 def _bodies():
-    extra = 8
+    extra = 0
     escape = ('\\"' * ((PAGE + extra) // 2 + 1))[: PAGE + extra]
     return {
         "ascii": "A" * (PAGE + extra),
@@ -140,18 +140,19 @@ class KnowledgePageTests(unittest.TestCase):
 
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_explain_schema_maximum_and_query_unchanged(self):
+    def test_explain_schema_ref_only_and_query_continuation(self):
         from export_catalog import catalog
 
         generated = catalog()
         checked = json.loads((SCRIPTS / "mcp_catalog.json").read_text())
         explain = next(item for item in generated["knowledge"] if item["name"] == "knowledge_explain")
         query = next(item for item in generated["knowledge"] if item["name"] == "knowledge_query")
-        self.assertEqual(explain["inputSchema"]["properties"]["limit"]["maximum"], PAGE)
+        self.assertEqual(set(explain["inputSchema"]["properties"]), {"ref"})
         self.assertEqual(explain["inputSchema"]["required"], ["ref"])
         self.assertIs(explain["inputSchema"]["additionalProperties"], False)
-        self.assertIn("next_offset", explain["description"])
-        self.assertIn("slice", explain["description"])
+        self.assertIn("block", explain["description"])
+        self.assertIn("continuation", query["inputSchema"]["properties"])
+        self.assertEqual(query["inputSchema"]["required"], [])
         self.assertNotIn("offset", query["inputSchema"]["properties"])
         self.assertEqual(query["inputSchema"]["properties"]["limit"]["maximum"], 20)
         self.assertEqual(
@@ -172,80 +173,45 @@ class KnowledgePageTests(unittest.TestCase):
         self.assertIn("identity mismatch", mismatched["message"])
         self.assertIs(mismatched["service_started"], False)
 
-    def test_store_explain_page_fits_knowledge_bound(self):
+    def test_store_single_block_and_navigation_fit_knowledge_bound(self):
+        import hashlib
         from mindie_knowledge.loop.store import Store
-
-        knowledge_bound = mcp_gate.KNOWLEDGE_MAX_OUTPUT
+        from mindie_knowledge.materials import MaterialStore
+        from mindie_knowledge.materials.references import task_ref
 
         store = Store(self.tmp / "store", "vllm-ascend")
-        sizes = {}
-        nonbmp_out = None
-        observed = {
-            "explain_page_chars": getattr(Store, "EXPLAIN_PAGE_CHARS", None),
-            "explain_max_limit": getattr(Store, "EXPLAIN_MAX_LIMIT", None),
-        }
-        try:
-            for name, body in _bodies().items():
-                self.assertEqual(len(body), PAGE + 8)
-                doc = store.create_draft(
-                    kind="knowledge",
-                    title="Local page fixture",
-                    summary="Local component fixture only.",
-                    content=body,
-                )
-                ref = store.ref(doc["entry_id"], doc["revision"])
-                offset = 0
-                for _ in range(3):
-                    page = store.explain(ref, offset=offset, limit=PAGE)
-                    path = self.tmp / f"{name}-{offset}.json"
-                    path.write_text(json.dumps(page, ensure_ascii=False), encoding="utf-8")
-                    out = self._run("page", ref, offset, path, session=SESSION)
-                    parsed = json.loads(out)
-                    text = json.loads(parsed["content"][0]["text"])
-                    self.assertIs(parsed["isError"], False)
-                    self.assertEqual(text, page)
-                    self.assertEqual(parsed["structuredContent"], page)
-                    self.assertEqual(parsed["structuredContent"]["ref"], ref)
-                    nbytes = len(out.encode())
-                    self.assertLessEqual(nbytes, knowledge_bound, f"{name} {nbytes}")
-                    self.assertIn("next_offset", parsed["structuredContent"])
-                    self.assertEqual(parsed["structuredContent"]["next_offset"], page["next_offset"])
-                    if offset == 0:
-                        self.assertEqual(len(text["content"]), PAGE)
-                        self.assertEqual(text["content"], body[:PAGE])
-                        sizes[name] = nbytes
-                        if name == "nonbmp":
-                            nonbmp_out = out
-                    else:
-                        self.assertEqual(text["content"], body[offset:])
-                    nxt = page["next_offset"]
-                    if nxt is None:
-                        self.assertEqual(offset + len(page["content"]), page["content_length"])
-                        break
-                    self.assertIsInstance(nxt, int)
-                    self.assertEqual(nxt, offset + len(page["content"]))
-                    offset = nxt
-                else:
-                    self.fail("paging did not reach the end")
-        finally:
-            store.close()
-        self.assertGreater(sizes["nonbmp"], 256 * 1024)
-        with self.assertRaises(ValueError):
-            bounded_process.run(
-                [sys.executable, "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"],
-                nonbmp_out,
-                timeout=10,
-                max_output=256 * 1024,
-            )
-        observed["bytes"] = sizes
-        observed["bound"] = knowledge_bound
-        print("KNOWLEDGE_PAGE_BYTES " + json.dumps(observed, sort_keys=True))
+        author = MaterialStore(self.tmp / "author", "vllm-ascend")
+        self.addCleanup(store.close)
+        self.addCleanup(author.close)
+        for name, body in _bodies().items():
+            task = hashlib.sha256(name.encode()).hexdigest()
+            author.append_batch(task, [dict(block_id="a" * 64, text=body,
+                                source_range={"part": 1}, title="Local block", summary="Local fixture")],
+                                "Local wire fixture", title="Local fixture", status="complete", promote=True)
+            store.install_feed([author.export_task(task)], feed_ident="f" * 64)
+            navigation = store.explain(task_ref("vllm-ascend", task))
+            self.assertNotIn("content", navigation)
+            self.assertEqual(navigation["block_count"], 1)
+            for result in (navigation, store.explain(navigation["first_block_ref"])):
+                path = self.tmp / (name + result["kind"] + ".json")
+                path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+                output = self._run("page", result["ref"], 0, path, session=SESSION)
+                parsed = json.loads(output)
+                self.assertIs(parsed["isError"], False)
+                self.assertEqual(parsed["structuredContent"], result)
+                self.assertEqual(json.loads(parsed["content"][0]["text"]), result)
+                self.assertLessEqual(len(output.encode()), mcp_gate.KNOWLEDGE_MAX_OUTPUT)
+                self.assertNotIn("next_offset", result)
+                self.assertNotEqual(result["ref"], result["feedback_ref"])
+                if result["kind"] == "block":
+                    self.assertEqual(result["content"], body)
+                    self.assertIsNone(result["next_block_ref"])
 
     def _run(self, mode, ref, offset, page, *, session):
         payload = {
             "surface": "knowledge",
             "name": "knowledge_explain",
-            "arguments": {"ref": ref, "offset": offset, "limit": PAGE},
+            "arguments": {"ref": ref},
             "mindie_session_id": session,
             "mindie_activation": "component-token",
         }

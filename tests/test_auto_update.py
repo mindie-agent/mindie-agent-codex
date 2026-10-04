@@ -20,6 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
 import auto_update
+import product_contract
+import candidate_validate
 from auto_update import Updater, atomic, read
 from session_gate import Sessions, bind_explicit_config
 from update_lock import update_lock
@@ -99,10 +101,13 @@ class LocalUpdater(Updater):
         return dict(capture_mode="public-transcript", redactor_executable=str(Path(candidate["python"]).absolute()),
                     summary_command=[candidate["python"], str(Path(candidate["plugin"]) / "scripts/agent_worker.py")])
 
-    def probe_runtime(self, python, scripts=None):
+    def probe_runtime(self, python, scripts=None, *, revision=None, verified_receipt=None):
         self.assert_runtime = Path(python).exists()
         if not self.assert_runtime:
             raise RuntimeError("runtime missing")
+        source = product_contract.source_root(scripts or SCRIPTS)
+        candidate_validate.adapter_check(source)
+        return dict(product_contract.identity(source, revision), status="validated")
 
     def native_cache(self):
         return (
@@ -163,7 +168,7 @@ class AutoUpdateTests(unittest.TestCase):
             self.remote / "plugins",
             ignore=shutil.ignore_patterns("__pycache__"),
         )
-        shutil.copy(ROOT / "update-contract.json", self.remote)
+        shutil.copy(ROOT / "product-contract.json", self.remote)
         shutil.copy(ROOT / "runtime-requirements.txt", self.remote)
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.name", "Fixture")
@@ -492,8 +497,137 @@ class AutoUpdateTests(unittest.TestCase):
             str(other.expanduser().absolute()),
         )
 
+    def test_product_community_projection_restores_only_owned_field(self):
+        import consent
+        community = consent.shared_community_path_for(self.config)
+        declaration, _ = product_contract.product(ROOT)
+        previous = dict(repository=declaration["publication"]["repository"],
+                        publication_contract_sha256="b" * 64, enabled=False,
+                        sibling={"value": "retained"})
+        atomic(community, previous)
+        atomic(self.root / "transaction.json", dict(candidate=self.sha, adapter=self.initial))
+        self.updater.project_publication(declaration)
+        projected = read(community)
+        self.assertEqual(projected["publication_contract_sha256"], declaration["publication"]["contract_sha256"])
+        projected["sibling"] = {"value": "changed concurrently"}
+        atomic(community, projected)
+        self.updater.restore_publication(read(self.root / "transaction.json"))
+        restored = read(community)
+        self.assertEqual(restored["publication_contract_sha256"], previous["publication_contract_sha256"])
+        self.assertEqual(restored["sibling"], {"value": "changed concurrently"})
+        self.assertIs(restored["enabled"], False)
+
+    def test_product_community_projection_preserves_foreign_repository_and_conflicts(self):
+        import consent
+        community = consent.shared_community_path_for(self.config)
+        declaration, _ = product_contract.product(ROOT)
+        atomic(community, dict(repository="owner/custom", publication_contract_sha256="b" * 64))
+        before = community.read_bytes()
+        atomic(self.root / "transaction.json", dict(candidate=self.sha, adapter=self.initial))
+        self.updater.project_publication(declaration)
+        self.assertEqual(community.read_bytes(), before)
+        self.assertNotIn("publication_projection", read(self.root / "transaction.json"))
+        atomic(community, dict(repository=declaration["publication"]["repository"]))
+        self.updater.project_publication(declaration)
+        current = read(community)
+        current["publication_contract_sha256"] = "c" * 64
+        atomic(community, current)
+        before = community.read_bytes()
+        with self.assertRaisesRegex(RuntimeError, "changed during product rollback"):
+            self.updater.restore_publication(read(self.root / "transaction.json"))
+        self.assertEqual(community.read_bytes(), before)
+
+    def test_install_failure_and_conflicting_rollback_remain_distinct_and_durable(self):
+        import consent
+        community = consent.shared_community_path_for(self.config)
+        declaration, _ = product_contract.product(ROOT)
+        atomic(community, dict(repository=declaration["publication"]["repository"],
+                               publication_contract_sha256="b" * 64))
+        original = OSError("ORIGINAL_INSTALL_FAILURE_SENTINEL")
+        project = self.updater.project_publication
+        install = self.updater.install
+        observed = []
+        def conflicting_projection(value):
+            project(value)
+            current = read(community)
+            current["publication_contract_sha256"] = "c" * 64
+            atomic(community, current)
+            raise original
+        def observe(candidate):
+            try:
+                return install(candidate)
+            except auto_update.InstallRollbackError as exc:
+                observed.append(exc)
+                raise
+        with patch.object(self.updater, "project_publication", side_effect=conflicting_projection), \
+             patch.object(self.updater, "install", side_effect=observe):
+            result = self.check()
+        self.assertEqual(result["status"], "update_failed")
+        self.assertIn("install failed (OSError)", result["error"])
+        self.assertIn("rollback failed (RuntimeError)", result["error"])
+        durable = read(self.updater.state_path)
+        self.assertEqual(durable["original_install_error"], dict(
+            stage="install", error="OSError", message="ORIGINAL_INSTALL_FAILURE_SENTINEL"))
+        self.assertEqual(durable["rollback_error"]["stage"], "rollback")
+        self.assertIn("publication contract changed", durable["rollback_error"]["message"])
+        self.assertEqual(len(observed), 1)
+        self.assertIs(observed[0].__cause__, original)
+        self.assertIsInstance(observed[0].rollback_exception, RuntimeError)
+        self.assertIn("Rollback also failed: RuntimeError", original.__notes__)
+        self.assertEqual(read(community)["publication_contract_sha256"], "c" * 64)
+        self.assertTrue((self.root / "transaction.json").is_file())
+        self.assertEqual(self.updater.installs, 1)  # no retry after the uncertain rollback
+        self.assertNotIn("next_retry_at", result["attempts"][self.sha])
+
+    def test_candidate_failure_stage_and_code_reach_durable_update_result(self):
+        error = product_contract.CandidateValidationError(dict(
+            stage="runtime_pins", code="revision_mismatch", component="mindie-knowledge"))
+        with patch.object(self.updater, "probe_runtime", side_effect=error):
+            result = self.check()
+        self.assertEqual(result["status"], "update_failed")
+        self.assertIn("runtime_pins: revision_mismatch (mindie-knowledge)", result["error"])
+        self.assertEqual(read(self.updater.state_path)["error"], result["error"])
+        self.assertEqual(self.updater.installs, 0)
+        self.assertEqual(read(self.config), self.initial)
+
+    def test_prepared_plugin_edit_prevents_native_installation(self):
+        candidate = self.updater.prepare(self.sha)
+        script = Path(candidate["plugin"]) / "scripts/bridge.py"
+        script.write_text(script.read_text() + "\n# corrupted packaged entry\n")
+        with self.assertRaisesRegex(auto_update.Incompatible, "plugin bytes changed"):
+            self.updater.install(candidate)
+        self.assertEqual(read(self.config), self.initial)
+        self.assertEqual(self.updater.installs, 0)
+        self.assertFalse((self.root / "transaction.json").exists())
+
+    def test_cached_candidate_runtime_drift_is_rechecked_before_native_installation(self):
+        candidate = self.updater.prepare(self.sha)
+        reused = self.updater.prepare(self.sha)
+        self.assertEqual(candidate, reused)
+        def changed_runtime(*args, **kwargs):
+            self.assertEqual(kwargs["verified_receipt"], candidate["validation"])
+            candidate_validate.installed_revisions(candidate["validation"]["runtime"])
+        distribution = SimpleNamespace(read_text=lambda _: '{"vcs_info":{"commit_id":"changed"}}')
+        with patch.object(self.updater, "probe_runtime", side_effect=changed_runtime), \
+             patch.object(candidate_validate.importlib.metadata, "distribution", return_value=distribution):
+            with self.assertRaisesRegex(ValueError, "revision_mismatch"):
+                self.updater.install(reused)
+        self.assertEqual(read(self.config), self.initial)
+        self.assertEqual(self.updater.installs, 0)
+        self.assertFalse((self.root / "transaction.json").exists())
+
+    def test_prepared_source_edit_prevents_installation(self):
+        candidate = self.updater.prepare(self.sha)
+        source = Path(candidate["source"])
+        script = source / "plugins/mindie-agent/scripts/candidate_validate.py"
+        script.write_text(script.read_text() + "\n# concurrent change\n")
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            self.updater.install(candidate)
+        self.assertEqual(read(self.config), self.initial)
+        self.assertFalse((self.root / "transaction.json").exists())
+
     def test_missing_contract_never_replaces_local_safety_fix(self):
-        (self.remote / "update-contract.json").unlink()
+        (self.remote / "product-contract.json").unlink()
         sha = self.commit("old unsafe main")
         for _ in range(5):
             result = self.check()

@@ -16,3 +16,10 @@ def prepare(python, scripts):
         raise RuntimeError('installed transcript redactor is missing')
     return dict(capture_mode='public-transcript', redactor_executable=path,
                 summary_command=[str(python), str(Path(scripts) / 'agent_worker.py')])
+
+
+if __name__ == "__main__":
+    import json
+    from pathlib import Path
+    import sys
+    print(json.dumps(prepare(sys.executable, Path(__file__).resolve().parent)))

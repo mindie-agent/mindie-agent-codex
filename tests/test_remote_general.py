@@ -274,6 +274,25 @@ class GeneralRemoteTests(unittest.TestCase):
             self.assertEqual(payload['error_details']['retryable'], retryable)
             close.assert_called_once()
 
+    def test_knowledge_reference_and_continuation_codes_survive_the_adapter(self):
+        payload = {'surface': 'knowledge', 'mindie_activation': 'test-token',
+                   'mindie_session_id': 'task-A', 'arguments': {'ref': 'x'},
+                   'name': 'knowledge_explain'}
+        for code in ('reference_invalid', 'withdrawn', 'removed_or_superseded',
+                     'continuation_invalid', 'continuation_expired'):
+            with self.subTest(code=code), \
+                 patch.object(runtime_call, 'resolve_lease', return_value={'session': 'task-A'}), \
+                 patch.object(runtime_call, 'finish_outcome'), \
+                 patch('mindie_knowledge.loop.cli.ensure_service', return_value={}), \
+                 patch('mindie_knowledge.loop.transport.rpc', side_effect=RequestRejected(
+                     'bounded reason', error_code=code, read_ref='mindie://test/' + 'a' * 64)):
+                result = runtime_call.call(payload)
+            self.assertTrue(result['isError'])
+            self.assertEqual(result['structuredContent']['code'], code)
+            self.assertEqual(result['structuredContent']['read_ref'], 'mindie://test/' + 'a' * 64)
+            self.assertEqual(result['structuredContent']['execution'], 'not_started')
+            self.assertFalse(result['structuredContent']['automatic_retry'])
+
     def test_knowledge_read_rejection_keeps_reason_without_retrying_mutations(self):
         payload = {'surface': 'knowledge', 'mindie_activation': 'test-token',
                    'mindie_session_id': 'task-A', 'arguments': {'ref': 'x'},
