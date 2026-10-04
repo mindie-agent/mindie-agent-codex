@@ -2,7 +2,7 @@
   "knowledge": [
     {
       "name": "knowledge_query",
-      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Search the selected domain's published knowledge and experience. Matches are grouped by a resolvable cited source without treating citation counts as evidence. Each match has a directly readable block ref and a separate feedback_ref for the observed task revision. To read more related matches, pass related_next as continuation without query; limit controls the next page. A changed corpus rejects the continuation explicitly.",
+      "description": "The host binds native task identity per call. Search the selected domain's published knowledge and experience. Matches are grouped by a resolvable cited source without treating citation counts as evidence. Each match has a directly readable block ref and a separate feedback_ref for the observed task revision. To read more related matches, pass related_next as continuation without query; limit controls the next page. A changed corpus rejects the continuation explicitly.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -30,7 +30,7 @@
     },
     {
       "name": "knowledge_explain",
-      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Read one exact immutable block by its returned ref, with current task navigation and adjacent block refs. A task ref returns current navigation, block count and first block ref without assembling the transcript. An appended task keeps unchanged block refs readable. Removed or withdrawn material is unavailable. Use feedback_ref only for feedback, never as a reading ref.",
+      "description": "The host binds native task identity per call. Read one exact immutable block by its returned ref, with current task navigation and adjacent block refs. A task ref returns current navigation, block count and first block ref without assembling the transcript. An appended task keeps unchanged block refs readable. Removed or withdrawn material is unavailable. Use feedback_ref only for feedback, never as a reading ref.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -53,7 +53,7 @@
     },
     {
       "name": "knowledge_feedback",
-      "description": "Requires manual MindIE activation in this session; the host binds task identity per call. Optional: copy feedback_ref from query/explain into ref to record an up/down vote on that observed revision with an optional one-line reason. Never required; silence is not a vote.",
+      "description": "The host binds native task identity per call. Optional: copy feedback_ref from query/explain into ref to record an up/down vote on that observed revision with an optional one-line reason. Never required; silence is not a vote.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -124,7 +124,8 @@
           },
           "connect_timeout_ms": {
             "type": "integer",
-            "default": 10000
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
           },
           "runtime_env_file": {
             "type": "string",
@@ -219,7 +220,8 @@
           },
           "connect_timeout_ms": {
             "type": "integer",
-            "default": 10000
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
           },
           "runtime_env_file": {
             "type": "string",
@@ -302,7 +304,8 @@
           },
           "connect_timeout_ms": {
             "type": "integer",
-            "default": 10000
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
           },
           "runtime_env_file": {
             "type": "string",
@@ -327,10 +330,14 @@
             "type": "string"
           },
           "timeout_ms": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional explicit execution limit in milliseconds. Omit to wait for completion, failure or cancellation."
           },
           "timeout": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "description": "Alias of timeout_ms; values must agree if both are supplied."
           },
           "tty": {
             "type": "boolean",
@@ -403,7 +410,8 @@
           },
           "connect_timeout_ms": {
             "type": "integer",
-            "default": 10000
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
           },
           "runtime_env_file": {
             "type": "string",
@@ -544,7 +552,8 @@
           },
           "connect_timeout_ms": {
             "type": "integer",
-            "default": 10000
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
           },
           "runtime_env_file": {
             "type": "string",
@@ -563,7 +572,9 @@
             "description": "Legacy alias for the patch payload, not a shell command."
           },
           "timeout_ms": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional explicit execution limit in milliseconds. Omit to wait for completion, failure or cancellation."
           }
         },
         "required": [],
@@ -613,7 +624,8 @@
           },
           "connect_timeout_ms": {
             "type": "integer",
-            "default": 10000
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
           },
           "runtime_env_file": {
             "type": "string",
@@ -678,7 +690,8 @@
           },
           "connect_timeout_ms": {
             "type": "integer",
-            "default": 10000
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
           },
           "runtime_env_file": {
             "type": "string",
@@ -755,7 +768,8 @@
           },
           "connect_timeout_ms": {
             "type": "integer",
-            "default": 10000
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
           },
           "runtime_env_file": {
             "type": "string",
@@ -823,7 +837,8 @@
           },
           "connect_timeout_ms": {
             "type": "integer",
-            "default": 10000
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
           },
           "runtime_env_file": {
             "type": "string",
@@ -904,7 +919,8 @@
           },
           "connect_timeout_ms": {
             "type": "integer",
-            "default": 10000
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
           },
           "runtime_env_file": {
             "type": "string",
@@ -981,7 +997,8 @@
           },
           "connect_timeout_ms": {
             "type": "integer",
-            "default": 10000
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
           },
           "runtime_env_file": {
             "type": "string",

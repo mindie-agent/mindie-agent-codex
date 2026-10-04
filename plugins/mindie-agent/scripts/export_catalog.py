@@ -35,10 +35,9 @@ RESOLVER_BOILERPLATE = (
     "remote-dev does not interpret session, profile, or binding identifiers itself. "
 )
 
-# call_tool accepts a common timeout/timeout_ms on every operation (it bounds
-# the 120-second default). Advertise it only on streaming artifact transfers,
-# where a long pull/push genuinely needs caller control; every other tool
-# keeps failing closed on an undeclared timeout key (e.g. remote_write).
+# Preserve deadlines declared by each upstream tool. Streaming artifact
+# transfers also accept the common timeout aliases, so advertise those
+# caller controls without adding undeclared keys elsewhere (e.g. remote_write).
 TRANSFER_TOOLS = {"remote_artifact_pull", "remote_artifact_push"}
 
 # Truthful MCP annotations: query/explain are pure local reads; feedback is
@@ -160,8 +159,7 @@ def catalog():
         tool["annotations"] = REMOTE_MUTATION
     for tool in result["knowledge"]:
         tool["description"] = (
-            "Requires manual MindIE activation in this session; the host "
-            "binds task identity per call. " + tool["description"]
+            "The host binds native task identity per call. " + tool["description"]
         )
     for tool in result["remote"]:
         tool["description"] = (
@@ -183,5 +181,6 @@ def catalog():
 
 if __name__ == "__main__":
     Path(__file__).with_name("mcp_catalog.json").write_text(
-        json.dumps(catalog(), ensure_ascii=False, indent=2) + "\n"
+        json.dumps(catalog(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
     )
