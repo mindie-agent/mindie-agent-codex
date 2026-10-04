@@ -502,9 +502,18 @@ class CommandTests(SharingFixture):
 
     def test_malformed_status_still_reports_and_fails_closed(self):
         self.community.write_text('{"schema": "mindie-community-config/1"}')
-        status = json.loads(self.bridge("sharing-status").stdout)
+        outcome = self.bridge("sharing-status")
+        self.assertEqual(outcome.returncode, 1)
+        status = json.loads(outcome.stdout)
         self.assertEqual(status["state"], "malformed")
         self.assertIn("fail-closed", status["capture"])
+        damaged = self.community.read_bytes()
+        for operation in ('sharing-enable', 'sharing-disable'):
+            with self.subTest(operation=operation):
+                outcome = self.bridge(operation)
+                self.assertEqual(outcome.returncode, 1)
+                self.assertIn('sharing operation failed', outcome.stderr)
+                self.assertEqual(self.community.read_bytes(), damaged)
 
     def test_disable_survives_a_concurrent_settings_write(self):
         # One writer pauses inside the settings os.replace (inside the

@@ -961,7 +961,8 @@ def main():
         try:
             result = sharing_operation(operation)
             print(json.dumps(result))
-            if result.get("status") in {"degraded", "failed", "unavailable", "error"}:
+            if (result.get("status") in {"degraded", "failed", "unavailable", "error"}
+                    or result.get("state") in {"malformed", "unavailable"}):
                 raise SystemExit(1)
         except Exception as exc:
             print(
