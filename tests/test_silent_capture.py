@@ -155,6 +155,50 @@ class SilentCaptureTests(unittest.TestCase):
         diagnostic_support.acknowledge_pending(diagnostic_support.attach_pending(value))
         self.assertIsNone(agent_diagnostics.pending())
 
+    def test_invalid_diagnostic_root_is_visible_without_replacing_business_result(self):
+        blocker = self.root / 'diagnostic-root-is-a-file'
+        blocker.write_bytes(b'preserve existing authority')
+        for selected in (blocker, blocker / 'missing' / 'diagnostics'):
+            for failed in (False, True):
+                with self.subTest(root=str(selected), business_failed=failed), patch.dict(
+                        os.environ, MINDIE_DIAGNOSTICS_ROOT=str(selected)):
+                    value = dict(content=[dict(type='text', text='known business result')],
+                                 isError=failed, structuredContent=dict(operation_outcome='known'))
+                    projected = diagnostic_support.attach_pending(value)
+                    self.assertEqual(projected['content'], value['content'])
+                    self.assertEqual(projected['isError'], failed)
+                    self.assertEqual(projected['structuredContent']['operation_outcome'], 'known')
+                    self.assertEqual(projected['structuredContent']['agent_diagnostics'],
+                        dict(items=[dict(code='diagnostic_delivery_unavailable')], remaining=None))
+                    self.assertNotIn('agent_diagnostics', value['structuredContent'])
+                    self.assertEqual(blocker.read_bytes(), b'preserve existing authority')
+
+    def test_absent_diagnostic_root_stays_inert_on_read(self):
+        selected = self.root / 'never-created' / 'diagnostics'
+        value = dict(content=[dict(type='text', text='known business result')], isError=False)
+        with patch.dict(os.environ, MINDIE_DIAGNOSTICS_ROOT=str(selected)):
+            self.assertIs(diagnostic_support.attach_pending(value), value)
+        self.assertFalse(selected.parent.exists())
+
+    def test_dangling_diagnostic_root_reports_unavailable_without_repair(self):
+        selected = self.root / 'dangling-diagnostics'
+        target = self.root / 'missing-target'
+        try:
+            selected.symlink_to(target, target_is_directory=True)
+        except OSError as exc:
+            if os.name == 'nt':
+                self.skipTest(f'directory symlinks are unavailable: {exc}')
+            raise
+        value = dict(content=[dict(type='text', text='known business result')], isError=False)
+        with patch.dict(os.environ, MINDIE_DIAGNOSTICS_ROOT=str(selected)):
+            projected = diagnostic_support.attach_pending(value)
+        self.assertEqual(projected['content'], value['content'])
+        self.assertFalse(projected['isError'])
+        self.assertEqual(projected['structuredContent']['agent_diagnostics'],
+            dict(items=[dict(code='diagnostic_delivery_unavailable')], remaining=None))
+        self.assertTrue(selected.is_symlink())
+        self.assertFalse(target.exists())
+
     def test_projection_overflow_is_counted_and_bootstrap_copy_matches_core(self):
         for index in range(70):
             agent_diagnostics.enqueue('mindie-agent-codex', 'capture.stop', 'handoff', 'code'+str(index), {})
