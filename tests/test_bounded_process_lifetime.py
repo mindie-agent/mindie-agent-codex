@@ -61,6 +61,11 @@ class PipeLifetimeTests(unittest.TestCase):
                 self.assertGreaterEqual(time.monotonic() - started, .18)
                 self.assertEqual(process.returncode, 0)
 
+    def test_target_signal_return_code_is_preserved(self):
+        result = bounded_process.run([sys.executable, '-c', 'import os,signal;os.kill(os.getpid(),signal.SIGTERM)'],
+                                     '', allowed_returncodes=None)
+        self.assertEqual(result.returncode, -15)
+
     def test_explicit_deadline_still_applies_after_pipe_eof(self):
         for runner in self.runners():
             with self.subTest(reader=runner.__name__):

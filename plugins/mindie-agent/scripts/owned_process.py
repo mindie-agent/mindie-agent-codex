@@ -50,7 +50,11 @@ def main():
     os.write(notify, b"started\n")
     os.close(notify)
     child.wait()
-    return child.returncode if child.returncode >= 0 else 128 - child.returncode
+    if child.returncode < 0:
+        # Mirror signal termination too; a caller must see the target's
+        # negative Popen return code, not a synthetic shell-style status.
+        os.kill(os.getpid(), -child.returncode)
+    return child.returncode
 
 
 if __name__ == '__main__':

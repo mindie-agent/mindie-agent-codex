@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import sys
 import sqlite3
+import stat
 import time
 import threading
 import uuid
@@ -30,6 +31,11 @@ from update_lock import update_lock, file_lock
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
 KNOWLEDGE_MAX_OUTPUT = 1024 * 1024
 CATALOG = Path(__file__).with_name("mcp_catalog.json")
+RECEIPT_SCHEMA = {
+    "authority": ("table", "authority", "CREATE TABLE authority(identity TEXT PRIMARY KEY, schema TEXT NOT NULL)"),
+    "attempts": ("table", "attempts", "CREATE TABLE attempts (identity TEXT PRIMARY KEY, started REAL NOT NULL, status TEXT NOT NULL, owner TEXT NOT NULL)"),
+    "attempts_running_owner": ("index", "attempts", "CREATE INDEX attempts_running_owner ON attempts(owner) WHERE status='running'"),
+}
 
 
 def failure(message):
@@ -185,9 +191,9 @@ class RemoteReceipts:
         marker = self.path.with_suffix(".authority.json")
         with file_lock(self.path.with_suffix(".initialize.lock"), exclusive=True, blocking=True):
             try:
-                authority = json.loads(marker.read_text(encoding="utf-8"))
+                metadata = marker.lstat()
             except FileNotFoundError:
-                if self.path.exists():
+                if os.path.lexists(self.path):
                     raise RuntimeError("existing remote receipt database lacks its authority marker") from None
                 authority = dict(schema="mindie-remote-receipts/1", identity=uuid.uuid4().hex)
                 # First-use admission is durable before SQLite creation. A
@@ -201,23 +207,35 @@ class RemoteReceipts:
                 try:
                     os.chmod(self.path, 0o600)
                     with db:
-                        db.execute("CREATE TABLE authority(identity TEXT PRIMARY KEY, schema TEXT NOT NULL)")
+                        for _, _, definition in RECEIPT_SCHEMA.values():
+                            db.execute(definition)
                         db.execute("INSERT INTO authority VALUES(?,?)", (authority["identity"], authority["schema"]))
-                        db.execute("CREATE TABLE attempts (identity TEXT PRIMARY KEY, started REAL NOT NULL, status TEXT NOT NULL, owner TEXT NOT NULL)")
-                        db.execute("CREATE INDEX attempts_running_owner ON attempts(owner) WHERE status='running'")
                 finally:
                     db.close()
+            else:
+                if not stat.S_ISREG(metadata.st_mode) or not 1 <= metadata.st_size <= 1024:
+                    raise ValueError("remote receipt authority marker is not a bounded regular file")
+                descriptor = os.open(marker, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+                with os.fdopen(descriptor, "rb") as stream:
+                    actual = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(actual.st_mode) or (actual.st_dev, actual.st_ino) != (metadata.st_dev, metadata.st_ino):
+                        raise ValueError("remote receipt authority marker changed during read")
+                    raw = stream.read(1025)
+                    if len(raw) > 1024:
+                        raise ValueError("remote receipt authority marker exceeds its bound")
+                    authority = json.loads(raw)
             if (not isinstance(authority, dict) or authority.get("schema") != "mindie-remote-receipts/1"
-                    or not isinstance(authority.get("identity"), str) or len(authority["identity"]) != 32):
+                    or not isinstance(authority.get("identity"), str) or len(authority["identity"]) != 32
+                    or any(c not in "0123456789abcdef" for c in authority["identity"])):
                 raise ValueError("remote receipt authority marker is invalid")
             db = sqlite3.connect(self.path.absolute().as_uri() + "?mode=rw", uri=True, timeout=0.2)
             try:
+                schema = {name: (kind, table, definition) for kind, name, table, definition in db.execute(
+                    "SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")}
+                if schema != RECEIPT_SCHEMA:
+                    raise ValueError("remote receipt schema or constraints are incomplete")
                 if db.execute("SELECT identity,schema FROM authority").fetchall() != [(authority["identity"], authority["schema"])]:
                     raise ValueError("remote receipt authority identity differs")
-                if [row[1] for row in db.execute("PRAGMA table_info(attempts)")] != ["identity", "started", "status", "owner"]:
-                    raise ValueError("remote receipt schema is incomplete")
-                if not db.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='attempts_running_owner'").fetchone():
-                    raise ValueError("remote receipt live-owner index is missing")
                 db.execute("PRAGMA cache_size=-2048")
                 return db
             except BaseException:

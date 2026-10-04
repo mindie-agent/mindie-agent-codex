@@ -113,6 +113,46 @@ class ReceiptLifetimeTests(unittest.TestCase):
         with closing(sqlite3.connect(gate._remote_receipts["cleanup"].path)) as db:
             self.assertEqual(db.execute("SELECT status FROM attempts").fetchone()[0], "succeeded")
 
+    def test_same_column_names_without_constraints_or_correct_index_are_rejected(self):
+        for damage in ('attempt-primary-key', 'authority-primary-key', 'index-definition'):
+            with self.subTest(damage=damage):
+                obj = self.receipts(damage)
+                self.assertTrue(obj.claim('consumed'))
+                with closing(sqlite3.connect(obj.path)) as db, db:
+                    if damage == 'index-definition':
+                        db.execute('DROP INDEX attempts_running_owner')
+                        db.execute('CREATE INDEX attempts_running_owner ON attempts(started)')
+                    else:
+                        table = 'attempts' if damage == 'attempt-primary-key' else 'authority'
+                        rows = db.execute('SELECT * FROM ' + table).fetchall()
+                        db.execute('DROP TABLE ' + table)
+                        definition = mcp_gate.RECEIPT_SCHEMA[table][2].replace(' PRIMARY KEY', '')
+                        db.execute(definition)
+                        db.executemany('INSERT INTO ' + table + ' VALUES(' + ','.join('?' for _ in rows[0]) + ')', rows)
+                        if table == 'attempts':
+                            db.execute(mcp_gate.RECEIPT_SCHEMA['attempts_running_owner'][2])
+                with self.assertRaisesRegex(ValueError, 'constraints'):
+                    obj.claim('new')
+                with closing(sqlite3.connect(obj.path)) as db:
+                    self.assertEqual(db.execute('SELECT identity FROM attempts').fetchall(), [('consumed',)])
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX special files')
+    def test_nonregular_authority_marker_is_rejected_without_reading(self):
+        for kind in ('fifo', 'symlink'):
+            with self.subTest(kind=kind):
+                obj = self.receipts('marker-' + kind)
+                self.assertTrue(obj.claim('consumed'))
+                marker = obj.path.with_suffix('.authority.json')
+                saved = marker.read_bytes()
+                marker.unlink()
+                if kind == 'fifo':
+                    os.mkfifo(marker)
+                else:
+                    target = marker.with_suffix('.target'); target.write_bytes(saved)
+                    marker.symlink_to(target)
+                with self.assertRaisesRegex(ValueError, 'regular file'):
+                    obj.claim('new')
+
     def test_gate_constructs_one_receipt_owner_per_seen_task(self):
         config = self.root / 'config.json'
         config.write_text(json.dumps({'python': sys.executable, 'engine_config': '/absent/not-used'}))
