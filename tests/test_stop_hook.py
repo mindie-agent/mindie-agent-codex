@@ -33,12 +33,16 @@ class StopHookTests(unittest.TestCase):
             [python or sys.executable, str(plugin / "scripts/bridge.py"), "stop"]
         )["commandWindows" if os.name == "nt" else "command"]
         argv = [self.host_shell, '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command] if self.host_shell else command
+        # This fixture verifies protocol isolation and single delivery. Its
+        # extra host-shell process needs a separate startup allowance; passing
+        # here does not establish the production hook's 5-second cold-start SLA.
+        timeout = STOP["timeout"] + (10 if self.host_shell else 0)
         result = subprocess.run(
             argv,
             input=json.dumps(event),
             text=True,
             capture_output=True,
-            timeout=STOP["timeout"],
+            timeout=timeout,
             shell=self.host_shell is None,
             env={**os.environ, "PLUGIN_ROOT": str(plugin), **env},
         )
