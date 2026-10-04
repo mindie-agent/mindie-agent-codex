@@ -302,25 +302,19 @@ class LaneCase(unittest.TestCase):
             return self.sessions.activate()
 
     def authorization_boundary(self, session):
-        """The same max(enabled_at, activated_at, capture_floor) the engine uses."""
+        """The same max(enabled_at, activated_at) the engine uses."""
         from mindie_knowledge.loop.activation import Admission
-        from mindie_knowledge.loop.store import Store
 
         lease = Admission(str(self.admission)).active_lease(session)
         if not lease or not isinstance(lease.get("activated_at"), (int, float)):
             raise AssertionError("no admission boundary for " + session)
-        store = Store(self.root / "data", "test")
-        try:
-            floor = float(store.capture_floor)
-        finally:
-            store.close()
         try:
             enabled_at = json.loads(self.community.read_text()).get("enabled_at") or 0
         except (OSError, ValueError):
             enabled_at = 0
         if isinstance(enabled_at, bool) or not isinstance(enabled_at, (int, float)):
             enabled_at = 0
-        return max(float(enabled_at), float(lease["activated_at"]), floor)
+        return max(float(enabled_at), float(lease["activated_at"]))
 
     def after_boundary(self, session, seconds):
         return _iso_at(self.authorization_boundary(session) + seconds)

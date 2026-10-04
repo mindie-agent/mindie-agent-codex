@@ -179,6 +179,7 @@ def remote(payload):
     from remote_dev.mcp.server import tool_text
 
     args = dict(payload["arguments"])
+    shaped = None
     try:
         value = call_tool(name, args)
         result = value.get("result", {}) if isinstance(value, dict) else {}
@@ -213,7 +214,8 @@ def remote(payload):
         )
         # Trust only a diagnostic the shared remote component already attached.
         diagnostic = reference(value) or reference(result)
-        return attach(shaped, diagnostic) if diagnostic else shaped
+        shaped = attach(shaped, diagnostic) if diagnostic else shaped
+        return shaped
     except Exception as exc:
         # Preserve transport certainty inside the selected runtime. Exception
         # messages and arbitrary remote attributes are not public diagnostics.
@@ -249,9 +251,25 @@ def remote(payload):
         # In-process reference set by shared remote-dev; do not record expected
         # caller, network, permission, nonzero, timeout, or cancel outcomes.
         diagnostic = reference({"diagnostic": getattr(exc, "mindie_diagnostic", None)})
-        return attach(shaped, diagnostic) if diagnostic else shaped
+        shaped = attach(shaped, diagnostic) if diagnostic else shaped
+        return shaped
     finally:
-        close_connections()
+        original = sys.exc_info()[1]
+        try:
+            close_connections()
+        except Exception as cleanup_error:
+            if shaped is not None:
+                shaped["cleanup"] = dict(status="failed", stage="close_connections",
+                                         error_type=type(cleanup_error).__name__,
+                                         operation_outcome="preserved", automatic_retry=False)
+                shaped["isError"] = True
+                shaped["content"].append(dict(type="text", text=
+                    "Remote operation result preserved; local connection cleanup failed. Do not repeat the operation."))
+            elif original is not None:
+                original.add_note("Connection cleanup also failed: " + type(cleanup_error).__name__)
+            else:
+                raise
+
 
 
 def redispatch():
@@ -262,44 +280,49 @@ def redispatch():
     re-execs the recorded generation's copy with the recorded interpreter
     instead of mixing an old script with a new interpreter or library.
     """
-    try:
-        config = json.loads(config_path().read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        return  # Unconfigured: run in place and fail closed on the call itself.
+    config = json.loads(config_path().read_text(encoding='utf-8'))
     python, scripts = config.get("python"), config.get("runtime_scripts")
-    if not isinstance(python, str) or not isinstance(scripts, str):
-        return  # Pre-update setup layout: this copy IS the committed runtime.
-    try:
-        target = Path(scripts) / "runtime_call.py"
-        same_script = target.is_file() and target.resolve() == Path(__file__).resolve()
-        same_python = Path(python).resolve() == Path(sys.executable).resolve()
-        if same_script and same_python:
-            return
-        if not target.is_file():
-            return
-        command = [python, str(target)]
-        if os.name == "nt":
-            raise SystemExit(subprocess.call(command, env=generation_env()))
-        os.execve(python, command, generation_env())
-    except OSError:
-        return  # A stale generation record fails closed in this process.
+    if (not isinstance(python, str) or not os.path.isabs(python)
+            or not isinstance(scripts, str) or not os.path.isabs(scripts)):
+        raise ValueError("selected generation requires absolute interpreter and script paths")
+    target = (Path(scripts) / "runtime_call.py").resolve(strict=True)
+    # Keep the interpreter's lexical venv identity. Resolving both symlinks
+    # would equate unrelated virtualenvs using one shared Python binary.
+    same_python = os.path.normcase(os.path.abspath(python)) == os.path.normcase(os.path.abspath(sys.executable))
+    if target == Path(__file__).resolve() and same_python:
+        return
+    command = [python, str(target)]
+    if os.name == "nt":
+        from bounded_process import run
+        output = run(command, sys.stdin.buffer.read().decode("utf-8"), env=generation_env()).checked_stdout()
+        sys.stdout.write(output)
+        raise SystemExit(0)
+    os.execve(python, command, generation_env())
 
 
 if __name__ == "__main__":
-    redispatch()
+    stage = "generation_dispatch"
+    execution = "not_started"
     try:
+        redispatch()
+        stage = "request"
         raw = sys.stdin.buffer.read()
-        sys.stdout.buffer.write((json.dumps(call(json.loads(raw)), ensure_ascii=False) + "\n").encode("utf-8"))
+        payload = json.loads(raw)
+        stage = "operation"
+        execution = "outcome_unconfirmed"
+        sys.stdout.buffer.write((json.dumps(call(payload), ensure_ascii=False) + "\n").encode("utf-8"))
         sys.stdout.buffer.flush()
     except Exception as exc:
         shaped = dict(
             content=[
                 dict(
                     type="text",
-                    text=f"MindIE {type(exc).__name__}; no retry. Outcome may be unknown.",
+                    text=f"MindIE {stage}: {type(exc).__name__}; execution={execution}; no automatic retry.",
                 )
             ],
             isError=True,
+            structuredContent=dict(component="mindie-agent-codex", stage=stage,
+                                   execution=execution, automatic_retry=False),
         )
         diagnostic = reference({"diagnostic": getattr(exc, "mindie_diagnostic", None)})
         # RequestRejected derives ValueError. MaintenanceCancelled may derive

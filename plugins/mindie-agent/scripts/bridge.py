@@ -181,7 +181,7 @@ def bind(lease):
                 timeout=None,
                 env=generation_env(config_file),
                 allow_service=True,
-            )
+            ).checked_stdout()
         result = json.loads(output)
         if isinstance(result, dict) and result.get("isError") is not True:
             return "bound"
@@ -420,7 +420,7 @@ def offline_status():
             output = run(
                 [config["python"], str(Path(runtime_scripts(config)) / "service_control.py"), "status"],
                 "", timeout=None, max_output=32768, env=generation_env(config_file),
-            )
+            ).checked_stdout()
             stage = "helper_response"
             payload = json.loads(output)
             if not isinstance(payload, dict):
@@ -473,8 +473,15 @@ def _observe_stop(result):
 def stop():
     try:
         settings = sharing.read()
-        # Cheap default-off before stdin: no helper, no lock, no lease DB.
-        if settings is None or sharing.consent_allows(settings) is False:
+        # Missing setup is an Agent diagnostic; an explicit disable is inert.
+        # Neither branch reads stdin, starts a helper or creates a capture row.
+        if settings is None:
+            disabled = sharing.status().get("state") == "disabled"
+            if not disabled:
+                _record_stop("configuration", "missing_configuration")
+            print("{}")
+            return 0 if disabled else 1
+        if not settings["enabled"] or sharing.consent_allows(settings) is False:
             print("{}")
             return 0
     except (OSError, ValueError) as exc:
@@ -587,7 +594,7 @@ def contribution(operation, batch_id):
             timeout=None,
             max_output=65536,
             env=generation_env(config_file),
-        )
+        ).checked_stdout()
     result = json.loads(output)
     if not isinstance(result, dict):
         raise ValueError("contribution helper returned no result object")
@@ -656,7 +663,7 @@ def configure(argv):
             timeout=None,
             max_output=65536,
             env=generation_env(config_file),
-        )
+        ).checked_stdout()
     result = json.loads(output)
     if not isinstance(result, dict):
         raise ValueError("configuration helper returned no result object")
@@ -776,7 +783,7 @@ def reporting_operation(operation):
                 max_output=65536,
                 allowed_returncodes=(0, 1),
                 env=generation_env(config_file),
-            )
+            ).checked_stdout()
             _print_reporting_json(output, "helper_response")
         except SystemExit:
             raise
@@ -813,7 +820,7 @@ def reporting_operation(operation):
                 max_output=65536,
                 allowed_returncodes=(0, 1),
                 env=generation_env(config_file),
-            )
+            ).checked_stdout()
             _print_reporting_json(output, "helper_response")
         except SystemExit:
             raise
@@ -849,7 +856,7 @@ def reporting_operation(operation):
             max_output=65536,
             allowed_returncodes=(0, 1),
             env=generation_env(config_file),
-        )
+        ).checked_stdout()
         _print_reporting_json(output, "helper_response")
     except SystemExit:
         raise
@@ -982,7 +989,7 @@ def main():
                     timeout=None,
                     max_output=32768,
                     env=generation_env(config_file),
-                ),
+                ).checked_stdout(),
                 end="",
             )
     except Exception as exc:

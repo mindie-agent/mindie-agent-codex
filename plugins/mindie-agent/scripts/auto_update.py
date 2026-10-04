@@ -247,11 +247,8 @@ def link(path, target):
         # privilege. Junctions cannot be atomically replaced, so the stale
         # link is removed first; the transaction journal re-creates it if the
         # process dies in between.
-        subprocess.run(
-            ["cmd", "/d", "/c", "mklink", "/J", str(temporary), str(target)],
-            check=True,
-            capture_output=True,
-        )
+        run(["cmd", "/d", "/c", "mklink", "/J", str(temporary), str(target)],
+            "").checked_stdout()
         _remove_link(path)
         os.replace(temporary, path)
         return
@@ -448,19 +445,34 @@ class Updater:
             CODEX_HOME=self.settings["codex_home"],
             MINDIE_CODEX_BIN=self.settings["codex"],
         )
-        return run(
+        completed = run(
             [str(arg) for arg in args], data, timeout=timeout, env=env,
             allowed_returncodes=allowed_returncodes, transport=transport,
             allow_service=allow_service,
             max_output=max_output, on_failure=on_failure,
         )
+        if completed.cleanup:
+            self.state["process_cleanup"] = dict(
+                status="failed", execution=completed.execution, returncode=completed.returncode,
+                issues=completed.cleanup, automatic_retry=False)
+        return completed.stdout
 
     def save(self, status, **values):
         self.state.update(status=status, checked_at=time.time(), **values)
-        if (self.state.get("service_handoff") or {}).get("status") in {"failed", "pending"}:
-            if status in {"installed", "up_to_date"}:
+        if status in {"installed", "up_to_date"}:
+            if (self.state.get("service_handoff") or {}).get("status") in {"failed", "pending"}:
                 self.state["status"] = "degraded"
-        atomic(self.state_path, self.state)
+            if self.state.get("launcher_error") or self.state.get("process_cleanup") or self.state.get("state_persistence"):
+                self.state["status"] = "partial"
+        if getattr(self, "_state_write_error", None) is not None:
+            raise self._state_write_error
+        try:
+            atomic(self.state_path, self.state)
+        except Exception as exc:
+            self._state_write_error = exc
+            self.state["state_persistence"] = dict(status="failed", error_type=type(exc).__name__,
+                generation_committed=bool(getattr(self, "_generation_committed", False)), automatic_retry=False)
+            raise
         return self.state
 
     def _read_release(self, request):
@@ -886,6 +898,23 @@ class Updater:
         if not journal_path.exists():
             return
         journal = read(journal_path)
+        prepared = journal.get("candidate_generation")
+        selected = read(self.config)
+        if (isinstance(prepared, dict) and journal.get("generation_committed") is True
+                and selected.get("runtime_scripts") == str(Path(prepared["plugin"]) / "scripts")
+                and selected.get("product_validation") == prepared.get("validation")):
+            # Native install and the adapter pointer may be proven complete
+            # while the final state save failed. Reconcile that exact result,
+            # never reinstall or infer a rollback from the missing bookkeeping.
+            self.verify_native(prepared["version"], prepared["plugin"])
+            self._generation_committed = True
+            self.state.pop("state_persistence", None)
+            self.save("installed", current=prepared, candidate=prepared["revision"])
+            handoff = self.state.get("service_handoff")
+            if isinstance(handoff, dict) and isinstance(handoff.get("retirement"), dict):
+                self.restore_service(True, handoff, prepared)
+            journal_path.unlink()
+            return
         if self.state.get("current", {}).get("revision") == journal.get("candidate"):
             self.verify_native(
                 self.state["current"]["version"],
@@ -920,12 +949,22 @@ class Updater:
             self.confirm_native(journal["previous_version"])
         journal_path.unlink()
 
-    def restore_service(self, final_proven):
+    def restore_service(self, final_proven, handoff, candidate):
         """No lock-recursive launcher; one restore with the actual adapter tuple."""
         try:
             if not final_proven:
                 raise RuntimeError("native recovery is unproven")
             selected = read(self.config)
+            if selected["engine_config"] == handoff["engine_config"]:
+                # The candidate owns the new retirement protocol, but the
+                # selected generation must own the restored service process.
+                # This also supports rollback to a pre-retirement core without
+                # running its service under the candidate interpreter.
+                restored = json.loads(self.command(
+                    [candidate["python"], Path(candidate["plugin"]) / "scripts/service_handoff.py",
+                     "unretire", selected["engine_config"], json.dumps(handoff["retirement"])]))
+                if restored.get("status") not in {"restored", "not-needed"}:
+                    raise RuntimeError("exact retired configuration could not be restored")
             output = self.command(
                 [selected["python"], Path(selected["runtime_scripts"]) / "service_handoff.py",
                  "restore", selected["engine_config"]], allow_service=True)
@@ -934,7 +973,7 @@ class Updater:
                 raise RuntimeError("invalid restoration result")
         except Exception as exc:
             result = dict(status="failed", error=type(exc).__name__)
-        self.save(self.state.get("status", "update_failed"), service_handoff=result)
+        self.save(self.state.get("status", "update_failed"), service_handoff=dict(handoff, restoration=result, status=result["status"]))
 
     def prepare_capture(self, candidate):
         helper = Path(candidate["plugin"]) / "scripts/capture_config.py"
@@ -971,27 +1010,42 @@ class Updater:
             if not idle_helper.is_file():
                 raise Incompatible("updater is missing service_handoff.py")
             self.publish_runtime_launcher(candidate)
-            previous_handoff = self.state.get("service_handoff")
-            self.save(self.state.get("status", "preparing"), service_handoff=dict(
-                status="pending", error="interrupted-stop-or-restore-needs-attention"))
+            handoff = dict(status="pending", engine_config=adapter["engine_config"],
+                           error="interrupted-retirement-needs-inspection", automatic_retry=False)
+            self.save(self.state.get("status", "preparing"), service_handoff=handoff)
             try:
-                idle = json.loads(
-                    self.command(
-                        # Handoff implementation and interpreter belong to
-                        # the same candidate generation.
-                        [candidate["python"], idle_helper, "stop", adapter["engine_config"]],
-                                )
-                )
-            except Exception:
-                self.save("update_failed", service_handoff=dict(
-                    status="failed", error="stop-outcome-unconfirmed"))
-                raise RuntimeError("stop outcome unconfirmed; service needs attention") from None
-            if idle.get("service") != "stopped":
-                self.save(self.state.get("status", "preparing"),
-                          service_handoff=previous_handoff)
-            if not idle["idle"]:
-                return self.save("waiting_for_idle", candidate=candidate["revision"])
-            stopped = idle.get("service") == "stopped"
+                idle = json.loads(self.command(
+                    [candidate["python"], idle_helper, "stop", adapter["engine_config"]],
+                    allowed_returncodes=(0, 1)))
+            except Exception as exc:
+                self.save("update_failed", service_handoff=dict(handoff,
+                    status="failed", error="retirement-outcome-unconfirmed", error_type=type(exc).__name__))
+                raise RuntimeError("retirement outcome unconfirmed; inspect before recovery") from exc
+            receipt = idle.get("retirement")
+            handoff = dict(handoff, observation=idle, retirement=receipt)
+            if (idle.get("status") == "failed" or not isinstance(receipt, dict)
+                    or receipt.get("status") not in {"retired", "busy"}):
+                self.save("update_failed", service_handoff=dict(handoff, status="failed"))
+                raise RuntimeError("service retirement is unconfirmed; no automatic retry")
+            if not idle.get("idle"):
+                return self.save("waiting_for_idle", candidate=candidate["revision"],
+                                 service_handoff=dict(handoff, status="busy"))
+            # Persist the known effect before publication. An absent old
+            # listener is still retired, and therefore needs restoration.
+            handoff["status"] = "retired"
+            try:
+                self.save(self.state.get("status", "preparing"), service_handoff=handoff)
+            except Exception as primary:
+                if not idle.get("cleanup_failed"):
+                    try:
+                        self.restore_service(True, handoff, candidate)
+                    except Exception as restore_error:
+                        primary.add_note("Retired service restoration bookkeeping failed: " + type(restore_error).__name__)
+                raise
+            if idle.get("cleanup_failed"):
+                self.save("update_failed", service_handoff=dict(handoff, status="failed",
+                    error="retirement-cleanup-failed"))
+                raise RuntimeError("service retired but cleanup failed; no publication attempted")
             installed = False
             final_proven = True  # prior native state, before any install mutation
             try:
@@ -1001,6 +1055,7 @@ class Updater:
                 journal = dict(
                     adapter=adapter,
                     candidate=candidate["revision"],
+                    candidate_generation=candidate,
                     marketplace=existing["root"] if existing else None,
                     link=str(plugin_link.resolve()) if plugin_link.exists() else None,
                     previous_version=(previous_native or {}).get("version"),
@@ -1098,7 +1153,12 @@ class Updater:
                         "deferred: " + type(migration_exc).__name__
                     )
                 self.project_publication(declaration)
+                committed_journal = read(self.root / "transaction.json")
+                committed_journal["generation_committed"] = True
+                atomic(self.root / "transaction.json", committed_journal)
                 final_proven = True
+                installed = True
+                self._generation_committed = True
                 result = self.save(
                     "installed",
                     error=None,
@@ -1113,9 +1173,17 @@ class Updater:
                 try:
                     self.publish_stable_launcher()
                 except Exception as exc:
-                    self.state["launcher_error"] = type(exc).__name__
+                    result = self.save("partial", launcher_error=dict(
+                        stage="publish_stable_launcher", error_type=type(exc).__name__,
+                        generation_committed=True, automatic_retry=False))
+                else:
+                    self.state.pop("launcher_error", None)
                 return result
             except Exception as install_exc:
+                if installed:
+                    # Business publication completed; a later persistence or
+                    # cleanup error must not replay installation or rollback.
+                    raise
                 final_proven = False
                 try:
                     self.recover()
@@ -1132,14 +1200,25 @@ class Updater:
                 final_proven = True
                 try:
                     self.publish_stable_launcher()
-                except Exception:
-                    pass
+                except Exception as launcher_exc:
+                    install_exc.add_note("Restored launcher publication also failed: " + type(launcher_exc).__name__)
+                    self.state["launcher_error"] = dict(stage="publish_restored_launcher",
+                        error_type=type(launcher_exc).__name__, generation_committed=False)
                 raise
             finally:
-                if stopped:
-                    self.restore_service(final_proven)
-                if installed:
-                    self.save("installed")
+                primary = sys.exc_info()[1]
+                try:
+                    self.restore_service(final_proven, handoff, candidate)
+                    if installed:
+                        self.save("installed")
+                except Exception as secondary:
+                    if primary is None:
+                        raise
+                    # A restore/save failure cannot replace the failed native
+                    # installation. Keep both facts in the returned state.
+                    self.state["operation_error"] = dict(stage="install",
+                        error_type=type(primary).__name__, automatic_retry=False)
+                    primary.add_note("Service restoration bookkeeping also failed: " + type(secondary).__name__)
 
     def maintain_diagnostics(self):
         """One offline maintenance call plus a bounded handoff request for an
@@ -1181,15 +1260,26 @@ class Updater:
 
     def check(self):
         self.root.mkdir(parents=True, exist_ok=True)
+        self._state_write_error = None
+        self._generation_committed = False
         try:
             with file_lock(self.root / "checker.lock", exclusive=True):
                 self.state = read(self.state_path, {})
                 result = self._check_locked()
                 retention = self.collect_generations()
                 self.state["retention"] = retention
-                atomic(self.state_path, self.state)
-        except BlockingIOError:
-            return dict(status="already_running")
+                self.save(self.state.get("status", "unknown"))
+        except Exception as exc:
+            if exc is not self._state_write_error:
+                if isinstance(exc, BlockingIOError):
+                    return dict(status="already_running")
+                raise
+            # The original write error reaches the caller alongside any
+            # already-proven publication/restoration facts. No second save.
+            self.state["status"] = "partial" if self._generation_committed else "update_failed"
+            self.state["error"] = self.state.get("error") or "update state persistence failed: " + type(exc).__name__
+            result = self.state
+            retention = dict(status="deferred", reason="state_persistence_failed")
         maintenance = self.maintain_diagnostics()
         try:
             atomic(self.root / "diagnostics-maintenance.json", maintenance)
@@ -1401,6 +1491,7 @@ class Updater:
             with update_lock(self.config, exclusive=True):
                 self.recover()
         self.publish_stable_launcher()
+        self.state.pop("launcher_error", None)
 
     def _note_resolve_failure(self, exc):
         failures = self.state.get("check_failures", 0) + 1
@@ -1565,6 +1656,8 @@ class Updater:
                 "waiting_for_compatible_source", error=str(exc), candidate=sha
             )
         except Exception as exc:
+            if exc is getattr(self, "_state_write_error", None):
+                raise
             kind = self._remember_attempt(record, exc)
             if kind == "quarantine":
                 return self.save(
@@ -1596,11 +1689,10 @@ def _native_run(updater, argv, timeout=None):
     No default execution deadline. Cleanup callers may explicitly bound their
     teardown/readback window; failures remain distinct from proven absence.
     """
-    completed = subprocess.run(
-        [str(arg) for arg in argv], stdin=subprocess.DEVNULL,
-        capture_output=True, text=True, errors="replace",
-        timeout=timeout)
-    return completed.returncode, completed.stdout or "", completed.stderr or ""
+    completed = run([str(arg) for arg in argv], "", timeout=timeout,
+                    allowed_returncodes=None)
+    completed.checked_stdout()
+    return completed.returncode, completed.stdout, completed.stderr
 
 
 def _launchd_state(updater, label, timeout=None):

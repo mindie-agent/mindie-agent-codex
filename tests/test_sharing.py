@@ -237,7 +237,7 @@ class GateTests(SharingFixture):
                 elif state == "wrong-schema":
                     self.community.write_text(json.dumps(dict(schema="other/1")))
                 result = self.bridge("stop", self.event(last_assistant_message="Done"))
-                expected = 1 if state in {"malformed", "wrong-schema"} else 0
+                expected = 0 if state == "disabled" else 1
                 self.assertEqual((result.returncode, json.loads(result.stdout)), (expected, {}))
                 self.assertEqual(self.attempts(), 0)
 
@@ -370,11 +370,11 @@ class GateTests(SharingFixture):
         self.assertLess(elapsed, 2.0)
         self.assertEqual(self.captures(), 1)
 
-    def test_sharing_off_unclosed_stdin_writes_no_state(self):
+    def test_unconfigured_unclosed_stdin_records_fault_without_capture(self):
         self.activate()
         before = self.attempts()
         code, stdout, _stderr, elapsed = self.bridge_stop_held_open()
-        self.assertEqual((code, json.loads(stdout)), (0, {}))
+        self.assertEqual((code, json.loads(stdout)), (1, {}))
         self.assertLess(elapsed, 0.75)
         self.assertEqual(self.attempts(), before)
         self.assertFalse(self.community.exists())

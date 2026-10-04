@@ -30,6 +30,7 @@ else:
     try:
         from mindie_knowledge.loop.cli import ensure_service, load_transcript_adapter
         from mindie_knowledge.loop.activation import Admission
+        from mindie_knowledge.loop.lifecycle import retire_service, restore_service, inspect_retirement
         from mindie_knowledge.materials.summarizer import SummaryLedger, MAX_PROMPT_BYTES, MAX_RESPONSE_BYTES, LANGMEM_VERSION
         from mindie_knowledge.materials.reme_index import ReMeIndex
         from langmem.short_term import summarize_messages
@@ -93,6 +94,8 @@ else:
             missing.append("Admission API is incomplete")
         if "admission" not in inspect.signature(Service).parameters:
             missing.append("Service does not accept admission")
+        if not all(callable(fn) for fn in (retire_service, restore_service, inspect_retirement)):
+            missing.append("exact-configuration service retirement is unavailable")
         if not callable(ensure_service):
             missing.append("service lifecycle is unavailable")
         try:

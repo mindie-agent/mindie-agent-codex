@@ -235,18 +235,18 @@ class KnowledgePageTests(unittest.TestCase):
             timeout=30,
             max_output=mcp_gate.KNOWLEDGE_MAX_OUTPUT,
             env=env,
-        )
+        ).checked_stdout()
 
     def test_knowledge_helper_bound_is_not_applied_to_remote(self):
         seen = []
 
         def fake_run(command, data, **kwargs):
             seen.append(kwargs)
-            return json.dumps({
+            return bounded_process.ProcessResult("completed", json.dumps({
                 "content": [{"type": "text", "text": "{}"}],
                 "structuredContent": {"outcome": "success"},
                 "isError": False,
-            })
+            }), 0)
 
         knowledge = mcp_gate.Gate("knowledge")
         request = {

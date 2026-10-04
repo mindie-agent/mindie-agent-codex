@@ -150,7 +150,11 @@ def operation(name, payload):
             raise ValueError("Valid MindIE session identity required")
         import sharing
         settings = sharing.read()
-        if settings is None or not settings['enabled'] or sharing.consent_allows(settings) is False:
+        if settings is None:
+            if sharing.status().get("state") == "disabled":
+                return dict(stage="inert", reason="sharing-disabled")
+            return dict(stage="unavailable", reason="missing-configuration")
+        if not settings['enabled'] or sharing.consent_allows(settings) is False:
             return dict(stage="inert", reason="sharing-disabled")
         import codex_transcript
         source = codex_transcript.capture_source(event.get('transcript_path'), session)

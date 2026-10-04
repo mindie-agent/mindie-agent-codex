@@ -24,12 +24,12 @@ if os.name == "posix":
     import fcntl
 
     @contextmanager
-    def file_lock(path, *, exclusive=False):
+    def file_lock(path, *, exclusive=False, blocking=False):
         descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             fcntl.flock(
                 descriptor,
-                (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB,
+                (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | (0 if blocking else fcntl.LOCK_NB),
             )
             yield descriptor
         finally:
@@ -69,12 +69,12 @@ else:
     ]
 
     @contextmanager
-    def file_lock(path, *, exclusive=False):
+    def file_lock(path, *, exclusive=False, blocking=False):
         # Windows (unverified on real hardware).
         descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
         handle = msvcrt.get_osfhandle(descriptor)
         overlapped = OVERLAPPED()
-        flags = LOCKFILE_FAIL_IMMEDIATELY | (
+        flags = (0 if blocking else LOCKFILE_FAIL_IMMEDIATELY) | (
             LOCKFILE_EXCLUSIVE_LOCK if exclusive else 0
         )
         try:

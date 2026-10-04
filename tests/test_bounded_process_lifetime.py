@@ -1,5 +1,6 @@
 """EOF is a pipe state, not a completed process or a cancellation boundary."""
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -56,7 +57,7 @@ class PipeLifetimeTests(unittest.TestCase):
             with self.subTest(reader=runner.__name__):
                 process = self.child('import os,time;os.close(1);os.close(2);time.sleep(.2)')
                 started = time.monotonic()
-                self.assertEqual(runner(process, None, 1024, None), '')
+                self.assertEqual(runner(process, None, 1024, None).checked_stdout(), '')
                 self.assertGreaterEqual(time.monotonic() - started, .18)
                 self.assertEqual(process.returncode, 0)
 
@@ -73,9 +74,53 @@ class PipeLifetimeTests(unittest.TestCase):
             with self.subTest(reader=runner.__name__):
                 process = self.child("import subprocess,sys;subprocess.Popen([sys.executable,'-c','import time;time.sleep(2)'])")
                 started = time.monotonic()
-                self.assertEqual(runner(process, None, 1024, None), '')
+                self.assertEqual(runner(process, None, 1024, None).checked_stdout(), '')
                 self.assertLess(time.monotonic() - started, 1)
                 self.assertEqual(process.returncode, 0)
+
+    def test_owner_death_after_target_exit_still_cancels_descendants(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            held, child_ready, owner_ready = base / 'held', base / 'child-ready', base / 'owner-ready'
+            child = ('import fcntl,time;from pathlib import Path;'
+                     f'stream=open({str(held)!r},"w");fcntl.flock(stream,fcntl.LOCK_EX);'
+                     f'Path({str(child_ready)!r}).touch();time.sleep(30)')
+            target = ('import subprocess,sys,time;from pathlib import Path;'
+                      f'subprocess.Popen([sys.executable,"-c",{child!r}]);'
+                      f'\nwhile not Path({str(child_ready)!r}).exists(): time.sleep(.01)')
+            owner_code = ('import sys,time;from pathlib import Path;'
+                          f'sys.path.insert(0,{str(SCRIPTS)!r});from bounded_process import _spawn;'
+                          f'p=_spawn([sys.executable,"-c",{target!r}],None,None);p.wait();'
+                          f'Path({str(owner_ready)!r}).write_text(str(p.pid));time.sleep(30)')
+            owner = subprocess.Popen([sys.executable, '-c', owner_code],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                until = time.monotonic() + 5
+                while not owner_ready.exists() and time.monotonic() < until:
+                    time.sleep(.01)
+                self.assertTrue(owner_ready.exists(), 'target did not finish')
+                with held.open() as lease:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    owner.kill(); owner.wait(timeout=3)
+                    until = time.monotonic() + 3
+                    while True:
+                        try:
+                            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            break
+                        except BlockingIOError:
+                            if time.monotonic() >= until:
+                                self.fail('descendant survived owner death after target exit')
+                            time.sleep(.01)
+            finally:
+                if owner.poll() is None:
+                    owner.kill(); owner.wait(timeout=3)
+                if owner_ready.exists():
+                    try:
+                        os.killpg(int(owner_ready.read_text()), 9)
+                    except ProcessLookupError:
+                        pass
 
 
 if __name__ == '__main__':

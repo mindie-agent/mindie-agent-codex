@@ -95,7 +95,11 @@ class LocalUpdater(Updater):
                 self.builds += 1
             return ""
         if len(args) > 1 and args[1].endswith("service_handoff.py"):
-            return json.dumps(dict(idle=self.idle))
+            if args[2] in {"restore", "unretire"}:
+                return json.dumps(dict(status="restored"))
+            return json.dumps(dict(idle=self.idle, service="absent" if self.idle else "busy",
+                retirement=dict(schema="mindie-service-retirement/1", operation_id="a"*32,
+                                config_fingerprint="b"*64, status="retired" if self.idle else "busy")))
         return super().command(args, **kwargs)
 
     def prepare_capture(self, candidate):
@@ -291,6 +295,28 @@ class AutoUpdateTests(unittest.TestCase):
         installs = self.updater.installs
         self.assertEqual(self.check()["status"], "up_to_date")
         self.assertEqual(self.updater.installs, installs)
+
+    def test_persistence_failure_after_commit_reports_known_install_and_reconciles_without_reinstall(self):
+        original_atomic = auto_update.atomic
+        failures = []
+        def disk_failure(path, data):
+            if (Path(path) == self.updater.state_path and data.get("current", {}).get("revision") == self.sha
+                    and not failures):
+                failures.append(dict(data))
+                raise OSError("fixture state disk unavailable")
+            return original_atomic(path, data)
+        with patch("auto_update.atomic", side_effect=disk_failure):
+            result = self.check()
+        self.assertEqual(result["status"], "partial")
+        self.assertTrue(result["state_persistence"]["generation_committed"])
+        self.assertEqual(result["current"]["revision"], self.sha)
+        self.assertEqual(read(self.config)["runtime_scripts"], str(Path(result["current"]["plugin"]) / "scripts"))
+        installs = self.updater.installs
+        self.assertTrue((self.root / "transaction.json").exists())
+        refreshed = self.check()
+        self.assertEqual(refreshed["status"], "up_to_date")
+        self.assertEqual(self.updater.installs, installs)
+        self.assertFalse((self.root / "transaction.json").exists())
 
     def test_upgrade_from_core_without_handoff_api(self):
         """The previous core cannot import the new helper's lock_held API."""
@@ -688,6 +714,22 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(self.check()["status"], "attempts_exhausted")
         self.assertEqual(self.updater.installs, count)
 
+    def test_install_failure_survives_restoration_state_write_failure(self):
+        self.updater.fail_install = True
+        original = auto_update.atomic
+        def fail_restoration(path, value):
+            if Path(path) == self.updater.state_path and (value.get('service_handoff') or {}).get('restoration'):
+                raise OSError('state disk unavailable')
+            return original(path, value)
+        with patch('auto_update.atomic', side_effect=fail_restoration):
+            result = self.check()
+        self.assertEqual(result['status'], 'update_failed')
+        self.assertEqual(result['operation_error']['stage'], 'install')
+        self.assertEqual(result['operation_error']['error_type'], 'RuntimeError')
+        self.assertEqual(result['state_persistence']['error_type'], 'OSError')
+        self.assertEqual(result['service_handoff']['restoration']['status'], 'restored')
+        self.assertEqual(read(self.config), self.initial)
+
     def test_uncertain_crash_consumes_attempt_and_recovers_before_next_check(self):
         original = self.updater.command
 
@@ -954,6 +996,19 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(result["retention"]["status"], "failed")
         self.assertEqual(read(self.updater.state_path)["retention"], result["retention"])
 
+    def test_required_launcher_failure_reports_committed_partial_install(self):
+        candidate = self.updater.prepare(self.sha)
+        with patch.object(self.updater, 'publish_stable_launcher', side_effect=OSError('fixture write failure')):
+            result = self.updater.install(candidate)
+        self.assertEqual(result['status'], 'partial')
+        self.assertEqual(result['current']['revision'], self.sha)
+        self.assertTrue(result['launcher_error']['generation_committed'])
+        self.assertEqual(read(self.config)['runtime_scripts'], str(Path(candidate['plugin']) / 'scripts'))
+        self.assertFalse((self.root / 'transaction.json').exists())
+        self.updater._startup_current(recover=True)
+        self.assertNotIn('launcher_error', self.updater.state)
+        self.assertTrue((self.root / 'launcher.py').is_file())
+
     def test_committed_generation_publishes_stable_launcher(self):
         with patch("auto_update.schedule_enable") as schedule:
             result = self.check()
@@ -1023,23 +1078,11 @@ class UpdateIdleTests(unittest.TestCase):
                 redactor_executable=str(Path(tmp) / "gitleaks"))), encoding="utf-8")
             self.assertTrue(service_handoff.stop(str(engine)))
 
-    def test_absent_stop_if_idle_fails_closed(self):
+    def test_retirement_failure_reaches_updater(self):
         import service_handoff
-
-        with tempfile.TemporaryDirectory() as tmp:
-            engine = Path(tmp) / "engine.json"
-            engine.write_text(json.dumps(dict(root=tmp, domain="test", capture_mode="public-transcript",
-                transcript_adapter=str(SCRIPTS / "codex_transcript.py"),
-                redactor_executable=str(Path(tmp) / "gitleaks"))), encoding="utf-8")
-            with (
-                patch(
-                    "service_handoff.connect",
-                    return_value=dict(url="http://127.0.0.1:9", token="t"),
-                ),
-                patch("service_handoff.rpc", return_value=dict(status="ok")),
-            ):
-                with self.assertRaises(RuntimeError):
-                    service_handoff.stop(str(engine))
+        with patch("service_handoff.retire_service", side_effect=OSError("receipt unavailable")):
+            with self.assertRaises(OSError):
+                service_handoff.stop("engine.json")
 
     # Authenticated acknowledgement and real lifetime release are exercised
     # by test_service_handoff; a canned sequence of TCP results cannot prove it.

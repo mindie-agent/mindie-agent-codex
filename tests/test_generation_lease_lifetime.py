@@ -1,4 +1,4 @@
-"""A killed launcher cannot make an executing helper's generation collectible."""
+"""Live work retains its generation; owner death cancels work before collection."""
 import json
 import os
 from pathlib import Path
@@ -18,7 +18,7 @@ from update_lock import file_lock
 
 @unittest.skipUnless(os.name == 'posix', 'POSIX flock inheritance; Windows owns children with a Job')
 class GenerationLeaseLifetimeTests(unittest.TestCase):
-    def test_both_stable_launchers_transfer_their_lease_before_parent_death(self):
+    def test_live_operation_holds_lease_and_owner_exit_cancels_it(self):
         for role in ('runtime', 'updater'):
             with self.subTest(role=role), tempfile.TemporaryDirectory() as temporary:
                 base = Path(temporary).resolve()
@@ -30,7 +30,7 @@ class GenerationLeaseLifetimeTests(unittest.TestCase):
                     generation = root / 'generations' / revision
                     scripts = generation / 'plugin/scripts'; scripts.mkdir(parents=True)
                     atomic(generation / 'ownership.json', dict(schema='mindie-runtime-generation/2', revision=revision))
-                    for name in ('bounded_process.py', 'windows_process.py'):
+                    for name in ('bounded_process.py', 'windows_process.py', 'owned_process.py'):
                         shutil.copy2(SCRIPTS / name, scripts / name)
                     child_code = ('from pathlib import Path;import os,time;Path(' + repr(str(ready))
                                   + ').write_text(str(os.getpid()));time.sleep(30)')
@@ -50,14 +50,13 @@ class GenerationLeaseLifetimeTests(unittest.TestCase):
                         time.sleep(.01)
                     self.assertTrue(ready.exists(), 'fixture helper did not start')
                     child = int(ready.read_text())
-                    launcher.kill(); launcher.wait(timeout=3)
                     atomic(config, dict(runtime_scripts=str(root / 'generations/new/plugin/scripts')))
                     atomic(root / 'state.json', dict(current=dict(revision='new', plugin=str(root / 'generations/new/plugin')), candidate='new'))
                     os.kill(child, 0)
                     first = Updater(settings).collect_generations()
                     self.assertIn('old', first['kept'])
                     self.assertTrue((root / 'generations/old').is_dir())
-                    os.killpg(child, signal.SIGKILL)
+                    launcher.kill(); launcher.wait(timeout=3)
                     until = time.monotonic() + 5
                     while True:
                         try:
@@ -65,7 +64,7 @@ class GenerationLeaseLifetimeTests(unittest.TestCase):
                                 break
                         except BlockingIOError:
                             if time.monotonic() >= until:
-                                self.fail('child did not release inherited generation lease')
+                                self.fail('owner death did not release the inherited generation lease')
                             time.sleep(.01)
                     self.assertIn('old', Updater(settings).collect_generations()['removed'])
                 finally:

@@ -73,7 +73,7 @@ def main() -> None:
         print(f"{env_name} contains {commit}")
     require_requirement_pins(REPO / "runtime-requirements.txt")
     receipt = probe(sys.executable, REPO / "plugins/mindie-agent/scripts",
-                    lambda argv, **kwargs: run(argv, "", **kwargs))
+                    lambda argv, **kwargs: run(argv, "", **kwargs).checked_stdout())
     print("validated product " + receipt["product_sha256"])
 
 

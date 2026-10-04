@@ -172,7 +172,7 @@ class Sessions:
                     max_output=32768,
                     env=generation_env(self.config),
                     allow_service=operation == "stop_capture",
-                )
+                ).checked_stdout()
                 envelope = json.loads(output)
             except Inactive:
                 raise

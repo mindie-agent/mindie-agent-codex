@@ -21,19 +21,20 @@ class AdapterTests(unittest.TestCase):
             text=True,
             capture_output=True,
             timeout=3,
-            env={**os.environ, "MINDIE_AGENT_CONFIG": str(config)},
+            env={**os.environ, "MINDIE_AGENT_CONFIG": str(config), "MINDIE_DIAGNOSTICS_ROOT": str(config.parent / "diagnostics")},
         )
 
-    def test_missing_configuration_drops_stop_without_writes(self):
+    def test_missing_configuration_emits_diagnostic_without_capture(self):
         with tempfile.TemporaryDirectory() as root:
             start = time.monotonic()
             result = self.bridge(
                 "stop", {"session_id": "a"}, Path(root) / "absent.json"
             )
-            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.returncode, 1)
             self.assertEqual(json.loads(result.stdout), {})
             self.assertLess(time.monotonic() - start, 2)
-            self.assertEqual(list(Path(root).iterdir()), [])
+            self.assertFalse((Path(root) / "absent.json").exists())
+            self.assertEqual([path.name for path in Path(root).iterdir()], ["diagnostics"])
 
     def test_retired_session_start_operation_is_rejected_without_state(self):
         with tempfile.TemporaryDirectory() as root:

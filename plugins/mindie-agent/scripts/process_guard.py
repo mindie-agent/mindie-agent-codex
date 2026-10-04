@@ -75,13 +75,12 @@ def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=Fals
         input_file.seek(0)
         try:
             if POSIX:
-                process = subprocess.Popen(
-                    command,
-                    stdin=input_file,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    start_new_session=not inherited,
-                )
+                if inherited:
+                    process = subprocess.Popen(command, stdin=input_file,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                else:
+                    from bounded_process import _spawn
+                    process = _spawn(command, input_file, None)
             else:
                 process = windows_process.spawn(
                     command,
@@ -307,6 +306,12 @@ def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=Fals
                 if original_error is None and not receipt['turn_completed']:
                     raise
             finally:
+                if getattr(process, '_mindie_owner_fd', None) is not None:
+                    owner_fd, process._mindie_owner_fd = process._mindie_owner_fd, None
+                    try:
+                        os.close(owner_fd)
+                    except OSError:
+                        receipt['cleanup_failed'] = True
                 receipt['elapsed_ms'] = round((time.monotonic() - started) * 1000)
                 if original_error is not None:
                     original_error.mindie_native_receipt = dict(receipt)

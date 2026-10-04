@@ -47,7 +47,6 @@ class SilentCaptureTests(unittest.TestCase):
         self.config.write_text(json.dumps(dict(admission_path=str(self.admission),
             engine_config=str(self.engine), community_config=str(self.community))))
         store = Store(self.root / 'data', 'test')
-        store.db.execute("UPDATE meta SET value=? WHERE key='capture_floor'", (str(self.enabled-10),))
         store.db.commit()
         store.close()
         self.stack.enter_context(patch.dict(os.environ, MINDIE_AGENT_CONFIG=str(self.config),
@@ -119,6 +118,26 @@ class SilentCaptureTests(unittest.TestCase):
         self.community.write_text(json.dumps(self.settings))
         with patch.object(codex_transcript, 'capture_source', side_effect=AssertionError('read')):
             self.assertEqual(self.accept(dict(session_id='current'))['reason'], 'sharing-disabled')
+        self.assertFalse(self.admission.exists())
+
+    def test_real_stdio_delivers_pending_fault_once_on_natural_call(self):
+        agent_diagnostics.enqueue('mindie-knowledge', 'capture', 'summary', 'worker_failed',
+                                  dict(incident_id='a'*32, logging_failed=False))
+        frames = [dict(jsonrpc='2.0', id=1, method='initialize', params={}),
+                  dict(jsonrpc='2.0', id=2, method='tools/call', params=dict(
+                      name='knowledge_query', arguments=dict(query='synthetic'),
+                      _meta={'threadId':'current', 'x-codex-turn-metadata': {
+                          'thread_id':'current', 'session_id':'current', 'turn_id':'turn'}}))]
+        result = subprocess.run([sys.executable, str(SCRIPTS / 'bridge.py'), 'mcp'],
+            input=''.join(json.dumps(frame)+'\n' for frame in frames), text=True,
+            capture_output=True, timeout=8)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        response = next(json.loads(line)['result'] for line in result.stdout.splitlines()
+                        if json.loads(line).get('id') == 2)
+        projection = response['structuredContent']['agent_diagnostics']
+        self.assertEqual(projection['items'][0]['code'], 'worker_failed')
+        self.assertIsNone(agent_diagnostics.pending())
+        self.assertNotIn('run status', result.stdout.lower())
         self.assertFalse(self.admission.exists())
 
     def test_internal_diagnostics_persist_until_a_written_response_is_acknowledged(self):

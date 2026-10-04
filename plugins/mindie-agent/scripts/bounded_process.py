@@ -5,6 +5,8 @@ uses a suspended spawn and owned Job before child code can create descendants.
 """
 
 import os
+from dataclasses import dataclass, field
+from pathlib import Path
 import math
 import re
 import subprocess
@@ -22,18 +24,87 @@ if POSIX:
     import signal
 
 
+@dataclass
+class ProcessResult:
+    """One execution outcome; cleanup never changes its execution facts.
+
+    ``completed`` means the target exited and stdout was drained, not that its
+    business operation succeeded. Exceptions raised by run carry this same
+    object as ``process_result``. A cancelled/disconnected operation is unknown
+    unless a higher-level protocol already has its own completion receipt.
+    """
+    execution: str
+    stdout: str = ""
+    returncode: int | None = None
+    stderr: str = ""
+    cleanup: list = field(default_factory=list)
+
+    def checked_stdout(self):
+        if self.cleanup:
+            raise ProcessCleanupError(self)
+        return self.stdout
+
+
+class ProcessCleanupError(RuntimeError):
+    def __init__(self, result):
+        self.process_result = result
+        super().__init__("Process execution " + result.execution +
+                         "; owned-process cleanup failed; do not repeat the operation")
+
+
+def _cleanup(process, result, *, selector=None, threads=()):
+    """Attempt every release and report failures separately from business work."""
+    def attempt(stage, operation):
+        try:
+            operation()
+        except Exception as exc:
+            result.cleanup.append(dict(stage=stage, error_type=type(exc).__name__))
+    attempt("terminate_owned_tree", lambda: _kill_tree(process))
+    attempt("reap_process", lambda: process.wait(timeout=1))
+    if getattr(process, "_mindie_owner_fd", None) is not None:
+        owner_fd, process._mindie_owner_fd = process._mindie_owner_fd, None
+        attempt("close_owner_pipe", lambda: os.close(owner_fd))
+    if selector is not None:
+        attempt("close_selector", selector.close)
+    for thread in threads:
+        attempt("join_reader", lambda thread=thread: thread.join(timeout=.5))
+    for index, stream in enumerate((process.stdout, process.stderr)):
+        if threads and threads[index].is_alive():
+            result.cleanup.append(dict(stage="join_reader", error_type="ReaderStillRunning"))
+        elif stream is not None:
+            attempt("close_pipe", stream.close)
+
+
 def _spawn(command, stdin, env, *, allow_service=False):
     if POSIX:
         from update_lock import generation_descriptors
-        return subprocess.Popen(
-            command,
-            stdin=stdin,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=True,
-            env=env,
-            pass_fds=generation_descriptors(),
-        )
+        started, notify = os.pipe()
+        owner_read, owner_write = os.pipe()
+        try:
+            process = subprocess.Popen(
+                [sys.executable, str(Path(__file__).with_name("owned_process.py")),
+                 str(os.getpid()), str(notify), str(owner_read), *command],
+                stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                start_new_session=True, env=env,
+                pass_fds=(*generation_descriptors(), notify, owner_read),
+            )
+            process._mindie_owner_fd = owner_write
+        except BaseException:
+            os.close(started)
+            os.close(owner_write)
+            raise
+        finally:
+            os.close(notify)
+            os.close(owner_read)
+        with os.fdopen(started, 'rb') as stream:
+            receipt = stream.read(256)
+        if receipt != b"started\n":
+            result = ProcessResult("not_started")
+            _cleanup(process, result)
+            error = OSError("owned command failed before execution")
+            error.process_result = result
+            raise error
+        return process
     # Windows assigns the process to its Job before resuming user code.
     return windows_process.spawn(
         command,
@@ -213,7 +284,7 @@ def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), t
     selector.register(process.stderr, selectors.EVENT_READ, "err")
     deadline = None if timeout is None else time.monotonic() + timeout
     output = bytearray()
-    errors = bytearray() if transport else None
+    errors = bytearray()
     cap = _Cap(max_output)
 
     def timeout_error():
@@ -224,6 +295,7 @@ def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), t
             _attach_transport(err, output, errors, timed_out=True)
         return err
 
+    result = ProcessResult("unknown")
     try:
         while selector.get_map() or process.poll() is None:
             if cancel is not None and cancel.is_set():
@@ -250,7 +322,11 @@ def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), t
         # Both EOF and process exit are established. EOF alone must never
         # hide cancellation in an uninterruptible wait.
         process.wait()
-        if process.returncode not in allowed_returncodes:
+        result.execution = "completed"
+        result.returncode = process.returncode
+        result.stdout = output.decode()
+        result.stderr = errors.decode(errors="replace")
+        if allowed_returncodes is not None and process.returncode not in allowed_returncodes:
             # A protocol owner may map bounded stdout to a safe error. Raw
             # stderr never leaves this runner, and a nonzero exit still raises.
             err = (on_failure(bytes(output), process.returncode) if on_failure
@@ -260,20 +336,22 @@ def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), t
             if transport:
                 _attach_transport(err, output, errors, timed_out=False)
             raise err
-        return output.decode()
+        return result
+    except BaseException as exc:
+        result.returncode = process.poll()
+        if not result.stdout:
+            result.stdout = output.decode(errors="replace")
+        exc.process_result = result
+        raise
     finally:
-        _kill_tree(process)
-        process.wait(timeout=1)
-        selector.close()
-        process.stdout.close()
-        process.stderr.close()
+        _cleanup(process, result, selector=selector)
 
 
 def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,), transport=False, on_failure=None):
     # Windows (unverified on real hardware): reader threads replace selectors.
     deadline = None if timeout is None else time.monotonic() + timeout
     output = bytearray()
-    errors = bytearray() if transport else None
+    errors = bytearray()
     cap = _Cap(max_output)
     lock = threading.Lock()
     failure = []
@@ -297,6 +375,7 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
     ]
     for thread in threads:
         thread.start()
+    result = ProcessResult("unknown")
     try:
         while any(thread.is_alive() for thread in threads) or process.poll() is None:
             if cancel is not None and cancel.is_set():
@@ -318,7 +397,11 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
         # Both EOF and process exit are established. EOF alone must never
         # hide cancellation in an uninterruptible wait.
         process.wait()
-        if process.returncode not in allowed_returncodes:
+        result.execution = "completed"
+        result.returncode = process.returncode
+        result.stdout = bytes(output).decode()
+        result.stderr = bytes(errors).decode(errors="replace")
+        if allowed_returncodes is not None and process.returncode not in allowed_returncodes:
             # A protocol owner may map bounded stdout to a safe error. Raw
             # stderr never leaves this runner, and a nonzero exit still raises.
             err = (on_failure(bytes(output), process.returncode) if on_failure
@@ -328,21 +411,15 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
             if transport:
                 _attach_transport(err, output, errors, timed_out=False)
             raise err
-        return bytes(output).decode()
+        return result
+    except BaseException as exc:
+        result.returncode = process.poll()
+        if not result.stdout:
+            result.stdout = bytes(output).decode(errors="replace")
+        exc.process_result = result
+        raise
     finally:
-        _kill_tree(process)
-        try:
-            process.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=1)
-        for thread in threads:
-            thread.join(timeout=0.5)
-        # The Job is closed before readers or their pipe objects are touched.
-        # This releases descendants which kept inherited pipe handles open.
-        if all(not thread.is_alive() for thread in threads):
-            process.stdout.close()
-            process.stderr.close()
+        _cleanup(process, result, threads=threads)
 
 
 def run(command, data, *, timeout=None, max_output=1024 * 1024, cancel=None, env=None, allowed_returncodes=(0,), transport=False, allow_service=False, on_failure=None):
@@ -354,7 +431,12 @@ def run(command, data, *, timeout=None, max_output=1024 * 1024, cancel=None, env
     with tempfile.TemporaryFile() as stream:
         stream.write(data.encode())
         stream.seek(0)
-        process = _spawn(command, stream, env, allow_service=allow_service)
+        try:
+            process = _spawn(command, stream, env, allow_service=allow_service)
+        except BaseException as exc:
+            if not hasattr(exc, "process_result"):
+                exc.process_result = ProcessResult("not_started")
+            raise
         if POSIX:
             return _run_posix(
                 process, timeout, max_output, cancel, allowed_returncodes, transport, on_failure

@@ -128,13 +128,13 @@ def publication_contract(publication):
     with tempfile.TemporaryDirectory(prefix="mindie-publication-contract-") as directory:
         git = ["git", "-c", "core.hooksPath=" + os.devnull, "-C", directory]
         checked("publication_fetch", "fetch_failed", lambda: run(
-            git + ["init", "--bare", "--quiet"], "", timeout=None, env=env))
+            git + ["init", "--bare", "--quiet"], "", timeout=None, env=env).checked_stdout())
         checked("publication_fetch", "fetch_failed", lambda: run(
             git + ["fetch", "--no-auto-maintenance", "--depth=1", "--no-tags",
                    "https://github.com/" + publication["repository"] + ".git",
-                   publication["verified_commit"]], "", timeout=None, env=env))
+                   publication["verified_commit"]], "", timeout=None, env=env).checked_stdout())
         observed = checked("publication_fetch", "fetch_failed", lambda: run(
-            git + ["rev-parse", "FETCH_HEAD"], "", timeout=None, env=env)).strip()
+            git + ["rev-parse", "FETCH_HEAD"], "", timeout=None, env=env).checked_stdout()).strip()
         if observed != publication["verified_commit"]:
             raise CheckFailure("publication_fetch", "revision_mismatch")
         try:

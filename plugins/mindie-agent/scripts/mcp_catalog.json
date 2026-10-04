@@ -177,9 +177,9 @@
         "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; the alias path is also accepted (Kimi/Cursor habit). Enforced by the server so alias-only calls pass provider schema validation."
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": false,
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": true
       }
     },
@@ -509,9 +509,9 @@
         "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": false,
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": true
       }
     },
@@ -647,9 +647,9 @@
         "description": "job_id or session_id is required; checked by the server."
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": false,
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": true
       }
     },
@@ -725,9 +725,9 @@
         "description": "job_id or session_id is required; checked by the server."
       },
       "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": false,
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": true
       }
     },

@@ -6,7 +6,7 @@ def prepare(python, scripts):
     path = run(
         [str(python), '-m', 'mindie_knowledge.loop.transcript_redaction'],
         '', max_output=8192,
-    ).strip()
+    ).checked_stdout().strip()
     from pathlib import Path
     if not Path(path).is_absolute() or not Path(path).is_file():
         raise RuntimeError('installed transcript redactor is missing')

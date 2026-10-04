@@ -21,6 +21,7 @@ from tests.process_fixtures import public_engine_config
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
 from session_gate import Inactive, Sessions
+from bounded_process import ProcessResult
 import bounded_process
 import mcp_gate
 
@@ -214,17 +215,18 @@ class SessionGateTests(unittest.TestCase):
             # and remains outside this mode-bit assertion.
             self.assertTrue(self.sessions.path.is_file())
 
-    def test_inactive_hooks_create_no_state_or_runtime(self):
+    def test_unconfigured_hooks_report_fault_without_capture_or_runtime(self):
         marker = self.runtime_fixture()
         event = self.event()
         before = set(self.root.iterdir())
         result = self.bridge("stop", event)
-        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
         result = self.bridge(
             "session-start", dict(hook_event_name="SessionStart", session_id="manual-A")
         )
         self.assertEqual(result.returncode, 1)  # retired operation, no longer served
-        self.assertEqual(set(self.root.iterdir()), before)
+        self.assertEqual(set(self.root.iterdir()) - {self.root / "diagnostics"}, before)
+        self.assertFalse(self.sessions.path.exists())
         self.assertFalse(marker.exists())
 
     def test_discovery_works_without_any_configuration(self):
@@ -316,12 +318,12 @@ class SessionGateTests(unittest.TestCase):
         )
         parent = self.activate("root-tree")
         gate = mcp_gate.Gate("knowledge")
-        with patch.object(mcp_gate, "run", return_value='{"content":[],"isError":false}') as run:
+        with patch.object(mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)) as run:
             self.assertFalse(gate.call(self.request(parent, ident=11, meta=child_meta))["isError"])
             self.assertEqual(json.loads(run.call_args.args[1])["mindie_session_id"], "child-thread")
         child = self.activate("child-thread")
         with patch.object(
-            mcp_gate, "run", return_value='{"content":[],"isError":false}'
+            mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)
         ) as run:
             self.assertFalse(
                 gate.call(self.request(child, ident=12, meta=child_meta))["isError"]
@@ -343,7 +345,7 @@ class SessionGateTests(unittest.TestCase):
             self.assertEqual(run.call_count, 0)
 
     def test_reads_work_without_capture_binding_and_do_not_create_it(self):
-        with patch.object(mcp_gate, "run", return_value='{"content":[],"isError":false}') as run:
+        with patch.object(mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)) as run:
             gate = mcp_gate.Gate("knowledge")
             self.assertFalse(gate.call(self.request())["isError"])
             self.assertFalse(gate.call(self.request(name="knowledge_explain", ref="x"))["isError"])
@@ -353,7 +355,7 @@ class SessionGateTests(unittest.TestCase):
 
     def test_repeated_reads_need_no_durable_request_record(self):
         gate = mcp_gate.Gate("knowledge")
-        with patch.object(mcp_gate, "run", return_value='{"content":[],"isError":false}') as run:
+        with patch.object(mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)) as run:
             self.assertFalse(gate.call(self.request())["isError"])
             self.assertFalse(gate.call(self.request())["isError"])
             self.assertEqual(run.call_count, 2)
@@ -365,7 +367,7 @@ class SessionGateTests(unittest.TestCase):
             lease, name="remote_job_status", session_id="remote-job-7"
         )
         with patch.object(
-            mcp_gate, "run", return_value='{"content":[],"isError":false}'
+            mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)
         ) as run:
             self.assertFalse(mcp_gate.Gate("remote").call(request)["isError"])
             payload = json.loads(run.call_args.args[1])
@@ -386,7 +388,7 @@ class SessionGateTests(unittest.TestCase):
                 isError=True,
             )
         )
-        with patch.object(mcp_gate, "run", return_value=rejected) as run:
+        with patch.object(mcp_gate, "run", return_value=ProcessResult("completed", rejected, 0)) as run:
             for i in range(3):
                 result = gate.call(
                     self.request(lease, ident=100 + i, name="knowledge_explain", ref="bad-ref")
@@ -408,20 +410,20 @@ class SessionGateTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(failures, 0)  # the circuit is neither consumed nor reset
         # A valid read still works on the same lease afterwards.
-        with patch.object(mcp_gate, "run", return_value='{"content":[],"isError":false}'):
+        with patch.object(mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)):
             self.assertFalse(gate.call(self.request(lease, ident=200))["isError"])
         # Actual runtime errors still consume the circuit and pause the lease.
         with patch.object(mcp_gate, "run", side_effect=TimeoutError("stalled")):
             for i in range(3):
                 self.assertTrue(gate.call(self.request(lease, ident=300 + i))["isError"])
-        with patch.object(mcp_gate, "run", return_value='{"content":[],"isError":false}') as run:
+        with patch.object(mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)) as run:
             self.assertFalse(gate.call(self.request(lease, ident=400))["isError"])
             self.assertEqual(run.call_count, 1)
         with patch.object(mcp_gate, "run", side_effect=ValueError("bad runtime response")):
             for i in range(3):
                 self.assertTrue(gate.call(self.request(lease, ident=500 + i))["isError"])
         # Protocol failures are recorded diagnostically but never pause the lease.
-        with patch.object(mcp_gate, "run", return_value='{"content":[],"isError":false}') as run:
+        with patch.object(mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)) as run:
             self.assertFalse(gate.call(self.request(lease, ident=600))["isError"])
             self.assertEqual(run.call_count, 1)
 
@@ -592,7 +594,7 @@ class SessionGateTests(unittest.TestCase):
         marker = self.runtime_fixture()
         self.sessions.path.write_text("corrupt")
         result = self.bridge("stop", self.event())
-        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
         self.assertFalse(marker.exists())
 
     def test_absolute_deadline_output_bound_and_pre_cancel(self):

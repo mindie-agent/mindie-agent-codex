@@ -84,7 +84,7 @@ invalid requests. Service or background-maintenance failure should not create
 extra user turns or an automatic repair loop; continue with native capabilities
 unless fixing the component is part of the requested work.
 
-`mindie-remote-dev` is available on demand in every native task, in each native task. Remote calls do not activate knowledge capture.
+`mindie-remote-dev` is available on demand in every native task. Remote calls do not activate knowledge capture.
 Use it for remote files, commands, jobs and artifacts. A call deadline is not a
 job-completion result: follow an existing job with the provided status/output
 operations as needed for the user's task. If a mutation's result is uncertain,

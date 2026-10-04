@@ -52,6 +52,10 @@ FEEDBACK_WRITE = dict(
 REMOTE_MUTATION = dict(
     readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True
 )
+REMOTE_READ = dict(
+    readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
+)
+REMOTE_READ_TOOLS = {"remote_read", "remote_grep", "remote_job_status", "remote_job_tail"}
 
 STRING = {"type": "string"}
 
@@ -156,7 +160,7 @@ def catalog():
                 f"{tool['name']} advertises keys call_tool rejects: {sorted(extra)}"
             )
     for tool in result["remote"]:
-        tool["annotations"] = REMOTE_MUTATION
+        tool["annotations"] = REMOTE_READ if tool["name"] in REMOTE_READ_TOOLS else REMOTE_MUTATION
     for tool in result["knowledge"]:
         tool["description"] = (
             "The host binds native task identity per call. " + tool["description"]

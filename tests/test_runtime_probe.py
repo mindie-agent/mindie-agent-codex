@@ -36,7 +36,7 @@ class RuntimeProbeTests(unittest.TestCase):
 
     def invoke(self, *, command=None):
         return auto_update.Updater.probe_runtime(
-            SimpleNamespace(command=command or (lambda argv, **kw: run(argv, '', **kw))),
+            SimpleNamespace(command=command or (lambda argv, **kw: run(argv, '', **kw).checked_stdout())),
             sys.executable, self.scripts, revision='a' * 40)
 
     def test_candidate_script_owns_validation_not_current_private_probe(self):
@@ -114,7 +114,7 @@ class RuntimeProbeTests(unittest.TestCase):
         def quick_command(argv, **kwargs):
             self.assertIsNone(kwargs['timeout'])
             self.assertEqual(kwargs['max_output'], 65536)
-            return run(argv, '', **dict(kwargs, timeout=0.1))
+            return run(argv, '', **dict(kwargs, timeout=0.1)).checked_stdout()
         with self.assertRaises(TimeoutError):
             self.invoke(command=quick_command)
 

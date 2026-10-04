@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
 sys.path.insert(0, str(SCRIPTS))
+from bounded_process import ProcessResult
 import bridge
 from session_gate import Sessions, Inactive
 
@@ -27,7 +28,7 @@ class FailureVisibilityTests(unittest.TestCase):
             path.write_text(json.dumps({'python': sys.executable, 'runtime_scripts': str(SCRIPTS),
                                         'engine_config': str(Path(directory) / 'engine.json')}))
             for output in ('', '[]', 'null'):
-                with self.subTest(output=output), patch.object(bridge, 'config_path', return_value=path), patch.object(bridge, 'run', return_value=output):
+                with self.subTest(output=output), patch.object(bridge, 'config_path', return_value=path), patch.object(bridge, 'run', return_value=ProcessResult("completed", output, 0)):
                     with self.assertRaises(ValueError):
                         bridge.configure([])
 

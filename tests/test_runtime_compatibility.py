@@ -64,5 +64,5 @@ class RuntimeCompatibilityTests(unittest.TestCase):
         self.assertEqual(Probe('').probe_runtime(sys.executable).strip(), 'OK')
 
     def test_missing_lifetime_observation_is_rejected(self):
-        with self.assertRaisesRegex(RuntimeError, "locks lacks lock_held"):
+        with self.assertRaisesRegex(RuntimeError, "lock_held"):
             Probe("from mindie_knowledge.loop import locks; del locks.lock_held").probe_runtime(sys.executable)

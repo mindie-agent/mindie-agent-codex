@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
 sys.path.insert(0, str(SCRIPTS))
+from bounded_process import ProcessResult
 import mcp_gate
 
 
@@ -77,6 +78,41 @@ class ReceiptLifetimeTests(unittest.TestCase):
             self.assertEqual(db.execute("SELECT status FROM attempts WHERE identity='original'").fetchone()[0], 'unknown')
         self.assertFalse(self.receipts().claim('original'))
 
+    def test_existing_receipt_authority_damage_never_becomes_fresh_admission(self):
+        for damage in ("missing", "empty", "table", "identity", "marker"):
+            with self.subTest(damage=damage):
+                obj = self.receipts("damage-" + damage)
+                self.assertTrue(obj.claim("consumed"))
+                if damage == "missing":
+                    obj.path.unlink()
+                elif damage == "empty":
+                    obj.path.write_bytes(b"")
+                elif damage == "marker":
+                    obj.path.with_suffix(".authority.json").unlink()
+                else:
+                    with closing(sqlite3.connect(obj.path)) as db, db:
+                        db.execute("DROP TABLE attempts" if damage == "table" else "UPDATE authority SET identity='wrong'")
+                with self.assertRaises((sqlite3.Error, RuntimeError, ValueError)):
+                    self.receipts("damage-" + damage).claim("consumed")
+
+    def test_known_business_success_stays_succeeded_when_helper_cleanup_fails(self):
+        config = self.root / "cleanup-config.json"
+        config.write_text(json.dumps({"python": sys.executable, "engine_config": "/absent"}))
+        request = {"id": 7, "params": {"name": "remote_bash",
+            "arguments": {"command": "true", "host": "example.invalid"},
+            "_meta": {"threadId": "cleanup", "x-codex-turn-metadata": {
+                "thread_id": "cleanup", "session_id": "cleanup", "turn_id": "turn"}}}}
+        completed = ProcessResult("completed", '{"content":[],"isError":false}', 0,
+                                  cleanup=[{"stage": "wait", "error_type": "OSError"}])
+        with patch.dict(os.environ, MINDIE_AGENT_CONFIG=str(config)), patch.object(mcp_gate, "run", return_value=completed):
+            gate = mcp_gate.Gate("remote")
+            result = gate.call(request)
+        self.objects.extend(gate._remote_receipts.values())
+        self.assertTrue(result["isError"])
+        self.assertEqual(result["operation_outcome"], "succeeded")
+        with closing(sqlite3.connect(gate._remote_receipts["cleanup"].path)) as db:
+            self.assertEqual(db.execute("SELECT status FROM attempts").fetchone()[0], "succeeded")
+
     def test_gate_constructs_one_receipt_owner_per_seen_task(self):
         config = self.root / 'config.json'
         config.write_text(json.dumps({'python': sys.executable, 'engine_config': '/absent/not-used'}))
@@ -88,7 +124,7 @@ class ReceiptLifetimeTests(unittest.TestCase):
                         'thread_id': 'task', 'session_id': 'task', 'turn_id': 'turn'}}}}
         with patch.dict(os.environ, MINDIE_AGENT_CONFIG=str(config)), \
              patch.object(mcp_gate, 'RemoteReceipts', wraps=factory) as constructor, \
-             patch.object(mcp_gate, 'run', return_value='{"content":[],"isError":false}'):
+             patch.object(mcp_gate, 'run', return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)):
             gate = mcp_gate.Gate('remote')
             self.assertFalse(gate.call(request(1))['isError'])
             self.assertFalse(gate.call(request(2))['isError'])

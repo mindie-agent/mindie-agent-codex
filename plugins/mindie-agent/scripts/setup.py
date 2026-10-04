@@ -46,7 +46,7 @@ def probe_runtime(python):
     """
     try:
         return product_contract.probe(
-            python, SCRIPTS, lambda argv, **kwargs: run(argv, "", **kwargs))
+            python, SCRIPTS, lambda argv, **kwargs: run(argv, "", **kwargs).checked_stdout())
     except Exception as exc:
         raise SystemExit(
             f"knowledge runtime probe failed to run in {python}: "
