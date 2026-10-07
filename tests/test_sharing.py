@@ -189,7 +189,8 @@ class GateTests(SharingFixture):
                 stream.write(json.dumps(message) + '\n')
             event = self.event(turn_id=f'large-{size}', last_assistant_message='公开结果' * (size // 12))
             result = self.bridge('stop', event, timeout=5)
-            self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+            self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}),
+                             f"Stop size={size}: {result.stderr}")
         path = self.root / 'data/test/state-v4.sqlite3'
         db = sqlite3.connect(path)
         try:

@@ -131,13 +131,15 @@ class SessionGateTests(unittest.TestCase):
             cwd=str(self.root),
         )
 
-    def runtime_fixture(self, *, delay=0, hook=False):
+    def runtime_fixture(self, *, delay=0, hook=False, marker_delay=0):
         """Keep Python executable; substitute only the selected runtime helper."""
         marker = self.root / "invocations"
         scripts = copy_runtime_scripts(self.root / "runtime-fixture")
         behavior = (
             "import sys, time\nfrom pathlib import Path\n"
-            f"Path({str(marker)!r}).open('a').write('attempt\\n')\n"
+            f"with Path({str(marker)!r}).open('a') as stream:\n"
+            f"    time.sleep({marker_delay})\n"
+            "    stream.write('attempt\\n')\n"
             "sys.stdin.read()\n"
             f"time.sleep({delay})\n"
             "print('{}')\n"
@@ -658,7 +660,8 @@ class SessionGateTests(unittest.TestCase):
         self.assertTrue(all(reply.get('result') == {} for reply in replies), replies)
 
     def test_mcp_protocol_call_and_cancellation(self):
-        marker = self.runtime_fixture(delay=20)
+        # Expose the file-created-but-not-written window before cancellation.
+        marker = self.runtime_fixture(delay=20, marker_delay=0.1)
         lease = self.activate()
         process = subprocess.Popen(
             [sys.executable, str(SCRIPTS / "bridge.py"), "mcp"],
@@ -670,9 +673,13 @@ class SessionGateTests(unittest.TestCase):
             process.stdin.write((json.dumps(self.request(lease)) + "\n").encode())
             process.stdin.flush()
             deadline = time.monotonic() + 2
-            while not marker.exists() and time.monotonic() < deadline:
+            while time.monotonic() < deadline:
+                if marker.exists() and marker.read_text().splitlines() == ["attempt"]:
+                    break
                 time.sleep(0.01)
-            self.assertTrue(marker.exists())
+            self.assertTrue(marker.exists(), "runtime helper did not start")
+            self.assertEqual(marker.read_text().splitlines(), ["attempt"],
+                             "runtime helper did not publish its ready marker")
             cancel = dict(
                 jsonrpc="2.0",
                 method="notifications/cancelled",

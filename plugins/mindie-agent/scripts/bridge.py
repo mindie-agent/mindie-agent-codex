@@ -74,6 +74,8 @@ BATCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 # handoff work keeps its independent bound; input length cannot extend it.
 HOOK_BUDGET = 1.5
 WINDOWS_HOOK_BUDGET = 1.3
+# Skip quoted spans with byte searches; only quote-adjacent escapes need work.
+_HOOK_TOKEN = re.compile(rb'["{}\[\]]')
 
 
 def _bounded_path(value, name):
@@ -87,39 +89,65 @@ def _bounded_path(value, name):
 def _read_hook_stdin(timeout):
     """Deadline-bounded raw fd read; never buffered I/O (shutdown can hang).
 
-    Stops at EOF, the deadline, or the first complete JSON
-    value so a held-open pipe cannot consume the helper's remaining time.
+    Frame one object/array incrementally, then decode it once. Braces in a
+    final-answer string are not completion candidates. Stops at EOF, the
+    deadline, or a complete frame so a held-open pipe does not use helper time.
     Windows native select is sockets-only; a daemon os.read thread is the
-    portable bound (code-only on Windows; not natively verified).
+    portable bound. Returns the decoded JSON value; malformed input and read
+    failures are propagated to the envelope failure boundary.
     """
     remaining = timeout
     if remaining <= 0:
         raise TimeoutError("hook stdin deadline exceeded")
     buf = bytearray()
-    lock = threading.Lock()
     finished = threading.Event()
+    result = []
+    errors = []
 
     def reader():
         try:
             fd = sys.stdin.fileno()
+            depth = 0
+            quoted = escaped = False
             while True:
-                try:
-                    chunk = os.read(fd, 65536)
-                except (OSError, ValueError):
-                    return
+                chunk = os.read(fd, 65536)
                 if not chunk:
+                    result.append(json.loads(buf))
                     return
-                with lock:
-                    buf.extend(chunk)
-                    # Native Stop is one object. Avoid reparsing a growing
-                    # final answer after every chunk (quadratic work).
-                    if not chunk.rstrip().endswith((b'}', b']')):
-                        continue
-                    try:
-                        json.loads(bytes(buf))
-                    except ValueError:
-                        continue
-                    return
+                buf.extend(chunk)
+                pos = int(escaped)
+                escaped = False
+                while pos < len(chunk):
+                    if quoted:
+                        quote = chunk.find(b'"', pos)
+                        if quote < 0:
+                            if chunk.endswith(b'\\'):
+                                tail = len(chunk) - max(pos, len(chunk.rstrip(b'\\')))
+                                escaped = bool(tail % 2)
+                            break
+                        before = quote
+                        while before > pos and chunk[before - 1] == 92:
+                            before -= 1
+                        if (quote - before) % 2 == 0:
+                            quoted = False
+                        pos = quote + 1
+                    else:
+                        match = _HOOK_TOKEN.search(chunk, pos)
+                        if match is None:
+                            break
+                        pos = match.end()
+                        token = match.group()
+                        if token == b'"':
+                            quoted = True
+                        elif token in (b'{', b'['):
+                            depth += 1
+                        else:
+                            depth -= 1
+                            if depth <= 0:
+                                result.append(json.loads(buf))
+                                return
+        except (OSError, ValueError, RecursionError) as exc:
+            errors.append(exc)
         finally:
             finished.set()
 
@@ -128,18 +156,18 @@ def _read_hook_stdin(timeout):
     finished.wait(timeout=max(0.0, remaining))
     if not finished.is_set():
         raise TimeoutError("hook stdin deadline exceeded")
-    with lock:
-        return bytes(buf)
+    if errors:
+        raise errors[0]
+    return result[0]
 
 
-def hook_event(raw):
+def hook_event(event):
     """Validate native identity and forward only the transcript reference.
 
     A valid transcript event is never rejected for a missing final summary:
     transcript_path alone is enough. The transcript itself is never opened
     here. The optional final-answer copy has no role in transcript capture.
     """
-    event = json.loads(raw)
     if not isinstance(event, dict) or event.get("hook_event_name") != "Stop":
         raise ValueError("unexpected hook event")
     for key in ("session_id", "turn_id"):
@@ -450,6 +478,7 @@ def offline_status():
 
 def _record_stop(stage, category, exc=None):
     """Local diagnostic only. No transcript, token, or exception text."""
+    print(f"MindIE Stop capture failed: stage={stage} category={category}.", file=sys.stderr)
     try:
         from diagnostic_support import failure
 
