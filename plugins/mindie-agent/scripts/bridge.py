@@ -78,10 +78,12 @@ def _bounded_path(value, name):
     return value
 
 
+_HOOK_TOKEN = re.compile(rb'["{}\[\]]')
+
+
 def _read_hook_stdin():
-    """Read one byte-bounded native event; a live quiet pipe is not failure."""
+    """Frame one byte-bounded event; wait for the caller while it owns us."""
     buf = bytearray()
-    lock = threading.Lock()
     finished = threading.Event()
     errors = []
     owner = os.getppid()
@@ -89,27 +91,47 @@ def _read_hook_stdin():
     def reader():
         try:
             fd = sys.stdin.fileno()
+            depth = 0
+            quoted = escaped = False
             while True:
-                try:
-                    chunk = os.read(fd, 65536)
-                except (OSError, ValueError):
-                    return
+                chunk = os.read(fd, 65536)
                 if not chunk:
                     return
-                with lock:
-                    buf.extend(chunk)
-                    if len(buf) > MAX_HOOK_BYTES:
-                        errors.append(ValueError('hook event exceeds its byte bound'))
-                        return
-                    # Native Stop is one object. Avoid reparsing a growing
-                    # final answer after every chunk (quadratic work).
-                    if not chunk.rstrip().endswith((b'}', b']')):
-                        continue
-                    try:
-                        json.loads(bytes(buf))
-                    except ValueError:
-                        continue
-                    return
+                buf.extend(chunk)
+                if len(buf) > MAX_HOOK_BYTES:
+                    raise ValueError('hook event exceeds its byte bound')
+                pos = int(escaped)
+                escaped = False
+                while pos < len(chunk):
+                    if quoted:
+                        quote = chunk.find(b'"', pos)
+                        if quote < 0:
+                            if chunk.endswith(b'\\'):
+                                tail = len(chunk) - max(pos, len(chunk.rstrip(b'\\')))
+                                escaped = bool(tail % 2)
+                            break
+                        before = quote
+                        while before > pos and chunk[before - 1] == 92:
+                            before -= 1
+                        if (quote - before) % 2 == 0:
+                            quoted = False
+                        pos = quote + 1
+                    else:
+                        match = _HOOK_TOKEN.search(chunk, pos)
+                        if match is None:
+                            break
+                        pos = match.end()
+                        token = match.group()
+                        if token == b'"':
+                            quoted = True
+                        elif token in (b'{', b'['):
+                            depth += 1
+                        else:
+                            depth -= 1
+                            if depth <= 0:
+                                return
+        except (OSError, ValueError) as exc:
+            errors.append(exc)
         finally:
             finished.set()
 
@@ -120,8 +142,7 @@ def _read_hook_stdin():
             raise ConnectionError('native hook owner exited')
     if errors:
         raise errors[0]
-    with lock:
-        return bytes(buf)
+    return bytes(buf)
 
 
 def hook_event(raw):
