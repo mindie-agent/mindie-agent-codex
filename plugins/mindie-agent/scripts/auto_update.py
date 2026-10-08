@@ -417,7 +417,7 @@ def stop_hook_commands(argv):
             + " 1>$null 2>$null } catch { } finally { [Console]::Out.WriteLine('{}') }; exit 0")
 
     windows = "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " + base64.b64encode(body.encode("utf-16le")).decode("ascii")
-    return {"command": posix, "commandWindows": windows}
+    return {"command": posix, "commandWindows": windows, "statusMessage": "MindIE Agent"}
 
 
 
