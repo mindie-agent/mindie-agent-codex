@@ -142,7 +142,8 @@ def catalog():
             schema_["properties"].setdefault("force", dict(type="boolean"))
         if tool["name"] in TRANSFER_TOOLS:
             schema_["properties"].update(
-                timeout_ms=dict(type="integer"), timeout=dict(type="integer")
+                timeout_ms=dict(type="integer", minimum=1, maximum=120000),
+                timeout=dict(type="integer", minimum=1, maximum=120000),
             )
         # Every advertised key must be one call_tool would actually accept.
         allowed = (

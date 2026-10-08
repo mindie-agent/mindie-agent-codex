@@ -26,7 +26,8 @@ from session_gate import IDENTITY, Sessions, config_path, generation_env, runtim
 from update_lock import update_lock
 
 KNOWLEDGE_TIMEOUT = 15
-REMOTE_TIMEOUT = 65
+REMOTE_TIMEOUT = 120
+ARTIFACT_TIMEOUT_MAX_MS = 120000
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
 KNOWLEDGE_MAX_OUTPUT = 1024 * 1024
 CATALOG = Path(__file__).with_name("mcp_catalog.json")
@@ -296,6 +297,12 @@ class Gate:
                 "missing keys: " + ", ".join(sorted(missing)) if missing else "",
             ] if part)
             raise InvalidToolArguments("Invalid MindIE tool arguments (" + detail + ")")
+        if name in {"remote_artifact_push", "remote_artifact_pull"}:
+            for key in ("timeout_ms", "timeout"):
+                if key in args and (type(args[key]) is not int or not 1 <= args[key] <= ARTIFACT_TIMEOUT_MAX_MS):
+                    raise InvalidToolArguments(
+                        f"{name} {key} must be an integer from 1 to {ARTIFACT_TIMEOUT_MAX_MS} ms"
+                    )
         return name, args
 
     def _request_identity(self, request):

@@ -30,7 +30,7 @@ task at hand.
   older host without that metadata, fails closed. Native identity for
   binding is `CODEX_THREAD_ID` only. The remote tools' existing `session_id`
   field is a remote job ID; it must not be replaced with the Codex session ID.
-- Knowledge MCP calls have a 15-second outer deadline; remote calls have 65
+- Knowledge MCP calls have a 15-second outer deadline; remote calls have 120
   seconds. Each business call has one attempt and zero automatic retries. A
   timed-out remote mutation may already have executed: inspect the original
   job or receipt as needed to finish the authorized task. A status read does
@@ -56,7 +56,7 @@ task at hand.
   invalidates the task binding or read tools.
 - Contribution inspect, reconcile, retry, and compact are optional troubleshooting for one existing batch, not ordinary recovery. A transient local or network failure is handled by the existing worker, and sharing status is how a problem is seen. Authentication, trust, rejected content, or invalid configuration can need an explicit user or operator action. These commands do not rerun the organizer, reset a capture cursor, or replay a model. Uncertain writes are inspected or reconciled, never blindly retried.
 
-Remote tools work in every native task without a binding. Their 65-second
+Remote tools work in every native task without a binding. Their 120-second
 call deadline, durable no-replay receipts and automatic failure backoff are
 independent of knowledge. Job records are isolated by native task. Repeated
 helper failures back off with a growing persisted delay and resume

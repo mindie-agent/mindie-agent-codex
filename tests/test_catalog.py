@@ -55,9 +55,9 @@ class CatalogTests(unittest.TestCase):
     def test_artifact_transfers_advertise_the_call_timeout(self):
         for name in ("remote_artifact_pull", "remote_artifact_push"):
             tool = next(t for t in self.generated["remote"] if t["name"] == name)
-            self.assertEqual(
-                tool["inputSchema"]["properties"]["timeout_ms"]["type"], "integer"
-            )
+            for key in ("timeout_ms", "timeout"):
+                self.assertEqual(tool["inputSchema"]["properties"][key],
+                                 {"type": "integer", "minimum": 1, "maximum": 120000})
 
 
 if __name__ == "__main__":
