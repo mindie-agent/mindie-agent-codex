@@ -19,6 +19,9 @@ from tests.process_fixtures import cleanup_temporary_directory, stop_owned_knowl
 from tests.process_fixtures import public_engine_config
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
+STOP_TIMEOUT = json.loads(
+    (SCRIPTS.parent / "hooks/hooks.json").read_text(encoding="utf-8")
+)["hooks"]["Stop"][0]["hooks"][0]["timeout"]
 sys.path.insert(0, str(SCRIPTS))
 from session_gate import Inactive, Sessions
 import bounded_process
@@ -573,11 +576,11 @@ class SessionGateTests(unittest.TestCase):
         self.enable_sharing()
         self.activate()
         Store(self.root / "data", "test").close()
-        started = time.monotonic()
-        result = self.bridge("stop", self.event())
-        self.assertLess(time.monotonic() - started, 1.9)
+        # Deduplication is a state invariant, not a cold-start benchmark.
+        result = self.bridge("stop", self.event(), timeout=STOP_TIMEOUT)
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
-        self.bridge("stop", self.event())
+        repeated = self.bridge("stop", self.event(), timeout=STOP_TIMEOUT)
+        self.assertEqual((repeated.returncode, json.loads(repeated.stdout)), (0, {}))
         db = sqlite3.connect(self.root / "data" / "test" / "state-v4.sqlite3")
         try:
             count = db.execute("SELECT count(*) FROM captures").fetchone()[0]
@@ -590,10 +593,11 @@ class SessionGateTests(unittest.TestCase):
         marker = self.runtime_fixture(delay=20)
         self.enable_sharing()
         self.activate()
-        started = time.monotonic()
-        result = self.bridge("stop", self.event(), timeout=3)
-        self.assertLess(time.monotonic() - started, 1.9)
+        # The configured host watchdog includes interpreter startup. Inner
+        # budget accounting is checked separately with a controlled clock.
+        result = self.bridge("stop", self.event(), timeout=STOP_TIMEOUT)
         self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
+        self.assertIn("stage=helper category=timeout", result.stderr)
         self.assertEqual(marker.read_text().splitlines(), ["attempt"])
 
     def test_corrupt_activation_state_fails_closed(self):
