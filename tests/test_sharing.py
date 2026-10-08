@@ -99,7 +99,7 @@ class SharingFixture(unittest.TestCase):
         store.close()
 
     def captures(self):
-        path = self.root / "data" / "test" / "state-v4.sqlite3"
+        path = self.root / "data" / "test" / "state-v1" / "state-v4.sqlite3"
         if not path.is_file():
             return 0
         db = sqlite3.connect(path)
@@ -201,7 +201,7 @@ class GateTests(SharingFixture):
             event = self.event(turn_id=f'large-{size}', last_assistant_message='公开结果' * (size // 12))
             result = self.bridge('stop', event, timeout=5)
             self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
-        path = self.root / 'data/test/state-v4.sqlite3'
+        path = self.root / 'data/test/state-v1/state-v4.sqlite3'
         db = sqlite3.connect(path)
         try:
             rows = db.execute('SELECT summary, transcript FROM captures').fetchall()

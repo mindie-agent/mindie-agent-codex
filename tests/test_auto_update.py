@@ -100,6 +100,8 @@ class LocalUpdater(Updater):
             return json.dumps(dict(idle=self.idle, service="absent" if self.idle else "busy",
                 retirement=dict(schema="mindie-service-retirement/1", operation_id="a"*32,
                                 config_fingerprint="b"*64, status="retired" if self.idle else "busy")))
+        if len(args) > 1 and args[1].endswith("state_compatibility.py"):
+            return json.dumps(dict(status="compatible"))
         return super().command(args, **kwargs)
 
     def prepare_capture(self, candidate):
@@ -627,6 +629,23 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(read(self.config), self.initial)
         self.assertEqual(self.updater.installs, 0)
         self.assertFalse((self.root / "transaction.json").exists())
+
+    def test_incompatible_released_state_rejected_before_service_retirement_or_install(self):
+        candidate = self.updater.prepare(self.sha)
+        command = self.updater.command
+        observed = []
+        def incompatible(args, **kwargs):
+            observed.append([str(arg) for arg in args])
+            if len(args) > 1 and str(args[1]).endswith('state_compatibility.py'):
+                raise RuntimeError('released knowledge state requires an explicit format migration')
+            return command(args, **kwargs)
+        with patch.object(self.updater, 'command', side_effect=incompatible):
+            with self.assertRaisesRegex(RuntimeError, 'explicit format migration'):
+                self.updater.install(candidate)
+        self.assertEqual(read(self.config), self.initial)
+        self.assertEqual(self.updater.installs, 0)
+        self.assertFalse((self.root / 'transaction.json').exists())
+        self.assertFalse(any(len(args) > 1 and args[1].endswith('service_handoff.py') for args in observed))
 
     def test_cached_candidate_runtime_drift_is_rechecked_before_native_installation(self):
         candidate = self.updater.prepare(self.sha)

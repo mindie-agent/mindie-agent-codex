@@ -37,6 +37,7 @@ else:
         from mindie_knowledge.loop.process import bounded_run, spawn_service
         from mindie_knowledge.loop.engine import Engine
         from mindie_knowledge.loop.store import Store
+        from mindie_knowledge.state_layout import state_root
         from mindie_knowledge.publication_contract import read_git_contract, parse_contract
         from mindie_knowledge.loop.transcript_redaction import install_scanner
         from mindie_knowledge.loop.history_import import import_transcript
@@ -47,6 +48,8 @@ else:
     except Exception as exc:
         missing.append(f"pinned runtime import ({{type(exc).__name__}}: {{exc}})")
     else:
+        if not callable(state_root):
+            missing.append("knowledge state compatibility API is incomplete")
         if set(inspect.signature(Store.explain).parameters) != {{"self", "ref"}}:
             missing.append("knowledge explain is not the ref-only block API")
         if "continuation" not in inspect.signature(Store.query).parameters:

@@ -983,6 +983,14 @@ class Updater:
             raise ValueError("candidate capture preparation returned an invalid receipt")
         return result
 
+    def validate_state_compatibility(self, candidate, adapter):
+        helper = Path(candidate["plugin"]) / "scripts/state_compatibility.py"
+        if not helper.is_file():
+            raise Incompatible("candidate lacks its persisted-state compatibility check")
+        result = json.loads(self.command([candidate["python"], helper, adapter["engine_config"]]))
+        if result != {"status": "compatible"}:
+            raise Incompatible("candidate did not confirm persisted-state compatibility")
+
     def install(self, candidate):
         # Actual-idle switching: the exclusive operation lock waits for any
         # in-flight admitted call (holders of the shared lock), and the idle
@@ -1003,6 +1011,7 @@ class Updater:
                                Path(candidate["source"]) / "plugins/mindie-agent/scripts",
                                revision=candidate["validation"].get("candidate_revision"),
                                verified_receipt=candidate["validation"])
+            self.validate_state_compatibility(candidate, adapter)
             # Dependency preparation happens only for an owned installation
             # and before stopping its service. Stop hooks never download.
             capture_config = self.prepare_capture(candidate)

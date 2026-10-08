@@ -358,7 +358,7 @@ class LaneCase(unittest.TestCase):
         }
 
     def capture_rows(self):
-        path = self.root / "data" / "test" / "state-v4.sqlite3"
+        path = self.root / "data" / "test" / "state-v1" / "state-v4.sqlite3"
         if not path.exists():
             return []
         db = sqlite3.connect(path)
@@ -1550,9 +1550,9 @@ class RemoteIsolationTests(LaneCase):
         child = mcp_gate.Gate("remote")
         child_result = child.call(request("child-task", 1))
         self.assertEqual(child_result.get("isError"), False, child_result)
-        parent_db = self.remote_state / "gate" / "parent-task.sqlite3"
-        child_db = self.remote_state / "gate" / "child-task.sqlite3"
-        self.assertTrue(parent_db.is_file(), list((self.remote_state / "gate").glob("*")))
+        parent_db = self.remote_state / "gate-v1" / "parent-task.sqlite3"
+        child_db = self.remote_state / "gate-v1" / "child-task.sqlite3"
+        self.assertTrue(parent_db.is_file(), list((self.remote_state / "gate-v1").glob("*")))
         self.assertTrue(child_db.is_file())
         with closing(sqlite3.connect(parent_db)) as db:
             parent_ids = db.execute("SELECT identity FROM attempts").fetchall()

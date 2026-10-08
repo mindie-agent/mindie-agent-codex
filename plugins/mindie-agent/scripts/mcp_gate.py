@@ -27,6 +27,7 @@ from diagnostic_support import attach as attach_diagnostic
 from diagnostic_support import failure as diagnostic_failure
 from session_gate import IDENTITY, Sessions, config_path, generation_env, runtime_scripts
 from update_lock import update_lock, file_lock
+from receipt_layout import receipt_root, prepare_layout
 
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
 KNOWLEDGE_MAX_OUTPUT = 1024 * 1024
@@ -163,7 +164,7 @@ class RemoteReceipts:
     """
 
     def __init__(self, session):
-        self.path = remote_state_dir() / "gate" / (session + ".sqlite3")
+        self.path = receipt_root(remote_state_dir()) / (session + ".sqlite3")
         self.owner = uuid.uuid4().hex
         self._ownership = ExitStack()
         self._owner_ready = False
@@ -187,6 +188,22 @@ class RemoteReceipts:
             return True
 
     def _db(self):
+        db = None
+        try:
+            with prepare_layout(remote_state_dir()) as directory:
+                if self.path.parent != directory:
+                    raise RuntimeError("remote receipt layout changed during admission")
+                db = self._open_db()
+            return db
+        except BaseException as error:
+            if db is not None:
+                try:
+                    db.close()
+                except Exception as cleanup:
+                    error.add_note('Receipt initialization cleanup also failed: ' + type(cleanup).__name__)
+            raise
+
+    def _open_db(self):
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         marker = self.path.with_suffix(".authority.json")
         with file_lock(self.path.with_suffix(".initialize.lock"), exclusive=True, blocking=True):

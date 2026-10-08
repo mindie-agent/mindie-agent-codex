@@ -128,7 +128,7 @@ class ScopedStatus(unittest.TestCase):
                                          (owner, "entry", "rev", "up", "private", 1, task + "-batch", 1))
             finally:
                 store.close()
-            state = root / "data/test/state-v4.sqlite3"
+            state = root / "data/test/state-v1/state-v4.sqlite3"
             before = state.read_bytes(), Path(engine["admission_path"]).read_bytes()
             base_env = {key: value for key, value in os.environ.items()
                         if key not in {"CODEX_THREAD_ID", "PYTHONPATH"}}

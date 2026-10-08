@@ -292,6 +292,25 @@ committed generation, not a stale controller copy. Current development tracks
 `main`. Release tracking can be selected when a suitable release exists; old
 business Skill migration is not part of this update.
 
+Before the repositories collectively meet the product release criteria and
+publish normal release versions, destructive state format updates may repeat.
+There is no one-time reset allowance. Development package numbers and Git pins
+are not a product release declaration. The release commit sets normal
+`major.minor.patch` `RELEASE_VERSION` values in the knowledge and receipt layout
+modules; they remain `None` during development.
+
+Knowledge state and remote request receipts have independent format
+directories. A development format change selects fresh state while preserving
+configuration and the old directories. Released state remains protected even
+when a later development build uses it. Compatible updates retain material,
+cursors, paid model attempts and consumed remote requests, including uncertain
+external writes. An incompatible released format requires an explicit
+migration in that candidate; until one exists, the updater rejects it before
+retiring the old service, writing an installation transaction or replacing the
+native package. It does not clear the state and report a successful upgrade.
+This is a release compatibility boundary, not an automatic beta launch or a
+claim that future migrations or native release acceptance have been completed.
+
 ## Stop or uninstall
 
 Task deactivation revokes that task's automatic capture binding. Sharing-disable stops

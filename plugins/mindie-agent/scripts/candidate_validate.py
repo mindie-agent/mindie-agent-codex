@@ -65,6 +65,8 @@ def adapter_check(source):
     for name in (
         "session_gate.py",
         "mcp_gate.py",
+        "receipt_layout.py",
+        "state_compatibility.py",
         "update_lock.py",
         "bounded_process.py",
         "windows_process.py",

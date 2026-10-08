@@ -48,7 +48,7 @@ class ServiceEntryLifetimeTests(SharingFixture):
                 payload=dict(type="message", role="assistant", phase="final_answer",
                     content=[dict(type="output_text", text="Synthetic lifetime test: public body persisted.")]))) + "\n", encoding="utf-8")
         self.bridge("stop", event=self.event(transcript_path=str(transcript)))
-        path = self.root / "data/test/state-v4.sqlite3"
+        path = self.root / "data/test/state-v1/state-v4.sqlite3"
         deadline = time.monotonic() + 8
         statuses = []
         while time.monotonic() < deadline:

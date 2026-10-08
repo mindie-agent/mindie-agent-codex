@@ -549,7 +549,7 @@ class SessionGateTests(unittest.TestCase):
             result = self.bridge("stop", event)
             expected = 1 if event['session_id'] == 'other' else 0
             self.assertEqual((result.returncode, json.loads(result.stdout)), (expected, {}))
-        db = sqlite3.connect(self.root / "data" / "test" / "state-v4.sqlite3")
+        db = sqlite3.connect(self.root / "data" / "test" / "state-v1" / "state-v4.sqlite3")
         try:
             count = db.execute("SELECT count(*) FROM captures").fetchone()[0]
             other = db.execute(
@@ -572,7 +572,7 @@ class SessionGateTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 1.9)
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
         self.bridge("stop", self.event())
-        db = sqlite3.connect(self.root / "data" / "test" / "state-v4.sqlite3")
+        db = sqlite3.connect(self.root / "data" / "test" / "state-v1" / "state-v4.sqlite3")
         try:
             count = db.execute("SELECT count(*) FROM captures").fetchone()[0]
         finally:

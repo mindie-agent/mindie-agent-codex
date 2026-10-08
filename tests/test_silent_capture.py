@@ -83,7 +83,7 @@ class SilentCaptureTests(unittest.TestCase):
         self.assertEqual(result['stage'], 'accepted-local')
         lease = Admission(self.admission).check('current')
         self.assertEqual(lease['activated_at'], self.enabled)
-        with closing(sqlite3.connect(self.root / 'data/test/state-v4.sqlite3')) as db:
+        with closing(sqlite3.connect(self.root / 'data/test/state-v1/state-v4.sqlite3')) as db:
             boundary = db.execute('SELECT boundary FROM captures').fetchone()[0]
         captured = codex_transcript.read_material(event['transcript_path'], 0,
             session_id='current', not_before=boundary)
