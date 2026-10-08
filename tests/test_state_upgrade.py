@@ -67,7 +67,7 @@ class ReceiptUpgradeTests(unittest.TestCase):
         before = receipts.path.read_bytes()
         with patch.object(receipt_layout, 'FORMAT', 2):
             with self.assertRaisesRegex(ValueError, 'released.*migration'):
-                self.receipts()
+                self.receipts().claim('new')
         self.assertEqual(receipts.path.read_bytes(), before)
         self.assertFalse((self.root / 'gate-v2').exists())
 
@@ -79,7 +79,7 @@ class ReceiptUpgradeTests(unittest.TestCase):
         (self.root / 'gate-layout.json').unlink()
         with patch.object(receipt_layout, 'FORMAT', 2):
             with self.assertRaisesRegex(ValueError, 'layout is missing'):
-                self.receipts()
+                self.receipts().claim('new')
         self.assertTrue(receipts.path.is_file())
 
     def test_layout_publication_failure_is_not_first_use_on_retry(self):
@@ -87,7 +87,7 @@ class ReceiptUpgradeTests(unittest.TestCase):
             with self.assertRaisesRegex(OSError, 'publication failure'):
                 self.receipts().claim('not-executed')
         with self.assertRaisesRegex(ValueError, 'layout is missing'):
-            self.receipts()
+            self.receipts().claim('not-executed')
 
     def test_real_compatibility_helper_reads_both_layouts_without_mutating_them(self):
         from mindie_knowledge import state_layout

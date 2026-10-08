@@ -27,7 +27,8 @@ from diagnostic_support import attach as attach_diagnostic
 from diagnostic_support import failure as diagnostic_failure
 from session_gate import IDENTITY, Sessions, config_path, generation_env, runtime_scripts
 from update_lock import update_lock, file_lock
-from receipt_layout import receipt_root, prepare_layout
+from receipt_layout import prepare_layout
+import receipt_layout
 
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
 KNOWLEDGE_MAX_OUTPUT = 1024 * 1024
@@ -164,7 +165,9 @@ class RemoteReceipts:
     """
 
     def __init__(self, session):
-        self.path = receipt_root(remote_state_dir()) / (session + ".sqlite3")
+        # Selection and compatibility are checked under the initialization
+        # lock in _db; another process may be publishing the first layout.
+        self.path = remote_state_dir() / ('gate-v' + str(receipt_layout.FORMAT)) / (session + ".sqlite3")
         self.owner = uuid.uuid4().hex
         self._ownership = ExitStack()
         self._owner_ready = False
@@ -260,9 +263,9 @@ class RemoteReceipts:
                 raise
 
     def claim(self, identity):
-        self._ensure_owner()
         db = self._db()
         try:
+            self._ensure_owner()
             with db:
                 db.execute("BEGIN IMMEDIATE")
                 # Actual owner death leaves an uncertain consumed receipt.
