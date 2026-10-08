@@ -404,7 +404,12 @@ def stop_hook_commands(argv):
     # This host watchdog includes both shell and interpreter cold startup.
     # The bridge still limits actual handoff work to 1.3 s on Windows / 1.5 s
     # elsewhere; transcript size never enters this hook's work or budget.
-    return {"command": posix, "commandWindows": windows, "timeout": STOP_HOST_TIMEOUT}
+    return {
+        "command": posix,
+        "commandWindows": windows,
+        "timeout": STOP_HOST_TIMEOUT,
+        "statusMessage": "MindIE Agent",
+    }
 
 
 class Updater:
