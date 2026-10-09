@@ -71,6 +71,29 @@ class SetupTests(unittest.TestCase):
         )
         self.assertFalse(hasattr(setup_script, 'PROBE_TIMEOUT'))
 
+    def test_corrupt_existing_store_blocks_config_publication_and_preserves_state(self):
+        from mindie_knowledge.loop.store import Store
+        from mindie_knowledge.state_layout import state_root
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            store = Store(base / 'data', 'vllm-ascend')
+            store.close()
+            state = state_root(base / 'data', 'vllm-ascend')
+            database = state / 'state-v4.sqlite3'
+            database.write_bytes(b'corrupt authority sentinel')
+            before = {str(path.relative_to(base)): path.read_bytes()
+                      for path in base.rglob('*') if path.is_file() and path.suffix != '.lock'}
+            config = base / 'codex.json'
+            result = run_setup(sys.executable, '--config', config, '--root', base / 'data')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('knowledge store preparation failed', result.stdout + result.stderr)
+            self.assertIn('database', result.stdout + result.stderr)
+            self.assertFalse(config.exists())
+            self.assertFalse(config.with_name('codex.engine.json').exists())
+            after = {str(path.relative_to(base)): path.read_bytes()
+                     for path in base.rglob('*') if path.is_file() and path.suffix != '.lock'}
+            self.assertEqual(after, before)
+
     def test_complete_runtime_writes_private_config_and_refuses_overwrite(self):
         for module in setup_script.PROBE_MODULES:
             try:
@@ -92,6 +115,12 @@ class SetupTests(unittest.TestCase):
                 self.assertTrue(config.is_file())
                 self.assertTrue(engine.is_file())
             value = json.loads(engine.read_text())
+            # Installation prepares the real state needed by the first Stop,
+            # without query, activation, feed sync or a running service.
+            from mindie_knowledge.state_layout import state_root
+            state = state_root(base / 'data', 'vllm-ascend')
+            self.assertTrue((state / 'state-v4.sqlite3').is_file())
+            self.assertFalse((base / 'data/vllm-ascend/connection.json').exists())
             adapter = json.loads(config.read_text())
             self.assertEqual(value["domain"], "vllm-ascend")
             self.assertEqual(value["capture_mode"], "public-transcript")

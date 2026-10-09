@@ -1078,6 +1078,16 @@ class Updater:
             installed = False
             final_proven = True  # prior native state, before any install mutation
             try:
+                from capture_config import store_failure
+                # The old consumer and queued wake helpers are now retired.
+                # Prepare the actual domain with the candidate core before
+                # exposing its native package or committing its config tuple.
+                # The Hook never initializes or migrates persistent state.
+                store_ready = json.loads(self.command(
+                    [candidate["python"], Path(candidate["plugin"]) / "scripts/capture_config.py", "prepare-store"],
+                    data=json.dumps(read(adapter["engine_config"])), on_failure=store_failure))
+                if store_ready != {"status": "ready"}:
+                    raise RuntimeError("candidate knowledge store preparation did not confirm readiness")
                 market = self.root / "marketplace"
                 plugin_link = market / "plugins/mindie-agent"
                 previous_native = self.native_plugin_entry()
