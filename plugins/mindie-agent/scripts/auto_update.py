@@ -421,7 +421,9 @@ def stop_hook_commands(argv):
             return "(Join-Path $env:PLUGIN_ROOT '" + value[len('${PLUGIN_ROOT}/'):].replace("'", "''") + "')"
         return "'" + value.replace("'", "''") + "'"
     warning = "[Console]::Error.WriteLine(" + ps_arg(failure) + ")"
-    body = ("try { & " + " ".join(ps_arg(arg) for arg in argv)
+    # Join-Path may auto-load its module and serialize first-use progress to
+    # stderr. Progress is not a helper failure; keep the actual error channel.
+    body = ("$ProgressPreference = 'SilentlyContinue'; try { & " + " ".join(ps_arg(arg) for arg in argv)
             + " 1>$null 2>$null; if ($LASTEXITCODE -ne 0) { " + warning
             + " } } catch { " + warning
             + " } finally { [Console]::Out.WriteLine('{}') }; exit 0")
