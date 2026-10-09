@@ -13,6 +13,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 
@@ -93,6 +94,19 @@ def adapter_check(source):
         raise ValueError("adapter knowledge catalogue is incomplete")
     if "knowledge_use" in names or "knowledge_judge" in names:
         raise ValueError("retired knowledge tools are advertised")
+    release_check(plugin)
+
+
+def release_check(plugin):
+    """A normal product version must declare both durable state boundaries."""
+    version = read_json(plugin / ".codex-plugin/plugin.json")[0]["version"]
+    if re.fullmatch(r"\d+\.\d+\.\d+", version):
+        from mindie_knowledge.state_layout import RELEASE_VERSION as knowledge_release
+        from receipt_layout import RELEASE_VERSION as receipt_release
+        if knowledge_release is None or receipt_release is None:
+            raise CheckFailure('adapter', 'release_state_undeclared')
+        if knowledge_release != version or receipt_release != version:
+            raise CheckFailure('adapter', 'release_version_mismatch')
 
 
 def installed_revisions(pins):

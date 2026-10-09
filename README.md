@@ -298,6 +298,10 @@ There is no one-time reset allowance. Development package numbers and Git pins
 are not a product release declaration. The release commit sets normal
 `major.minor.patch` `RELEASE_VERSION` values in the knowledge and receipt layout
 modules; they remain `None` during development.
+Candidate validation rejects a normal plugin version unless both declarations
+match it. The release channel also requires a normal tag and the matching
+source version, including cached candidates; a development build cannot enter
+that channel with unprotected state.
 
 Knowledge state and remote request receipts have independent format
 directories. A development format change selects fresh state while preserving

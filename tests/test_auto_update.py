@@ -776,6 +776,22 @@ class AutoUpdateTests(unittest.TestCase):
         ):
             self.assertEqual(self.updater.resolve(), self.sha)
 
+    def test_release_channel_rejects_development_and_mislabelled_source(self):
+        self.updater.settings['channel'] = 'release'
+        self.updater._release_version = '1.0.0'
+        manifest = self.remote / 'plugins/mindie-agent/.codex-plugin/plugin.json'
+        value = read(manifest)
+        with self.assertRaisesRegex(auto_update.Incompatible, 'release source version'):
+            self.updater.validate_source(self.remote)
+        for version in ('0.9.0', '1.0.0'):
+            value['version'] = version
+            atomic(manifest, value)
+            if version == '1.0.0':
+                self.updater.validate_source(self.remote)
+            else:
+                with self.assertRaises(auto_update.Incompatible):
+                    self.updater.validate_source(self.remote)
+
     def test_remote_only_update_retains_identical_stop_command(self):
         first = self.check()
         before = read(Path(first["current"]["plugin"]) / "hooks/hooks.json")

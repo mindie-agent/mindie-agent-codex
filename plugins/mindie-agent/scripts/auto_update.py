@@ -397,24 +397,34 @@ def venv_python(venv):
 
 
 def stop_hook_commands(argv):
-    """Build shell commands that always complete a non-blocking Stop hook.
+    """Keep Stop neutral while exposing failures before diagnostics can start.
 
     Codex accepts a Windows-specific command override. The POSIX command and
-    its Windows counterpart both discard helper output and print normal hook
-    completion even when the child executable is absent or fails.
+    its Windows counterpart discard protocol output, but report a fixed,
+    bounded error when the helper fails. Missing executables or scripts cannot
+    leave an incident in the Python diagnostic channel.
     """
     argv = [str(value) for value in argv]
-    posix = shlex.join(argv) + " >/dev/null 2>&1 || :; printf '{}\\n'"
+    failure = "MindIE Stop helper failed; capture completion is unconfirmed; no automatic retry."
+    def posix_arg(value):
+        if value.startswith("${PLUGIN_ROOT}/"):
+            return '"${PLUGIN_ROOT}"' + shlex.quote(value[len('${PLUGIN_ROOT}'):])
+        return shlex.quote(value)
+    posix = ("if ! " + " ".join(posix_arg(arg) for arg in argv) + " >/dev/null 2>&1; then printf '%s\\n' "
+             + shlex.quote(failure) + " >&2; fi; printf '{}\\n'")
     # Native Codex can dispatch Windows hooks through PowerShell. CMD's
     # `& echo` becomes a background job there and loses the event on stdin.
     # An encoded PowerShell command has one unambiguous argv under either
-    # host shell; the child inherits stdin and all failures complete normally.
+    # host shell; the child inherits stdin and every exit remains neutral.
     def ps_arg(value):
         if value.startswith("${PLUGIN_ROOT}/"):
             return "(Join-Path $env:PLUGIN_ROOT '" + value[len('${PLUGIN_ROOT}/'):].replace("'", "''") + "')"
         return "'" + value.replace("'", "''") + "'"
+    warning = "[Console]::Error.WriteLine(" + ps_arg(failure) + ")"
     body = ("try { & " + " ".join(ps_arg(arg) for arg in argv)
-            + " 1>$null 2>$null } catch { } finally { [Console]::Out.WriteLine('{}') }; exit 0")
+            + " 1>$null 2>$null; if ($LASTEXITCODE -ne 0) { " + warning
+            + " } } catch { " + warning
+            + " } finally { [Console]::Out.WriteLine('{}') }; exit 0")
 
     windows = "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " + base64.b64encode(body.encode("utf-16le")).decode("ascii")
     return {"command": posix, "commandWindows": windows, "statusMessage": "MindIE Agent"}
@@ -513,8 +523,9 @@ class Updater:
             if len(raw) > 256 * 1024:
                 raise ValueError("release metadata too large")
             tag = json.loads(raw)["tag_name"]
-            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}", tag):
-                raise ValueError("invalid release tag")
+            if not isinstance(tag, str) or not re.fullmatch(r"v?\d+\.\d+\.\d+", tag):
+                raise ValueError("release tag must declare a normal product version")
+            self._release_version = tag.removeprefix("v")
             ref = "refs/tags/" + tag
         elif self.settings["channel"] != "main":
             raise ValueError("unsupported update channel")
@@ -531,6 +542,11 @@ class Updater:
     def validate_source(self, source):
         try:
             product_contract.identity(source)
+            if self.settings["channel"] == "release":
+                version = read(Path(source) / "plugins/mindie-agent/.codex-plugin/plugin.json")["version"]
+                if (not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+", version)
+                        or version != getattr(self, "_release_version", version)):
+                    raise ValueError("release source version must match its normal release tag")
         except (OSError, ValueError) as exc:
             raise Incompatible("invalid product combination: " + str(exc)) from exc
 
@@ -544,6 +560,7 @@ class Updater:
         receipt = generation / "prepared.json"
         if receipt.exists():
             candidate = read(receipt)
+            self.validate_source(generation / "source")
             expected = product_contract.identity(generation / "source", sha)
             product_contract.validate_receipt(json.dumps(candidate.get("validation")), expected)
             if candidate.get("revision") != sha or candidate.get("source") != str(generation / "source"):
@@ -1003,6 +1020,7 @@ class Updater:
             existing = self.marketplace()
             # Validate before stopping a working service or writing a journal.
             self.validate_marketplace(existing)
+            self.validate_source(candidate["source"])
             expected = product_contract.identity(candidate["source"], candidate["validation"].get("candidate_revision"))
             product_contract.validate_receipt(json.dumps(candidate["validation"]), expected)
             if product_contract.source_identity(candidate["plugin"]) != candidate.get("package_sha256"):

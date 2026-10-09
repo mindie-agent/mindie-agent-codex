@@ -80,26 +80,33 @@ def run_owned_hook(argv, event, *, shell, env, timeout):
 class StopHookTests(unittest.TestCase):
     host_shell = None
 
-    def run_stop(self, plugin, *, python=None, failed=False, **env):
+    def run_stop(self, plugin, *, python=None, failed=False, configured=False, **env):
         event = {"session_id": "hook-regression", "last_assistant_message": "Done"}
-        command = stop_hook_commands(
+        commands = STOP if configured else stop_hook_commands(
             [python or sys.executable, str(plugin / "scripts/bridge.py"), "stop"]
-        )["commandWindows" if os.name == "nt" else "command"]
+        )
+        command = commands["commandWindows" if os.name == "nt" else "command"]
         argv = [self.host_shell, '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command] if self.host_shell else command
         # This fixture verifies protocol isolation and single delivery. Its
         # extra host-shell process needs a separate startup allowance; passing
         # here does not establish native hook latency.
         self.assertNotIn("timeout", STOP)
         timeout = 15  # Test watchdog only; no product deadline.
-        result = run_owned_hook(
-            argv, event,
-            timeout=timeout,
-            shell=self.host_shell is None,
-            env={**os.environ, "PLUGIN_ROOT": str(plugin), **env},
-        )
+        with tempfile.TemporaryDirectory(prefix='mindie-hook-diagnostics-') as diagnostics:
+            result = run_owned_hook(
+                argv, event,
+                timeout=timeout,
+                shell=self.host_shell is None,
+                env={**os.environ, "PLUGIN_ROOT": str(plugin),
+                     'MINDIE_DIAGNOSTICS_ROOT': diagnostics, **env},
+            )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), {})
-        self.assertEqual(result.stderr.strip(), "")
+        if failed:
+            self.assertEqual(result.stderr.strip(),
+                "MindIE Stop helper failed; capture completion is unconfirmed; no automatic retry.")
+        else:
+            self.assertEqual(result.stderr.strip(), "")
         return event
 
     def test_evicted_plugin_cache_does_not_resume_conversation(self):
@@ -154,9 +161,24 @@ class StopHookTests(unittest.TestCase):
                 [json.loads(line) for line in received.read_text().splitlines()], [event]
             )
 
+    def test_configured_hook_expands_plugin_root_with_spaces(self):
+        with tempfile.TemporaryDirectory() as root:
+            plugin = Path(root) / "plugin with spaces"
+            scripts = plugin / "scripts"
+            scripts.mkdir(parents=True)
+            received = Path(root) / "received.jsonl"
+            (scripts / "bridge.py").write_text(
+                "import os, sys\n"
+                "with open(os.environ['HOOK_TEST_RECEIVED'], 'a') as stream:\n"
+                "    stream.write(sys.stdin.read() + '\\n')\n"
+            )
+            event = self.run_stop(plugin, configured=True,
+                                  HOOK_TEST_RECEIVED=str(received))
+            self.assertEqual([json.loads(line) for line in received.read_text().splitlines()], [event])
+
     def test_real_bridge_missing_config_does_not_write_state(self):
         with tempfile.TemporaryDirectory() as root:
-            self.run_stop(PLUGIN, MINDIE_AGENT_CONFIG=str(Path(root) / "missing.json"))
+            self.run_stop(PLUGIN, failed=True, MINDIE_AGENT_CONFIG=str(Path(root) / "missing.json"))
             self.assertEqual(list(Path(root).iterdir()), [])
 
     def test_real_bridge_corrupt_config_warns_without_resuming(self):

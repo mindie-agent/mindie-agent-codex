@@ -44,6 +44,7 @@ def stop_owned_knowledge_service(engine_config, *, timeout=8):
     from urllib.parse import urlparse
     from mindie_knowledge.loop.cli import config_at, connect, rpc
     from mindie_knowledge.loop.locks import lock_held
+    from mindie_knowledge.state_layout import state_root
 
     engine_config = Path(engine_config)
     # A cold Stop returns before its detached starter publishes the service.
@@ -51,7 +52,7 @@ def stop_owned_knowledge_service(engine_config, *, timeout=8):
     # to stop; an absent endpoint while startup is pending is not cleanup.
     config = config_at(engine_config)
     domain = Path(config["root"]) / config["domain"]
-    wake_path = domain / "wake.json"
+    wake_path = state_root(config["root"], config["domain"]) / "wake.json"
     try:
         wake_pid = json.loads(wake_path.read_text(encoding="utf-8")).get("wake_pid")
     except FileNotFoundError:

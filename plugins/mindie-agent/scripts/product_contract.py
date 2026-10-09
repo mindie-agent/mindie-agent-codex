@@ -21,7 +21,7 @@ REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 
 FAILURE_CODES = {
     "source": {"source_invalid", "source_changed"},
-    "adapter": {"adapter_incompatible"},
+    "adapter": {"adapter_incompatible", "release_state_undeclared", "release_version_mismatch"},
     "runtime_pins": {"package_missing", "receipt_missing", "receipt_invalid", "revision_mismatch", "metadata_unavailable"},
     "runtime_api": {"api_incompatible"},
     "publication_fetch": {"fetch_failed", "revision_mismatch"},

@@ -39,6 +39,27 @@ class RuntimeProbeTests(unittest.TestCase):
             SimpleNamespace(command=command or (lambda argv, **kw: run(argv, '', **kw).checked_stdout())),
             sys.executable, self.scripts, revision='a' * 40)
 
+    def test_normal_product_version_requires_matching_release_state(self):
+        from mindie_knowledge import state_layout
+        import receipt_layout
+        plugin = self.scripts.parent
+        manifest = plugin / '.codex-plugin/plugin.json'
+        manifest.parent.mkdir()
+        manifest.write_text(json.dumps(dict(version='1.0.0')))
+        for knowledge, receipt in ((None, None), ('1.0.0', None), (None, '1.0.0'), ('1.0.0', '0.9.0')):
+            with self.subTest(knowledge=knowledge, receipt=receipt), \
+                    patch.object(state_layout, 'RELEASE_VERSION', knowledge), \
+                    patch.object(receipt_layout, 'RELEASE_VERSION', receipt):
+                with self.assertRaisesRegex(ValueError, 'release_state_undeclared|release_version_mismatch'):
+                    candidate_validate.release_check(plugin)
+        with patch.object(state_layout, 'RELEASE_VERSION', '1.0.0'), \
+                patch.object(receipt_layout, 'RELEASE_VERSION', '1.0.0'):
+            candidate_validate.release_check(plugin)
+        manifest.write_text(json.dumps(dict(version='0.1.0+codex.development')))
+        with patch.object(state_layout, 'RELEASE_VERSION', None), \
+                patch.object(receipt_layout, 'RELEASE_VERSION', None):
+            candidate_validate.release_check(plugin)
+
     def test_candidate_script_owns_validation_not_current_private_probe(self):
         # Candidate may replace its private API completely. The running updater
         # invokes only its candidate entry and verifies its exact receipt.
