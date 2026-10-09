@@ -35,10 +35,9 @@ RESOLVER_BOILERPLATE = (
     "remote-dev does not interpret session, profile, or binding identifiers itself. "
 )
 
-# call_tool accepts a common timeout/timeout_ms on every operation (it bounds
-# the 120-second default). Advertise it only on streaming artifact transfers,
-# where a long pull/push genuinely needs caller control; every other tool
-# keeps failing closed on an undeclared timeout key (e.g. remote_write).
+# Preserve deadlines declared by each upstream tool. Streaming artifact
+# transfers also accept the common timeout aliases, so advertise those
+# caller controls without adding undeclared keys elsewhere (e.g. remote_write).
 TRANSFER_TOOLS = {"remote_artifact_pull", "remote_artifact_push"}
 
 # Truthful MCP annotations: query/explain are pure local reads; feedback is
@@ -53,6 +52,10 @@ FEEDBACK_WRITE = dict(
 REMOTE_MUTATION = dict(
     readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True
 )
+REMOTE_READ = dict(
+    readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
+)
+REMOTE_READ_TOOLS = {"remote_read", "remote_grep", "remote_job_status", "remote_job_tail"}
 
 STRING = {"type": "string"}
 
@@ -74,28 +77,28 @@ KNOWLEDGE_TOOLS = [
         name="knowledge_query",
         description=(
             "Search the selected domain's published knowledge and experience. "
-            "Each advisory hit has a short pinned ref, title, summary and known software versions."
+            "Matches are grouped by a resolvable cited source without treating citation counts as evidence. "
+            "Each match has a directly readable block ref and a separate feedback_ref for the observed task revision. "
+            "To read more related matches, pass related_next as continuation without query; limit controls the next page. "
+            "A changed corpus rejects the continuation explicitly."
         ),
         inputSchema=schema(
-            dict(query=STRING, limit={"type": "integer", "minimum": 1, "maximum": 20}),
-            ["query"],
+            dict(query=STRING, limit={"type": "integer", "minimum": 1, "maximum": 20}, continuation=STRING),
+            [],
         ),
         annotations=READ_ONLY,
     ),
     dict(
         name="knowledge_explain",
         description=(
-            "Read one page of a result's detailed case and cited evidence using its exact short ref. "
-            "The page is a slice, not the full case. offset and limit count Unicode characters, not lines or bytes. "
-            "When next_offset is an integer, pass it as offset to read another page only if that page is still relevant; "
-            "do not count characters. next_offset is null at the end. "
-            "Superseded fixed references expire; withdrawn material is unavailable."
+            "Read one exact immutable block by its returned ref, with current task navigation and adjacent block refs. "
+            "A task ref returns current navigation, block count and first block ref without assembling the transcript. "
+            "An appended task keeps unchanged block refs readable. Removed or withdrawn material is unavailable. "
+            "Use feedback_ref only for feedback, never as a reading ref."
         ),
         inputSchema=schema(
             dict(
-                ref={"type": "string", "description": "Copy the pinned ref returned by knowledge_query exactly."},
-                offset={"type": "integer", "minimum": 0, "description": "Unicode character offset. Use the previous next_offset; omit for the first page."},
-                limit={"type": "integer", "minimum": 1, "maximum": 32768, "description": "Maximum Unicode characters in this page."},
+                ref={"type": "string", "description": "Copy a task or block ref returned by query/explain exactly; feedback_ref is not a reading ref."},
             ),
             ["ref"],
         ),
@@ -104,7 +107,7 @@ KNOWLEDGE_TOOLS = [
     dict(
         name="knowledge_feedback",
         description=(
-            "Optional: record one current up/down vote on a reference revision "
+            "Optional: copy feedback_ref from query/explain into ref to record an up/down vote on that observed revision "
             "with an optional one-line reason. Never required; silence is not a vote."
         ),
         inputSchema=schema(
@@ -157,11 +160,10 @@ def catalog():
                 f"{tool['name']} advertises keys call_tool rejects: {sorted(extra)}"
             )
     for tool in result["remote"]:
-        tool["annotations"] = REMOTE_MUTATION
+        tool["annotations"] = REMOTE_READ if tool["name"] in REMOTE_READ_TOOLS else REMOTE_MUTATION
     for tool in result["knowledge"]:
         tool["description"] = (
-            "Requires manual MindIE activation in this session; the host "
-            "binds task identity per call. " + tool["description"]
+            "The host binds native task identity per call. " + tool["description"]
         )
     for tool in result["remote"]:
         tool["description"] = (
@@ -183,5 +185,6 @@ def catalog():
 
 if __name__ == "__main__":
     Path(__file__).with_name("mcp_catalog.json").write_text(
-        json.dumps(catalog(), ensure_ascii=False, indent=2) + "\n"
+        json.dumps(catalog(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
     )

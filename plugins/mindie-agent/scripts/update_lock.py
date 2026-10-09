@@ -17,19 +17,21 @@ from pathlib import Path
 import threading
 
 _tls = threading.local()
+_generation_guard = threading.Lock()
+_generation_fds = set()
 
 if os.name == "posix":
     import fcntl
 
     @contextmanager
-    def file_lock(path, *, exclusive=False):
+    def file_lock(path, *, exclusive=False, blocking=False):
         descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             fcntl.flock(
                 descriptor,
-                (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB,
+                (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | (0 if blocking else fcntl.LOCK_NB),
             )
-            yield
+            yield descriptor
         finally:
             os.close(descriptor)
 else:
@@ -67,12 +69,12 @@ else:
     ]
 
     @contextmanager
-    def file_lock(path, *, exclusive=False):
+    def file_lock(path, *, exclusive=False, blocking=False):
         # Windows (unverified on real hardware).
         descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
         handle = msvcrt.get_osfhandle(descriptor)
         overlapped = OVERLAPPED()
-        flags = LOCKFILE_FAIL_IMMEDIATELY | (
+        flags = (0 if blocking else LOCKFILE_FAIL_IMMEDIATELY) | (
             LOCKFILE_EXCLUSIVE_LOCK if exclusive else 0
         )
         try:
@@ -117,3 +119,30 @@ def update_lock(config, *, exclusive=False):
             yield
         finally:
             locks.pop(key, None)
+
+
+@contextmanager
+def generation_lease(path):
+    """A process-held generation lease also inherited by owned POSIX helpers.
+
+    Only an actual acquired lease enters this in-memory registry. No caller
+    environment or supplied descriptor can bypass ownership validation in the
+    stable launcher's selection path. flock survives until every inherited
+    descriptor is closed, including after the launcher itself is killed.
+    """
+    with file_lock(path) as descriptor:
+        if os.name == 'posix':
+            with _generation_guard:
+                _generation_fds.add(descriptor)
+        try:
+            yield
+        finally:
+            if os.name == 'posix':
+                with _generation_guard:
+                    _generation_fds.remove(descriptor)
+
+
+def generation_descriptors():
+    """The stable launcher owns these descriptors for its entire call lifetime."""
+    with _generation_guard:
+        return tuple(_generation_fds)

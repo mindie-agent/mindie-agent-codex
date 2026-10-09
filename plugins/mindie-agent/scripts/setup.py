@@ -28,13 +28,13 @@ import time
 
 from bounded_process import run
 import consent
-from runtime_probe import PROBE_MODULES, build_probe_script
+from runtime_probe import PROBE_MODULES
+import product_contract
 import sharing
 
 SCRIPTS = Path(__file__).parent.absolute()
 
 # Setup and updater use the same material-index and runtime API contract.
-PROBE_TIMEOUT = 15
 
 
 def probe_runtime(python):
@@ -44,18 +44,13 @@ def probe_runtime(python):
     ``load_transcript_adapter`` (registers the module before exec). This
     process does not grow a second dynamic importer.
     """
-    script = build_probe_script(SCRIPTS / "codex_transcript.py")
     try:
-        output = run([python, "-c", script], "", timeout=PROBE_TIMEOUT)
+        return product_contract.probe(
+            python, SCRIPTS, lambda argv, **kwargs: run(argv, "", **kwargs).checked_stdout())
     except Exception as exc:
         raise SystemExit(
             f"knowledge runtime probe failed to run in {python}: "
             f"{type(exc).__name__}: {str(exc)[:200]}"
-        )
-    if not output.strip().endswith("OK"):
-        raise SystemExit(
-            f"{python} is missing pinned dependencies: {output.strip()}. "
-            "Install runtime-requirements.txt first."
         )
 
 
@@ -83,7 +78,7 @@ def replace_private(path, value):
         Path(name).unlink(missing_ok=True)
 
 
-def community_settings(args, parser, python):
+def community_settings(args, parser, python, *, scripts=SCRIPTS):
     """Explicitly selected sharing settings; None leaves sharing OFF."""
     selected = any(
         getattr(args, key)
@@ -130,6 +125,10 @@ def community_settings(args, parser, python):
         if value:
             settings[key] = value
     settings["visibility"] = args.community_visibility
+    declaration, _ = product_contract.product(product_contract.source_root(scripts))
+    publication = declaration["publication"]
+    if settings["repository"] == publication["repository"]:
+        settings["publication_contract_sha256"] = publication["contract_sha256"]
     try:
         structural = sharing.validate(settings)
         return sharing.normalize_with_runtime(structural, python)
@@ -163,7 +162,8 @@ def install(args, parser):
         parser.error("install requires --knowledge-python")
     python = str(Path(args.knowledge_python).expanduser().absolute())
     # Keep the venv executable path; resolving its symlink loses its site-packages.
-    probe_runtime(python)
+    validation = probe_runtime(python)
+    declaration, _ = product_contract.product(product_contract.source_root(SCRIPTS))
     transcript_adapter = str(SCRIPTS / "codex_transcript.py")
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args.domain):
         parser.error("invalid domain name")
@@ -202,18 +202,12 @@ def install(args, parser):
         admission_path=str(admission_path),
         transcript_adapter=transcript_adapter,
         community_config=str(community_config),
+        product_validation=validation,
     )
     from capture_config import prepare
     value.update(prepare(python, SCRIPTS))
-    if args.domain == "vllm-ascend" and not args.no_public_feed:
-        value["feeds"] = [
-            dict(
-                repository="mindie-agent/knowledge-vllm-ascend",
-                ref="main",
-                domain="vllm-ascend",
-                interval_seconds=300,
-            )
-        ]
+    if args.domain == declaration["publication"]["domain"] and not args.no_public_feed:
+        value["feeds"] = [product_contract.publication_feed(declaration)]
     write_private(engine_config, value)
     adapter = dict(
         python=python,
@@ -221,6 +215,7 @@ def install(args, parser):
         community_config=str(community_config),
         admission_path=str(admission_path),
         runtime_scripts=str(SCRIPTS),
+        product_validation=validation,
     )
     write_private(config, adapter)
     if sharing_choice:
@@ -284,7 +279,10 @@ def configure(args, parser):
     python = adapter.get("python")
     if not isinstance(python, str) or not python:
         parser.error("existing configuration has no runtime interpreter")
-    community = community_settings(args, parser, python)
+    scripts = adapter.get("runtime_scripts")
+    if not isinstance(scripts, str) or not Path(scripts).is_absolute():
+        parser.error("existing configuration has no selected product scripts")
+    community = community_settings(args, parser, python, scripts=Path(scripts))
     if community is None:
         parser.error(
             "configure requires the explicit community selection "
@@ -339,6 +337,8 @@ def configure(args, parser):
                 key: value
                 for key, value in old.items()
                 if key not in sharing.CORE_KEYS and key != "consent_config"
+                and (key != "publication_contract_sha256"
+                     or old.get("repository") == community["repository"])
             }
         merged = sharing.normalize_with_runtime(
             {**extensions, **community}, python, config, previous=old

@@ -57,7 +57,7 @@ class WindowsProcessTreeTests(unittest.TestCase):
                 self.kernel.WaitForSingleObject(handle, 2000)
             self.kernel.CloseHandle(handle)
 
-    def _write_case_files(self, root):
+    def _write_case_files(self, root, *, leader_wait=False):
         child = root / "descendant.py"
         child.write_text("import time; time.sleep(30)\n", encoding="utf-8")
         parent = root / "leader.py"
@@ -66,7 +66,8 @@ class WindowsProcessTreeTests(unittest.TestCase):
             "kwargs = {} if sys.argv[3] == 'inherited' else {"
             "'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL}\n"
             "child = subprocess.Popen([sys.executable, sys.argv[1]], **kwargs)\n"
-            "pathlib.Path(sys.argv[2]).write_text(str(child.pid), encoding='ascii')\n",
+            "pathlib.Path(sys.argv[2]).write_text(str(child.pid), encoding='ascii')\n"
+            + ("import time; time.sleep(30)\n" if leader_wait else ""),
             encoding="utf-8",
         )
         runner = root / "runner.py"
@@ -81,8 +82,7 @@ class WindowsProcessTreeTests(unittest.TestCase):
             " except TimeoutError: timed_out = True\n"
             "elif api == 'process_guard':\n"
             " import process_guard\n"
-            " process_guard.TIMEOUT = 0.5\n"
-            " try: process_guard.run_codex([sys.executable, leader, *sys.argv[3:]], '')\n"
+            " try: process_guard.run_codex([sys.executable, leader, *sys.argv[3:]], '', timeout=0.5)\n"
             " except TimeoutError: timed_out = True\n"
             "else: raise SystemExit('unknown adapter')\n"
             "print(json.dumps({'timed_out': timed_out}), flush=True)\n",
@@ -90,10 +90,10 @@ class WindowsProcessTreeTests(unittest.TestCase):
         )
         return child, parent, runner
 
-    def _run_case(self, api, pipe_mode):
+    def _run_case(self, api, pipe_mode, *, leader_wait=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            child, leader, runner = self._write_case_files(root)
+            child, leader, runner = self._write_case_files(root, leader_wait=leader_wait)
             pidfile = root / "descendant.pid"
             started = time.monotonic()
             process = subprocess.Popen(
@@ -123,7 +123,10 @@ class WindowsProcessTreeTests(unittest.TestCase):
                 stdout, stderr = process.communicate(timeout=4)
                 self.assertEqual(process.returncode, 0, stderr.decode("utf-8", "replace"))
                 result = json.loads(stdout)
-                self.assertEqual(result["timed_out"], pipe_mode == "inherited")
+                # Inherited pipes do not turn the leader's real exit into a
+                # timeout. A live leader still reaches the explicit deadline;
+                # both paths must reap the exact owned descendant below.
+                self.assertEqual(result["timed_out"], leader_wait)
                 if child_handle:
                     self.assertEqual(
                         self.kernel.WaitForSingleObject(child_handle, 1000),
@@ -142,19 +145,19 @@ class WindowsProcessTreeTests(unittest.TestCase):
                     process.communicate(timeout=3)
 
     def test_bounded_process_owns_descendants_after_timeout_and_normal_exit(self):
-        for pipe_mode in ("inherited", "detached"):
-            with self.subTest(pipe_mode=pipe_mode):
-                self._run_case("bounded_process", pipe_mode)
+        for pipe_mode, leader_wait in (("inherited", False), ("detached", False), ("inherited", True)):
+            with self.subTest(pipe_mode=pipe_mode, leader_wait=leader_wait):
+                self._run_case("bounded_process", pipe_mode, leader_wait=leader_wait)
 
     def test_process_guard_owns_descendants_after_timeout_and_normal_exit(self):
-        for pipe_mode in ("inherited", "detached"):
-            with self.subTest(pipe_mode=pipe_mode):
-                self._run_case("process_guard", pipe_mode)
+        for pipe_mode, leader_wait in (("inherited", False), ("detached", False), ("inherited", True)):
+            with self.subTest(pipe_mode=pipe_mode, leader_wait=leader_wait):
+                self._run_case("process_guard", pipe_mode, leader_wait=leader_wait)
 
     def test_service_launcher_still_cleans_ordinary_descendants(self):
-        for pipe_mode in ("inherited", "detached"):
-            with self.subTest(pipe_mode=pipe_mode):
-                self._run_case("service_launcher", pipe_mode)
+        for pipe_mode, leader_wait in (("inherited", False), ("detached", False), ("inherited", True)):
+            with self.subTest(pipe_mode=pipe_mode, leader_wait=leader_wait):
+                self._run_case("service_launcher", pipe_mode, leader_wait=leader_wait)
 
     def test_legacy_live_leader_check_is_caught_by_inherited_pipe_control(self):
         """The pre-Job taskkill check misses the tree once its leader exits."""

@@ -40,7 +40,9 @@ SCRIPTS = REPO / "plugins/mindie-agent/scripts"
 
 
 KIMI_COMMIT = "90f73e76c6087ce091570f2d151b709145c913bc"
-CORE_COMMIT = "929bdcb918f2207aea38b02a14bd8e6219fabac4"
+sys.path.insert(0, str(SCRIPTS))
+from product_contract import requirements
+CORE_COMMIT = requirements(REPO)[0]["mindie-knowledge"]
 CONSENT_STORE_SHA256 = "679c6483a2edbf2d093de2ca38b00bfb73418b1179bcef9cdf6f34b5f9ed6b4c"
 
 
@@ -215,11 +217,17 @@ class LaneCase(unittest.TestCase):
     def tearDown(self):
         try:
             self._stop_owned_engine()
+        except BaseException as exc:
+            # Preserve the shutdown failure and its files. Deleting a still
+            # owned SQLite tree can both damage the fixture and hide the cause.
+            self.temp._finalizer.detach()
+            exc.add_note(f"Test engine cleanup failed; retained {self.root}")
+            raise
         finally:
             session_gate.bind_explicit_config(None)
             tempfile.tempdir = None
             self.env_patch.stop()
-            cleanup_temporary_directory(self.temp)
+        cleanup_temporary_directory(self.temp)
 
     def child_env(self, **extra):
         env = dict(self.platform_env)
@@ -294,25 +302,19 @@ class LaneCase(unittest.TestCase):
             return self.sessions.activate()
 
     def authorization_boundary(self, session):
-        """The same max(enabled_at, activated_at, capture_floor) the engine uses."""
+        """The same max(enabled_at, activated_at) the engine uses."""
         from mindie_knowledge.loop.activation import Admission
-        from mindie_knowledge.loop.store import Store
 
         lease = Admission(str(self.admission)).active_lease(session)
         if not lease or not isinstance(lease.get("activated_at"), (int, float)):
             raise AssertionError("no admission boundary for " + session)
-        store = Store(self.root / "data", "test")
-        try:
-            floor = float(store.capture_floor)
-        finally:
-            store.close()
         try:
             enabled_at = json.loads(self.community.read_text()).get("enabled_at") or 0
         except (OSError, ValueError):
             enabled_at = 0
         if isinstance(enabled_at, bool) or not isinstance(enabled_at, (int, float)):
             enabled_at = 0
-        return max(float(enabled_at), float(lease["activated_at"]), floor)
+        return max(float(enabled_at), float(lease["activated_at"]))
 
     def after_boundary(self, session, seconds):
         return _iso_at(self.authorization_boundary(session) + seconds)
@@ -338,6 +340,13 @@ class LaneCase(unittest.TestCase):
         )
         return result
 
+    def session_meta(self, session, **payload):
+        return _session_meta(session, cwd=str(self.work),
+                             **dict({"timestamp": _iso_before(time.time(), 1)}, **payload))
+
+    def native_transcript(self, name):
+        return self.codex_home / 'sessions' / name
+
     def event(self, session, transcript, turn="turn-1"):
         return {
             "hook_event_name": "Stop",
@@ -349,7 +358,7 @@ class LaneCase(unittest.TestCase):
         }
 
     def capture_rows(self):
-        path = self.root / "data" / "test" / "state-v4.sqlite3"
+        path = self.root / "data" / "test" / "state-v1" / "state-v4.sqlite3"
         if not path.exists():
             return []
         db = sqlite3.connect(path)
@@ -425,8 +434,8 @@ class ConsentGateTests(LaneCase):
         self.write_community(enabled=True)
         self.open_store()
         self.activate("task-main")
-        transcript = self.root / "corrupt-body.jsonl"
-        _jsonl(transcript, [_session_meta("task-main"),
+        transcript = self.native_transcript("corrupt-body.jsonl")
+        _jsonl(transcript, [self.session_meta("task-main"),
             _user("Public before corruption", self.after_boundary("task-main", 30))])
         with transcript.open('ab') as stream:
             stream.write(b'{"type":broken}\n')
@@ -451,9 +460,9 @@ class ConsentGateTests(LaneCase):
         self.write_community(enabled=True)
         self.open_store()
         self.activate("task-main")
-        transcript = self.root / "public-body.jsonl"
+        transcript = self.native_transcript("public-body.jsonl")
         stamp = self.after_boundary("task-main", 30)
-        records = [_session_meta("task-main"), _user("Public request marker", stamp)]
+        records = [self.session_meta("task-main"), _user("Public request marker", stamp)]
         for channel, text in (("analysis", "hidden-only-marker"), ("commentary", "Public progress marker"), ("final_answer", "Public result marker")):
             records.append(dict(type="response_item", timestamp=stamp, payload=dict(type="message", role="assistant", phase=channel, content=[dict(type="output_text", text=text)])))
         records.append(dict(type="response_item", timestamp=stamp, payload=dict(type="function_call_output", output="tool-only-marker")))
@@ -503,7 +512,7 @@ class ConsentGateTests(LaneCase):
                 self.activate(thread)
                 transcript = self.root / f"{name}.jsonl"
                 _jsonl(transcript, [
-                    _session_meta(thread),
+                    self.session_meta(thread),
                     _user(SENTINEL, stamp=self.after_boundary(thread, 30)),
                 ])
                 result = self.stop(
@@ -537,9 +546,9 @@ class ConsentGateTests(LaneCase):
         self.write_community(enabled=True)
         self.open_store()
         self.activate("task-main")
-        transcript = self.root / "contribute.jsonl"
+        transcript = self.native_transcript("contribute.jsonl")
         _jsonl(transcript, [
-            _session_meta("task-main"),
+            self.session_meta("task-main"),
             _user(SENTINEL, stamp=self.after_boundary("task-main", 30)),
         ])
         first = self.stop(self.event("task-main", transcript))
@@ -569,9 +578,9 @@ class ConsentGateTests(LaneCase):
         self.open_store()
         self.activate("parent-task")
         self.activate("child-task")
-        transcript = self.root / "parent-secret.jsonl"
+        transcript = self.native_transcript("parent-secret.jsonl")
         _jsonl(transcript, [
-            _session_meta("parent-task"),
+            self.session_meta("parent-task"),
             _user(PARENT_SECRET, stamp=self.after_boundary("parent-task", 30)),
         ])
         result = self.stop(
@@ -597,8 +606,8 @@ class ConsentGateTests(LaneCase):
         self.activate("child-task")
         # Parent text is after admission and before the fork. Exclusion is the
         # fork cut, not the admission cut. The admission cut is its own test.
-        transcript = self.root / "fork.jsonl"
-        head = _session_meta(
+        transcript = self.native_transcript("fork.jsonl")
+        head = self.session_meta(
             "child-task",
             forked_from_id="parent-task",
             timestamp=self.after_boundary("child-task", 20),
@@ -623,9 +632,9 @@ class ConsentGateTests(LaneCase):
         self.write_community(enabled=True)
         self.open_store()
         self.activate("task-main")
-        transcript = self.root / "before-admission.jsonl"
+        transcript = self.native_transcript("before-admission.jsonl")
         _jsonl(transcript, [
-            _session_meta("task-main"),
+            self.session_meta("task-main"),
             _user(PRE_ADMISSION, stamp=self.before_boundary("task-main", 60)),
         ])
         result = self.stop(self.event("task-main", transcript))
@@ -1541,9 +1550,9 @@ class RemoteIsolationTests(LaneCase):
         child = mcp_gate.Gate("remote")
         child_result = child.call(request("child-task", 1))
         self.assertEqual(child_result.get("isError"), False, child_result)
-        parent_db = self.remote_state / "gate" / "parent-task.sqlite3"
-        child_db = self.remote_state / "gate" / "child-task.sqlite3"
-        self.assertTrue(parent_db.is_file(), list((self.remote_state / "gate").glob("*")))
+        parent_db = self.remote_state / "gate-v1" / "parent-task.sqlite3"
+        child_db = self.remote_state / "gate-v1" / "child-task.sqlite3"
+        self.assertTrue(parent_db.is_file(), list((self.remote_state / "gate-v1").glob("*")))
         self.assertTrue(child_db.is_file())
         with closing(sqlite3.connect(parent_db)) as db:
             parent_ids = db.execute("SELECT identity FROM attempts").fetchall()

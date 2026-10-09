@@ -7,6 +7,7 @@ from contextlib import closing
 from pathlib import Path
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
 import auto_update
+import product_contract
+import candidate_validate
 from auto_update import Updater, atomic, read
 from session_gate import Sessions, bind_explicit_config
 from update_lock import update_lock
@@ -92,17 +95,26 @@ class LocalUpdater(Updater):
                 self.builds += 1
             return ""
         if len(args) > 1 and args[1].endswith("service_handoff.py"):
-            return json.dumps(dict(idle=self.idle))
+            if args[2] in {"restore", "unretire"}:
+                return json.dumps(dict(status="restored"))
+            return json.dumps(dict(idle=self.idle, service="absent" if self.idle else "busy",
+                retirement=dict(schema="mindie-service-retirement/1", operation_id="a"*32,
+                                config_fingerprint="b"*64, status="retired" if self.idle else "busy")))
+        if len(args) > 1 and args[1].endswith("state_compatibility.py"):
+            return json.dumps(dict(status="compatible"))
         return super().command(args, **kwargs)
 
     def prepare_capture(self, candidate):
         return dict(capture_mode="public-transcript", redactor_executable=str(Path(candidate["python"]).absolute()),
                     summary_command=[candidate["python"], str(Path(candidate["plugin"]) / "scripts/agent_worker.py")])
 
-    def probe_runtime(self, python, scripts=None):
+    def probe_runtime(self, python, scripts=None, *, revision=None, verified_receipt=None):
         self.assert_runtime = Path(python).exists()
         if not self.assert_runtime:
             raise RuntimeError("runtime missing")
+        source = product_contract.source_root(scripts or SCRIPTS)
+        candidate_validate.adapter_check(source)
+        return dict(product_contract.identity(source, revision), status="validated")
 
     def native_cache(self):
         return (
@@ -163,7 +175,7 @@ class AutoUpdateTests(unittest.TestCase):
             self.remote / "plugins",
             ignore=shutil.ignore_patterns("__pycache__"),
         )
-        shutil.copy(ROOT / "update-contract.json", self.remote)
+        shutil.copy(ROOT / "product-contract.json", self.remote)
         shutil.copy(ROOT / "runtime-requirements.txt", self.remote)
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.name", "Fixture")
@@ -271,19 +283,42 @@ class AutoUpdateTests(unittest.TestCase):
             "Uncommitted", (plugin / "skills/mindie-agent/SKILL.md").read_text(encoding="utf-8")
         )
         mcp = read(plugin / ".mcp.json")["mcpServers"]["mindie-knowledge"]
-        self.assertEqual(mcp["args"][0], str(plugin / "scripts/bridge.py"))
+        self.assertEqual(mcp["args"][0], str(self.root / "runtime_launcher.py"))
         self.assertIn(
-            str(plugin),
+            str(self.root / "runtime_launcher.py"),
             read(plugin / "hooks/hooks.json")["hooks"]["Stop"][0]["hooks"][0][
                 "command"
             ],
         )
-        self.assertTrue(old_plugin.exists())
-        self.assertTrue((self.cache / "bridge.py").exists())
+        self.assertEqual(result["retention"]["status"], "complete", result["retention"])
+        self.assertFalse(old_plugin.exists())
+        self.assertFalse((self.cache / "bridge.py").exists())
         self.assertIn("Uncommitted", skill.read_text(encoding="utf-8"))
         installs = self.updater.installs
         self.assertEqual(self.check()["status"], "up_to_date")
         self.assertEqual(self.updater.installs, installs)
+
+    def test_persistence_failure_after_commit_reports_known_install_and_reconciles_without_reinstall(self):
+        original_atomic = auto_update.atomic
+        failures = []
+        def disk_failure(path, data):
+            if (Path(path) == self.updater.state_path and data.get("current", {}).get("revision") == self.sha
+                    and not failures):
+                failures.append(dict(data))
+                raise OSError("fixture state disk unavailable")
+            return original_atomic(path, data)
+        with patch("auto_update.atomic", side_effect=disk_failure):
+            result = self.check()
+        self.assertEqual(result["status"], "partial")
+        self.assertTrue(result["state_persistence"]["generation_committed"])
+        self.assertEqual(result["current"]["revision"], self.sha)
+        self.assertEqual(read(self.config)["runtime_scripts"], str(Path(result["current"]["plugin"]) / "scripts"))
+        installs = self.updater.installs
+        self.assertTrue((self.root / "transaction.json").exists())
+        refreshed = self.check()
+        self.assertEqual(refreshed["status"], "up_to_date")
+        self.assertEqual(self.updater.installs, installs)
+        self.assertFalse((self.root / "transaction.json").exists())
 
     def test_upgrade_from_core_without_handoff_api(self):
         """The previous core cannot import the new helper's lock_held API."""
@@ -393,7 +428,7 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertIn(expected, command)
         self.assertIn("stop", command)
         hook = read(plugin / "hooks/hooks.json")["hooks"]["Stop"][0]["hooks"][0]
-        self.assertEqual(hook["timeout"], 5)
+        self.assertNotIn("timeout", hook)
         other = str(self.base / "other-adapter.json")
         import bridge as bridge_mod
         from session_gate import config_path as live_config
@@ -492,8 +527,154 @@ class AutoUpdateTests(unittest.TestCase):
             str(other.expanduser().absolute()),
         )
 
+    def test_product_community_projection_restores_only_owned_field(self):
+        import consent
+        community = consent.shared_community_path_for(self.config)
+        declaration, _ = product_contract.product(ROOT)
+        previous = dict(repository=declaration["publication"]["repository"],
+                        publication_contract_sha256="b" * 64, enabled=False,
+                        sibling={"value": "retained"})
+        atomic(community, previous)
+        atomic(self.root / "transaction.json", dict(candidate=self.sha, adapter=self.initial))
+        self.updater.project_publication(declaration)
+        projected = read(community)
+        self.assertEqual(projected["publication_contract_sha256"], declaration["publication"]["contract_sha256"])
+        projected["sibling"] = {"value": "changed concurrently"}
+        atomic(community, projected)
+        self.updater.restore_publication(read(self.root / "transaction.json"))
+        restored = read(community)
+        self.assertEqual(restored["publication_contract_sha256"], previous["publication_contract_sha256"])
+        self.assertEqual(restored["sibling"], {"value": "changed concurrently"})
+        self.assertIs(restored["enabled"], False)
+
+    def test_product_community_projection_preserves_foreign_repository_and_conflicts(self):
+        import consent
+        community = consent.shared_community_path_for(self.config)
+        declaration, _ = product_contract.product(ROOT)
+        atomic(community, dict(repository="owner/custom", publication_contract_sha256="b" * 64))
+        before = community.read_bytes()
+        atomic(self.root / "transaction.json", dict(candidate=self.sha, adapter=self.initial))
+        self.updater.project_publication(declaration)
+        self.assertEqual(community.read_bytes(), before)
+        self.assertNotIn("publication_projection", read(self.root / "transaction.json"))
+        atomic(community, dict(repository=declaration["publication"]["repository"]))
+        self.updater.project_publication(declaration)
+        current = read(community)
+        current["publication_contract_sha256"] = "c" * 64
+        atomic(community, current)
+        before = community.read_bytes()
+        with self.assertRaisesRegex(RuntimeError, "changed during product rollback"):
+            self.updater.restore_publication(read(self.root / "transaction.json"))
+        self.assertEqual(community.read_bytes(), before)
+
+    def test_install_failure_and_conflicting_rollback_remain_distinct_and_durable(self):
+        import consent
+        community = consent.shared_community_path_for(self.config)
+        declaration, _ = product_contract.product(ROOT)
+        atomic(community, dict(repository=declaration["publication"]["repository"],
+                               publication_contract_sha256="b" * 64))
+        original = OSError("ORIGINAL_INSTALL_FAILURE_SENTINEL")
+        project = self.updater.project_publication
+        install = self.updater.install
+        observed = []
+        def conflicting_projection(value):
+            project(value)
+            current = read(community)
+            current["publication_contract_sha256"] = "c" * 64
+            atomic(community, current)
+            raise original
+        def observe(candidate):
+            try:
+                return install(candidate)
+            except auto_update.InstallRollbackError as exc:
+                observed.append(exc)
+                raise
+        with patch.object(self.updater, "project_publication", side_effect=conflicting_projection), \
+             patch.object(self.updater, "install", side_effect=observe):
+            result = self.check()
+        self.assertEqual(result["status"], "update_failed")
+        self.assertIn("install failed (OSError)", result["error"])
+        self.assertIn("rollback failed (RuntimeError)", result["error"])
+        durable = read(self.updater.state_path)
+        self.assertEqual(durable["original_install_error"], dict(
+            stage="install", error="OSError", message="ORIGINAL_INSTALL_FAILURE_SENTINEL"))
+        self.assertEqual(durable["rollback_error"]["stage"], "rollback")
+        self.assertIn("publication contract changed", durable["rollback_error"]["message"])
+        self.assertEqual(len(observed), 1)
+        self.assertIs(observed[0].__cause__, original)
+        self.assertIsInstance(observed[0].rollback_exception, RuntimeError)
+        self.assertIn("Rollback also failed: RuntimeError", original.__notes__)
+        self.assertEqual(read(community)["publication_contract_sha256"], "c" * 64)
+        self.assertTrue((self.root / "transaction.json").is_file())
+        self.assertEqual(self.updater.installs, 1)  # no retry after the uncertain rollback
+        self.assertNotIn("next_retry_at", result["attempts"][self.sha])
+
+    def test_candidate_failure_stage_and_code_reach_durable_update_result(self):
+        error = product_contract.CandidateValidationError(dict(
+            stage="runtime_pins", code="revision_mismatch", component="mindie-knowledge"))
+        with patch.object(self.updater, "probe_runtime", side_effect=error):
+            result = self.check()
+        self.assertEqual(result["status"], "update_failed")
+        self.assertIn("runtime_pins: revision_mismatch (mindie-knowledge)", result["error"])
+        self.assertEqual(read(self.updater.state_path)["error"], result["error"])
+        self.assertEqual(self.updater.installs, 0)
+        self.assertEqual(read(self.config), self.initial)
+
+    def test_prepared_plugin_edit_prevents_native_installation(self):
+        candidate = self.updater.prepare(self.sha)
+        script = Path(candidate["plugin"]) / "scripts/bridge.py"
+        script.write_text(script.read_text() + "\n# corrupted packaged entry\n")
+        with self.assertRaisesRegex(auto_update.Incompatible, "plugin bytes changed"):
+            self.updater.install(candidate)
+        self.assertEqual(read(self.config), self.initial)
+        self.assertEqual(self.updater.installs, 0)
+        self.assertFalse((self.root / "transaction.json").exists())
+
+    def test_incompatible_released_state_rejected_before_service_retirement_or_install(self):
+        candidate = self.updater.prepare(self.sha)
+        command = self.updater.command
+        observed = []
+        def incompatible(args, **kwargs):
+            observed.append([str(arg) for arg in args])
+            if len(args) > 1 and str(args[1]).endswith('state_compatibility.py'):
+                raise RuntimeError('released knowledge state requires an explicit format migration')
+            return command(args, **kwargs)
+        with patch.object(self.updater, 'command', side_effect=incompatible):
+            with self.assertRaisesRegex(RuntimeError, 'explicit format migration'):
+                self.updater.install(candidate)
+        self.assertEqual(read(self.config), self.initial)
+        self.assertEqual(self.updater.installs, 0)
+        self.assertFalse((self.root / 'transaction.json').exists())
+        self.assertFalse(any(len(args) > 1 and args[1].endswith('service_handoff.py') for args in observed))
+
+    def test_cached_candidate_runtime_drift_is_rechecked_before_native_installation(self):
+        candidate = self.updater.prepare(self.sha)
+        reused = self.updater.prepare(self.sha)
+        self.assertEqual(candidate, reused)
+        def changed_runtime(*args, **kwargs):
+            self.assertEqual(kwargs["verified_receipt"], candidate["validation"])
+            candidate_validate.installed_revisions(candidate["validation"]["runtime"])
+        distribution = SimpleNamespace(read_text=lambda _: '{"vcs_info":{"commit_id":"changed"}}')
+        with patch.object(self.updater, "probe_runtime", side_effect=changed_runtime), \
+             patch.object(candidate_validate.importlib.metadata, "distribution", return_value=distribution):
+            with self.assertRaisesRegex(ValueError, "revision_mismatch"):
+                self.updater.install(reused)
+        self.assertEqual(read(self.config), self.initial)
+        self.assertEqual(self.updater.installs, 0)
+        self.assertFalse((self.root / "transaction.json").exists())
+
+    def test_prepared_source_edit_prevents_installation(self):
+        candidate = self.updater.prepare(self.sha)
+        source = Path(candidate["source"])
+        script = source / "plugins/mindie-agent/scripts/candidate_validate.py"
+        script.write_text(script.read_text() + "\n# concurrent change\n")
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            self.updater.install(candidate)
+        self.assertEqual(read(self.config), self.initial)
+        self.assertFalse((self.root / "transaction.json").exists())
+
     def test_missing_contract_never_replaces_local_safety_fix(self):
-        (self.remote / "update-contract.json").unlink()
+        (self.remote / "product-contract.json").unlink()
         sha = self.commit("old unsafe main")
         for _ in range(5):
             result = self.check()
@@ -546,11 +727,27 @@ class AutoUpdateTests(unittest.TestCase):
             self.assertEqual(
                 read(self.root / "fixture-marketplace.json")["root"], str(self.remote)
             )
-            self.assertTrue((self.cache / "bridge.py").exists())
+            self.assertFalse((self.cache / "bridge.py").exists())
             self.assertFalse((self.root / "transaction.json").exists())
         count = self.updater.installs
         self.assertEqual(self.check()["status"], "attempts_exhausted")
         self.assertEqual(self.updater.installs, count)
+
+    def test_install_failure_survives_restoration_state_write_failure(self):
+        self.updater.fail_install = True
+        original = auto_update.atomic
+        def fail_restoration(path, value):
+            if Path(path) == self.updater.state_path and (value.get('service_handoff') or {}).get('restoration'):
+                raise OSError('state disk unavailable')
+            return original(path, value)
+        with patch('auto_update.atomic', side_effect=fail_restoration):
+            result = self.check()
+        self.assertEqual(result['status'], 'update_failed')
+        self.assertEqual(result['operation_error']['stage'], 'install')
+        self.assertEqual(result['operation_error']['error_type'], 'RuntimeError')
+        self.assertEqual(result['state_persistence']['error_type'], 'OSError')
+        self.assertEqual(result['service_handoff']['restoration']['status'], 'restored')
+        self.assertEqual(read(self.config), self.initial)
 
     def test_uncertain_crash_consumes_attempt_and_recovers_before_next_check(self):
         original = self.updater.command
@@ -579,6 +776,22 @@ class AutoUpdateTests(unittest.TestCase):
         ):
             self.assertEqual(self.updater.resolve(), self.sha)
 
+    def test_release_channel_rejects_development_and_mislabelled_source(self):
+        self.updater.settings['channel'] = 'release'
+        self.updater._release_version = '1.0.0'
+        manifest = self.remote / 'plugins/mindie-agent/.codex-plugin/plugin.json'
+        value = read(manifest)
+        with self.assertRaisesRegex(auto_update.Incompatible, 'release source version'):
+            self.updater.validate_source(self.remote)
+        for version in ('0.9.0', '1.0.0'):
+            value['version'] = version
+            atomic(manifest, value)
+            if version == '1.0.0':
+                self.updater.validate_source(self.remote)
+            else:
+                with self.assertRaises(auto_update.Incompatible):
+                    self.updater.validate_source(self.remote)
+
     def test_remote_only_update_retains_identical_stop_command(self):
         first = self.check()
         before = read(Path(first["current"]["plugin"]) / "hooks/hooks.json")
@@ -589,13 +802,13 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(second["status"], "installed")
         self.assertEqual(read(Path(second["current"]["plugin"]) / "hooks/hooks.json"), before)
 
-    def test_stop_diagnostic_helper_change_selects_new_stop_command(self):
+    def test_stop_helper_change_keeps_stable_command_and_selects_new_generation(self):
         first = self.check()
         previous = Path(first["current"]["plugin"])
         previous_command = read(previous / "hooks/hooks.json")["hooks"]["Stop"][0][
             "hooks"
         ][0]["command"]
-        self.assertIn(str(previous / "scripts/bridge.py"), previous_command)
+        self.assertIn(str(self.root / "runtime_launcher.py"), previous_command)
         for name in ("diagnostic_support.py", "diagnostic_fallback.py", "windows_process.py"):
             path = self.remote / "plugins/mindie-agent/scripts" / name
             path.write_text(path.read_text(encoding="utf-8") + f"\n# {name} stop behavior\n", encoding="utf-8")
@@ -606,9 +819,9 @@ class AutoUpdateTests(unittest.TestCase):
             command = read(plugin / "hooks/hooks.json")["hooks"]["Stop"][0]["hooks"][
                 0
             ]["command"]
-            self.assertIn(str(plugin / "scripts/bridge.py"), command)
-            self.assertNotIn(str(previous / "scripts/bridge.py"), command)
-            self.assertNotEqual(command, previous_command)
+            self.assertEqual(command, previous_command)
+            self.assertIn(f"# {name} stop behavior", (plugin / "scripts" / name).read_text())
+            self.assertEqual(read(self.config)["runtime_scripts"], str(plugin / "scripts"))
             previous, previous_command = plugin, command
 
     def test_wrapper_change_replaces_stop_even_with_identical_helpers(self):
@@ -627,17 +840,14 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(result["status"], "installed")
         plugin = Path(result["current"]["plugin"])
         hook = read(plugin / "hooks/hooks.json")["hooks"]["Stop"][0]["hooks"][0]
-        self.assertIn(str(plugin / "scripts/bridge.py"), hook["command"])
+        self.assertIn(str(self.root / "runtime_launcher.py"), hook["command"])
         self.assertIn("-EncodedCommand", hook["commandWindows"])
         self.assertNotEqual(hook["commandWindows"], legacy["hooks"]["Stop"][0]["hooks"][0]["commandWindows"])
 
-    def test_uncoordinated_caches_are_retained_untouched(self):
-        # No compatibility shim: cached entrypoints of loaded tasks keep their
-        # exact bytes; the updater only retains/restores them across switches.
+    def test_native_cache_is_not_duplicated_or_restored_by_updater(self):
         self.check()
-        self.assertEqual((self.cache / "bridge.py").read_text(encoding="utf-8"), "retained safe entrypoint")
-        retained = self.root / "retained-caches/old/scripts/bridge.py"
-        self.assertEqual(retained.read_text(encoding="utf-8"), "retained safe entrypoint")
+        self.assertFalse(self.cache.exists())
+        self.assertFalse((self.root / "retained-caches").exists())
         self.assertFalse((self.root / "legacy-caches-original").exists())
 
     def test_knowledge_sync_runs_on_every_schedule_and_failure_is_isolated(self):
@@ -686,36 +896,29 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(native["version"], candidate_version)
         self.assertTrue(native["installed"] and native["enabled"])
         retained = self.updater.native_cache() / "0.1.0+codex.20260919061330608250/scripts/bridge.py"
-        self.assertEqual(retained.read_text(encoding="utf-8"), "old loaded-task entrypoint")
+        self.assertFalse(retained.exists())
 
-    def test_no_fake_installed_when_retained_cache_wins_native_discovery(self):
-        # A candidate whose build metadata sorts BELOW a retained cache (the
-        # exact root failure: 14-digit new vs 20-digit old) must NOT report
-        # installed: readback verification fails and rolls back.
-        old = self.updater.native_cache() / "0.1.0+codex.20260919061330608250/scripts"
-        old.mkdir(parents=True)
-        (old / "bridge.py").write_text("old loaded-task entrypoint", encoding="utf-8")
-        with patch("auto_update.datetime") as clock:
-            clock.now.return_value.strftime.return_value = "20260920055301"
+    def test_wrong_native_selection_is_visible_and_rolls_back(self):
+        # Inject an incorrect native readback after add, independently of the
+        # host's own cache retention/pruning policy.
+        original = self.updater.native_list
+        reads = 0
+        def wrong_selection_once():
+            nonlocal reads
+            value = original()
+            reads += 1
+            if reads == 2:
+                value["installed"][0]["version"] = "0.0.0"
+            return value
+        with patch.object(self.updater, "native_list", side_effect=wrong_selection_once):
             result = self.check()
         self.assertEqual(result["status"], "update_failed")
         self.assertIn("native plugin selection", result["error"])
         self.assertNotIn("current", self.updater.state)
         self.assertEqual(read(self.config), self.initial)
         self.assertFalse((self.root / "transaction.json").exists())
-        # Rollback leaves the truthful previous native state, not the
-        # rejected candidate masquerading as installed.
-        native = self.updater.native_list()["installed"][0]
-        self.assertEqual(native["version"], "0.1.0+codex.20260919061330608250")
-        self.assertEqual(
-            (self.updater.native_cache() / "0.1.0+codex.20260919061330608250/scripts/bridge.py").read_text(encoding="utf-8"),
-            "old loaded-task entrypoint",
-        )
-        # Bounded: a repeated check consumes attempts, never loops adds.
-        with patch("auto_update.datetime") as clock:
-            clock.now.return_value.strftime.return_value = "20260920055301"
-            result = self.check()
-        self.assertEqual(result["status"], "update_failed")
+        self.assertEqual(original()["installed"][0]["version"],
+                         read(self.remote / "plugins/mindie-agent/.codex-plugin/plugin.json")["version"])
 
     def test_fetch_deadline_and_network_backoff_do_not_spawn_models(self):
         with patch.object(
@@ -726,12 +929,120 @@ class AutoUpdateTests(unittest.TestCase):
             self.assertGreater(result["next_check"], time.time() + 3500)
             self.updater.check()
             self.assertEqual(resolve.call_count, 3)
-        self.updater.deadline = time.monotonic() - 1
-        with self.assertRaises(TimeoutError):
-            self.updater.command(
-                [sys.executable, "-c", "raise AssertionError('must not run')"]
-            )
+        self.updater.deadline = time.monotonic() - 1  # not an execution cap
+        self.assertEqual(self.updater.command(
+            [sys.executable, "-c", "import time; time.sleep(.1); print('complete')"]
+        ).splitlines(), ["complete"])
 
+    def test_generation_cleanup_removes_readonly_git_objects_but_not_locked_files(self):
+        self.check()
+        generation = self.root / "generations" / "retired"
+        generation.mkdir()
+        atomic(generation / "ownership.json", {"schema": "mindie-runtime-generation/2", "revision": "retired"})
+        artifact = generation / "git-object"
+        artifact.write_bytes(b"owned readonly artifact")
+        artifact.chmod(stat.S_IREAD)
+        original_unlink = os.unlink
+
+        def windows_unlink(path, *args, **kwargs):
+            info = os.stat(path, dir_fd=kwargs.get("dir_fd"), follow_symlinks=False)
+            if not info.st_mode & stat.S_IWRITE:
+                error = PermissionError("read-only owned file")
+                error.winerror = 5
+                raise error
+            return original_unlink(path, *args, **kwargs)
+
+        with patch.object(auto_update.os, "unlink", side_effect=windows_unlink):
+            result = self.updater.collect_generations()
+        self.assertEqual(result["status"], "complete", result)
+        self.assertEqual(result["removed"], ["retired"])
+        self.assertFalse(generation.exists())
+
+        for code, mode in ((32, stat.S_IREAD), (5, stat.S_IREAD | stat.S_IWRITE)):
+            with self.subTest(winerror=code):
+                generation.mkdir()
+                atomic(generation / "ownership.json", {"schema": "mindie-runtime-generation/2", "revision": "retired"})
+                artifact.write_bytes(b"keep on actual access failure")
+                artifact.chmod(mode)
+                failure = PermissionError("owned file still in use or inaccessible")
+                failure.winerror = code
+                with patch.object(auto_update.shutil, "rmtree", side_effect=lambda path, *, onerror: onerror(os.unlink, str(artifact), (type(failure), failure, None))), \
+                     patch.object(auto_update.os, "chmod") as chmod:
+                    result = self.updater.collect_generations()
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["error_type"], "PermissionError")
+                self.assertEqual(artifact.read_bytes(), b"keep on actual access failure")
+                chmod.assert_not_called()
+                artifact.chmod(stat.S_IREAD | stat.S_IWRITE)
+                shutil.rmtree(generation)
+
+
+    def test_generation_cleanup_requires_state_and_matching_runtime_pointer(self):
+        first = self.check()
+        generation = Path(first["current"]["plugin"]).parent
+        saved = self.updater.state_path.read_bytes()
+        self.updater.state_path.unlink()
+        self.assertEqual(self.updater.collect_generations()["status"], "failed")
+        self.assertTrue(generation.exists())
+        self.updater.state_path.write_bytes(saved)
+        state = read(self.updater.state_path)
+        state["current"]["revision"] = "different"
+        atomic(self.updater.state_path, state)
+        self.assertEqual(self.updater.collect_generations()["status"], "failed")
+        self.assertTrue(generation.exists())
+
+    def test_generation_cleanup_retains_active_lease_and_bounds_inactive_storage(self):
+        from update_lock import file_lock
+        self.check()
+        generations = self.root / "generations"
+        live = generations / "leased"
+        for index in range(20):
+            name = "leased" if index == 0 else f"retired-{index}"
+            directory = generations / name
+            directory.mkdir()
+            atomic(directory / "ownership.json", {"schema": "mindie-runtime-generation/2", "revision": name})
+            (directory / "data").write_bytes(b"x" * 4096)
+        locks = self.root / "generation-locks"
+        with file_lock(locks / "leased.lock"):
+            receipt = self.updater.collect_generations()
+            self.assertEqual(len(receipt["removed"]), 19)
+            self.assertTrue(live.exists())
+            self.assertEqual(len(list(generations.iterdir())), 2)
+        receipt = self.updater.collect_generations()
+        self.assertEqual(receipt["removed"], ["leased"])
+        self.assertEqual(len(list(generations.iterdir())), 1)
+        self.assertFalse((locks / "leased.lock").exists())
+
+    def test_generation_cleanup_keeps_untracked_and_transaction_roots(self):
+        self.check()
+        untracked = self.root / "generations" / "untracked"
+        untracked.mkdir()
+        (untracked / "user-content").write_text("preserve")
+        receipt = self.updater.collect_generations()
+        self.assertEqual(receipt["status"], "untracked_retained")
+        self.assertTrue(untracked.exists())
+        atomic(self.root / "transaction.json", {"stage": "unresolved"})
+        self.assertEqual(self.updater.collect_generations()["reason"], "transaction_pending")
+
+    def test_cleanup_failure_is_visible_without_reverting_completed_install(self):
+        with patch.object(self.updater, "collect_generations", return_value={"status": "failed", "error_type": "PermissionError"}):
+            result = self.check()
+        self.assertEqual(result["status"], "installed")
+        self.assertEqual(result["retention"]["status"], "failed")
+        self.assertEqual(read(self.updater.state_path)["retention"], result["retention"])
+
+    def test_required_launcher_failure_reports_committed_partial_install(self):
+        candidate = self.updater.prepare(self.sha)
+        with patch.object(self.updater, 'publish_stable_launcher', side_effect=OSError('fixture write failure')):
+            result = self.updater.install(candidate)
+        self.assertEqual(result['status'], 'partial')
+        self.assertEqual(result['current']['revision'], self.sha)
+        self.assertTrue(result['launcher_error']['generation_committed'])
+        self.assertEqual(read(self.config)['runtime_scripts'], str(Path(candidate['plugin']) / 'scripts'))
+        self.assertFalse((self.root / 'transaction.json').exists())
+        self.updater._startup_current(recover=True)
+        self.assertNotIn('launcher_error', self.updater.state)
+        self.assertTrue((self.root / 'launcher.py').is_file())
 
     def test_committed_generation_publishes_stable_launcher(self):
         with patch("auto_update.schedule_enable") as schedule:
@@ -802,23 +1113,11 @@ class UpdateIdleTests(unittest.TestCase):
                 redactor_executable=str(Path(tmp) / "gitleaks"))), encoding="utf-8")
             self.assertTrue(service_handoff.stop(str(engine)))
 
-    def test_absent_stop_if_idle_fails_closed(self):
+    def test_retirement_failure_reaches_updater(self):
         import service_handoff
-
-        with tempfile.TemporaryDirectory() as tmp:
-            engine = Path(tmp) / "engine.json"
-            engine.write_text(json.dumps(dict(root=tmp, domain="test", capture_mode="public-transcript",
-                transcript_adapter=str(SCRIPTS / "codex_transcript.py"),
-                redactor_executable=str(Path(tmp) / "gitleaks"))), encoding="utf-8")
-            with (
-                patch(
-                    "service_handoff.connect",
-                    return_value=dict(url="http://127.0.0.1:9", token="t"),
-                ),
-                patch("service_handoff.rpc", return_value=dict(status="ok")),
-            ):
-                with self.assertRaises(RuntimeError):
-                    service_handoff.stop(str(engine))
+        with patch("service_handoff.retire_service", side_effect=OSError("receipt unavailable")):
+            with self.assertRaises(OSError):
+                service_handoff.stop("engine.json")
 
     # Authenticated acknowledgement and real lifetime release are exercised
     # by test_service_handoff; a canned sequence of TCP results cannot prove it.

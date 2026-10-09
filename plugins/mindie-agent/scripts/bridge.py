@@ -23,11 +23,6 @@ import sys
 import threading
 import time
 
-# Start the hook's deadline before loading its project modules. On a cold
-# Windows interpreter those imports are part of the native Stop
-# window just as much as helper dispatch and stdin parsing.
-_ENTRYPOINT_STARTED_AT = time.monotonic()
-
 from bounded_process import run
 from session_gate import (
     Inactive,
@@ -70,12 +65,9 @@ CONTRIBUTION_OPERATIONS = {
 }
 IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
 BATCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
-# The native watchdog also covers cold shell/interpreter startup. Actual
-# handoff work keeps its independent bound; input length cannot extend it.
-HOOK_BUDGET = 1.5
-WINDOWS_HOOK_BUDGET = 1.3
-# Skip quoted spans with byte searches; only quote-adjacent escapes need work.
-_HOOK_TOKEN = re.compile(rb'["{}\[\]]')
+# Includes JSON escaping of the native final-answer copy; only references
+# are forwarded. This byte cap bounds memory without imposing a run deadline.
+MAX_HOOK_BYTES = 32 * 1024 * 1024
 
 
 def _bounded_path(value, name):
@@ -86,23 +78,15 @@ def _bounded_path(value, name):
     return value
 
 
-def _read_hook_stdin(timeout):
-    """Deadline-bounded raw fd read; never buffered I/O (shutdown can hang).
+_HOOK_TOKEN = re.compile(rb'["{}\[\]]')
 
-    Frame one object/array incrementally, then decode it once. Braces in a
-    final-answer string are not completion candidates. Stops at EOF, the
-    deadline, or a complete frame so a held-open pipe does not use helper time.
-    Windows native select is sockets-only; a daemon os.read thread is the
-    portable bound. Returns the decoded JSON value; malformed input and read
-    failures are propagated to the envelope failure boundary.
-    """
-    remaining = timeout
-    if remaining <= 0:
-        raise TimeoutError("hook stdin deadline exceeded")
+
+def _read_hook_stdin():
+    """Frame one byte-bounded event; wait for the caller while it owns us."""
     buf = bytearray()
     finished = threading.Event()
-    result = []
     errors = []
+    owner = os.getppid()
 
     def reader():
         try:
@@ -112,9 +96,10 @@ def _read_hook_stdin(timeout):
             while True:
                 chunk = os.read(fd, 65536)
                 if not chunk:
-                    result.append(json.loads(buf))
                     return
                 buf.extend(chunk)
+                if len(buf) > MAX_HOOK_BYTES:
+                    raise ValueError('hook event exceeds its byte bound')
                 pos = int(escaped)
                 escaped = False
                 while pos < len(chunk):
@@ -144,30 +129,30 @@ def _read_hook_stdin(timeout):
                         else:
                             depth -= 1
                             if depth <= 0:
-                                result.append(json.loads(buf))
                                 return
-        except (OSError, ValueError, RecursionError) as exc:
+        except (OSError, ValueError) as exc:
             errors.append(exc)
         finally:
             finished.set()
 
     thread = threading.Thread(target=reader, daemon=True)
     thread.start()
-    finished.wait(timeout=max(0.0, remaining))
-    if not finished.is_set():
-        raise TimeoutError("hook stdin deadline exceeded")
+    while not finished.wait(0.1):
+        if os.name == 'posix' and os.getppid() != owner:
+            raise ConnectionError('native hook owner exited')
     if errors:
         raise errors[0]
-    return result[0]
+    return bytes(buf)
 
 
-def hook_event(event):
+def hook_event(raw):
     """Validate native identity and forward only the transcript reference.
 
     A valid transcript event is never rejected for a missing final summary:
     transcript_path alone is enough. The transcript itself is never opened
     here. The optional final-answer copy has no role in transcript capture.
     """
+    event = json.loads(raw)
     if not isinstance(event, dict) or event.get("hook_event_name") != "Stop":
         raise ValueError("unexpected hook event")
     for key in ("session_id", "turn_id"):
@@ -214,10 +199,10 @@ def bind(lease):
                     str(Path(runtime_scripts(config)) / "runtime_call.py"),
                 ],
                 json.dumps(payload),
-                timeout=15,
+                timeout=None,
                 env=generation_env(config_file),
                 allow_service=True,
-            )
+            ).checked_stdout()
         result = json.loads(output)
         if isinstance(result, dict) and result.get("isError") is not True:
             return "bound"
@@ -422,7 +407,6 @@ def _status_failure(state, stage, exc, config_file, selected=None):
 
 def offline_status():
     """Distinguish missing installation from unreadable or busy existing state."""
-    deadline = time.monotonic() + 5
     config_file = config_path()
     selected = None
     stage = "config_stat"
@@ -454,13 +438,10 @@ def offline_status():
                 _bounded_path(config["runtime_scripts"], "runtime_scripts")
             selected = config
             stage = "helper_run"
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError("status budget exhausted")
             output = run(
                 [config["python"], str(Path(runtime_scripts(config)) / "service_control.py"), "status"],
-                "", timeout=remaining, max_output=32768, env=generation_env(config_file),
-            )
+                "", timeout=None, max_output=32768, env=generation_env(config_file),
+            ).checked_stdout()
             stage = "helper_response"
             payload = json.loads(output)
             if not isinstance(payload, dict):
@@ -478,7 +459,6 @@ def offline_status():
 
 def _record_stop(stage, category, exc=None):
     """Local diagnostic only. No transcript, token, or exception text."""
-    print(f"MindIE Stop capture failed: stage={stage} category={category}.", file=sys.stderr)
     try:
         from diagnostic_support import failure
 
@@ -512,12 +492,17 @@ def _observe_stop(result):
 
 
 def stop():
-    budget = WINDOWS_HOOK_BUDGET if os.name == "nt" else HOOK_BUDGET
-    deadline = _ENTRYPOINT_STARTED_AT + budget
     try:
         settings = sharing.read()
-        # Cheap default-off before stdin: no helper, no lock, no lease DB.
-        if settings is None or sharing.consent_allows(settings) is False:
+        # Missing setup is an Agent diagnostic; an explicit disable is inert.
+        # Neither branch reads stdin, starts a helper or creates a capture row.
+        if settings is None:
+            disabled = sharing.status().get("state") == "disabled"
+            if not disabled:
+                _record_stop("configuration", "missing_configuration")
+            print("{}")
+            return 0 if disabled else 1
+        if not settings["enabled"] or sharing.consent_allows(settings) is False:
             print("{}")
             return 0
     except (OSError, ValueError) as exc:
@@ -525,9 +510,7 @@ def stop():
         print("{}")
         return 1
     try:
-        event = hook_event(
-            _read_hook_stdin(deadline - time.monotonic())
-        )
+        event = hook_event(_read_hook_stdin())
         # This host delivers no native thread identity to the hook process
         # (verified on codex-cli 0.153.4: the hook env carries CODEX_HOME
         # only). When a host does supply CODEX_THREAD_ID, a disagreement with
@@ -556,31 +539,20 @@ def stop():
         return 1
     failed = False
     try:
-        # Remaining helper time under the same whole-hook deadline.
-        remaining = deadline - time.monotonic()
-        result = None
-        if remaining > 0:
-            event["budget_seconds"] = remaining
-            result = Sessions(op_timeout=remaining)._op(
-                "stop_capture", {"event": event, "session": event["session_id"]}
-            )
-            failed = not _observe_stop(result)
-        else:
-            _record_stop("budget", "budget_exhausted")
-            failed = True
+        result = Sessions()._op(
+            "stop_capture", {"event": event, "session": event["session_id"]}
+        )
+        failed = not _observe_stop(result)
     except Inactive as exc:
-        message = str(exc)
-        if message not in {"session is not manually activated", "ValueError: session is not manually activated"}:
-            category = "timeout" if "TimeoutError" in message else "unavailable"
-            _record_stop("helper", category, exc)
-            failed = True
+        _record_stop("helper", "unavailable", exc)
+        failed = True
     except Exception as exc:
         # The hook never propagates a failure into the original task.
         _record_stop("helper", "unavailable", exc)
         failed = True
     print("{}")
-    # The installed wrapper always returns {} / exit 0 to the host and emits
-    # a static warning on this nonzero child result, even if diagnostics failed.
+    # The wrapper returns the neutral hook response; internal failures remain
+    # in the local machine diagnostic channel for a natural capability call.
     return 1 if failed else 0
 
 
@@ -637,10 +609,10 @@ def contribution(operation, batch_id):
                 batch_id,
             ],
             "",
-            timeout=130,
+            timeout=None,
             max_output=65536,
             env=generation_env(config_file),
-        )
+        ).checked_stdout()
     result = json.loads(output)
     if not isinstance(result, dict):
         raise ValueError("contribution helper returned no result object")
@@ -706,10 +678,10 @@ def configure(argv):
                 *argv,
             ],
             "",
-            timeout=30,
+            timeout=None,
             max_output=65536,
             env=generation_env(config_file),
-        )
+        ).checked_stdout()
     result = json.loads(output)
     if not isinstance(result, dict):
         raise ValueError("configuration helper returned no result object")
@@ -721,18 +693,21 @@ def _refresh_capture(result):
     session = os.environ.get("CODEX_THREAD_ID")
     if session:
         try:
-            lease = Sessions().check(session)
+            lease = Sessions().active_lease(session)
         except (Inactive, ValueError) as exc:
-            if str(exc) not in {"session is not manually activated", "ValueError: session is not manually activated"}:
-                result["status"] = "degraded"
-                result["activation"] = dict(status="unavailable", error=str(exc)[:240])
+            result["configuration_status"] = result["status"]
+            result["status"] = "degraded"
+            result["activation"] = dict(status="unavailable", error=str(exc)[:240])
         else:
+            if lease is None:
+                return result
             result["activation"] = _prepare_capture(dict(
                 status="active", mindie_session_id=lease["session"],
                 mindie_activation=lease["token"], activated_at=lease["activated_at"],
                 project_root=lease["project_root"],
             ))
             if result["activation"].get("status") == "degraded":
+                result["configuration_status"] = result["status"]
                 result["status"] = "degraded"
     return result
 
@@ -825,11 +800,11 @@ def reporting_operation(operation):
             output = run(
                 [python, "-m", "mindie_diagnostics.cli", "reporting", "status"],
                 "",
-                timeout=3,
+                timeout=None,
                 max_output=65536,
                 allowed_returncodes=(0, 1),
                 env=generation_env(config_file),
-            )
+            ).checked_stdout()
             _print_reporting_json(output, "helper_response")
         except SystemExit:
             raise
@@ -862,18 +837,17 @@ def reporting_operation(operation):
                     str(Path(scripts)),
                 ],
                 "",
-                timeout=3,
+                timeout=None,
                 max_output=65536,
                 allowed_returncodes=(0, 1),
                 env=generation_env(config_file),
-            )
+            ).checked_stdout()
             _print_reporting_json(output, "helper_response")
         except SystemExit:
             raise
         except Exception as exc:
             _reporting_unavailable(stage, exc)
         return
-    timeout = 60 if verb == "ensure" else 5
     stage = "config_read"
     try:
         # Preparing or maintaining the reporter requires the saved reporting
@@ -899,11 +873,11 @@ def reporting_operation(operation):
         output = run(
             [python, "-m", "mindie_diagnostics.cli", "reporting", verb],
             "",
-            timeout=timeout,
+            timeout=None,
             max_output=65536,
             allowed_returncodes=(0, 1),
             env=generation_env(config_file),
-        )
+        ).checked_stdout()
         _print_reporting_json(output, "helper_response")
     except SystemExit:
         raise
@@ -1006,7 +980,11 @@ def main():
         raise SystemExit(stop())
     if operation.startswith("sharing-"):
         try:
-            print(json.dumps(sharing_operation(operation)))
+            result = sharing_operation(operation)
+            print(json.dumps(result))
+            if (result.get("status") in {"degraded", "failed", "unavailable", "error"}
+                    or result.get("state") in {"malformed", "unavailable"}):
+                raise SystemExit(1)
         except Exception as exc:
             print(
                 f"MindIE sharing operation failed: {type(exc).__name__}: {exc}",
@@ -1033,10 +1011,10 @@ def main():
                 run(
                     control,
                     "",
-                    timeout=5,
+                    timeout=None,
                     max_output=32768,
                     env=generation_env(config_file),
-                ),
+                ).checked_stdout(),
                 end="",
             )
     except Exception as exc:

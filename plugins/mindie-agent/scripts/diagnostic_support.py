@@ -88,16 +88,8 @@ def build_metadata():
 
 
 def _warn():
-    global _warned
-    if _warned:
-        return
-    _warned = True
-    try:
-        descriptor = sys.stderr.fileno()
-        if not os.get_blocking(descriptor):
-            os.write(descriptor, (_STORAGE + "\n").encode("ascii"))
-    except Exception:
-        pass
+    # Background observability never writes instructions into the user task.
+    pass
 
 
 def _record():
@@ -135,10 +127,20 @@ def failure(operation, stage, category, *, exception=None, revision=None,
         incident = _hex(raw.get("incident_id"), 32)
         if incident:
             result["incident_id"] = incident
+        try:
+            from agent_diagnostics import enqueue
+            enqueue(COMPONENT, operation, stage, category, result)
+        except Exception:
+            result['delivery_failed'] = True
         return result
     except Exception:
-        _warn()
-        return {"logging_failed": True}
+        result = {"logging_failed": True}
+        try:
+            from agent_diagnostics import enqueue
+            enqueue(COMPONENT, operation, stage, category, result)
+        except Exception:
+            result['delivery_failed'] = True
+        return result
 
 
 def _ref(diagnostic):
@@ -176,16 +178,36 @@ def attach(result, diagnostic):
     if projected is None:
         return result
     result = dict(result, diagnostic=projected)
-    incident = projected.get("incident_id")
-    command = shlex.join([sys.executable, str(Path(__file__).with_name("bridge.py")), "reporting-status"])
-    text = (f"MindIE incident {incident}; read-only local status: {command}. Upload remains a separate opt-in."
-            if incident else _STORAGE)
-    content = result.get("content")
-    if isinstance(content, list):
-        result["content"] = [*content, {"type": "text", "text": text}]
-    elif "content" not in result:
-        result["content"] = [{"type": "text", "text": text}]
     return result
+
+
+def attach_pending(result):
+    """Attach machine diagnostics to one naturally occurring capability call."""
+    if not isinstance(result, dict):
+        return result
+    try:
+        from agent_diagnostics import pending
+        projection = pending()
+    except Exception:
+        projection = dict(items=[dict(code='diagnostic_delivery_unavailable')], remaining=None)
+    if projection is None:
+        return result
+    existing = result.get('structuredContent')
+    if existing is not None and not isinstance(existing, dict):
+        return result  # Keep the pending incident; do not mask a malformed result.
+    structured = dict(existing or {})
+    structured['agent_diagnostics'] = projection
+    return dict(result, structuredContent=structured)
+
+
+def acknowledge_pending(result):
+    try:
+        from agent_diagnostics import acknowledge
+        acknowledge((result.get('structuredContent') or {}).get('agent_diagnostics'))
+    except Exception:
+        # A failed acknowledgment remains pending; the business result has
+        # already been written and must never be replayed to repair it.
+        pass
 
 
 def reporting_config_path():

@@ -9,29 +9,35 @@ bound task and a checked lease.
 """
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 import hashlib
 import json
 import os
 from pathlib import Path
 import sys
 import sqlite3
+import stat
 import time
 import threading
 import uuid
+import weakref
 
-from bounded_process import run
+from bounded_process import run, ProcessResult
 from diagnostic_support import attach as attach_diagnostic
 from diagnostic_support import failure as diagnostic_failure
 from session_gate import IDENTITY, Sessions, config_path, generation_env, runtime_scripts
-from update_lock import update_lock
+from update_lock import update_lock, file_lock
+from receipt_layout import prepare_layout
+import receipt_layout
 
-KNOWLEDGE_TIMEOUT = 15
-REMOTE_TIMEOUT = 65
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
 KNOWLEDGE_MAX_OUTPUT = 1024 * 1024
 CATALOG = Path(__file__).with_name("mcp_catalog.json")
-
-REMOTE_MAX_FAILURES = 3
+RECEIPT_SCHEMA = {
+    "authority": ("table", "authority", "CREATE TABLE authority(identity TEXT PRIMARY KEY, schema TEXT NOT NULL)"),
+    "attempts": ("table", "attempts", "CREATE TABLE attempts (identity TEXT PRIMARY KEY, started REAL NOT NULL, status TEXT NOT NULL, owner TEXT NOT NULL)"),
+    "attempts_running_owner": ("index", "attempts", "CREATE INDEX attempts_running_owner ON attempts(owner) WHERE status='running'"),
+}
 
 
 def failure(message):
@@ -51,7 +57,28 @@ def call_failure(exc):
             code="invalid_arguments", execution="not_started",
             automatic_retry=False, message=message,
         ))
-    return failure(f"{type(exc).__name__}: {str(exc)[:240]}. No automatic retry.")
+    result = failure(f"{type(exc).__name__}: {str(exc)[:240]}. No automatic retry.")
+    process = getattr(exc, "process_result", None)
+    if isinstance(process, ProcessResult):
+        result["process"] = dict(execution=process.execution, returncode=process.returncode,
+                                 cleanup=process.cleanup, automatic_retry=False)
+    return result
+
+
+def runtime_result(completed):
+    """A helper's valid business envelope survives its separate cleanup fault."""
+    if not isinstance(completed, ProcessResult) or completed.execution != "completed":
+        raise ValueError("runtime helper has no completed process result")
+    result = json.loads(completed.stdout)
+    if not isinstance(result, dict) or not isinstance(result.get("content"), list):
+        raise ValueError("Invalid MindIE runtime response")
+    if completed.cleanup:
+        result = dict(result, operation_outcome="failed" if result.get("isError") is True else "succeeded", isError=True, cleanup=dict(
+            status="failed", issues=completed.cleanup, operation_outcome="preserved",
+            automatic_retry=False))
+        result["content"].append(dict(type="text", text=
+            "Runtime operation result preserved; local process cleanup failed. Do not repeat the operation."))
+    return result
 
 
 def helper_failure(result, diagnostic, stage, category):
@@ -75,7 +102,7 @@ def remote_state_dir():
 
     Never the knowledge engine root. Static discovery does not create this;
     only an actual remote call may, and only for its own bounded receipt,
-    circuit and job-ownership bookkeeping.
+    and job-ownership bookkeeping.
     """
     override = os.environ.get("MINDIE_REMOTE_STATE_DIR")
     if override:
@@ -133,103 +160,138 @@ class RemoteReceipts:
     SQLite rejects corrupt state instead of reopening an empty replay ledger.
     Request keys remain on disk, never in an unbounded in-memory collection;
     there is no lifetime call ceiling or eviction that makes old keys reusable.
-    Repeated helper failures back off with a persisted, growing delay and
-    recover automatically — they never latch into a manual-recovery pause.
+    A failed operation never prevents a later independent diagnostic call.
+    Uncertain effects remain consumed receipts and cannot be replayed.
     """
 
-    BACKOFF_BASE = 60.0
-    BACKOFF_CAP = 3600.0
-
     def __init__(self, session):
-        self.path = remote_state_dir() / "gate" / (session + ".sqlite3")
+        # Selection and compatibility are checked under the initialization
+        # lock in _db; another process may be publishing the first layout.
+        self.path = remote_state_dir() / ('gate-v' + str(receipt_layout.FORMAT)) / (session + ".sqlite3")
+        self.owner = uuid.uuid4().hex
+        self._ownership = ExitStack()
+        self._owner_ready = False
+        weakref.finalize(self, self._ownership.close)
+
+    def _ensure_owner(self):
+        if not self._owner_ready:
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self._ownership.enter_context(file_lock(self.path.parent / (self.owner + ".owner.lock")))
+            self._owner_ready = True
+
+    def _owner_alive(self, owner):
+        if not isinstance(owner, str) or len(owner) != 32 or any(c not in "0123456789abcdef" for c in owner):
+            raise ValueError("remote receipt owner identity is invalid")
+        if owner == self.owner:
+            return self._owner_ready
+        try:
+            with file_lock(self.path.parent / (owner + ".owner.lock"), exclusive=True):
+                return False
+        except BlockingIOError:
+            return True
 
     def _db(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        db = sqlite3.connect(self.path, timeout=0.2)
+        db = None
         try:
-            os.chmod(self.path, 0o600)
-            db.execute("PRAGMA cache_size=-2048")
-            db.execute("CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY, failures INTEGER NOT NULL, paused INTEGER NOT NULL)")
-            db.execute("INSERT OR IGNORE INTO state(id, failures, paused) VALUES(1, 0, 0)")
-            columns = {row[1] for row in db.execute("PRAGMA table_info(state)")}
-            if "next_check" not in columns:
-                # The retired permanent pause becomes a bounded automatic backoff.
-                db.execute("ALTER TABLE state ADD COLUMN next_check REAL NOT NULL DEFAULT 0")
-                db.execute("UPDATE state SET paused=0 WHERE id=1")
-            db.execute("CREATE TABLE IF NOT EXISTS attempts (identity TEXT PRIMARY KEY, started REAL NOT NULL, status TEXT NOT NULL)")
-            db.commit()
+            with prepare_layout(remote_state_dir()) as directory:
+                if self.path.parent != directory:
+                    raise RuntimeError("remote receipt layout changed during admission")
+                db = self._open_db()
             return db
-        except BaseException:
-            # _db can fail while opening corrupt or incompatible state, before
-            # claim/finish/recover receive a handle they could close.
-            db.close()
+        except BaseException as error:
+            if db is not None:
+                try:
+                    db.close()
+                except Exception as cleanup:
+                    error.add_note('Receipt initialization cleanup also failed: ' + type(cleanup).__name__)
             raise
 
-    @classmethod
-    def _backoff(cls, failures):
-        return min(cls.BACKOFF_CAP, cls.BACKOFF_BASE * (2.0 ** min(max(0, failures - REMOTE_MAX_FAILURES), 6)))
+    def _open_db(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        marker = self.path.with_suffix(".authority.json")
+        with file_lock(self.path.with_suffix(".initialize.lock"), exclusive=True, blocking=True):
+            try:
+                metadata = marker.lstat()
+            except FileNotFoundError:
+                if os.path.lexists(self.path):
+                    raise RuntimeError("existing remote receipt database lacks its authority marker") from None
+                authority = dict(schema="mindie-remote-receipts/1", identity=uuid.uuid4().hex)
+                # First-use admission is durable before SQLite creation. A
+                # partial creation remains an error on the next call.
+                with marker.open("x", encoding="utf-8") as stream:
+                    os.chmod(marker, 0o600)
+                    json.dump(authority, stream)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                db = sqlite3.connect(self.path, timeout=0.2)
+                try:
+                    os.chmod(self.path, 0o600)
+                    with db:
+                        for _, _, definition in RECEIPT_SCHEMA.values():
+                            db.execute(definition)
+                        db.execute("INSERT INTO authority VALUES(?,?)", (authority["identity"], authority["schema"]))
+                finally:
+                    db.close()
+            else:
+                if not stat.S_ISREG(metadata.st_mode) or not 1 <= metadata.st_size <= 1024:
+                    raise ValueError("remote receipt authority marker is not a bounded regular file")
+                descriptor = os.open(marker, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+                with os.fdopen(descriptor, "rb") as stream:
+                    actual = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(actual.st_mode) or (actual.st_dev, actual.st_ino) != (metadata.st_dev, metadata.st_ino):
+                        raise ValueError("remote receipt authority marker changed during read")
+                    raw = stream.read(1025)
+                    if len(raw) > 1024:
+                        raise ValueError("remote receipt authority marker exceeds its bound")
+                    authority = json.loads(raw)
+            if (not isinstance(authority, dict) or authority.get("schema") != "mindie-remote-receipts/1"
+                    or not isinstance(authority.get("identity"), str) or len(authority["identity"]) != 32
+                    or any(c not in "0123456789abcdef" for c in authority["identity"])):
+                raise ValueError("remote receipt authority marker is invalid")
+            db = sqlite3.connect(self.path.absolute().as_uri() + "?mode=rw", uri=True, timeout=0.2)
+            try:
+                schema = {name: (kind, table, definition) for kind, name, table, definition in db.execute(
+                    "SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")}
+                if schema != RECEIPT_SCHEMA:
+                    raise ValueError("remote receipt schema or constraints are incomplete")
+                if db.execute("SELECT identity,schema FROM authority").fetchall() != [(authority["identity"], authority["schema"])]:
+                    raise ValueError("remote receipt authority identity differs")
+                db.execute("PRAGMA cache_size=-2048")
+                return db
+            except BaseException:
+                db.close()
+                raise
 
     def claim(self, identity):
         db = self._db()
         try:
+            self._ensure_owner()
             with db:
                 db.execute("BEGIN IMMEDIATE")
-                # A killed gate leaves an uncertain, consumed receipt. It can
-                # contribute to the backoff but can never become dispatchable.
-                expired = db.execute("UPDATE attempts SET status='failed' WHERE status='running' AND started<?", (time.time() - REMOTE_TIMEOUT - 5,)).rowcount
-                if expired:
-                    db.execute("UPDATE state SET failures=failures+? WHERE id=1", (expired,))
-                failures, _, next_check = db.execute("SELECT failures, paused, next_check FROM state WHERE id=1").fetchone()
-                if failures >= REMOTE_MAX_FAILURES:
-                    now = time.time()
-                    if now < next_check:
-                        raise ValueError(
-                            "Remote calls are backing off after repeated helper "
-                            f"failures; they resume automatically in {int(next_check - now) + 1}s — "
-                            "no manual recovery or retry is needed"
-                        )
-                    # One bounded probe per backoff window.
-                    db.execute(
-                        "UPDATE state SET next_check=? WHERE id=1",
-                        (now + self._backoff(failures),),
-                    )
+                # Actual owner death leaves an uncertain consumed receipt.
+                # Elapsed time and earlier failures never reject new work.
+                for owner, in db.execute("SELECT DISTINCT owner FROM attempts WHERE status='running'").fetchall():
+                    if not self._owner_alive(owner):
+                        db.execute("UPDATE attempts SET status='unknown' WHERE status='running' AND owner=?", (owner,))
                 if db.execute("SELECT 1 FROM attempts WHERE identity=?", (identity,)).fetchone():
                     return False
                 if db.execute("SELECT count(*) FROM attempts WHERE status='running'").fetchone()[0] >= 4:
                     raise ValueError("Remote task concurrency limit reached; no automatic retry")
-                db.execute("INSERT INTO attempts VALUES(?, ?, 'running')", (identity, time.time()))
+                db.execute("INSERT INTO attempts(identity,started,status,owner) VALUES(?, ?, 'running', ?)", (identity, time.time(), self.owner))
                 return True
         finally:
             db.close()
 
-    def finish(self, identity, succeeded):
+    def finish(self, identity, outcome):
+        if outcome not in {"succeeded", "failed", "unknown"}:
+            raise ValueError("invalid remote operation outcome")
         db = self._db()
         try:
             with db:
-                db.execute("BEGIN IMMEDIATE")
-                db.execute("UPDATE attempts SET status=? WHERE identity=? AND status='running'", ("succeeded" if succeeded else "failed", identity))
-                if succeeded:
-                    db.execute("UPDATE state SET failures=0, paused=0, next_check=0 WHERE id=1")
-                else:
-                    row = db.execute("SELECT failures FROM state WHERE id=1").fetchone()
-                    count = (int(row[0]) if row else 0) + 1
-                    db.execute("UPDATE state SET failures=? WHERE id=1", (count,))
-                    if count >= REMOTE_MAX_FAILURES:
-                        # Growing persisted delay; never shortens an existing one.
-                        db.execute(
-                            "UPDATE state SET next_check=MAX(COALESCE(next_check, 0), ?) WHERE id=1",
-                            (time.time() + self._backoff(count),),
-                        )
-        finally:
-            db.close()
-
-    def recover(self):
-        db = self._db()
-        try:
-            with db:
-                # Explicit operator action releases the backoff early; it is
-                # never required — recovery is automatic.
-                db.execute("UPDATE state SET failures=0, paused=0, next_check=0 WHERE id=1")
+                changed = db.execute("UPDATE attempts SET status=? WHERE identity=? AND status='running' AND owner=?",
+                                     (outcome, identity, self.owner))
+                if changed.rowcount != 1:
+                    raise ValueError("remote outcome receipt no longer belongs to this owner")
         finally:
             db.close()
 
@@ -250,16 +312,16 @@ class Gate:
         self.sessions = Sessions() if surface == "knowledge" else None
         self.tools = json.loads(CATALOG.read_text(encoding='utf-8'))[surface]
         self.connection_id = uuid.uuid4().hex
+        self._remote_receipts = {}
 
     def call(self, request, cancel=None, *, timeout=None, cli_identity=None):
         if self.surface == "remote":
             # General remote path: no MindIE activation, lease, knowledge
             # service or capture state is consulted or created.
             return self._remote_call(request, cancel, timeout, cli_identity)
-        # Inactive discovery/calls must not create any local state.
-        # Domain CLI reuses this path: missing config, missing lease, and the
-        # bounded runtime all fail closed. There is no ungated development
-        # bypass around claim/finish or the 65s remote budget.
+        # Discovery does not create capture state. The native or trusted CLI
+        # boundary verifies task identity; ordinary reads need no capture lease.
+        # Runtime failures remain visible without an implicit execution TTL.
         try:
             if not config_path().is_file():
                 raise ValueError(
@@ -267,14 +329,11 @@ class Gate:
                 )
             if cli_identity is None:
                 session = native_identity(request)
-                # Exactly this native task's lease; identity never comes from
-                # arguments, and never from the most recently active lease.
-                self.sessions.check(session)
+                # Identity never comes from arguments or another task's lease.
             else:
                 # Domain CLI path: no host metadata exists outside MCP, so the
-                # explicit env-supplied activation is checked directly.
+                # explicit environment-supplied identity is checked directly.
                 session, token = cli_identity
-                self.sessions.check(session, token)
             with update_lock(self.sessions.config):
                 return self._call(request, session, cancel, timeout=timeout)
         except Exception as exc:
@@ -305,11 +364,12 @@ class Gate:
 
     def _remote_call(self, request, cancel, timeout, cli_identity):
         admitted = False
-        succeeded = False
+        outcome = "unknown"
         receipts = None
         stage = "admission"
         started = time.monotonic()
         name = None
+        result = None
         try:
             if cli_identity is None:
                 session = native_identity(request)
@@ -321,7 +381,10 @@ class Gate:
                 if not isinstance(session, str) or not IDENTITY.fullmatch(session):
                     raise ValueError("Valid native task identity required")
             name, args = self._tool_args(request)
-            receipts = RemoteReceipts(session)
+            receipts = self._remote_receipts.get(session)
+            if receipts is None:
+                receipts = RemoteReceipts(session)
+                self._remote_receipts[session] = receipts
             if cli_identity is None:
                 turn = request["params"]["_meta"]["x-codex-turn-metadata"].get("turn_id")
                 if not isinstance(turn, str) or not IDENTITY.fullmatch(turn):
@@ -348,9 +411,7 @@ class Gate:
                 arguments=args,
                 remote_session_id=session,
             )
-            bound = REMOTE_TIMEOUT
-            if timeout is not None:
-                bound = min(max(0.01, float(timeout)), bound)
+            bound = timeout
             with update_lock(config_path()):
                 config = _adapter_config()
                 stage = "helper_run"
@@ -365,12 +426,13 @@ class Gate:
                     env=generation_env(config_path()),
                 )
             stage = "helper_response"
-            result = json.loads(output)
-            if not isinstance(result, dict) or not isinstance(
-                result.get("content"), list
-            ):
-                raise ValueError("Invalid MindIE runtime response")
-            succeeded = result.get("isError") is not True
+            result = runtime_result(output)
+            details = result.get("structuredContent")
+            error_details = details.get("error_details") if isinstance(details, dict) else None
+            uncertain = isinstance(details, dict) and (
+                details.get("status") == "submission_uncertain"
+                or isinstance(error_details, dict) and error_details.get("submission_state") == "uncertain")
+            outcome = "unknown" if uncertain else result.get("operation_outcome") or ("failed" if result.get("isError") is True else "succeeded")
             return result
         except Exception as exc:
             # No traceback, credentials, model wakeup, reconnect loop or replay.
@@ -396,9 +458,14 @@ class Gate:
         finally:
             if admitted and receipts is not None:
                 try:
-                    receipts.finish(identity, succeeded)
-                except Exception:
-                    pass
+                    receipts.finish(identity, outcome)
+                except Exception as accounting_error:
+                    if isinstance(result, dict):
+                        result["accounting"] = dict(status="failed", error_type=type(accounting_error).__name__,
+                                                    operation_outcome="preserved", automatic_retry=False)
+                        result["isError"] = True
+                        result["content"].append(dict(type="text", text=
+                            "Remote result preserved; local outcome accounting failed. Do not repeat the operation."))
 
     def _call(self, request, session, cancel=None, timeout=None):
         token = None
@@ -407,25 +474,15 @@ class Gate:
         name = None
         try:
             name, args = self._tool_args(request)
-            lease = self.sessions.check(session)
-            token = lease["token"]
-            if not self.sessions.claim(
-                session, "mcp", self.connection_id + ":" + self._request_identity(request), token
-            ):
-                raise ValueError("Duplicate MCP request; not executed again")
             config = json.loads(self.sessions.config.read_text(encoding='utf-8'))
             payload = dict(
                 surface=self.surface,
                 name=name,
                 arguments=args,
                 mindie_session_id=session,
-                mindie_activation=token,
+                native_session_verified=True,
             )
-            bound = (
-                KNOWLEDGE_TIMEOUT if self.surface == "knowledge" else REMOTE_TIMEOUT
-            )
-            if timeout is not None:
-                bound = min(max(0.01, float(timeout)), bound)
+            bound = timeout
             try:
                 # Exactly one committed generation: the recorded interpreter
                 # plus the recorded scripts directory, read in one config load
@@ -446,7 +503,7 @@ class Gate:
             except Exception as exc:
                 # A timeout or refused connection is availability, not a
                 # paused grant. Protocol and configuration failures still count.
-                if not (
+                if token is not None and not (
                     isinstance(exc, (TimeoutError, ConnectionError))
                     or type(exc).__name__ in {"URLError", "TimeoutExpired"}
                 ):
@@ -456,11 +513,7 @@ class Gate:
                         pass
                 raise
             stage = "helper_response"
-            result = json.loads(output)
-            if not isinstance(result, dict) or not isinstance(
-                result.get("content"), list
-            ):
-                raise ValueError("Invalid MindIE runtime response")
+            result = runtime_result(output)
             return result
         except Exception as exc:
             # No traceback, credentials, model wakeup, reconnect loop or replay.
@@ -488,7 +541,7 @@ class Gate:
 def serve(surface):
     gate = Gate(surface)
     output_lock, pending_lock = threading.Lock(), threading.Lock()
-    pending, seen = {}, set()
+    pending = {}
     capacity = threading.BoundedSemaphore(4)
     executor = ThreadPoolExecutor(max_workers=4)
 
@@ -502,7 +555,10 @@ def serve(surface):
 
     def execute(message, cancel):
         try:
-            respond(message["id"], gate.call(message, cancel))
+            from diagnostic_support import attach_pending, acknowledge_pending
+            result = attach_pending(gate.call(message, cancel))
+            respond(message["id"], result)
+            acknowledge_pending(result)
         finally:
             with pending_lock:
                 pending.pop(message["id"], None)
@@ -548,7 +604,7 @@ def serve(surface):
                 elif method == "tools/call":
                     with pending_lock:
                         if (
-                            (identifier in seen if surface != "remote" else identifier in pending)
+                            identifier in pending
                             or not capacity.acquire(blocking=False)
                         ):
                             respond(
@@ -558,8 +614,6 @@ def serve(surface):
                                 ),
                             )
                             continue
-                        if surface != "remote":
-                            seen.add(identifier)
                         event = threading.Event()
                         pending[identifier] = event
                     executor.submit(execute, message, event)

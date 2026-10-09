@@ -111,15 +111,19 @@ def operation(name, payload):
     if name == "check":
         lease = store.check(checked_session(payload), checked_token(payload))
         return dict(lease)
+    if name == "active_lease":
+        # None is normal absence or explicit revocation. A damaged required
+        # authority raises instead; do not infer this distinction from text.
+        lease = store.active_lease(checked_session(payload))
+        return dict(lease) if lease is not None else None
     if name == "resolve":
         token = checked_token(payload)
         if token is None:
-            raise ValueError("Manual MindIE session activation required")
+            raise ValueError("MindIE operation requires its internal task-binding token")
         lease = store.resolve(token)
         if lease is None:
             raise ValueError(
-                "MindIE activation does not match an active lease; "
-                "do not activate automatically"
+                "MindIE task-binding token does not match an active lease"
             )
         return dict(lease)
     if name == "claim":
@@ -149,40 +153,35 @@ def operation(name, payload):
         session = event.get("session_id")
         if not isinstance(session, str) or not IDENTITY.fullmatch(session):
             raise ValueError("Valid MindIE session identity required")
+        import sharing
+        settings = sharing.read()
+        if settings is None:
+            if sharing.status().get("state") == "disabled":
+                return dict(stage="inert", reason="sharing-disabled")
+            return dict(stage="unavailable", reason="missing-configuration")
+        if not settings['enabled'] or sharing.consent_allows(settings) is False:
+            return dict(stage="inert", reason="sharing-disabled")
+        import codex_transcript
+        source = codex_transcript.capture_source(event.get('transcript_path'), session)
+        candidate = dict(project_root=source['project_root'], root_session=session,
+                         activated_at=max(settings['enabled_at'], source['created_at']))
+        if not sharing.capture_allowed(candidate, None):
+            return dict(stage="inert", reason="out-of-scope")
         inspected = store.inspect(session)
         if inspected.get("status") == "unavailable":
             return dict(
                 stage="unavailable", reason="admission-unreadable",
                 cause="admission-unreadable",
             )
-        try:
-            lease = store.check(session)
-        except ValueError:
-            return dict(stage="inert", reason="not-activated")
-        import sharing
-
-        if not sharing.capture_allowed(lease, event.get("cwd")):
-            return dict(stage="inert", reason="sharing-disabled")
+        if inspected.get('status') == 'inactive':
+            return dict(stage='inert', reason='task-revoked')
+        lease = store.associate(session, project_root=source['project_root'],
+                                not_before=candidate['activated_at'])
         turn = event.get("turn_id")
         if not isinstance(turn, str) or not IDENTITY.fullmatch(turn):
             raise ValueError("invalid hook identity")
-        transcript = event.get("transcript_path")
-        if isinstance(transcript, str):
-            # The hook process receives no native thread identity from this
-            # host, so the forwarded transcript artifact itself is the binding
-            # evidence: a positive mismatch between the event's session and
-            # the transcript owner is never captured. A missing/unreadable or
-            # unrecognizable transcript is reported by the worker's parser;
-            # it cannot be replaced by a successful summary-only capture.
-            import codex_transcript
-
-            probe = codex_transcript.read_material(
-                transcript, 0, session_id=session,
-                max_scan_bytes=1024, max_seconds=1.0, max_text_bytes=16384,
-            )
-            if probe.get("session_match") is False:
-                return dict(stage="rejected", reason="wrong-task")
-        forwarded = dict(event, mindie_activation=lease["token"], harness="codex")
+        forwarded = dict(event, transcript_path=source['transcript_path'],
+                         mindie_activation=lease["token"], harness="codex")
         from mindie_knowledge.loop.cli import capture_hook
 
         result = capture_hook(config["engine_config"], forwarded)

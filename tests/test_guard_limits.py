@@ -20,6 +20,60 @@ spec.loader.exec_module(guard)
 
 
 class GuardLimitTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'posix', 'POSIX owner disappearance')
+    def test_owner_exit_reaps_a_quiet_native_without_an_elapsed_deadline(self):
+        self._owner_exit_case(close_pipes=False)
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX owner disappearance after EOF')
+    def test_owner_exit_remains_observable_after_native_output_eof(self):
+        self._owner_exit_case(close_pipes=True)
+
+    def _owner_exit_case(self, *, close_pipes):
+        with tempfile.TemporaryDirectory() as directory:
+            ready, survived = Path(directory) / 'ready', Path(directory) / 'survived'
+            prefix = 'import os; os.close(1); os.close(2); ' if close_pipes else ''
+            native = (prefix + f"from pathlib import Path; import time; Path({str(ready)!r}).touch(); "
+                      f"time.sleep(1); Path({str(survived)!r}).touch(); time.sleep(20)")
+            worker = (f"import sys; sys.path.insert(0,{str(SCRIPTS)!r}); import process_guard; "
+                      f"process_guard.run_codex([sys.executable,'-c',{native!r}], '')")
+            owner = ("import os,sys,subprocess,time; "
+                     "env=dict(os.environ,MINDIE_MAINTENANCE_GROUP='1',MINDIE_MAINTENANCE_OWNER=str(os.getpid())); "
+                     f"p=subprocess.Popen([sys.executable,'-c',{worker!r}],env=env,start_new_session=True); "
+                     "print(p.pid,flush=True); time.sleep(20)")
+            process = subprocess.Popen([sys.executable, '-c', owner], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            worker_pid = int(process.stdout.readline())
+            try:
+                until = time.monotonic()+3
+                while not ready.exists() and time.monotonic() < until:
+                    time.sleep(.02)
+                self.assertTrue(ready.exists())
+                process.kill()
+                process.wait(timeout=2)
+                time.sleep(1.2)
+                self.assertFalse(survived.exists(), 'native outlived its owner')
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate(timeout=2)
+                try:
+                    os.killpg(worker_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+    def test_native_eof_waits_for_real_exit_beyond_old_cleanup_duration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            done = Path(directory) / 'done'
+            result = guard.run_codex([sys.executable, '-c',
+                'import os,sys,time; from pathlib import Path; os.close(1); os.close(2); '
+                'time.sleep(2.2); Path(sys.argv[1]).write_text("done")', str(done)], '')
+            self.assertIsNone(result)
+            self.assertEqual(done.read_text(), 'done')
+
+    def test_explicit_deadline_remains_live_after_native_eof(self):
+        with self.assertRaises(TimeoutError):
+            guard.run_codex([sys.executable, '-c',
+                'import os,time; os.close(1); os.close(2); time.sleep(30)'], '', timeout=.3)
+
     @unittest.skipUnless(os.name == 'posix', 'POSIX inherited group contract')
     def test_inherited_grandchild_pipe_cannot_hold_worker_deadline(self):
         # Real processes and inherited pipes. The outer service owns cleanup;
@@ -27,9 +81,8 @@ class GuardLimitTests(unittest.TestCase):
         script = f'''import sys,os,subprocess
 sys.path.insert(0,{str(SCRIPTS)!r})
 import process_guard
-process_guard.TIMEOUT=0.2
 try:
- process_guard.run_codex([sys.executable,'-c',"import subprocess,sys,time; subprocess.Popen([sys.executable,'-c','import time; time.sleep(20)']); time.sleep(20)"], '')
+ process_guard.run_codex([sys.executable,'-c',"import subprocess,sys,time; subprocess.Popen([sys.executable,'-c','import time; time.sleep(20)']); time.sleep(20)"], '', timeout=0.2)
 except TimeoutError:
  print('bounded timeout',flush=True)
 '''
@@ -64,8 +117,8 @@ except TimeoutError:
                 "time.sleep(20)\n"
             )
             start = time.monotonic()
-            with patch.object(guard, "TIMEOUT", 0.2), self.assertRaises(TimeoutError):
-                guard.run_codex([sys.executable, "-c", parent], "")
+            with self.assertRaises(TimeoutError):
+                guard.run_codex([sys.executable, "-c", parent], "", timeout=0.2)
             self.assertLess(time.monotonic() - start, 3)
             time.sleep(1)
             self.assertFalse(marker.exists(), "owned grandchild outlived timeout cleanup")

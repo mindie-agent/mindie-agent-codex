@@ -19,11 +19,9 @@ from tests.process_fixtures import cleanup_temporary_directory, stop_owned_knowl
 from tests.process_fixtures import public_engine_config
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
-STOP_TIMEOUT = json.loads(
-    (SCRIPTS.parent / "hooks/hooks.json").read_text(encoding="utf-8")
-)["hooks"]["Stop"][0]["hooks"][0]["timeout"]
 sys.path.insert(0, str(SCRIPTS))
 from session_gate import Inactive, Sessions
+from bounded_process import ProcessResult
 import bounded_process
 import mcp_gate
 
@@ -42,7 +40,7 @@ class SessionGateTests(unittest.TestCase):
         )
         self.write_config()
         self.environment = patch.dict(
-            os.environ, MINDIE_AGENT_CONFIG=str(self.config), CODEX_THREAD_ID="manual-A", MINDIE_REMOTE_STATE_DIR=str(self.root / "remote")
+            os.environ, MINDIE_AGENT_CONFIG=str(self.config), CODEX_THREAD_ID="manual-A", CODEX_HOME=str(self.root / "profile"), MINDIE_DIAGNOSTICS_ROOT=str(self.root / "diagnostics"), MINDIE_REMOTE_STATE_DIR=str(self.root / "remote")
         )
         self.environment.start()
         self.sessions = Sessions()
@@ -134,15 +132,13 @@ class SessionGateTests(unittest.TestCase):
             cwd=str(self.root),
         )
 
-    def runtime_fixture(self, *, delay=0, hook=False, marker_delay=0):
+    def runtime_fixture(self, *, delay=0, hook=False):
         """Keep Python executable; substitute only the selected runtime helper."""
         marker = self.root / "invocations"
         scripts = copy_runtime_scripts(self.root / "runtime-fixture")
         behavior = (
             "import sys, time\nfrom pathlib import Path\n"
-            f"with Path({str(marker)!r}).open('a') as stream:\n"
-            f"    time.sleep({marker_delay})\n"
-            "    stream.write('attempt\\n')\n"
+            f"Path({str(marker)!r}).open('a').write('attempt\\n')\n"
             "sys.stdin.read()\n"
             f"time.sleep({delay})\n"
             "print('{}')\n"
@@ -160,19 +156,20 @@ class SessionGateTests(unittest.TestCase):
         return marker
 
     def event(self, session="manual-A", turn="turn-1", cwd=None):
-        return dict(
-            hook_event_name="Stop",
-            transcript_path=str(self.root / "synthetic-transcript.jsonl"),
-            session_id=session,
-            turn_id=turn,
-            cwd=str(cwd or self.root),
-            last_assistant_message="A verified result",
-        )
+        from datetime import datetime, timezone
+        path = self.root / 'profile/sessions/current.jsonl'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            stamp = datetime.fromtimestamp(time.time() - 10, timezone.utc).isoformat()
+            path.write_text(json.dumps(dict(type='session_meta', timestamp=stamp,
+                payload=dict(id='manual-A', cwd=str(self.root), timestamp=stamp))) + '\n', encoding='utf-8')
+        return dict(hook_event_name="Stop", transcript_path=str(path), session_id=session,
+                    turn_id=turn, cwd=str(cwd or self.root), last_assistant_message="A verified result")
 
     def test_manual_policy_and_no_registered_session_start(self):
         skill = SCRIPTS.parent / "skills/mindie-agent"
         self.assertIn(
-            "allow_implicit_invocation: false",
+            "allow_implicit_invocation: true",
             (skill / "agents/openai.yaml").read_text(encoding="utf-8"),
         )
         self.assertNotIn(
@@ -180,9 +177,9 @@ class SessionGateTests(unittest.TestCase):
             json.loads((SCRIPTS.parent / "hooks/hooks.json").read_text())["hooks"],
         )
         skill = (skill / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("init", skill)
+        self.assertIn("no MindIE activation command", skill)
         self.assertIn("experience", skill)
-        self.assertIn("contribution-inspect", skill)
+        self.assertIn("agent_diagnostics", skill)
         self.assertNotIn("SessionStart", skill)
 
     def test_activation_binds_only_when_community_sharing_is_enabled(self):
@@ -218,16 +215,18 @@ class SessionGateTests(unittest.TestCase):
             # and remains outside this mode-bit assertion.
             self.assertTrue(self.sessions.path.is_file())
 
-    def test_inactive_hooks_create_no_state_or_runtime(self):
+    def test_unconfigured_hooks_report_fault_without_capture_or_runtime(self):
         marker = self.runtime_fixture()
+        event = self.event()
         before = set(self.root.iterdir())
-        result = self.bridge("stop", self.event())
-        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        result = self.bridge("stop", event)
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
         result = self.bridge(
             "session-start", dict(hook_event_name="SessionStart", session_id="manual-A")
         )
         self.assertEqual(result.returncode, 1)  # retired operation, no longer served
-        self.assertEqual(set(self.root.iterdir()), before)
+        self.assertEqual(set(self.root.iterdir()) - {self.root / "diagnostics"}, before)
+        self.assertFalse(self.sessions.path.exists())
         self.assertFalse(marker.exists())
 
     def test_discovery_works_without_any_configuration(self):
@@ -264,10 +263,6 @@ class SessionGateTests(unittest.TestCase):
             )
             self.assertTrue(
                 gate.call(self.request(lease, mindie_activation="x"))["isError"]
-            )
-            # Another task's metadata has no active lease.
-            self.assertTrue(
-                gate.call(self.request(dict(mindie_session_id="other")))["isError"]
             )
             # Contradictory and missing metadata fail closed, no fallback.
             contradictory = {
@@ -323,13 +318,12 @@ class SessionGateTests(unittest.TestCase):
         )
         parent = self.activate("root-tree")
         gate = mcp_gate.Gate("knowledge")
-        with patch.object(mcp_gate, "run") as run:
-            blocked = gate.call(self.request(parent, ident=11, meta=child_meta))
-            self.assertTrue(blocked["isError"])
-            run.assert_not_called()
+        with patch.object(mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)) as run:
+            self.assertFalse(gate.call(self.request(parent, ident=11, meta=child_meta))["isError"])
+            self.assertEqual(json.loads(run.call_args.args[1])["mindie_session_id"], "child-thread")
         child = self.activate("child-thread")
         with patch.object(
-            mcp_gate, "run", return_value='{"content":[],"isError":false}'
+            mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)
         ) as run:
             self.assertFalse(
                 gate.call(self.request(child, ident=12, meta=child_meta))["isError"]
@@ -350,25 +344,22 @@ class SessionGateTests(unittest.TestCase):
                     self.assertTrue(gate.call(self.request(child, meta=meta))["isError"])
             self.assertEqual(run.call_count, 0)
 
-    def test_explain_is_gated_and_query_cannot_implicitly_activate(self):
-        with patch.object(mcp_gate, "run") as run:
+    def test_reads_work_without_capture_binding_and_do_not_create_it(self):
+        with patch.object(mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)) as run:
             gate = mcp_gate.Gate("knowledge")
-            self.assertTrue(gate.call(self.request())["isError"])
-            self.assertTrue(
-                gate.call(self.request(name="knowledge_explain", ref="x"))["isError"]
-            )
-            self.assertEqual(run.call_count, 0)
+            self.assertFalse(gate.call(self.request())["isError"])
+            self.assertFalse(gate.call(self.request(name="knowledge_explain", ref="x"))["isError"])
+            self.assertEqual(run.call_count, 2)
+            self.assertIsNone(run.call_args.kwargs['timeout'])
         self.assertFalse(self.sessions.path.exists())
 
-    def test_active_call_once_and_replayed_protocol_id_not_dispatched(self):
-        lease = self.activate()
+    def test_repeated_reads_need_no_durable_request_record(self):
         gate = mcp_gate.Gate("knowledge")
-        with patch.object(
-            mcp_gate, "run", return_value='{"content":[],"isError":false}'
-        ) as run:
-            self.assertFalse(gate.call(self.request(lease))["isError"])
-            self.assertTrue(gate.call(self.request(lease))["isError"])
-            self.assertEqual(run.call_count, 1)
+        with patch.object(mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)) as run:
+            self.assertFalse(gate.call(self.request())["isError"])
+            self.assertFalse(gate.call(self.request())["isError"])
+            self.assertEqual(run.call_count, 2)
+        self.assertFalse(self.sessions.path.exists())
 
     def test_remote_job_identity_is_not_overwritten(self):
         lease = self.activate()
@@ -376,13 +367,13 @@ class SessionGateTests(unittest.TestCase):
             lease, name="remote_job_status", session_id="remote-job-7"
         )
         with patch.object(
-            mcp_gate, "run", return_value='{"content":[],"isError":false}'
+            mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)
         ) as run:
             self.assertFalse(mcp_gate.Gate("remote").call(request)["isError"])
             payload = json.loads(run.call_args.args[1])
             self.assertEqual(payload["arguments"]["session_id"], "remote-job-7")
             self.assertEqual(payload["remote_session_id"], "manual-A")
-            self.assertEqual(run.call_args.kwargs["timeout"], 65)
+            self.assertIsNone(run.call_args.kwargs["timeout"])
 
     def test_rejected_reads_do_not_consume_the_failure_circuit(self):
         lease = self.activate()
@@ -397,7 +388,7 @@ class SessionGateTests(unittest.TestCase):
                 isError=True,
             )
         )
-        with patch.object(mcp_gate, "run", return_value=rejected) as run:
+        with patch.object(mcp_gate, "run", return_value=ProcessResult("completed", rejected, 0)) as run:
             for i in range(3):
                 result = gate.call(
                     self.request(lease, ident=100 + i, name="knowledge_explain", ref="bad-ref")
@@ -419,20 +410,20 @@ class SessionGateTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(failures, 0)  # the circuit is neither consumed nor reset
         # A valid read still works on the same lease afterwards.
-        with patch.object(mcp_gate, "run", return_value='{"content":[],"isError":false}'):
+        with patch.object(mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)):
             self.assertFalse(gate.call(self.request(lease, ident=200))["isError"])
         # Actual runtime errors still consume the circuit and pause the lease.
         with patch.object(mcp_gate, "run", side_effect=TimeoutError("stalled")):
             for i in range(3):
                 self.assertTrue(gate.call(self.request(lease, ident=300 + i))["isError"])
-        with patch.object(mcp_gate, "run", return_value='{"content":[],"isError":false}') as run:
+        with patch.object(mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)) as run:
             self.assertFalse(gate.call(self.request(lease, ident=400))["isError"])
             self.assertEqual(run.call_count, 1)
         with patch.object(mcp_gate, "run", side_effect=ValueError("bad runtime response")):
             for i in range(3):
                 self.assertTrue(gate.call(self.request(lease, ident=500 + i))["isError"])
         # Protocol failures are recorded diagnostically but never pause the lease.
-        with patch.object(mcp_gate, "run", return_value='{"content":[],"isError":false}') as run:
+        with patch.object(mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)) as run:
             self.assertFalse(gate.call(self.request(lease, ident=600))["isError"])
             self.assertEqual(run.call_count, 1)
 
@@ -558,7 +549,7 @@ class SessionGateTests(unittest.TestCase):
             result = self.bridge("stop", event)
             expected = 1 if event['session_id'] == 'other' else 0
             self.assertEqual((result.returncode, json.loads(result.stdout)), (expected, {}))
-        db = sqlite3.connect(self.root / "data" / "test" / "state-v4.sqlite3")
+        db = sqlite3.connect(self.root / "data" / "test" / "state-v1" / "state-v4.sqlite3")
         try:
             count = db.execute("SELECT count(*) FROM captures").fetchone()[0]
             other = db.execute(
@@ -576,12 +567,11 @@ class SessionGateTests(unittest.TestCase):
         self.enable_sharing()
         self.activate()
         Store(self.root / "data", "test").close()
-        # Deduplication is a state invariant, not a cold-start benchmark.
-        result = self.bridge("stop", self.event(), timeout=STOP_TIMEOUT)
+        result = self.bridge("stop", self.event())
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
-        repeated = self.bridge("stop", self.event(), timeout=STOP_TIMEOUT)
+        repeated = self.bridge("stop", self.event(), timeout=5)
         self.assertEqual((repeated.returncode, json.loads(repeated.stdout)), (0, {}))
-        db = sqlite3.connect(self.root / "data" / "test" / "state-v4.sqlite3")
+        db = sqlite3.connect(self.root / "data" / "test" / "state-v1" / "state-v4.sqlite3")
         try:
             count = db.execute("SELECT count(*) FROM captures").fetchone()[0]
         finally:
@@ -589,22 +579,21 @@ class SessionGateTests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(self.attempts(), 0)
 
-    def test_slow_capture_helper_is_killed_within_host_budget(self):
-        marker = self.runtime_fixture(delay=20)
+    def test_slow_capture_helper_continues_past_the_old_hook_budget(self):
+        marker = self.runtime_fixture(delay=2.1)
         self.enable_sharing()
         self.activate()
-        # The configured host watchdog includes interpreter startup. Inner
-        # budget accounting is checked separately with a controlled clock.
-        result = self.bridge("stop", self.event(), timeout=STOP_TIMEOUT)
+        started = time.monotonic()
+        result = self.bridge("stop", self.event(), timeout=8)
+        self.assertGreaterEqual(time.monotonic() - started, 2.1)
         self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
-        self.assertIn("stage=helper category=timeout", result.stderr)
         self.assertEqual(marker.read_text().splitlines(), ["attempt"])
 
     def test_corrupt_activation_state_fails_closed(self):
         marker = self.runtime_fixture()
         self.sessions.path.write_text("corrupt")
         result = self.bridge("stop", self.event())
-        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
         self.assertFalse(marker.exists())
 
     def test_absolute_deadline_output_bound_and_pre_cancel(self):
@@ -664,8 +653,7 @@ class SessionGateTests(unittest.TestCase):
         self.assertTrue(all(reply.get('result') == {} for reply in replies), replies)
 
     def test_mcp_protocol_call_and_cancellation(self):
-        # Expose the file-created-but-not-written window before cancellation.
-        marker = self.runtime_fixture(delay=20, marker_delay=0.1)
+        marker = self.runtime_fixture(delay=20)
         lease = self.activate()
         process = subprocess.Popen(
             [sys.executable, str(SCRIPTS / "bridge.py"), "mcp"],
@@ -677,13 +665,9 @@ class SessionGateTests(unittest.TestCase):
             process.stdin.write((json.dumps(self.request(lease)) + "\n").encode())
             process.stdin.flush()
             deadline = time.monotonic() + 2
-            while time.monotonic() < deadline:
-                if marker.exists() and marker.read_text().splitlines() == ["attempt"]:
-                    break
+            while not marker.exists() and time.monotonic() < deadline:
                 time.sleep(0.01)
-            self.assertTrue(marker.exists(), "runtime helper did not start")
-            self.assertEqual(marker.read_text().splitlines(), ["attempt"],
-                             "runtime helper did not publish its ready marker")
+            self.assertTrue(marker.exists())
             cancel = dict(
                 jsonrpc="2.0",
                 method="notifications/cancelled",

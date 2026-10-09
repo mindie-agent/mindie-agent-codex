@@ -29,9 +29,11 @@ Setup and updates install the LangMem summary worker. Its explicit policy is
 Each invocation reads complete new blocks and short prior task navigation, then
 returns one index per block and updated navigation. Blocks are at most 16 KiB;
 the serialized user prompt is at most 64 KiB with at most eight blocks. Native
-system/context tokens are additional and are counted in reported usage. The
-native invocation deadline is 90 seconds with a 100-second outer deadline.
-There is no final full-transcript merge or repeated old-body input.
+system/context tokens are additional and are counted in reported usage. Native
+execution and worker identity checks have no default wall-clock deadline. The
+owner can cancel them on service shutdown or revoked authority. Terminal output
+is saved before cleanup; a cleanup failure cannot erase it or authorize another
+paid call. There is no final full-transcript merge or repeated old-body input.
 
 The outcome ledger distinguishes returned, failed and unknown invocations and
 retains nullable native token usage. Returned outputs survive local scanner or

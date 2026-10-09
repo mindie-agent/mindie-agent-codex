@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
 sys.path.insert(0, str(SCRIPTS))
+from bounded_process import ProcessResult
 import bridge
 from session_gate import Sessions, Inactive
 
@@ -27,7 +28,7 @@ class FailureVisibilityTests(unittest.TestCase):
             path.write_text(json.dumps({'python': sys.executable, 'runtime_scripts': str(SCRIPTS),
                                         'engine_config': str(Path(directory) / 'engine.json')}))
             for output in ('', '[]', 'null'):
-                with self.subTest(output=output), patch.object(bridge, 'config_path', return_value=path), patch.object(bridge, 'run', return_value=output):
+                with self.subTest(output=output), patch.object(bridge, 'config_path', return_value=path), patch.object(bridge, 'run', return_value=ProcessResult("completed", output, 0)):
                     with self.assertRaises(ValueError):
                         bridge.configure([])
 
@@ -41,9 +42,10 @@ class FailureVisibilityTests(unittest.TestCase):
             self.assertFalse(path.with_suffix('.admission.sqlite3').exists())
 
     def test_refresh_reports_admission_fault(self):
-        with patch.dict('os.environ', {'CODEX_THREAD_ID': 'native-task'}), patch.object(Sessions, 'check', side_effect=Inactive('MindIE admission is unavailable: OSError')):
+        with patch.dict('os.environ', {'CODEX_THREAD_ID': 'native-task'}), patch.object(Sessions, 'active_lease', side_effect=Inactive('MindIE admission is unavailable: OSError')):
             result = bridge._refresh_capture({'status': 'configured'})
         self.assertEqual(result['status'], 'degraded')
+        self.assertEqual(result['configuration_status'], 'configured')
         self.assertEqual(result['activation']['status'], 'unavailable')
 
     def test_config_command_returns_failure_for_incomplete_activation(self):

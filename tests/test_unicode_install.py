@@ -13,6 +13,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
 class UnicodeInstallTests(unittest.TestCase):
     def test_setup_and_core_readback_with_unicode_paths(self):
         from mindie_knowledge.loop.cli import config_at
+        from tests.test_setup import run_setup
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "\u5de5\u4f5c\U00020000"
@@ -20,11 +21,10 @@ class UnicodeInstallTests(unittest.TestCase):
             config = root / "adapter.json"
             env = dict(os.environ, PYTHONUTF8="0", PYTHONIOENCODING="cp1252",
                        MINDIE_AGENT_CONFIG=str(config), MINDIE_KIMI_CONFIG=str(config))
-            command = [sys.executable, str(SCRIPTS / "setup.py"),
-                       "--knowledge-python", sys.executable, "--config", str(config),
-                       "--root", str(root / "runtime"), "--no-public-feed"]
-            # Setup is isolated by its explicit config and runtime root.
-            result = subprocess.run(command, env=env, capture_output=True, timeout=30)
+            # The same setup writes run under the legacy locale; publication
+            # verification is isolated as in other config-write tests.
+            result = run_setup(sys.executable, "--config", str(config),
+                               "--root", str(root / "runtime"), "--no-public-feed", env=env)
             self.assertEqual(result.returncode, 0, result.stderr)
             adapter = json.loads(config.read_bytes())
             engine = config_at(adapter["engine_config"])

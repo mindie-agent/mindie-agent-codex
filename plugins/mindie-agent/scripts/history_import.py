@@ -1,7 +1,7 @@
 """Manual historical contribution. Never imported by Stop or maintenance.
 
 Runs in the committed interpreter under the bridge's generation lock. The
-current native task must already have invoked MindIE. Saved contribution
+current native task is associated internally. Saved contribution
 consent is reused without changing any choice, scope, or other task's lease.
 """
 import argparse
@@ -31,13 +31,25 @@ def arguments(argv):
 
 def run_imports(sources, *, emit, retry_summary=False):
     # Check these BEFORE even importing the parser, opening a source, or
-    # creating a knowledge store. This operation never activates a session.
+    # creating a knowledge store. An explicit import is not a history scan or
+    # a change to the installation's contribution choice.
     config = read_config()
     authority = admission(config)
     session = native_session()
-    lease = authority.check(session)
     import sharing
-
+    settings = sharing.read()
+    inspected = authority.inspect(session)
+    if inspected.get('status') == 'active':
+        lease = authority.check(session)
+    elif inspected.get('status') == 'missing':
+        candidate = dict(project_root=str(Path.cwd().resolve()), root_session=session,
+                         activated_at=(settings or {}).get('enabled_at'))
+        if not sharing.capture_allowed(candidate, None):
+            raise ValueError('history import requires enabled contribution in this task scope')
+        lease = authority.associate(session, project_root=candidate['project_root'],
+                                    not_before=candidate['activated_at'])
+    else:
+        raise ValueError('current native task association is revoked or unavailable')
     if not sharing.capture_allowed(lease, None):
         raise ValueError('history import requires enabled contribution in this task scope')
     from mindie_knowledge.loop.cli import config_at, ensure_service, load_transcript_adapter
@@ -127,7 +139,7 @@ def main(argv=None):
     except Exception as exc:
         emit(dict(status='not-started', error=type(exc).__name__,
                   detail=str(exc) if isinstance(exc, ConfigurationError) else
-                  'Check current MindIE activation, saved contribution scope and runtime configuration.'))
+                  'Current native task, saved contribution scope or runtime configuration is unavailable.'))
         return 1
 
 

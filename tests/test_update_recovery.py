@@ -524,7 +524,8 @@ class LauncherTests(unittest.TestCase):
             "print(json.dumps({'argv': sys.argv[1:], 'cwd': os.getcwd()}))\n"
         )
         self.settings = self.base / "updater.json"
-        self.settings.write_text(json.dumps({"root": str(self.root)}) + "\n")
+        self.settings.write_text(json.dumps({"root": str(self.root), "adapter_config": str(self.base / "adapter.json")}) + "\n")
+        (self.plugin.parent / "ownership.json").write_text(json.dumps({"schema": "mindie-runtime-generation/2", "revision": "local"}))
         atomic_state = {
             "current": {"plugin": str(self.plugin), "revision": "local"},
         }
@@ -598,7 +599,7 @@ class LauncherTests(unittest.TestCase):
     def test_real_status_has_no_side_effects(self):
         for name in (
             "auto_update.py", "bounded_process.py", "windows_process.py",
-            "runtime_probe.py", "session_gate.py", "update_lock.py",
+            "product_contract.py", "session_gate.py", "update_lock.py",
         ):
             shutil.copy(SCRIPTS / name, self.plugin / "scripts" / name)
         self.settings.write_text(json.dumps({
@@ -624,7 +625,7 @@ class LauncherTests(unittest.TestCase):
         payload = json.loads(proc.stdout)
         self.assertEqual(payload["state"]["current"]["revision"], "local")
         self.assertEqual(state.read_bytes(), before)
-        self.assertEqual(sorted(path.name for path in self.root.iterdir()), names)
+        self.assertEqual(sorted(path.name for path in self.root.iterdir() if path.name != "generation-locks"), names)
         self.assertFalse((self.root / "launcher.next").exists())
 
 

@@ -127,7 +127,7 @@ class Inactive(ValueError):
 
 
 class Sessions:
-    def __init__(self, path=None, *, op_timeout=5.0):
+    def __init__(self, path=None, *, op_timeout=None):
         self.config = Path(path or config_path())
         self.op_timeout = op_timeout
 
@@ -172,7 +172,7 @@ class Sessions:
                     max_output=32768,
                     env=generation_env(self.config),
                     allow_service=operation == "stop_capture",
-                )
+                ).checked_stdout()
                 envelope = json.loads(output)
             except Inactive:
                 raise
@@ -207,6 +207,12 @@ class Sessions:
             raise Inactive("Valid MindIE session identity required")
         return self._op("check", {"session": session, "token": token})
 
+    def active_lease(self, session):
+        """Read an existing binding, or None; authority faults stay visible."""
+        if not isinstance(session, str) or not IDENTITY.fullmatch(session):
+            raise Inactive("Valid MindIE session identity required")
+        return self._op("active_lease", {"session": session})
+
     def resolve(self, token):
         """Resolve an activation token to its owning valid lease.
 
@@ -218,7 +224,7 @@ class Sessions:
         """
         if not isinstance(token, str) or not token:
             raise Inactive(
-                "Manual MindIE session activation required; continue without the plugin"
+                "MindIE operation requires its internal task-binding token"
             )
         return self._op("resolve", {"token": token})
 

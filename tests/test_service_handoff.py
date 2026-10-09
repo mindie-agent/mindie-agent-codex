@@ -20,7 +20,7 @@ def make_config(root):
 
 sys.path.insert(0, str(SCRIPTS))
 import service_handoff
-from mindie_knowledge.loop.cli import connection_path, rpc
+from mindie_knowledge.loop.cli import connection_path, rpc, connect
 from mindie_knowledge.loop.locks import StartLock, lock_held
 
 
@@ -45,7 +45,7 @@ class ServiceHandoffTests(unittest.TestCase):
                         # A lock probe briefly takes a free lock. Do not make
                         # the readiness observer compete with service startup.
                         try:
-                            connection = service_handoff.connect(config)
+                            connection = connect(config, config_path=engine_path)
                             status = rpc(connection, "status", timeout=.3)
                             if status.get("admission_frozen") is False:
                                 self.assertIs(lock_held(consumer), True)
@@ -56,27 +56,33 @@ class ServiceHandoffTests(unittest.TestCase):
                     else:
                         self.fail("service readiness deadline")
                     result = service_handoff.stop(engine_path)
-                    self.assertEqual(result, {"idle": True, "service": "stopped"})
+                    self.assertTrue(result["idle"])
+                    self.assertEqual(result["service"], "stopped")
+                    self.assertEqual(result["retirement"]["status"], "retired")
                     self.assertIs(lock_held(consumer), False)
                     self.assertEqual(process.wait(timeout=3), 0)
                     self.assertEqual(service_handoff.stop(engine_path)["service"], "absent")
+                    service_handoff.restore(engine_path, result["retirement"])
             finally:
                 for process in processes:
                     if process.poll() is None:
                         process.kill()
                         process.wait(timeout=3)
 
-    def test_idle_acknowledgement_does_not_prove_lock_release(self):
-        with tempfile.TemporaryDirectory() as temp:
-            adapter = make_config(Path(temp))
-            engine_path = json.loads(adapter.read_text())["engine_config"]
-            config = json.loads(Path(engine_path).read_text())
-            consumer = connection_path(config).with_name("consumer.lock")
-            connection = {"url": "http://127.0.0.1:1", "token": "test"}
-            with StartLock(consumer), patch.object(service_handoff, "connect", return_value=connection), patch.object(service_handoff, "rpc", return_value={"idle": True}):
-                with self.assertRaisesRegex(RuntimeError, "exit unconfirmed"):
-                    service_handoff.stop(engine_path)
-                self.assertIs(lock_held(consumer), True)
+    def test_retirement_delegates_without_reinterpreting_missing_endpoint(self):
+        with patch.object(service_handoff, "retire_service", side_effect=OSError("ownership unconfirmed")):
+            with self.assertRaisesRegex(OSError, "ownership unconfirmed"):
+                service_handoff.stop("engine.json")
+
+    def test_restore_without_old_listener_still_checks_existing_authorization(self):
+        with patch.object(service_handoff, "restore_service", return_value={"status": "not-needed"}), \
+             patch.object(service_handoff, "config_at", return_value={"admission_path": "admission.sqlite3"}), \
+             patch.object(service_handoff, "Admission") as admission, \
+             patch.object(service_handoff, "ensure_service", return_value={"url": "local"}) as ensure, \
+             patch.object(service_handoff, "rpc", return_value={"admission_frozen": False}):
+            admission.return_value.leases.return_value = [{"enabled": True}]
+            self.assertEqual(service_handoff.restore("new-engine.json")["status"], "restored")
+            ensure.assert_called_once_with("new-engine.json")
 
 
 if __name__ == "__main__":

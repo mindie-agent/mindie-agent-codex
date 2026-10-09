@@ -7,18 +7,19 @@ no service and lose that increment.
 
 The update transaction now confirms that the exact old loopback endpoint has
 exited, switches the native package and committed runtime tuple, and makes
-one bounded restoration attempt while retaining the exclusive operation lock.
+one restoration attempt while retaining the exclusive operation lock.
 Restoration uses the selected interpreter and engine configuration directly,
-never a shared-lock launcher. Core startup remains one spawn, five seconds,
-and three readiness probes; the returned service must be unfrozen.
+never a shared-lock launcher. Core startup remains one owned spawn with
+authenticated readiness and cancellation, without an execution deadline; a
+live process alone is not readiness, and the returned service must be unfrozen.
 
 Only a service stopped by this updater invocation is eligible for updater
 restoration. A service already absent before the update stays absent; revoked
 or explicitly unbound task leases do not authorize updater restoration. No task is
 activated, no transcript is replayed, and no model call belongs to the updater.
 
-The lifecycle repair candidate handles Stop separately: an activated task with
-contribution enabled first durably hands off its capture reference, then may
+Stop has its own automatic boundary: the current native task with approved
+contribution scope first durably hands off its capture reference, then may
 request one coalesced wake when the service is absent. Knowledge queries retain
 on-demand startup. Hook acceptance, a live worker, organized experience and a
 submitted PR are separate outcomes. This change requires new native acceptance;

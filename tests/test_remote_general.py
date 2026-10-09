@@ -13,6 +13,7 @@ from tests.process_fixtures import cleanup_temporary_directory
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
 sys.path.insert(0, str(SCRIPTS))
+from bounded_process import ProcessResult
 import mcp_gate
 import runtime_call
 from mindie_knowledge.loop.transport import RequestRejected
@@ -38,7 +39,7 @@ class GeneralRemoteTests(unittest.TestCase):
         return {'id': identity, 'params': {'name': 'remote_bash', 'arguments': {'command': 'true', 'host': 'example.invalid'}, '_meta': {'threadId': session, 'x-codex-turn-metadata': {'thread_id': session, 'session_id': session, 'turn_id': turn}}}}
 
     def test_no_activation_no_engine_and_persisted_request_identity(self):
-        with patch.object(mcp_gate, 'run', return_value='{"content":[], "isError":false}') as dispatch:
+        with patch.object(mcp_gate, 'run', return_value=ProcessResult("completed", '{"content":[], "isError":false}', 0)) as dispatch:
             gate = mcp_gate.Gate('remote')
             self.assertFalse(gate.call(self.request())['isError'])
             repeat = gate.call(self.request())
@@ -72,7 +73,7 @@ class GeneralRemoteTests(unittest.TestCase):
                 'turn_id': 'turn-1',
             },
         }
-        with patch.object(mcp_gate, 'run', return_value='{"content":[], "isError":false}') as dispatch:
+        with patch.object(mcp_gate, 'run', return_value=ProcessResult("completed", '{"content":[], "isError":false}', 0)) as dispatch:
             gate = mcp_gate.Gate('remote')
             self.assertFalse(gate.call(request)['isError'])
             payload = json.loads(dispatch.call_args.args[1])
@@ -85,16 +86,15 @@ class GeneralRemoteTests(unittest.TestCase):
         self.assertTrue(mcp_gate.RemoteReceipts('child-two').path.is_file())
         self.assertFalse(mcp_gate.RemoteReceipts('root-tree').path.exists())
 
-    def test_pause_recovery_keeps_failed_receipts(self):
-        # Same connection: circuit reset must not make a failed key replayable.
+    def test_failures_never_disable_new_calls_or_replay_consumed_receipts(self):
+        # New diagnostic work stays usable; old uncertain keys stay consumed.
         gate = mcp_gate.Gate('remote')
         with patch.object(mcp_gate, 'run', side_effect=TimeoutError) as dispatch:
             for i in range(10):
                 self.assertTrue(gate.call(self.request(i))['isError'])
-            self.assertEqual(dispatch.call_count, 3)
+            self.assertEqual(dispatch.call_count, 10)
         receipts = mcp_gate.RemoteReceipts('task-A')
-        receipts.recover()
-        with patch.object(mcp_gate, 'run', return_value='{"content":[], "isError":false}') as dispatch:
+        with patch.object(mcp_gate, 'run', return_value=ProcessResult("completed", '{"content":[], "isError":false}', 0)) as dispatch:
             self.assertTrue(gate.call(self.request(0))['isError'])
             self.assertFalse(gate.call(self.request(11))['isError'])
             self.assertEqual(dispatch.call_count, 1)
@@ -105,8 +105,8 @@ class GeneralRemoteTests(unittest.TestCase):
         old = 'turn-1:' + gate._request_identity(request)
         receipts = mcp_gate.RemoteReceipts('task-A')
         self.assertTrue(receipts.claim(old))
-        receipts.finish(old, False)
-        with patch.object(mcp_gate, 'run', return_value='{"content":[], "isError":false}') as dispatch:
+        receipts.finish(old, "failed")
+        with patch.object(mcp_gate, 'run', return_value=ProcessResult("completed", '{"content":[], "isError":false}', 0)) as dispatch:
             self.assertFalse(gate.call(request)['isError'])
             self.assertTrue(gate.call(request)['isError'])
             self.assertEqual(dispatch.call_count, 1)
@@ -126,7 +126,7 @@ class GeneralRemoteTests(unittest.TestCase):
             'sys.path.insert(0, os.environ["MINDIE_SCRIPTS"])\n'
             'import mcp_gate\n'
             'def component_noop_dispatch(*_args, **_kwargs):\n'
-            '    return \'{"content":[{"type":"text","text":"component-noop"}],"isError":false}\'\n'
+            '    return mcp_gate.ProcessResult("completed", \'{"content":[{"type":"text","text":"component-noop"}],"isError":false}\', 0)\n'
             'mcp_gate.run = component_noop_dispatch\n'
             'mcp_gate.serve("remote")\n'
         )
@@ -180,7 +180,7 @@ class GeneralRemoteTests(unittest.TestCase):
     def test_bad_arguments_are_rejected_before_runtime_and_can_be_corrected(self):
         request = self.request()
         request['params']['arguments']['invented_key'] = 'x'
-        with patch.object(mcp_gate, 'run', return_value='{"content":[], "isError":false}') as dispatch:
+        with patch.object(mcp_gate, 'run', return_value=ProcessResult("completed", '{"content":[], "isError":false}', 0)) as dispatch:
             gate = mcp_gate.Gate('remote')
             result = gate.call(request)
             self.assertEqual(result['structuredContent']['execution'], 'not_started')
@@ -201,16 +201,16 @@ class GeneralRemoteTests(unittest.TestCase):
     def test_no_lifetime_receipt_eviction_or_call_ceiling(self):
         receipts = mcp_gate.RemoteReceipts('task-A')
         self.assertTrue(receipts.claim('0'))
-        receipts.finish('0', True)
+        receipts.finish('0', 'succeeded')
         # This contract is the former 4096-receipt boundary, not thousands
         # of repetitions of the same disk transaction. Seed durable history
         # in one transaction, then cross that boundary through the real API.
         with closing(sqlite3.connect(receipts.path)) as db, db:
-            db.executemany('INSERT INTO attempts(identity, started, status) VALUES(?, ?, ?)',
-                           ((str(i), 1.0, 'succeeded') for i in range(1, 4094)))
+            db.executemany('INSERT INTO attempts(identity, started, status, owner) VALUES(?, ?, ?, ?)',
+                           ((str(i), 1.0, 'succeeded', '') for i in range(1, 4094)))
         for i in range(4094, 4100):
             self.assertTrue(receipts.claim(str(i)))
-            receipts.finish(str(i), True)
+            receipts.finish(str(i), "succeeded")
         receipts = mcp_gate.RemoteReceipts('task-A')
         self.assertFalse(receipts.claim('0'))
         self.assertFalse(receipts.claim('4099'))
@@ -273,6 +273,25 @@ class GeneralRemoteTests(unittest.TestCase):
                              'unknown' if delivery.startswith('PRIVATE_') else delivery)
             self.assertEqual(payload['error_details']['retryable'], retryable)
             close.assert_called_once()
+
+    def test_knowledge_reference_and_continuation_codes_survive_the_adapter(self):
+        payload = {'surface': 'knowledge', 'mindie_activation': 'test-token',
+                   'mindie_session_id': 'task-A', 'arguments': {'ref': 'x'},
+                   'name': 'knowledge_explain'}
+        for code in ('reference_invalid', 'withdrawn', 'removed_or_superseded',
+                     'continuation_invalid', 'continuation_expired'):
+            with self.subTest(code=code), \
+                 patch.object(runtime_call, 'resolve_lease', return_value={'session': 'task-A'}), \
+                 patch.object(runtime_call, 'finish_outcome'), \
+                 patch('mindie_knowledge.loop.cli.ensure_service', return_value={}), \
+                 patch('mindie_knowledge.loop.transport.rpc', side_effect=RequestRejected(
+                     'bounded reason', error_code=code, read_ref='mindie://test/' + 'a' * 64)):
+                result = runtime_call.call(payload)
+            self.assertTrue(result['isError'])
+            self.assertEqual(result['structuredContent']['code'], code)
+            self.assertEqual(result['structuredContent']['read_ref'], 'mindie://test/' + 'a' * 64)
+            self.assertEqual(result['structuredContent']['execution'], 'not_started')
+            self.assertFalse(result['structuredContent']['automatic_retry'])
 
     def test_knowledge_read_rejection_keeps_reason_without_retrying_mutations(self):
         payload = {'surface': 'knowledge', 'mindie_activation': 'test-token',

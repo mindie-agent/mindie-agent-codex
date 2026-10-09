@@ -1,0 +1,11 @@
+{
+  "schema": "mindie-product/1",
+  "validation": "mindie-candidate-check/1",
+  "publication": {
+    "repository": "mindie-agent/knowledge-vllm-ascend",
+    "ref": "main",
+    "domain": "vllm-ascend",
+    "verified_commit": "7510944d3f69b458784731b4dafc51013aee21f3",
+    "contract_sha256": "6a5551335fb3a40c9a90ffaee473da34cfd49eb66975783933530252cbb4ebc6"
+  }
+}

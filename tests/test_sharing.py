@@ -4,6 +4,7 @@ All checks are local mechanism tests with controlled files and stub runtimes;
 no model, service or network is started.
 """
 
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -33,6 +34,9 @@ class SharingFixture(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.scope = self.root / "scope"
         self.scope.mkdir()
+        self.codex_home = self.root / "codex-home"
+        (self.codex_home / "sessions").mkdir(parents=True)
+        self.native_transcript()
         self.config = self.root / "codex.json"
         self.engine = self.root / "engine.json"
         self.community = self.root / "mindie-community.json"
@@ -54,7 +58,8 @@ class SharingFixture(unittest.TestCase):
             )
         )
         self.environment = patch.dict(
-            os.environ, MINDIE_AGENT_CONFIG=str(self.config), CODEX_THREAD_ID="manual-A"
+            os.environ, MINDIE_AGENT_CONFIG=str(self.config), CODEX_THREAD_ID="manual-A",
+            CODEX_HOME=str(self.codex_home), MINDIE_DIAGNOSTICS_ROOT=str(self.root / "diagnostics")
         )
         self.environment.start()
         self.sessions = Sessions()
@@ -94,7 +99,7 @@ class SharingFixture(unittest.TestCase):
         store.close()
 
     def captures(self):
-        path = self.root / "data" / "test" / "state-v4.sqlite3"
+        path = self.root / "data" / "test" / "state-v1" / "state-v4.sqlite3"
         if not path.is_file():
             return 0
         db = sqlite3.connect(path)
@@ -110,10 +115,17 @@ class SharingFixture(unittest.TestCase):
         ):
             return self.sessions.activate()
 
+    def native_transcript(self, name="synthetic-transcript.jsonl", *, owner="manual-A", scope=None):
+        path = self.codex_home / "sessions" / name
+        path.write_text(json.dumps(dict(type="session_meta",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            payload=dict(id=owner, cwd=str(scope or self.scope)))) + "\n", encoding="utf-8")
+        return path
+
     def event(self, cwd=None, **extra):
         event = dict(
             hook_event_name="Stop",
-            transcript_path=str(self.root / "synthetic-transcript.jsonl"),
+            transcript_path=str(self.codex_home / "sessions/synthetic-transcript.jsonl"),
             session_id="manual-A",
             turn_id="turn-1",
             cwd=str(cwd or self.scope),
@@ -147,7 +159,7 @@ class SharingFixture(unittest.TestCase):
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=2)
-            self.fail("stop hook exceeded native budget on unclosed stdin")
+            self.fail("stop hook did not consume the complete event on unclosed stdin")
         elapsed = time.monotonic() - started
         stdout = process.stdout.read()
         stderr = process.stderr.read()
@@ -181,7 +193,6 @@ class GateTests(SharingFixture):
         config.pop('summary_command')  # This case verifies body delivery, with zero model calls.
         self.engine.write_text(json.dumps(config))
         transcript_path = Path(self.event()['transcript_path'])
-        transcript_path.write_text(json.dumps(dict(type='session_meta', payload=dict(id='manual-A'))) + '\n', encoding='utf-8')
         for size in (129 * 1024, 1024 * 1024, 10 * 1024 * 1024):
             message = dict(type='response_item', timestamp=datetime.now(timezone.utc).isoformat(),
                            payload=dict(type='message', role='user', content=[dict(type='input_text', text=f'public-marker-{size}')]))
@@ -189,9 +200,8 @@ class GateTests(SharingFixture):
                 stream.write(json.dumps(message) + '\n')
             event = self.event(turn_id=f'large-{size}', last_assistant_message='公开结果' * (size // 12))
             result = self.bridge('stop', event, timeout=5)
-            self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}),
-                             f"Stop size={size}: {result.stderr}")
-        path = self.root / 'data/test/state-v4.sqlite3'
+            self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        path = self.root / 'data/test/state-v1/state-v4.sqlite3'
         db = sqlite3.connect(path)
         try:
             rows = db.execute('SELECT summary, transcript FROM captures').fetchall()
@@ -199,7 +209,7 @@ class GateTests(SharingFixture):
             db.close()
         self.assertEqual(len(rows), 3)
         self.assertTrue(all(summary == '' for summary, _ in rows))
-        self.assertTrue(any(transcript == event['transcript_path'] for _, transcript in rows))
+        self.assertTrue(any(transcript == str(Path(event['transcript_path']).resolve()) for _, transcript in rows))
         with closing(Store(self.root / 'data', 'test')) as store:
             until = time.monotonic() + 5
             while time.monotonic() < until:
@@ -227,11 +237,11 @@ class GateTests(SharingFixture):
                 elif state == "wrong-schema":
                     self.community.write_text(json.dumps(dict(schema="other/1")))
                 result = self.bridge("stop", self.event(last_assistant_message="Done"))
-                expected = 1 if state in {"malformed", "wrong-schema"} else 0
+                expected = 0 if state == "disabled" else 1
                 self.assertEqual((result.returncode, json.loads(result.stdout)), (expected, {}))
                 self.assertEqual(self.attempts(), 0)
 
-    def test_scope_comes_from_the_lease_not_the_event_cwd(self):
+    def test_scope_comes_from_native_metadata_not_the_event_cwd(self):
         self.write_sharing()
         self.activate()
         outside = self.root / "outside"
@@ -244,19 +254,16 @@ class GateTests(SharingFixture):
         self.assertEqual(self.attempts(), 0)
         self.prepare_store()
         # An absolute event cwd outside the scope does not block capture: the
-        # authorized scope is the lease's activation-time project root.
+        # authorized scope comes from the named native transcript metadata.
         result = self.bridge(
             "stop", self.event(cwd=str(outside), last_assistant_message="Done")
         )
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
         self.assertEqual(self.captures(), 1)
         self.assertEqual(self.attempts(), 0)
-        # A lease activated outside the authorized roots captures nothing,
-        # even when the event cwd points inside an allowed directory.
-        db = sqlite3.connect(self.sessions.path)
-        with db:
-            db.execute("UPDATE leases SET project_root=?", (str(outside),))
-        db.close()
+        # Native metadata outside the approved roots captures nothing, even
+        # when the event cwd points inside an allowed directory.
+        self.native_transcript(scope=outside)
         result = self.bridge(
             "stop",
             self.event(
@@ -272,17 +279,17 @@ class GateTests(SharingFixture):
         self.write_sharing()
         self.activate()
         self.prepare_store()
-        result = self.bridge("stop", self.event(transcript_path=str(self.scope / "t.jsonl")))
+        result = self.bridge("stop", self.event(transcript_path=str(self.codex_home / "sessions/synthetic-transcript.jsonl")))
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
         self.assertEqual(self.captures(), 1)
         self.assertEqual(self.attempts(), 0)
         # The same turn is one row, and recursion is dropped.
-        self.bridge("stop", self.event(transcript_path=str(self.scope / "t.jsonl")))
+        self.bridge("stop", self.event(transcript_path=str(self.codex_home / "sessions/synthetic-transcript.jsonl")))
         self.bridge(
             "stop",
             self.event(
                 turn_id="turn-2",
-                transcript_path=str(self.scope / "t.jsonl"),
+                transcript_path=str(self.codex_home / "sessions/synthetic-transcript.jsonl"),
                 stop_hook_active=True,
             ),
         )
@@ -297,7 +304,7 @@ class GateTests(SharingFixture):
         self.write_sharing()
         self.activate()
         self.prepare_store()
-        foreign = self.scope / "foreign.jsonl"
+        foreign = self.codex_home / "sessions/foreign.jsonl"
         foreign.write_text(
             json.dumps(
                 dict(
@@ -313,7 +320,7 @@ class GateTests(SharingFixture):
         self.assertEqual(self.captures(), 0)
         self.assertEqual(self.attempts(), 0)
         # The task's own transcript captures normally.
-        own = self.scope / "own.jsonl"
+        own = self.codex_home / "sessions/own.jsonl"
         own.write_text(
             json.dumps(
                 dict(
@@ -348,7 +355,7 @@ class GateTests(SharingFixture):
         self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
         self.assertEqual(self.attempts(), 0)
 
-    def test_held_open_stdin_still_forwards_once_under_native_budget(self):
+    def test_complete_event_with_held_open_stdin_forwards_once(self):
         self.write_sharing()
         self.activate()
         self.prepare_store()
@@ -363,19 +370,19 @@ class GateTests(SharingFixture):
         self.assertLess(elapsed, 2.0)
         self.assertEqual(self.captures(), 1)
 
-    def test_sharing_off_unclosed_stdin_writes_no_state(self):
+    def test_unconfigured_unclosed_stdin_records_fault_without_capture(self):
         self.activate()
         before = self.attempts()
         code, stdout, _stderr, elapsed = self.bridge_stop_held_open()
-        self.assertEqual((code, json.loads(stdout)), (0, {}))
+        self.assertEqual((code, json.loads(stdout)), (1, {}))
         self.assertLess(elapsed, 0.75)
         self.assertEqual(self.attempts(), before)
         self.assertFalse(self.community.exists())
 
-    def test_lease_without_capture_metadata_fails_closed_for_capture_only(self):
+    def test_verified_native_metadata_repairs_incomplete_automatic_binding(self):
         self.write_sharing()
-        # A lease lacking capture metadata: ordinary use keeps working while
-        # capture is refused.
+        self.prepare_store()
+        # A verified current transcript supplies the missing capture metadata.
         lease = self.activate()
         db = sqlite3.connect(self.sessions.path)
         with db:
@@ -388,7 +395,8 @@ class GateTests(SharingFixture):
             "manual-A",
         )
         result = self.bridge("stop", self.event(last_assistant_message="Done"))
-        self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        self.assertEqual(self.captures(), 1)
         self.assertEqual(self.attempts(), 0)
 
     def test_sharing_toggle_does_not_invalidate_ordinary_activation(self):
@@ -419,6 +427,7 @@ class CommandTests(SharingFixture):
         started = time.monotonic()
         enabled = json.loads(self.bridge("sharing-enable").stdout)
         self.assertEqual(enabled["status"], "enabled")
+        self.assertFalse(self.admission.exists())
         first = enabled["generation"]
         self.assertGreaterEqual(enabled["enabled_at"], started)
         settings = sharing.validate(json.loads(self.community.read_text()))
@@ -443,6 +452,23 @@ class CommandTests(SharingFixture):
         status = json.loads(self.bridge("sharing-status").stdout)
         self.assertEqual(status["state"], "disabled")
         self.assertEqual(status["repository"], "mindie-agent/knowledge")
+
+    def test_enable_preserves_applied_choice_when_binding_authority_is_lost(self):
+        self.write_sharing(enabled=False, enabled_at=None)
+        self.activate()
+        marker = self.admission.with_name(self.admission.name + '.owner')
+        marker_before = marker.read_bytes()
+        self.admission.unlink()
+        outcome = self.bridge('sharing-enable')
+        self.assertEqual(outcome.returncode, 1)
+        enabled = json.loads(outcome.stdout)
+        self.assertEqual(enabled['status'], 'degraded')
+        self.assertEqual(enabled['configuration_status'], 'enabled')
+        self.assertEqual(enabled['activation']['status'], 'unavailable')
+        self.assertIn('AdmissionUnavailable', enabled['activation']['error'])
+        self.assertTrue(sharing.read()['enabled'])
+        self.assertFalse(self.admission.exists())
+        self.assertEqual(marker.read_bytes(), marker_before)
 
     def test_reenable_uses_fresh_enabled_at_without_backfill(self):
         self.write_sharing(enabled=True, enabled_at=time.time() - 10000)
@@ -476,9 +502,18 @@ class CommandTests(SharingFixture):
 
     def test_malformed_status_still_reports_and_fails_closed(self):
         self.community.write_text('{"schema": "mindie-community-config/1"}')
-        status = json.loads(self.bridge("sharing-status").stdout)
+        outcome = self.bridge("sharing-status")
+        self.assertEqual(outcome.returncode, 1)
+        status = json.loads(outcome.stdout)
         self.assertEqual(status["state"], "malformed")
         self.assertIn("fail-closed", status["capture"])
+        damaged = self.community.read_bytes()
+        for operation in ('sharing-enable', 'sharing-disable'):
+            with self.subTest(operation=operation):
+                outcome = self.bridge(operation)
+                self.assertEqual(outcome.returncode, 1)
+                self.assertIn('sharing operation failed', outcome.stderr)
+                self.assertEqual(self.community.read_bytes(), damaged)
 
     def test_disable_survives_a_concurrent_settings_write(self):
         # One writer pauses inside the settings os.replace (inside the

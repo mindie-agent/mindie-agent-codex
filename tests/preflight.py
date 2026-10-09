@@ -11,8 +11,12 @@ import subprocess
 import sys
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "plugins/mindie-agent/scripts"))
+from product_contract import requirements, probe
+from bounded_process import run
+
 CHECKOUTS = (
-    ("MINDIE_CORE_REPO", "929bdcb918f2207aea38b02a14bd8e6219fabac4"),
+    ("MINDIE_CORE_REPO", requirements(REPO)[0]["mindie-knowledge"]),
     ("MINDIE_KIMI_REPO", "90f73e76c6087ce091570f2d151b709145c913bc"),
 )
 
@@ -56,14 +60,7 @@ def installed_commit(dist_name: str) -> str:
 
 
 def require_requirement_pins(path: Path) -> None:
-    import re
-    pattern = re.compile(
-        r"([A-Za-z0-9_.-]+) @ git\+https://github.com/mindie-agent/\S+@([0-9a-f]{40})"
-    )
-    found = pattern.findall(path.read_text(encoding="utf-8"))
-    if not found:
-        fail(f"{path.name} declares no exact commit pins")
-    for name, commit in found:
+    for name, commit in requirements(path.parent)[0].items():
         actual = installed_commit(name)
         if actual != commit:
             fail(f"installed {name} commit {actual} != required {commit}")
@@ -75,6 +72,9 @@ def main() -> None:
         require_commit(env_name, commit)
         print(f"{env_name} contains {commit}")
     require_requirement_pins(REPO / "runtime-requirements.txt")
+    receipt = probe(sys.executable, REPO / "plugins/mindie-agent/scripts",
+                    lambda argv, **kwargs: run(argv, "", **kwargs).checked_stdout())
+    print("validated product " + receipt["product_sha256"])
 
 
 if __name__ == "__main__":

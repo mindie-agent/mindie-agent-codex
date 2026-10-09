@@ -1,18 +1,21 @@
 """Install-time wiring for deterministic public transcript capture."""
-import subprocess
+from bounded_process import run
 
 
 def prepare(python, scripts):
-    result = subprocess.run(
+    path = run(
         [str(python), '-m', 'mindie_knowledge.loop.transcript_redaction'],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90,
-        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
-    )
-    if result.returncode:
-        raise RuntimeError('could not install the verified transcript redactor')
-    path = result.stdout.decode('utf-8').strip()
+        '', max_output=8192,
+    ).checked_stdout().strip()
     from pathlib import Path
     if not Path(path).is_absolute() or not Path(path).is_file():
         raise RuntimeError('installed transcript redactor is missing')
     return dict(capture_mode='public-transcript', redactor_executable=path,
                 summary_command=[str(python), str(Path(scripts) / 'agent_worker.py')])
+
+
+if __name__ == "__main__":
+    import json
+    from pathlib import Path
+    import sys
+    print(json.dumps(prepare(sys.executable, Path(__file__).resolve().parent)))

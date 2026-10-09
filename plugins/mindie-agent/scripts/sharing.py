@@ -349,12 +349,12 @@ def normalize_with_runtime(settings, python, config_file=None, *, previous=None)
         output = run(
             [python, "-c", NORMALIZE_SCRIPT],
             request,
-            timeout=10,
+            timeout=None,
             max_output=max(65536, len(request.encode('utf-8')) * 2),
             env=generation_env(config_file) if config_file is not None else {
                 key: value for key, value in os.environ.items() if key != "PYTHONPATH"
             },
-        )
+        ).checked_stdout()
         value = json.loads(output)
     except Exception as exc:
         raise SharingError(
@@ -378,8 +378,6 @@ def read(config_file=None):
         raw = json.loads(configured_path(config_file).read_text(encoding='utf-8'))
         settings = validate(raw)
     except FileNotFoundError:
-        return None
-    if not settings["enabled"]:
         return None
     return settings
 

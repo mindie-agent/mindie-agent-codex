@@ -213,8 +213,13 @@ class HistoryImportTests(SharingFixture):
         self.assertEqual(rows[-1]['service'], 'ready')
         from mindie_knowledge.loop.cli import connect, rpc
         lease = self.authority.check('manual-A')
-        material = rpc(connect(engine), 'explain', dict(ref=rows[0]['ref'],
+        navigation = rpc(connect(engine), 'explain', dict(ref=rows[0]['ref'],
                         _session_id='manual-A', _activation=lease['token']))
+        self.assertEqual(navigation['kind'], 'task')
+        self.assertNotIn('content', navigation)
+        material = rpc(connect(engine), 'explain', dict(ref=navigation['first_block_ref'],
+                        _session_id='manual-A', _activation=lease['token']))
+        self.assertEqual(material['kind'], 'block')
         self.assertIn('verified eight output tokens', material['content'])
         self.assertIsNone(self.authority.active_lease('historical-task'))
 

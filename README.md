@@ -8,8 +8,12 @@ A native Codex plugin for NPU infrastructure work, initially the `vllm-ascend`
 domain. It inherits the [nine VAWS / MindIE principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md).
 The native task remains in charge; knowledge is optional reference material.
 
-The plugin provides one explicit entry Skill, three knowledge tools
-(query, full-body read and optional feedback), and general remote-dev tools.
+Read the [用户须知 / contribution notice](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md)
+for the full visible-message sharing scope, deterministic redaction limits,
+model-provider processing and public Git history. It adds no authorization step.
+
+The plugin provides one informational entry Skill, three knowledge tools
+(query, block reading and optional feedback), and general remote-dev tools.
 It owns Codex identity, transcript parsing, Hook translation and model execution.
 The shared knowledge runtime owns retrieval, task admission, contribution
 receipts and local cleanup. Claude Code and Kimi have independent adapters.
@@ -23,6 +27,16 @@ plugin support.
 Installation probes the actual pinned runtime, including ReMe, LangMem and the
 summary outcome ledger. SQLite stores metadata; retrieval does not require FTS5
 or `contentless_delete`.
+
+[product-contract.json](product-contract.json) binds the public content baseline,
+its declaration digest and candidate validation protocol. Runtime commit pins
+live only in [runtime-requirements.txt](runtime-requirements.txt). The candidate's
+own interpreter verifies its installed pins and APIs; the running updater checks
+a bounded receipt instead of importing a different runtime's private API.
+Content may advance under the same declaration without a plugin release.
+Changed declarations require a matching product combination and fail before
+installation, publication or feed promotion when they do not match. Cached
+candidates recheck local runtime and packaged bytes before installation.
 
 Sign in to Codex, then install from a downloaded copy:
 
@@ -125,30 +139,27 @@ Change the final option to `--schedule manual` on systems without a responding
 per-user systemd manager. Automatic Linux checks run as the same user every
 five minutes while that manager is running.
 
-## First use and task boundaries
+## Everyday use and task boundaries
 
-Explicitly invoke `$mindie-agent:mindie-agent` (the installed plugin's qualified
-Skill name). Its status distinguishes task binding from
-experience capture. Missing public destination and project scope are incomplete
-configuration; supply only those missing values through `bridge.py config`.
-Existing approved settings persist across tasks and updates. Configuration in
-an already-bound task prepares capture without a second activation.
-An explicit disable and legacy declined settings remain disabled until changed.
-Read-only/later product modes are removed; they are retained only as migration
-data. Inspect actual capture, organization and contribution receipts before
-claiming full-loop success.
+Use knowledge and remote-dev when they help the current task. Ordinary tasks
+need no explicit Skill invocation, activation command, status check or closing
+step. The host supplies task identity; public tool arguments carry no identity
+or capture token. Queries and block reads verify native identity without
+creating a capture binding. Remote-dev remains independent of capture.
 
-Knowledge tools require that entry binding. The host supplies task
-identity; public knowledge calls have no identity or capability argument.
-Mentioning MindIE, opening a repository, MCP discovery or a query does not
-bind it. Remote-dev works in ordinary native tasks independently.
+The installation's saved contribution choice and approved project scope govern
+capture. An eligible Stop event automatically associates its current native
+task after checking the named transcript's profile location, session identity,
+project directory and creation time. It reads no other session. The contribution
+enablement boundary and task creation boundary preserve the first authorized
+turn without backfilling older material. Forks exclude inherited parent text.
 
-The install-level choice and the task binding persist across idle time,
-restarts, runtime updates and failures. There is no renewal requirement, no
-configuration fingerprint expiry and no failure-count pause — ordinary
-failures never require deactivate/reactivate. Only explicit unbinding or an
-actual project-scope change ends a binding.
-See [activation details](plugins/mindie-agent/skills/mindie-agent/references/activation-lifecycle.md).
+Existing approved settings persist across tasks and updates. Missing required
+configuration and internal failures remain machine diagnostics for the Agent;
+they do not initiate a setup conversation. An explicit disable or task revocation
+remains authoritative. Repeated events keep the existing binding and do not
+replay captured material. Optional configuration and operator commands remain
+available when requested. See [capture and operation lifecycle](plugins/mindie-agent/skills/mindie-agent/references/activation-lifecycle.md).
 
 ## Optional experience sharing
 
@@ -158,7 +169,7 @@ creation or organizer invocation. Plugin and public knowledge updates continue.
 With contribution on, an admitted Stop delivery saves the current task's user
 messages, public assistant progress and final answers in their original order.
 Users can explicitly [contribute selected historical transcripts](docs/history-import.md).
-This is separate from activation and Stop capture; it never scans past sessions
+This is separate from automatic Stop capture; it never scans past sessions
 automatically and reuses the saved contribution choice and project scope.
 
 Tools, hidden reasoning, injected instructions and inherited task history are
@@ -170,9 +181,12 @@ and sensitive content before sending a Markdown contribution PR; raw
 transcripts are not uploaded. The existing external Grok Bot application owns
 repository review and merge. This plugin does not install a Grok CLI reviewer.
 
-The shared core retains small receipts for uncertain writes. Once the exact PR
-receipt is confirmed, submitted local bodies can be removed; a later task
-continuation retrieves the exact earlier revision when needed. PR construction
+The shared core retains small receipts for uncertain writes. An exact confirmed
+PR receipt permits send staging to be cleared; a matching published feed is
+required before the corresponding local candidate is retired. Continuation uses
+confirmed current remote material plus unsent blocks; it cannot restore text
+removed by a maintainer. A changed open PR head is an explicit conflict until
+its contribution can be reconciled safely. PR construction
 and receipt reconciliation use no model. Unknown writes are inspected before
 any explicit retry. Optional up/down feedback is never required to finish a task.
 
@@ -182,22 +196,23 @@ valid data when an update fails. Retrieval results are references, not authority
 
 ## Local diagnostics and optional fault reporting
 
-Tool failures include an incident reference and a concrete local status command.
-The original result, remote job identity and cancellation behavior remain intact.
-`bridge.py reporting-status` reads local faults, authorization and worker health;
-it does not activate knowledge, install a service or retry work.
+Internal failures retain structured incident, stage, code and record references.
+A bounded diagnostic projection accompanies the next naturally occurring
+capability response for the Agent; delivery is acknowledged only after that
+response is written. If no further call occurs, the incident remains pending.
+No user status message, diagnostic panel, command or additional model turn is
+required. Business results and remote job identity remain intact, including a
+separate accounting or cleanup failure after completed work.
 
-Automatic Issue reporting is a separate opt-in from community contribution.
-`bridge.py reporting-enable` saves the choice and returns the exact selected
-runtime command to ensure the shared reporter outside the Hook deadline.
-`bridge.py reporting-disable` revokes pending publication. First-use status
-explains this independent choice; no upload is enabled by installation.
-Ask the entry Skill to run these commands through the selected installed
-entrypoint. Execute the returned ensure command once outside the Hook, then
-check that the runtime is ready and the worker is healthy. Saving the setting
-alone is not service readiness. `not_configured` describes upload consent;
-it does not mean there are no local logs. The shared setting applies across
-MindIE adapters; disabling it preserves local diagnostics.
+Automatic Issue reporting is a separate saved opt-in from community contribution;
+installation does not enable uploads. For explicitly requested configuration or
+diagnosis, the Agent can use `bridge.py reporting-status`, `reporting-enable` or
+`reporting-disable` through the selected installed entrypoint. Enabling reports
+returns the selected runtime ensure command; its execution and health readback
+belong to that requested operation. Saving the setting alone is not service
+readiness. `not_configured` describes upload consent, not an absence of local
+logs. The shared choice applies across adapters; disabling uploads preserves
+local diagnostics.
 
 The shared reporter uses bounded structured evidence without a model. Business
 nonzero exits, permissions, normal network failures and cancellation are not
@@ -211,24 +226,28 @@ checks the adapter's remote `main` and public knowledge feed every five
 minutes. On unsupported systems, or when Linux has no responding per-user
 systemd manager, explicit `--schedule manual` mode still installs the validated
 plugin and records that no scheduler is registered. This work does not open
-model tasks or activate knowledge. Runtime dependencies follow exact reviewed commits in
+model tasks or grant contribution authority. Runtime dependencies follow exact reviewed commits in
 `runtime-requirements.txt`; code, interpreter, configuration and plugin files
 switch as one generation.
 
 Only actual in-flight calls or maintenance postpone switching. Idle task grants
-and unresolved receipts do not block an update. Old loaded entrypoints and
-remote job state remain available; new definitions refresh according to the
-native host lifecycle. Interrupted installation restores the prior configuration
+and unresolved receipts do not block an update. Native definitions retain an installation-level launcher path. Selection and
+generation lease acquisition share the update lock; an executing process keeps
+its selected generation until exit. Remote job state remains available, and
+new tool definitions refresh according to the native host lifecycle. Interrupted installation restores the prior configuration
 and native package, with readback. Changed Hook dependencies require fresh
-native trust. No live entrypoint is automatically deleted.
+native trust. Generation cleanup keeps current and candidate pointers, interrupted
+transactions and active process leases. Untracked directories are reported and
+retained; elapsed age alone never authorizes deletion.
 
 Business MCP calls and each admitted Stop delivery get one attempt, without an
-automatic model retry. The Stop Hook has a 1.5-second inner budget on POSIX and
-1.3 seconds on Windows, within the 5-second native timeout. It always returns
-normal completion and cannot request another model turn. Missing/offline
-capture does not create an automatic repair task.
-MCP calls have bounded input, output and process deadlines; long remote work
-uses owned jobs with explicit status and cancellation.
+automatic model retry. The adapter adds no default execution deadline to a
+Stop event or capability call. Stop emits the inert protocol response and keeps
+internal failures in durable Agent diagnostics; it cannot request another model
+turn. Input/output byte limits, concurrency limits, owner cancellation and
+process-tree cleanup remain enforced. Explicit remote execution limits follow
+the requested operation; long remote work uses owned jobs with status and
+cancellation.
 
 Setup installs a checksum-pinned Gitleaks release once. Stop processing performs
 no downloads and has no model dependency. A missing or failed scanner leaves
@@ -239,8 +258,11 @@ Setup and updates install the required LangMem index worker with the explicit
 `gpt-5.6-luna` / `low` native policy. It reads complete new blocks plus short
 previous navigation and returns block titles/summaries and updated navigation;
 it cannot rewrite source bodies. Blocks are at most 16 KiB and each serialized
-user prompt is at most 64 KiB. The native deadline is 90 seconds with a 100-second
-outer deadline. Native system/context overhead is included in recorded usage.
+user prompt is at most 64 KiB. The worker and its identity check have no default
+execution deadline; service shutdown or revoked authority cancels their owned
+processes. Bounded waits after a terminal result concern cleanup only, and
+cleanup failure does not erase the completed result. Native system/context
+overhead is included in recorded usage.
 Returned output survives local processing failures without another paid call.
 Failed or uncertain model calls require explicit retry and retain prior usage.
 Missing worker configuration blocks publication and remains a visible failure.
@@ -270,9 +292,32 @@ committed generation, not a stale controller copy. Current development tracks
 `main`. Release tracking can be selected when a suitable release exists; old
 business Skill migration is not part of this update.
 
+Before the repositories collectively meet the product release criteria and
+publish normal release versions, destructive state format updates may repeat.
+There is no one-time reset allowance. Development package numbers and Git pins
+are not a product release declaration. The release commit sets normal
+`major.minor.patch` `RELEASE_VERSION` values in the knowledge and receipt layout
+modules; they remain `None` during development.
+Candidate validation rejects a normal plugin version unless both declarations
+match it. The release channel also requires a normal tag and the matching
+source version, including cached candidates; a development build cannot enter
+that channel with unprotected state.
+
+Knowledge state and remote request receipts have independent format
+directories. A development format change selects fresh state while preserving
+configuration and the old directories. Released state remains protected even
+when a later development build uses it. Compatible updates retain material,
+cursors, paid model attempts and consumed remote requests, including uncertain
+external writes. An incompatible released format requires an explicit
+migration in that candidate; until one exists, the updater rejects it before
+retiring the old service, writing an installation transaction or replacing the
+native package. It does not clear the state and report a successful upgrade.
+This is a release compatibility boundary, not an automatic beta launch or a
+claim that future migrations or native release acceptance have been completed.
+
 ## Stop or uninstall
 
-Task deactivation ends that task's knowledge access. Sharing-disable stops
+Task deactivation revokes that task's automatic capture binding. Sharing-disable stops
 contribution for its configured scope; neither removes the plugin nor stops
 model-free updates. To stop automatic updates, use the stable launcher:
 
@@ -306,9 +351,9 @@ recorded revisions. Component checks are diagnostic and do not replace native
 or hardware acceptance.
 
 ```sh
-# Pins match .github/workflows/tests.yml. Do not omit these: the contract
-# tests archive the commits below and fail, naming the variable, if unset.
-export MINDIE_CORE_REPO=/path/to/knowledge-checkout   # contains 68ed86579bcbf88ac8ed2817a2ca81756c351485
+# Runtime pins are declared once in runtime-requirements.txt. Contract tests
+# archive those exact commits and name the missing checkout variable on failure.
+export MINDIE_CORE_REPO=/path/to/knowledge-checkout   # contains the declared core commit
 export MINDIE_KIMI_REPO=/path/to/kimi-adapter-checkout  # contains 90f73e76c6087ce091570f2d151b709145c913bc
 .venv/bin/python -m unittest discover -s tests -p 'test_*.py'
 .venv/bin/python -m unittest tests.test_parallel_codex_contract -v

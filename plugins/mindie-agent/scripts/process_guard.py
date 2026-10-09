@@ -17,10 +17,8 @@ import threading
 import time
 
 import windows_process
-from mindie_knowledge.materials.summarizer import SUMMARY_TIMEOUT
 
 MAX_OUTPUT = 128 * 1024
-TIMEOUT = SUMMARY_TIMEOUT
 ALLOWED_ITEMS = {"agent_message", "reasoning"}
 POSIX = os.name == "posix"
 
@@ -54,9 +52,8 @@ def _rejected_model(event):
             and ('chatgpt' in message or '400' in message))
 
 
-def run_codex(command, prompt, *, timeout=None, receipt=None):
+def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=False):
     # The knowledge service owns one group for worker + Codex + descendants.
-    timeout = TIMEOUT if timeout is None else timeout
     started = time.monotonic()
     receipt = {} if receipt is None else receipt
     receipt.update(native_started=False, turn_started=False, turn_completed=False, turn_failed=False,
@@ -67,18 +64,23 @@ def run_codex(command, prompt, *, timeout=None, receipt=None):
         and os.environ.get("MINDIE_MAINTENANCE_GROUP") == "1"
         and os.getpgrp() == os.getpid()
     )
+    owner = os.environ.get("MINDIE_MAINTENANCE_OWNER") if inherited else None
+    if owner is not None and (not owner.isdecimal() or os.getppid() != int(owner)):
+        raise NativeStartError("maintenance owner exited before native execution")
+    deferred_to_core = defer_cleanup and (inherited or (
+        not POSIX and os.environ.get('MINDIE_MAINTENANCE_GROUP') == '1'
+        and os.environ.get('MINDIE_MAINTENANCE_OWNER', '').isdecimal()))
     with tempfile.TemporaryFile() as input_file:
         input_file.write(prompt.encode())
         input_file.seek(0)
         try:
             if POSIX:
-                process = subprocess.Popen(
-                    command,
-                    stdin=input_file,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    start_new_session=not inherited,
-                )
+                if inherited:
+                    process = subprocess.Popen(command, stdin=input_file,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                else:
+                    from bounded_process import _spawn
+                    process = _spawn(command, input_file, None)
             else:
                 process = windows_process.spawn(
                     command,
@@ -136,7 +138,7 @@ def run_codex(command, prompt, *, timeout=None, receipt=None):
         ]
         for thread in threads:
             thread.start()
-        deadline = time.monotonic() + timeout
+        deadline = None if timeout is None else time.monotonic() + timeout
         turns = 0
         usage = None
 
@@ -158,7 +160,9 @@ def run_codex(command, prompt, *, timeout=None, receipt=None):
                 if turns > 1:
                     raise NativeFailure("maintenance attempted another turn")
             if event.get("type") == "turn.completed":
-                if receipt['turn_completed']:
+                if receipt['turn_completed'] and deferred_to_core:
+                    code = None  # Core records the worker outcome before tree cleanup.
+                elif receipt['turn_completed']:
                     raise NativeFailure("maintenance completed another turn")
                 receipt['turn_completed'] = True
                 reported = event.get("usage")
@@ -179,17 +183,21 @@ def run_codex(command, prompt, *, timeout=None, receipt=None):
 
         try:
             while True:
+                if owner is not None and os.getppid() != int(owner):
+                    raise NativeFailure("maintenance owner exited")
                 if read_errors:
                     raise InvalidResultError("Codex output read failed") from read_errors[0]
                 if flooded or total[0] > MAX_OUTPUT:
                     raise OutputLimitExceeded("Codex maintenance output exceeds limit")
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
                     raise TimeoutError("Codex maintenance deadline exceeded")
                 try:
-                    line = lines.get(timeout=min(0.1, remaining))
+                    line = lines.get(timeout=0.1 if remaining is None else min(0.1, remaining))
                 except queue.Empty:
-                    if process.poll() is not None and not threads[0].is_alive():
+                    # Exit is evidence; silence is not. An inherited pipe
+                    # holder must not hide the actual native process exit.
+                    if process.poll() is not None:
                         break
                     continue
                 if line is None:
@@ -197,15 +205,39 @@ def run_codex(command, prompt, *, timeout=None, receipt=None):
                         raise OutputLimitExceeded(
                             "Codex maintenance output exceeds limit"
                         )
-                    break
+                    if process.poll() is not None:
+                        break
+                    continue  # EOF alone does not end healthy native work.
                 if line.strip():
                     check_line(line)
+                    if receipt['turn_completed']:
+                        break
+            # A terminal event closes the business operation. Reaping this
+            # process afterwards has its own small cleanup wait, never a new
+            # model deadline. Preserve terminal evidence on cleanup failure.
             try:
-                code = process.wait(timeout=max(0.01, deadline - time.monotonic()))
+                if receipt['turn_completed']:
+                    code = process.wait(timeout=2)
+                else:
+                    # The event loop already observed actual process exit;
+                    # it kept owner checks and explicit deadlines live after EOF.
+                    code = process.wait()
             except subprocess.TimeoutExpired as exc:
-                raise TimeoutError("Codex maintenance deadline exceeded") from exc
-            if code:
+                receipt['cleanup_failed'] = True
+                code = None
+            # Validate already-delivered events without waiting for another
+            # model turn or treating quiet inference as a fault.
+            while True:
+                try:
+                    pending = lines.get_nowait()
+                except queue.Empty:
+                    break
+                if pending is not None and pending.strip():
+                    check_line(pending)
+            if code and not receipt['turn_completed']:
                 raise NativeFailure("Codex maintenance exited nonzero; no retry")
+            if code and receipt['turn_completed']:
+                receipt['cleanup_failed'] = True
         except NativeFailure as error:
             # A CLI can emit `error` immediately before `turn.failed`. Inspect
             # only events already queued; never wait for/reconnect the model.
@@ -230,9 +262,19 @@ def run_codex(command, prompt, *, timeout=None, receipt=None):
             raise
         finally:
             original_error = sys.exc_info()[1]
+            if original_error is None and receipt['turn_completed'] and deferred_to_core:
+                # The existing core process group owns every descendant. Let
+                # this worker deliver the validated business envelope first;
+                # the core records it durably before closing the group.
+                receipt['elapsed_ms'] = round((time.monotonic() - started) * 1000)
+                return usage
             try:
                 if inherited:
                     # The service kills this whole group after reading our result/error.
+                    if owner is not None and os.getppid() != int(owner):
+                        # The owner can no longer reap descendants. This worker
+                        # leads only its owned maintenance process group.
+                        os.killpg(os.getpid(), signal.SIGKILL)
                     if process.poll() is None:
                         process.kill()
                 elif POSIX:
@@ -261,12 +303,21 @@ def run_codex(command, prompt, *, timeout=None, receipt=None):
                     process.stderr.close()
             except Exception:
                 receipt['cleanup_failed'] = True
-                if original_error is None:
+                if original_error is None and not receipt['turn_completed']:
                     raise
             finally:
+                if getattr(process, '_mindie_owner_fd', None) is not None:
+                    owner_fd, process._mindie_owner_fd = process._mindie_owner_fd, None
+                    try:
+                        os.close(owner_fd)
+                    except OSError:
+                        receipt['cleanup_failed'] = True
                 receipt['elapsed_ms'] = round((time.monotonic() - started) * 1000)
                 if original_error is not None:
                     original_error.mindie_native_receipt = dict(receipt)
         if read_errors:
-            raise InvalidResultError("Codex output read failed") from read_errors[0]
+            if receipt['turn_completed']:
+                receipt['cleanup_failed'] = True
+            else:
+                raise InvalidResultError("Codex output read failed") from read_errors[0]
         return usage

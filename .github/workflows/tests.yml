@@ -31,11 +31,16 @@ jobs:
       # Contract tests archive these commits. They do not guess a sibling
       # checkout. Publish the exact core and peer revisions before adapter CI.
       # Peer 90f73e7 is an ancestor of the reviewed Kimi 86de2c3 revision.
+      - name: Read product runtime pin
+        id: product
+        shell: bash
+        run: |
+          python -c 'import os,sys; sys.path.insert(0,"plugins/mindie-agent/scripts"); from product_contract import requirements; open(os.environ["GITHUB_OUTPUT"],"a").write("knowledge="+requirements(".")[0]["mindie-knowledge"]+"\n")'
       - name: Checkout pinned core
         uses: actions/checkout@v4
         with:
           repository: mindie-agent/knowledge
-          ref: 929bdcb918f2207aea38b02a14bd8e6219fabac4
+          ref: ${{ steps.product.outputs.knowledge }}
           path: .ci/core
       - name: Checkout pinned peer adapter
         uses: actions/checkout@v4
