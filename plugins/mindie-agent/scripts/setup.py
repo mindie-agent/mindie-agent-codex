@@ -204,10 +204,14 @@ def install(args, parser):
         community_config=str(community_config),
         product_validation=validation,
     )
-    from capture_config import prepare
+    from capture_config import prepare, prepare_store
     value.update(prepare(python, SCRIPTS))
     if args.domain == declaration["publication"]["domain"] and not args.no_public_feed:
         value["feeds"] = [product_contract.publication_feed(declaration)]
+    # The short Stop path only admits into an existing store. Initialize it
+    # with the pinned core here, without starting a service or calling a model.
+    # A damaged existing authority fails before installation config is written.
+    prepare_store(python, SCRIPTS, value)
     write_private(engine_config, value)
     adapter = dict(
         python=python,

@@ -102,6 +102,8 @@ class LocalUpdater(Updater):
                                 config_fingerprint="b"*64, status="retired" if self.idle else "busy")))
         if len(args) > 1 and args[1].endswith("state_compatibility.py"):
             return json.dumps(dict(status="compatible"))
+        if len(args) > 2 and args[1].endswith("capture_config.py") and args[2] == "prepare-store":
+            return json.dumps(dict(status="ready"))
         return super().command(args, **kwargs)
 
     def prepare_capture(self, candidate):
@@ -646,6 +648,24 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(self.updater.installs, 0)
         self.assertFalse((self.root / 'transaction.json').exists())
         self.assertFalse(any(len(args) > 1 and args[1].endswith('service_handoff.py') for args in observed))
+
+    def test_store_preparation_failure_restores_retirement_without_native_install(self):
+        candidate = self.updater.prepare(self.sha)
+        command = self.updater.command
+        observed = []
+        def failed_store(args, **kwargs):
+            observed.append([str(arg) for arg in args])
+            if len(args) > 2 and str(args[1]).endswith('capture_config.py') and args[2] == 'prepare-store':
+                raise RuntimeError('required knowledge authority is corrupt')
+            return command(args, **kwargs)
+        with patch.object(self.updater, 'command', side_effect=failed_store):
+            with self.assertRaisesRegex(RuntimeError, 'knowledge authority is corrupt'):
+                self.updater.install(candidate)
+        self.assertEqual(read(self.config), self.initial)
+        self.assertEqual(self.updater.installs, 0)
+        self.assertFalse((self.root / 'transaction.json').exists())
+        actions = [args[2] for args in observed if len(args) > 2 and args[1].endswith('service_handoff.py')]
+        self.assertEqual(actions, ['stop', 'unretire', 'restore'])
 
     def test_cached_candidate_runtime_drift_is_rechecked_before_native_installation(self):
         candidate = self.updater.prepare(self.sha)
