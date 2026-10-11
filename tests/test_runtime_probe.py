@@ -149,7 +149,7 @@ class RuntimeProbeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             product_contract.validate_receipt(json.dumps(receipt), product_contract.identity(self.source, 'a' * 40))
 
-    def test_candidate_checks_installed_pin_and_publication_validator(self):
+    def test_candidate_checks_runtime_pin_independently_of_publication_validator(self):
         expected = product_contract.identity(self.source, 'a' * 40)
         with patch.object(candidate_validate.importlib.metadata, 'distribution', return_value=SimpleNamespace(read_text=lambda _: '{"vcs_info":{"commit_id":"wrong"}}')):
             with self.assertRaisesRegex(ValueError, 'revision_mismatch'):
@@ -157,9 +157,12 @@ class RuntimeProbeTests(unittest.TestCase):
         with (patch.object(candidate_validate, 'adapter_check'),
               patch.object(candidate_validate, 'installed_revisions'),
               patch.object(candidate_validate, 'runtime_check'),
-              patch.object(candidate_validate, 'publication_contract', return_value={'contract': {'validator': {'revision': 'b' * 40}}})):
-            with self.assertRaisesRegex(ValueError, 'validator_mismatch'):
-                candidate_validate.validate(self.source, expected)
+              patch.object(candidate_validate, 'publication_contract') as publication):
+            from mindie_knowledge.publication_contract import make_contract, render_contract, parse_contract
+            raw = render_contract(make_contract(expected['publication']['domain'], 'b' * 40))
+            publication.return_value = parse_contract(raw, expected['publication']['domain'])
+            self.assertEqual(candidate_validate.validate(self.source, expected)['status'], 'validated')
+            publication.assert_called_once_with(expected['publication'])
 
     def test_local_recheck_reuses_only_verified_publication_and_rechecks_runtime(self):
         expected = product_contract.identity(self.source, 'a' * 40)

@@ -27,6 +27,18 @@ import mcp_gate
 
 
 class SessionGateTests(unittest.TestCase):
+    def test_admission_error_precedes_cleanup_and_success_cannot_hide_cleanup(self):
+        for ok in (False, True):
+            envelope = {'ok': ok, 'result': None} if ok else {'ok': False, 'error': 'AdmissionUnavailable: synthetic authority loss'}
+            completed = ProcessResult('completed', stdout=json.dumps(envelope), returncode=0,
+                cleanup=[{'stage': 'close_owner_pipe', 'error_type': 'OSError'}])
+            with self.subTest(ok=ok), patch('session_gate.run', return_value=completed):
+                with self.assertRaises(Inactive) as caught:
+                    Sessions(self.config).active_lease('manual-A')
+                self.assertIn('cleanup', str(caught.exception))
+                if not ok:
+                    self.assertIn('AdmissionUnavailable', str(caught.exception))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

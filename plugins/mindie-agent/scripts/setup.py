@@ -240,6 +240,7 @@ def install(args, parser):
     print(
         json.dumps(
             dict(
+                status="configured",
                 config=str(config),
                 engine_config=str(engine_config),
                 community_config=str(community_config),
@@ -372,6 +373,7 @@ def configure(args, parser):
     print(
         json.dumps(
             dict(
+                status="configured",
                 community_config=str(community_config),
                 sharing="enabled",
                 sharing_choice="contribute",

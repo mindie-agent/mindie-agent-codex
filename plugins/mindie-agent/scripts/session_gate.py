@@ -165,28 +165,29 @@ class Sessions:
             config = self._config()
             helper = Path(runtime_scripts(config)) / "admission_ops.py"
             try:
-                output = run(
+                completed = run(
                     [config["python"], str(helper), operation, str(self.config)],
                     json.dumps(payload),
                     timeout=self.op_timeout,
                     max_output=32768,
                     env=generation_env(self.config),
                     allow_service=operation == "stop_capture",
-                ).checked_stdout()
-                envelope = json.loads(output)
+                )
+                envelope = json.loads(completed.stdout)
+                if not isinstance(envelope, dict) or envelope.get("ok") is not True:
+                    detail = (envelope.get("error", "invalid admission response")
+                              if isinstance(envelope, dict) else "invalid admission response")
+                    detail = str(detail)[:240]
+                    if completed.cleanup:
+                        detail += "; owned-process cleanup also failed; do not repeat the operation"
+                    raise Inactive(detail)
+                completed.checked_stdout()
             except Inactive:
                 raise
             except Exception as exc:
                 raise Inactive(
                     f"MindIE admission is unavailable: {type(exc).__name__}: {str(exc)[:160]}"
                 )
-            if not isinstance(envelope, dict) or envelope.get("ok") is not True:
-                detail = (
-                    envelope.get("error", "invalid admission response")
-                    if isinstance(envelope, dict)
-                    else "invalid admission response"
-                )
-                raise Inactive(str(detail)[:240])
             return envelope["result"]
 
     def activate(self):

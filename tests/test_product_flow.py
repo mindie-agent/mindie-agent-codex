@@ -100,3 +100,20 @@ class ProductFlowTests(SharingFixture):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(consent.load()["choice"], before)
         self.assertEqual(self.community.read_text(encoding="utf-8"), "{broken")
+
+    def test_completed_configuration_survives_binding_read_failure(self):
+        self.enter()
+        from session_gate import Inactive
+        error = Inactive('synthetic admission read/cleanup failure')
+        with patch.object(bridge.Sessions, 'active_lease', side_effect=error):
+            result = bridge.configure([
+                '--community-repository', 'owner/knowledge',
+                '--community-project-root', str(self.scope),
+                '--community-visibility', 'public',
+            ])
+        self.assertEqual(result['status'], 'degraded')
+        self.assertEqual(result['configuration_status'], 'configured')
+        self.assertEqual(result['activation']['status'], 'unavailable')
+        self.assertIn(str(error), result['activation']['error'])
+        self.assertEqual(sharing.read()['repository'], 'owner/knowledge')
+        self.assertEqual(consent.load()['choice'], 'contribute')
