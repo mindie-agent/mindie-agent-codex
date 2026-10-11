@@ -1056,6 +1056,9 @@ class Updater:
                     or receipt.get("status") not in {"retired", "busy"}):
                 self.save("update_failed", service_handoff=dict(handoff, status="failed"))
                 raise RuntimeError("service retirement is unconfirmed; no automatic retry")
+            # A confirmed receipt replaces the pending interruption warning.
+            # Later retirement/restore failures retain their own diagnostics.
+            handoff.pop("error", None)
             if not idle.get("idle"):
                 return self.save("waiting_for_idle", candidate=candidate["revision"],
                                  service_handoff=dict(handoff, status="busy"))

@@ -266,6 +266,9 @@ class AutoUpdateTests(unittest.TestCase):
     def test_two_git_revisions_install_all_surfaces_and_leave_source_dirty(self):
         first = self.check()
         self.assertEqual(first["status"], "installed")
+        self.assertEqual(first["service_handoff"]["restoration"]["status"], "restored")
+        self.assertNotIn("error", first["service_handoff"])
+        self.assertNotIn("error", read(self.updater.state_path)["service_handoff"])
         old_plugin = Path(first["current"]["plugin"])
         self.assertEqual(first["current"]["revision"], self.sha)
         skill = self.remote / "plugins/mindie-agent/skills/mindie-agent/SKILL.md"
@@ -702,6 +705,42 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(result["attempts"][sha]["count"], 1)
         self.assertEqual(read(self.config), self.initial)
         self.assertEqual(self.updater.installs, 0)
+
+    def test_confirmed_busy_service_reports_waiting_without_interruption_error(self):
+        self.updater.idle = False
+        result = self.check()
+        self.assertEqual(result["status"], "waiting_for_idle")
+        self.assertEqual(result["service_handoff"]["retirement"]["status"], "busy")
+        self.assertNotIn("error", result["service_handoff"])
+        self.assertEqual(read(self.config), self.initial)
+        self.assertEqual(self.updater.installs, 0)
+
+    def test_unconfirmed_retirement_preserves_error_and_prevents_install(self):
+        command = self.updater.command
+        def unknown_stop(args, **kwargs):
+            if len(args) > 2 and str(args[1]).endswith('service_handoff.py') and args[2] == 'stop':
+                raise OSError('stop outcome unconfirmed')
+            return command(args, **kwargs)
+        with patch.object(self.updater, 'command', side_effect=unknown_stop):
+            result = self.check()
+        self.assertEqual(result["status"], "update_failed")
+        self.assertEqual(result["service_handoff"]["error"], "retirement-outcome-unconfirmed")
+        self.assertEqual(read(self.config), self.initial)
+        self.assertEqual(self.updater.installs, 0)
+
+    def test_restore_failure_remains_visible_after_confirmed_retirement(self):
+        command = self.updater.command
+        def failed_restore(args, **kwargs):
+            if len(args) > 2 and str(args[1]).endswith('service_handoff.py') and args[2] == 'restore':
+                raise OSError('selected service could not resume')
+            return command(args, **kwargs)
+        with patch.object(self.updater, 'command', side_effect=failed_restore):
+            result = self.check()
+        self.assertEqual(result["current"]["revision"], self.sha)
+        self.assertEqual(result["service_handoff"]["status"], "failed")
+        self.assertEqual(result["service_handoff"]["restoration"]["error"], "OSError")
+        self.assertNotIn("error", result["service_handoff"])
+        self.assertEqual(self.updater.installs, 1)
 
     def test_idle_authorization_does_not_block_update(self):
         with patch.dict(os.environ, CODEX_THREAD_ID="fixture-manual"):
