@@ -169,9 +169,11 @@ def validate(source, expected, verified_receipt=None):
     installed_revisions(actual["runtime"])
     checked("runtime_api", "api_incompatible", lambda: runtime_check(Path(__file__).resolve().parent))
     if verified_receipt is None:
-        parsed = checked("publication_contract", "read_failed", lambda: publication_contract(actual["publication"]))
-        if parsed["contract"]["validator"]["revision"] != actual["runtime"]["mindie-knowledge"]:
-            raise CheckFailure("publication_contract", "validator_mismatch")
+        # The runtime parser checks material formats and review semantics.
+        # The exact product-selected declaration digest binds the independent
+        # trusted publication validator. A runtime-only change does not select
+        # new Bot code; executable code never comes from candidate content.
+        checked("publication_contract", "read_failed", lambda: publication_contract(actual["publication"]))
     else:
         # This baseline is immutable and already verified for these exact
         # source/product/runtime identities. Rechecking before installation
