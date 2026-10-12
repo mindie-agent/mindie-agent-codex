@@ -103,6 +103,55 @@ class NativeSummaryResultTests(unittest.TestCase):
         self.assertEqual(value['status'], 'failed')
         self.assertEqual(value['usage']['input_tokens'], 120)
         self.assertEqual(value['error'], 'native')
+        self.assertEqual(value['error_reason'], 'native_extra_completion')
+
+    def test_native_failure_observations_reach_the_caller_without_private_events(self):
+        cases = [
+            (dict(type='error', message='Reconnecting... 1/5 PRIVATE_NATIVE_CANARY'),
+             'native_reconnecting', 'outcome_unknown'),
+            (dict(type='error', error=dict(message='stream disconnected PRIVATE_NATIVE_CANARY')),
+             'native_stream_disconnected', 'outcome_unknown'),
+            (dict(type='error', message='PRIVATE_NATIVE_CANARY'),
+             'native_event_error', 'outcome_unknown'),
+            (dict(type='turn.failed', error=dict(message='PRIVATE_NATIVE_CANARY')),
+             'native_turn_failed', 'failed'),
+            (dict(type='item.completed', item=dict(type='command_execution', command='PRIVATE_NATIVE_CANARY')),
+             'native_forbidden_item', 'outcome_unknown'),
+            (dict(type='turn.started'), 'native_extra_turn', 'outcome_unknown'),
+        ]
+        for event, reason, status in cases:
+            with self.subTest(reason=reason):
+                payload = request(worker)
+                value = self.execute(payload, [dict(type='turn.started'), event])
+                self.assertEqual(value['status'], status)
+                self.assertEqual(value['error_reason'], reason)
+                self.assertEqual(value['model_calls'], 1)
+                self.assertIsNone(value['result'])
+                self.assertIsNone(value['usage'])
+                self.assertNotIn('PRIVATE_NATIVE_CANARY', json.dumps(value))
+                self.assertNotIn('PRIVATE_NATIVE_CANARY', json.dumps(summarizer.failure_detail(value)))
+                summarizer.validate_outcome(value, payload)
+
+    def test_unsuccessful_cli_exit_has_a_distinct_uncertain_result(self):
+        payload = request(worker)
+        value = self.execute(payload, [dict(type='turn.started')], 'sys.exit(7)\n')
+        self.assertEqual(value['status'], 'outcome_unknown')
+        self.assertEqual(value['error_reason'], 'native_exit_nonzero')
+        self.assertEqual(value['billing_status'], 'unknown')
+        self.assertIsNone(value['result'])
+
+    def test_untrusted_native_reason_cannot_become_a_public_diagnostic(self):
+        for reason in ['PRIVATE_NATIVE_CANARY', 'block_identity_mismatch', ['PRIVATE_NATIVE_CANARY']]:
+            with self.subTest(reason=reason):
+                payload = request(worker)
+                def fail(_command, prompt, **options):
+                    options['receipt']['native_started'] = True
+                    raise guard.NativeFailure('PRIVATE_NATIVE_CANARY', reason=reason)
+                with patch.object(worker, 'run_codex', fail):
+                    value = worker.run(payload)
+                self.assertEqual(value['status'], 'outcome_unknown')
+                self.assertEqual(value['error_reason'], 'native_failure')
+                self.assertNotIn('PRIVATE_NATIVE_CANARY', json.dumps(value))
 
     def test_reaping_failure_preserves_known_answer_and_usage(self):
         payload = request(worker)
