@@ -86,12 +86,12 @@ class PublicationCompatibilityTests(unittest.TestCase):
                  'commit', '--quiet', '-m', 'Synthetic public material')
         return self.git('rev-parse', 'HEAD')
 
-    def produce(self):
+    def produce(self, *, content=None):
         from mindie_knowledge.loop.store import Store
         with closing(Store(self.directory / 'producer', self.publication['domain'])) as store:
             doc = store.create_draft(kind='experience', title='Synthetic boundary example',
                 summary='An empty file differs from a missing file; example evidence only.',
-                content='Synthetic evidence: an existing empty file returns zero bytes.\n')
+                content=content or 'Synthetic evidence: an existing empty file returns zero bytes.\n')
             package = store.materials.export_task(doc['entry_id'])
         for path, content in package['files'].items():
             target = self.repo / 'tasks' / doc['entry_id'] / path
@@ -131,6 +131,15 @@ class PublicationCompatibilityTests(unittest.TestCase):
         from mindie_knowledge.publication_contract import ContractMismatch, parse_contract
         with self.assertRaisesRegex(ContractMismatch, 'formats'):
             parse_contract(raw, self.publication['domain'], hashlib.sha256(raw).hexdigest())
+
+    def test_generated_host_placeholder_passes_exact_trusted_validator(self):
+        content = 'SSH identity <redacted:username-at-host:a1b2c3d4e5f6> remains private.'
+        revision = self.produce(content=content)
+        result = self.trusted_check(revision)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(json.loads(result.stdout)['content_only'])
+        body = next((self.repo / 'tasks').glob('*/blocks/*.md')).read_text('utf-8')
+        self.assertIn(content, body)
 
     def test_validator_reuse_rejects_a_wrong_actual_installed_pin(self):
         with self.assertRaisesRegex(ValueError, 'exact publication pin'):
