@@ -121,7 +121,10 @@ def _reason(error, receipt):
     if isinstance(error, summarizer.SummaryInputError):
         return "request_invalid"
     if isinstance(error, NativeFailure):
-        return "native_failure"
+        reason = getattr(error, 'reason', 'native_failure')
+        if isinstance(reason, str) and reason.startswith('native_') and reason in summarizer.SUMMARY_FAILURE_REASONS:
+            return reason
+        return 'native_failure'
     return "unknown_failure"
 
 

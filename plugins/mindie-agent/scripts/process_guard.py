@@ -34,6 +34,10 @@ class InvalidResultError(ValueError):
 class NativeFailure(RuntimeError):
     """Native child failed, emitted error/turn.failed, or used a forbidden event."""
 
+    def __init__(self, message, *, reason='native_failure'):
+        super().__init__(message)
+        self.reason = reason
+
 
 class NativeStartError(OSError):
     """The native executable could not be started."""
@@ -50,6 +54,20 @@ def _rejected_model(event):
     message = message.lower()
     return ('model' in message and ('not supported' in message or 'does not support' in message)
             and ('chatgpt' in message or '400' in message))
+
+
+def _native_error_reason(event):
+    """Static observations only; never retain provider text, codes or URLs."""
+    message = event.get('message')
+    if not isinstance(message, str) and isinstance(event.get('error'), dict):
+        message = event['error'].get('message')
+    if isinstance(message, str):
+        lower = message.lower()
+        if lower.startswith('reconnecting...'):
+            return 'native_reconnecting'
+        if 'stream disconnected' in lower:
+            return 'native_stream_disconnected'
+    return 'native_turn_failed' if event['type'] == 'turn.failed' else 'native_event_error'
 
 
 def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=False):
@@ -153,15 +171,15 @@ def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=Fals
             if event.get("type") in {"error", "turn.failed"}:
                 receipt['request_rejected'] = _rejected_model(event)
                 receipt['turn_failed'] = event.get('type') == 'turn.failed' or receipt['request_rejected']
-                raise NativeFailure("Codex maintenance failed; no retry")
+                raise NativeFailure("Codex maintenance failed; no retry", reason=_native_error_reason(event))
             if event.get("type") == "turn.started":
                 turns += 1
                 receipt['turn_started'] = True
                 if turns > 1:
-                    raise NativeFailure("maintenance attempted another turn")
+                    raise NativeFailure("maintenance attempted another turn", reason='native_extra_turn')
             if event.get("type") == "turn.completed":
                 if receipt['turn_completed']:
-                    raise NativeFailure("maintenance completed another turn")
+                    raise NativeFailure("maintenance completed another turn", reason='native_extra_completion')
                 receipt['turn_completed'] = True
                 reported = event.get("usage")
                 if isinstance(reported, dict):
@@ -177,7 +195,7 @@ def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=Fals
             if item and not isinstance(item.get("type"), str):
                 raise InvalidResultError("invalid Codex item type")
             if item and item.get("type") not in ALLOWED_ITEMS:
-                raise NativeFailure("maintenance attempted a tool call")
+                raise NativeFailure("maintenance attempted a tool call", reason='native_forbidden_item')
             if (item and item.get('type') == 'agent_message'
                     and event['type'] == 'item.completed'
                     and item.get('phase') in (None, 'final_answer')):
@@ -190,7 +208,7 @@ def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=Fals
         try:
             while True:
                 if owner is not None and os.getppid() != int(owner):
-                    raise NativeFailure("maintenance owner exited")
+                    raise NativeFailure("maintenance owner exited", reason='native_owner_exited')
                 if read_errors:
                     raise InvalidResultError("Codex output read failed") from read_errors[0]
                 if flooded or total[0] > MAX_OUTPUT:
@@ -247,7 +265,7 @@ def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=Fals
                 if pending is not None and pending.strip():
                     check_line(pending)
             if code and not receipt['turn_completed']:
-                raise NativeFailure("Codex maintenance exited nonzero; no retry")
+                raise NativeFailure("Codex maintenance exited nonzero; no retry", reason='native_exit_nonzero')
             if code and receipt['turn_completed']:
                 receipt['cleanup_failed'] = True
         except NativeFailure as error:
