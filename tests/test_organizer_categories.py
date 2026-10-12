@@ -77,7 +77,7 @@ class OrganizerCategoryTests(unittest.TestCase):
         payload = request(worker, 'K3-02')
         def native(command, prompt, **options):
             completion(options['receipt'])
-            Path(command[command.index('--output-last-message') + 1]).write_text('not-json')
+            options['receipt']['final_message'] = 'not-json'
         with patch.object(worker, 'run_codex', native):
             value = worker.run(payload)
         self.assertEqual(value['status'], 'failed')
