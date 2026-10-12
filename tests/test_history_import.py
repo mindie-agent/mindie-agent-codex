@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from contextlib import closing, redirect_stderr
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -133,11 +134,36 @@ class HistoryImportTests(SharingFixture):
 
     def test_bridge_dispatches_explicit_empty_source_without_service(self):
         self.activate()
-        result = subprocess.run(
-            [sys.executable, str(SCRIPTS / 'bridge.py'), '--config', str(self.config),
-             'history-import', '--source', str(self.source)],
-            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15,
-        )
+        # This checks receipt/dispatch semantics, not a cold-start SLA. Keep a
+        # real helper and capture its stack before the outer CI watchdog; a
+        # killed initialization previously hid its stage behind teardown.
+        helpers = self.root / 'instrumented-helpers'
+        helpers.mkdir()
+        (helpers / 'history_import.py').write_text(
+            'import faulthandler,sys\n'
+            'faulthandler.dump_traceback_later(10, repeat=True)\n'
+            f'sys.path.insert(0, {str(SCRIPTS)!r})\n'
+            'from history_import import main\n'
+            'raise SystemExit(main())\n', encoding='utf-8')
+        config = json.loads(self.config.read_text())
+        config['runtime_scripts'] = str(helpers)
+        self.config.write_text(json.dumps(config))
+        started = time.monotonic()
+        try:
+            result = subprocess.run(
+                [sys.executable, str(SCRIPTS / 'bridge.py'), '--config', str(self.config),
+                 'history-import', '--source', str(self.source)],
+                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60,
+            )
+        except subprocess.TimeoutExpired as exc:
+            diagnostic = exc.stderr or b''
+            if isinstance(diagnostic, bytes):
+                diagnostic = diagnostic.decode('utf-8', errors='replace')
+            exc.add_note('Owned synthetic import helper stack before timeout:\n' + diagnostic)
+            raise
+        print(f'Owned synthetic empty import elapsed: {time.monotonic() - started:.3f}s')
+        if result.stderr:
+            print(result.stderr)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(json.loads(result.stdout)['status'], 'empty')
         self.assertFalse((self.root / 'data/test/connection.json').exists())
