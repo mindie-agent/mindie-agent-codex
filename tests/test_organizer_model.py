@@ -20,7 +20,7 @@ class SummaryModelTests(unittest.TestCase):
         def native(command, prompt, **options):
             captured.append((command, prompt, options))
             completion(options['receipt'])
-            Path(command[command.index('--output-last-message') + 1]).write_text(json.dumps(metadata), encoding='utf-8')
+            options['receipt']['final_message'] = json.dumps(metadata)
         with patch.object(agent_worker, 'run_codex', native):
             value = agent_worker.run(payload)
         return value, captured
@@ -42,6 +42,7 @@ class SummaryModelTests(unittest.TestCase):
         self.assertIn('--ignore-rules', command)
         self.assertIn('features.hooks=false', command)
         self.assertIn('features.shell_tool=false', command)
+        self.assertNotIn('--output-last-message', command)
         self.assertIsNone(options.get('timeout'))
         self.assertTrue(options['defer_cleanup'])
         self.assertIn('fallible reference index', prompt)

@@ -32,8 +32,12 @@ the serialized user prompt is at most 64 KiB with at most eight blocks. Native
 system/context tokens are additional and are counted in reported usage. Native
 execution and worker identity checks have no default wall-clock deadline. The
 owner can cancel them on service shutdown or revoked authority. Terminal output
-is saved before cleanup; a cleanup failure cannot erase it or authorize another
-paid call. There is no final full-transcript merge or repeated old-body input.
+is the completed visible `agent_message` from the native JSONL stream, paired
+with `turn.completed` and its usage. Provisional items, commentary and hidden
+reasoning are not results. Indexing does not depend on a CLI output file written
+during shutdown. The core saves the result before closing its owned process
+tree; a cleanup failure cannot erase it or authorize another paid call. There
+is no final full-transcript merge or repeated old-body input.
 
 The outcome ledger distinguishes returned, failed and unknown invocations and
 retains nullable native token usage. Returned outputs survive local scanner or

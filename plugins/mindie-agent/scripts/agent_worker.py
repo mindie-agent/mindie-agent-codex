@@ -56,7 +56,7 @@ class NativeSummaryModel:
         if len(prompt.encode("utf-8")) > summarizer.MAX_PROMPT_BYTES:
             raise summarizer.SummaryInputError("complete prompt exceeds budget")
         with tempfile.TemporaryDirectory(prefix="mindie-summary-") as directory:
-            schema, output = Path(directory) / "schema.json", Path(directory) / "result.json"
+            schema = Path(directory) / "schema.json"
             schema.write_text(json.dumps(summarizer.output_schema(
                 [message.id for message in messages if message.id])), encoding="utf-8")
             command = [os.environ.get("MINDIE_CODEX_BIN", "codex"), "exec", "--model", SUMMARY_MODEL,
@@ -65,19 +65,21 @@ class NativeSummaryModel:
                        "-c", "features.hooks=false", "-c", "features.apps=false",
                        "-c", "features.shell_tool=false", "-c", "features.multi_agent=false",
                        "-c", "features.unbounded_connection_retries=false", "-c", 'web_search="disabled"',
-                       "--output-schema", str(schema), "--output-last-message", str(output), "--json", "-"]
+                       "--output-schema", str(schema), "--json", "-"]
             run_codex(command, prompt, receipt=self.receipt, defer_cleanup=True)
             if not self.receipt["turn_completed"]:
                 raise NativeFailure("native execution did not report completion")
             try:
-                with output.open("rb") as stream:
-                    raw = stream.read(summarizer.MAX_RESPONSE_BYTES + 1)
+                message = self.receipt.get('final_message')
+                if not isinstance(message, str) or not message:
+                    raise InvalidResultError("completed summary message is unavailable")
+                raw = message.encode('utf-8')
                 if len(raw) > summarizer.MAX_RESPONSE_BYTES:
                     raise OutputLimitExceeded("summary metadata exceeds output budget")
-                self.raw_result = raw.decode("utf-8")
+                self.raw_result = message
             except OutputLimitExceeded:
                 raise
-            except (OSError, UnicodeError):
+            except UnicodeError:
                 raise InvalidResultError("summary output is unavailable or invalid") from None
             return AIMessage(content=self.raw_result)
 

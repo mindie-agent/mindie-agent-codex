@@ -58,7 +58,7 @@ def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=Fals
     receipt = {} if receipt is None else receipt
     receipt.update(native_started=False, turn_started=False, turn_completed=False, turn_failed=False,
                    request_rejected=False,
-                   usage=None, elapsed_ms=0, cleanup_failed=False)
+                   usage=None, final_message=None, elapsed_ms=0, cleanup_failed=False)
     inherited = (
         POSIX
         and os.environ.get("MINDIE_MAINTENANCE_GROUP") == "1"
@@ -160,9 +160,7 @@ def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=Fals
                 if turns > 1:
                     raise NativeFailure("maintenance attempted another turn")
             if event.get("type") == "turn.completed":
-                if receipt['turn_completed'] and deferred_to_core:
-                    code = None  # Core records the worker outcome before tree cleanup.
-                elif receipt['turn_completed']:
+                if receipt['turn_completed']:
                     raise NativeFailure("maintenance completed another turn")
                 receipt['turn_completed'] = True
                 reported = event.get("usage")
@@ -180,6 +178,14 @@ def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=Fals
                 raise InvalidResultError("invalid Codex item type")
             if item and item.get("type") not in ALLOWED_ITEMS:
                 raise NativeFailure("maintenance attempted a tool call")
+            if (item and item.get('type') == 'agent_message'
+                    and event['type'] == 'item.completed'
+                    and item.get('phase') in (None, 'final_answer')):
+                if not isinstance(item.get('text'), str):
+                    raise InvalidResultError('invalid completed Codex message')
+                # Only the visible, completed answer is a result. Reasoning,
+                # provisional items and commentary never become metadata.
+                receipt['final_message'] = item['text']
 
         try:
             while True:
@@ -216,13 +222,19 @@ def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=Fals
             # process afterwards has its own small cleanup wait, never a new
             # model deadline. Preserve terminal evidence on cleanup failure.
             try:
-                if receipt['turn_completed']:
+                if receipt['turn_completed'] and deferred_to_core:
+                    # The core must record this result before it closes the
+                    # owned tree. Waiting here couples output to CLI shutdown.
+                    code = process.poll()
+                elif receipt['turn_completed']:
                     code = process.wait(timeout=2)
                 else:
                     # The event loop already observed actual process exit;
                     # it kept owner checks and explicit deadlines live after EOF.
                     code = process.wait()
-            except subprocess.TimeoutExpired as exc:
+            except (subprocess.TimeoutExpired, OSError):
+                if not receipt['turn_completed']:
+                    raise
                 receipt['cleanup_failed'] = True
                 code = None
             # Validate already-delivered events without waiting for another
