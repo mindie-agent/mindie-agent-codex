@@ -38,11 +38,16 @@ def program(rows, tail=''):
 
 class NativeSummaryResultTests(unittest.TestCase):
     def execute(self, payload, rows, tail=''):
-        command = [sys.executable, '-c', program(rows, tail)]
-        def native(_command, prompt, **options):
-            return guard.run_codex(command, prompt, **options)
-        with patch.object(worker, 'run_codex', native):
-            return worker.run(payload)
+        # Large output must exercise the result stream, not Windows' much
+        # smaller command-line limit before the fake native process starts.
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / 'native.py'
+            script.write_text(program(rows, tail), encoding='utf-8')
+            command = [sys.executable, str(script)]
+            def native(_command, prompt, **options):
+                return guard.run_codex(command, prompt, **options)
+            with patch.object(worker, 'run_codex', native):
+                return worker.run(payload)
 
     def test_completed_result_survives_cli_that_never_writes_its_late_file(self):
         payload = request(worker)
