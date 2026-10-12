@@ -66,7 +66,10 @@ class WindowsProcessTreeTests(unittest.TestCase):
             "kwargs = {} if sys.argv[3] == 'inherited' else {"
             "'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL}\n"
             "child = subprocess.Popen([sys.executable, sys.argv[1]], **kwargs)\n"
-            "pathlib.Path(sys.argv[2]).write_text(str(child.pid), encoding='ascii')\n"
+            "pidfile = pathlib.Path(sys.argv[2])\n"
+            "ready = pidfile.with_suffix('.ready')\n"
+            "ready.write_text(str(child.pid), encoding='ascii')\n"
+            "ready.replace(pidfile)\n"
             + ("import time; time.sleep(30)\n" if leader_wait else ""),
             encoding="utf-8",
         )
