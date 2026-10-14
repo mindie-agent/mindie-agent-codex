@@ -244,6 +244,12 @@ def ensure_argv(python):
             "--config", str(reporting_config_path())]
 
 
+def ensure_command_line(command):
+    if os.name == "nt":
+        return "& " + " ".join("'" + part.replace("'", "''") + "'" for part in command)
+    return shlex.join(command)
+
+
 def configure_reporting(enabled, python):
     if type(enabled) is not bool:
         return _unavailable("reporting_configure", "TypeError")
@@ -257,7 +263,8 @@ def configure_reporting(enabled, python):
         if enabled:
             result.update(
                 run_outside_hook=True, command=command,
-                command_line=shlex.join(command),
+                command_line=ensure_command_line(command),
+                command_shell="powershell" if os.name == "nt" else "posix",
                 note=("Reporting settings are enabled. Execute this command once outside "
                       "the Hook and inspect its result before claiming reporter readiness. "
                       "Report any failure; do not automatically retry."),
