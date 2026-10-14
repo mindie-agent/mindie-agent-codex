@@ -45,10 +45,12 @@ Changed declarations require a matching product combination and fail before
 installation, publication or feed promotion when they do not match. Cached
 candidates recheck local runtime and packaged bytes before installation.
 
-Sign in to Codex, then install from a downloaded copy:
+Sign in to Codex, then install the release source. The `v0.0.1` tag is being
+prepared and these release commands become available when it is published.
+Development validation uses an explicitly selected candidate checkout.
 
 ```sh
-git clone https://github.com/mindie-agent/mindie-agent-codex.git
+git clone --branch v0.0.1 --depth 1 https://github.com/mindie-agent/mindie-agent-codex.git
 cd mindie-agent-codex
 MINDIE_DATA="${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent"
 MINDIE_BOOTSTRAP="$MINDIE_DATA/codex-bootstrap/runtime"
@@ -57,7 +59,7 @@ uv pip install --python "$MINDIE_BOOTSTRAP/bin/python" -r runtime-requirements.t
 "$MINDIE_BOOTSTRAP/bin/python" plugins/mindie-agent/scripts/setup.py install \
   --knowledge-python "$MINDIE_BOOTSTRAP/bin/python" --root "$MINDIE_DATA"
 "$MINDIE_BOOTSTRAP/bin/python" plugins/mindie-agent/scripts/auto_update.py enable \
-  --source-root "$PWD" --root "$MINDIE_DATA/updates" --channel main
+  --source-root "$PWD" --root "$MINDIE_DATA/updates" --channel release
 ```
 
 Setup writes MindIE-owned configuration and defaults community contribution to
@@ -85,6 +87,8 @@ plugin support. Run these commands from the downloaded repository in PowerShell;
 the default schedule uses the current user's Windows Task Scheduler task.
 
 ```powershell
+git clone --branch v0.0.1 --depth 1 https://github.com/mindie-agent/mindie-agent-codex.git
+Set-Location mindie-agent-codex
 $Repo = (Get-Location).Path
 $Data = Join-Path $env:LOCALAPPDATA 'MindIEAgent'
 $Bootstrap = Join-Path $Data 'codex-bootstrap\runtime'
@@ -102,13 +106,14 @@ $env:MINDIE_AGENT_CONFIG = $Config
 & (Join-Path $Bootstrap 'Scripts\python.exe') `
   (Join-Path $Repo 'plugins\mindie-agent\scripts\auto_update.py') `
   --settings $UpdaterSettings enable --source-root $Repo `
-  --root (Join-Path $Data 'updates') --channel main --schedule auto
+  --root (Join-Path $Data 'updates') --channel release --schedule auto
 & (Join-Path $Bootstrap 'Scripts\python.exe') `
   (Join-Path $Data 'updates\launcher.py') $UpdaterSettings status
 ```
 
-The final command validates and installs the plugin through Codex's native
-plugin API before registering the task. To install and validate it without a
+The enable command validates and installs the plugin through Codex's native
+plugin API before registering the task; the final command reads status.
+To install and validate it without a
 periodic task, use `--schedule manual`; this mode persists and reports the
 manual check command. Windows CI exercises the pinned runtime and process
 contracts. A native Codex install and real Windows host acceptance still need
@@ -137,7 +142,7 @@ MINDIE_AGENT_CONFIG="$MINDIE_CONFIG" \
 MINDIE_AGENT_CONFIG="$MINDIE_CONFIG" \
   "$MINDIE_BOOTSTRAP/bin/python" plugins/mindie-agent/scripts/auto_update.py \
   --settings "$MINDIE_UPDATER_SETTINGS" enable --source-root "$PWD" \
-  --root "$MINDIE_DATA/updates" --channel main --schedule auto
+  --root "$MINDIE_DATA/updates" --channel release --schedule auto
 "$MINDIE_BOOTSTRAP/bin/python" "$MINDIE_DATA/updates/launcher.py" \
   "$MINDIE_UPDATER_SETTINGS" status
 ```
@@ -229,7 +234,7 @@ with reporting off. See the [shared diagnostics contract](https://github.com/min
 ## Updates and failures
 
 The macOS LaunchAgent, Windows Task Scheduler task, or Linux systemd user timer
-checks the adapter's remote `main` and public knowledge feed every five
+checks the adapter's selected release channel and public knowledge feed every five
 minutes. On unsupported systems, or when Linux has no responding per-user
 systemd manager, explicit `--schedule manual` mode still installs the validated
 plugin and records that no scheduler is registered. This work does not open
@@ -295,9 +300,10 @@ installation example in a new shell):
 The second command checks for updates. It takes no operation argument, which
 is what the scheduler runs. `status`, `disable`, and `uninstall` are the other
 launcher operations; `uninstall` accepts `--purge` only. These dispatch to the
-committed generation, not a stale controller copy. Current development tracks
-`main`. Release tracking can be selected when a suitable release exists; old
-business Skill migration is not part of this update.
+committed generation, not a stale controller copy. New installs default to the
+ordinary `release` channel; development tracking uses explicit `--channel main`.
+An unavailable Release is reported as a failed check without falling back to
+`main`. Old business Skill migration is not part of this update.
 
 The first internal product release is `0.0.1`, with Git tag `v0.0.1`; it uses
 the existing normal `release` channel. Internal testing does not relax data

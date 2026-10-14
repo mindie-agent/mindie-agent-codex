@@ -2348,7 +2348,7 @@ def main():
     start.add_argument(
         "--root", type=Path, default=Path.home() / ".local/share/mindie-agent/updates"
     )
-    start.add_argument("--channel", choices=["main", "release"], default="main")
+    start.add_argument("--channel", choices=["main", "release"], default="release")
     start.add_argument("--schedule", choices=["auto", "manual"], default="auto")
     sub.add_parser("check")
     sub.add_parser("status")
