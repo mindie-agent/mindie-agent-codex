@@ -15,6 +15,11 @@ Explicit disable and scope limits remain authoritative.
 [用户须知](references/user-notice.md) describes visible material, redaction,
 index-model processing and public Git history. It adds no approval step.
 
+During installation or first-use setup, present the user notice, then follow
+[optional workspace setup](references/workspace-setup.md): recommend the workspace,
+ask whether and where to create it, and after creation ask whether to initialize it.
+Reuse prior answers; offer this during setup rather than ordinary task execution.
+
 Normal Stop events automatically associate the current native task after
 verifying its named transcript and approved project scope. No history scan runs.
 Missing configuration or internal maintenance failures stay in machine
