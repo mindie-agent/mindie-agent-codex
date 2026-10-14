@@ -242,13 +242,14 @@ def link(path, target):
     temporary = path.with_name(path.name + ".next")
     _remove_link(temporary)
     if os.name == "nt":
-        # Windows (unverified on real hardware): plain users lack
-        # SeCreateSymbolicLinkPrivilege, but a directory junction needs no
+        # Plain Windows users lack SeCreateSymbolicLinkPrivilege, but a junction needs no
         # privilege. Junctions cannot be atomically replaced, so the stale
         # link is removed first; the transaction journal re-creates it if the
         # process dies in between.
-        run(["cmd", "/d", "/c", "mklink", "/J", str(temporary), str(target)],
-            "").checked_stdout()
+        # cmd's normal output uses the machine's code page. /u makes this
+        # built-in command's redirected output explicitly UTF-16LE.
+        run(["cmd", "/d", "/u", "/c", "mklink", "/J", str(temporary), str(target)],
+            "", output_encoding="utf-16-le").checked_stdout()
         _remove_link(path)
         os.replace(temporary, path)
         return
