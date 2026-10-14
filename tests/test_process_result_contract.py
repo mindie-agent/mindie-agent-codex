@@ -33,6 +33,8 @@ class ProcessResultTests(unittest.TestCase):
         with self.assertRaises(bounded_process.ProcessCleanupError) as caught:
             result.checked_stdout()
         self.assertIs(caught.exception.process_result, result)
+        self.assertIn("reap_process: TimeoutExpired", str(caught.exception))
+        self.assertNotIn("cleanup fixture", str(caught.exception))
         shaped = mcp_gate.runtime_result(result)
         self.assertEqual(shaped['structuredContent']['receipt'], 'done')
         self.assertEqual(shaped['cleanup']['operation_outcome'], 'preserved')

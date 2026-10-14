@@ -48,8 +48,12 @@ class ProcessResult:
 class ProcessCleanupError(RuntimeError):
     def __init__(self, result):
         self.process_result = result
+        stages = ", ".join(
+            f"{item['stage']}: {item['error_type']}" for item in result.cleanup
+        )
         super().__init__("Process execution " + result.execution +
-                         "; owned-process cleanup failed; do not repeat the operation")
+                         "; owned-process cleanup failed (" + stages +
+                         "); do not repeat the operation")
 
 
 def _cleanup(process, result, *, selector=None, threads=()):
