@@ -165,8 +165,9 @@ def validate(source, expected, verified_receipt=None):
     actual = checked("source", "source_invalid", lambda: identity(source, expected.get("candidate_revision")))
     if actual != expected:
         raise CheckFailure("source", "source_changed")
-    checked("adapter", "adapter_incompatible", lambda: adapter_check(Path(source)))
+    # Verify provenance before adapter checks import runtime state declarations.
     installed_revisions(actual["runtime"])
+    checked("adapter", "adapter_incompatible", lambda: adapter_check(Path(source)))
     checked("runtime_api", "api_incompatible", lambda: runtime_check(Path(__file__).resolve().parent))
     if verified_receipt is None:
         # The runtime parser checks material formats and review semantics.
