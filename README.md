@@ -299,12 +299,11 @@ committed generation, not a stale controller copy. Current development tracks
 `main`. Release tracking can be selected when a suitable release exists; old
 business Skill migration is not part of this update.
 
-Before the repositories collectively meet the product release criteria and
-publish normal release versions, destructive state format updates may repeat.
-There is no one-time reset allowance. Development package numbers and Git pins
-are not a product release declaration. The release commit sets normal
-`major.minor.patch` `RELEASE_VERSION` values in the knowledge and receipt layout
-modules; they remain `None` during development.
+The first internal product release is `0.0.1`, with Git tag `v0.0.1`; it uses
+the existing normal `release` channel. Internal testing does not relax data
+protection. Both knowledge and receipt layout modules declare `RELEASE_VERSION`
+as `0.0.1`, including installations from the candidate branch. This preparation
+does not itself publish a Release or complete native acceptance.
 Candidate validation rejects a normal plugin version unless both declarations
 match it. The release channel also requires a normal tag and the matching
 source version, including cached candidates; a development build cannot enter
@@ -319,8 +318,7 @@ external writes. An incompatible released format requires an explicit
 migration in that candidate; until one exists, the updater rejects it before
 retiring the old service, writing an installation transaction or replacing the
 native package. It does not clear the state and report a successful upgrade.
-This is a release compatibility boundary, not an automatic beta launch or a
-claim that future migrations or native release acceptance have been completed.
+Future migrations and native release acceptance need their own evidence.
 
 ## Stop or uninstall
 

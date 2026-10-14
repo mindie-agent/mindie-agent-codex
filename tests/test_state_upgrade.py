@@ -35,6 +35,9 @@ class ReceiptUpgradeTests(unittest.TestCase):
         return obj
 
     def test_development_resets_can_repeat_without_opening_old_receipts(self):
+        development = patch.object(receipt_layout, 'RELEASE_VERSION', None)
+        development.start()
+        self.addCleanup(development.stop)
         legacy = self.root / 'gate/task.sqlite3'
         legacy.parent.mkdir()
         legacy.write_bytes(b'opaque old development ledger without authority marker')
@@ -49,6 +52,20 @@ class ReceiptUpgradeTests(unittest.TestCase):
         for path in retained:
             with closing(sqlite3.connect(path)) as db:
                 self.assertEqual(db.execute('SELECT status FROM attempts').fetchall(), [('succeeded',)])
+
+    def test_first_product_release_protects_uncertain_receipts_without_an_override(self):
+        receipts = self.receipts()
+        self.assertTrue(receipts.claim('uncertain-write'))
+        receipts.finish('uncertain-write', 'unknown')
+        layout = self.root / 'gate-layout.json'
+        self.assertEqual(json.loads(layout.read_text())['release_version'], '0.0.1')
+        before = receipts.path.read_bytes()
+        with patch.object(receipt_layout, 'FORMAT', 2):
+            with self.assertRaisesRegex(ValueError, 'released.*migration'):
+                self.receipts().claim('new-request')
+        self.assertEqual(receipts.path.read_bytes(), before)
+        self.assertFalse((self.root / 'gate-v2').exists())
+        self.assertFalse(self.receipts().claim('uncertain-write'))
 
     def test_compatible_release_upgrade_preserves_success_and_unknown_without_replay(self):
         with patch.object(receipt_layout, 'RELEASE_VERSION', '1.0.0'):
