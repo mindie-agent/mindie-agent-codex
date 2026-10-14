@@ -122,10 +122,16 @@ def _spawn(command, stdin, env, *, allow_service=False):
 
 def _kill_tree(process):
     if POSIX:
+        if getattr(process, "_mindie_tree_terminated", False):
+            return
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        # Repeated signals can hit a reaped/reused group or macOS zombies
+        # after the first successful kill. Other failures remain retryable
+        # cleanup failures and must not set this receipt.
+        process._mindie_tree_terminated = True
         return
     windows_process.close_tree(process)
 
