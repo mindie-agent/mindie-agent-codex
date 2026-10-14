@@ -12,6 +12,13 @@ Read the [用户须知 / contribution notice](plugins/mindie-agent/skills/mindie
 for the full visible-message sharing scope, deterministic redaction limits,
 model-provider processing and public Git history. It adds no authorization step.
 
+After presenting the user notice during setup, recommend
+[mindie-agent/vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace.git)
+and ask whether to create a working directory. After creation, ask whether to
+initialize its source submodules and local configuration. Creation and
+initialization are optional; reuse the user's existing choices. See
+[workspace setup](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md).
+
 The plugin provides one informational entry Skill, three knowledge tools
 (query, block reading and optional feedback), and general remote-dev tools.
 It owns Codex identity, transcript parsing, Hook translation and model execution.
