@@ -43,8 +43,10 @@ if __name__ == "__main__":
         try:
             from mindie_knowledge.loop.store import Store
             from mindie_knowledge.loop.service_context import validate
+            from mindie_knowledge.git_layout import validate_config_feed_layout
             config = json.load(sys.stdin)
             validate(config)
+            validate_config_feed_layout(config)
             store = Store(config['root'], config['domain'])
             store.close()
         except Exception as exc:
