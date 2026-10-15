@@ -24,7 +24,8 @@ class GeneralRemoteTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.config = self.root / 'config.json'
-        self.config.write_text(json.dumps({'python': sys.executable, 'engine_config': '/absent/not-read'}))
+        self.config.write_text(json.dumps({'python': sys.executable, 'runtime_scripts': str(SCRIPTS),
+                                          'engine_config': '/absent/not-read'}))
         diag = self.root / 'diagnostics'
         diag.mkdir()
         (diag / 'diagnostics.json').write_text('{"decision":"disabled"}\n')
@@ -283,7 +284,7 @@ class GeneralRemoteTests(unittest.TestCase):
             with self.subTest(code=code), \
                  patch.object(runtime_call, 'resolve_lease', return_value={'session': 'task-A'}), \
                  patch.object(runtime_call, 'finish_outcome'), \
-                 patch('mindie_knowledge.loop.cli.ensure_service', return_value={}), \
+                 patch('service_client.connect', return_value={}), \
                  patch('mindie_knowledge.loop.transport.rpc', side_effect=RequestRejected(
                      'bounded reason', error_code=code, read_ref='mindie://test/' + 'a' * 64)):
                 result = runtime_call.call(payload)
@@ -300,7 +301,7 @@ class GeneralRemoteTests(unittest.TestCase):
         finished = []
         with patch.object(runtime_call, 'resolve_lease', return_value={'session': 'task-A'}), \
              patch.object(runtime_call, 'finish_outcome', side_effect=lambda *a, **k: finished.append(a[-1])), \
-             patch('mindie_knowledge.loop.cli.ensure_service', return_value={}), \
+             patch('service_client.connect', return_value={}), \
              patch('mindie_knowledge.loop.transport.rpc', side_effect=RequestRejected('ambiguous reference')) as rpc:
             result = runtime_call.call(payload)
             self.assertTrue(result['isError'])
@@ -323,7 +324,7 @@ class GeneralRemoteTests(unittest.TestCase):
         finished = []
         with patch.object(runtime_call, 'resolve_lease', return_value={'session': 'task-A'}), \
              patch.object(runtime_call, 'finish_outcome', side_effect=lambda *a, **k: finished.append(a[-1])), \
-             patch('mindie_knowledge.loop.cli.ensure_service', return_value={}), \
+             patch('service_client.connect', return_value={}), \
              patch('mindie_knowledge.loop.transport.rpc', side_effect=ValueError('response exceeds limit')):
             with self.assertRaisesRegex(ValueError, 'response exceeds'):
                 runtime_call.call(payload)

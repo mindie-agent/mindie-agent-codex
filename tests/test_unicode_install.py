@@ -22,25 +22,6 @@ class UnicodeInstallTests(unittest.TestCase):
         self.assertEqual(result.checked_stdout(), text)
         self.assertEqual(result.returncode, 0)
 
-    @unittest.skipUnless(os.name == "nt", "actual native Windows junction")
-    def test_junction_creation_with_unicode_paths_and_output(self):
-        sys.path.insert(0, str(SCRIPTS))
-        from auto_update import link, _remove_link
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory) / "\u5de5\u4f5c path"
-            target = root / "\u6e90 target"
-            target.mkdir(parents=True)
-            (target / "marker").write_text("preserved", encoding="utf-8")
-            selected = root / "\u9009\u4e2d link"
-            try:
-                link(selected, target)
-                self.assertEqual((selected / "marker").read_text(encoding="utf-8"), "preserved")
-                self.assertFalse(selected.with_name(selected.name + ".next").exists())
-            finally:
-                _remove_link(selected.with_name(selected.name + ".next"))
-                _remove_link(selected)
-            self.assertEqual((target / "marker").read_text(encoding="utf-8"), "preserved")
 
     def test_setup_and_core_readback_with_unicode_paths(self):
         from mindie_knowledge.loop.cli import config_at

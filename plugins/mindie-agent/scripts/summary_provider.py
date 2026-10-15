@@ -154,6 +154,17 @@ def environment_keys(home=None):
     return sorted(set(names))
 
 
+def required_environment(home=None):
+    """A cold static MCP entry must not start a service with missing auth."""
+    _, _, provider = _selected_provider(home, project=False)
+    if provider is None:
+        return
+    names = environment_keys(home)
+    if any(not os.environ.get(name) for name in names):
+        raise ProviderConfigurationError(
+            "required provider context unavailable; start a new native SessionStart")
+
+
 def selected(model):
     """Honor the installed native home, including the ordinary default home."""
     config, name, provider = _selected_provider()

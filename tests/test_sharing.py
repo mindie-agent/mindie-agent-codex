@@ -44,7 +44,8 @@ class SharingFixture(unittest.TestCase):
         self.admission = self.root / "codex.admission.sqlite3"
         self.engine.write_text(
             json.dumps(
-                public_engine_config(self.root / "data", admission_path=str(self.admission))
+                public_engine_config(self.root / "data", adapter_profile=self.config,
+                                     admission_path=str(self.admission))
             )
         )
         self.config.write_text(
@@ -83,11 +84,15 @@ class SharingFixture(unittest.TestCase):
             project_roots=[str(self.scope)],
             idle_seconds=300,
             visibility="public",
+            consent_config=str(self.root / "mindie-consent.json"),
         )
         value.update(overrides)
         return value
 
     def write_sharing(self, **overrides):
+        import consent
+        if consent.load(self.config)["state"] == "missing":
+            consent.record_choice("contribute", self.config)
         self.community.write_text(json.dumps(self.settings(**overrides)))
         engine = json.loads(self.engine.read_text())
         engine["community_config"] = str(self.community)
@@ -190,9 +195,10 @@ class GateTests(SharingFixture):
         self.activate()
         self.prepare_store()
         config = json.loads(self.engine.read_text())
+        summary_fixture = config['summary_command']
         config.update(prepare(sys.executable, SCRIPTS))
         config['transcript_adapter'] = str(SCRIPTS / 'codex_transcript.py')
-        config.pop('summary_command')  # This case verifies body delivery, with zero model calls.
+        config['summary_command'] = summary_fixture  # No provider can run in this body-delivery case.
         self.engine.write_text(json.dumps(config))
         transcript_path = Path(self.event()['transcript_path'])
         for size in (129 * 1024, 1024 * 1024, 10 * 1024 * 1024):
@@ -532,7 +538,7 @@ class CommandTests(SharingFixture):
         # community write lock). The concurrent disable must wait for it —
         # never overlap the read-merge-replace — then land on the freshly
         # enabled file: the stored flag ends disabled, both exit 0.
-        self.write_sharing(enabled=True)
+        self.write_sharing(enabled=False)
         script = self.root / "settings_race.py"
         script.write_text(
             "import os, sys, time\n"

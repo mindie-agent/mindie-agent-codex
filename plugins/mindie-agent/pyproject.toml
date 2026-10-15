@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=77,<81"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mindie-agent-codex"
+version = "0.0.1"
+description = "Codex adapter for MindIE Agent"
+requires-python = ">=3.11"
+dependencies = ["mindie-knowledge", "remote-dev"]
+
+[tool.uv.sources]
+mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "6a4bbf824820b9a72bb81de71034d11a8596e697" }
+remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "dc3f7cecdd9cabbc3cc222f576725d69514cfdf7" }
+
+[tool.setuptools]
+packages = ["mindie_codex", "mindie_codex.scripts"]
+package-dir = { mindie_codex = "." }
+include-package-data = false
+
+[tool.setuptools.package-data]
+mindie_codex = [
+  "pyproject.toml", "uv.lock", "product-contract.json",
+  ".codex-plugin/plugin.json", ".mcp.json",
+  "hooks/*.json", "skills/*/*.md", "skills/*/agents/*.yaml",
+  "skills/*/references/*.md", "skills/*/assets/*", "assets/*", "scripts/*.json"
+]

@@ -1,6 +1,4 @@
-"""F2 consent authority for the Codex adapter: profile-shared persistent
-choice, legacy migration (adapter sharing_choice + legacy community file),
-damaged-state honesty. Real files, stub runtime; no model, no network."""
+"""Explicit profile consent and damaged-state preservation; no inferred choices."""
 
 import json
 import os
@@ -30,7 +28,7 @@ class ConsentFixture(unittest.TestCase):
             json.dumps(dict(root=str(self.root / "data"), domain="test",
                             admission_path=str(self.root / "a.sqlite3")))
         )
-        self.legacy_community = self.root / "codex.community.json"
+        self.legacy_community = self.root / "mindie-community.json"
         self.config.write_text(
             json.dumps(dict(
                 python=sys.executable,
@@ -49,50 +47,8 @@ class ConsentFixture(unittest.TestCase):
         self.environment.stop()
         cleanup_temporary_directory(self.temp)
 
-    def test_legacy_adapter_choice_imports_once_at_boundary(self):
-        adapter = json.loads(self.config.read_text())
-        adapter["sharing_choice"] = "read-only"
-        self.config.write_text(json.dumps(adapter))
-        # Reads never import: the authority stays missing until an explicit
-        # install/upgrade/entry boundary migrates it.
-        self.assertIsNone(sharing.adapter_choice())
-        self.assertFalse(consent.consent_path().exists())
-        migrated = consent.migrate_legacy()
-        self.assertEqual(migrated["status"], "migrated")
-        self.assertEqual(sharing.adapter_choice(), "read-only")
-        saved = json.loads(consent.consent_path().read_text())
-        self.assertEqual(saved["choice"], "read-only")
-        # The adapter key is then ignored as a consent source.
-        adapter["sharing_choice"] = "later"
-        self.config.write_text(json.dumps(adapter))
-        self.assertEqual(sharing.adapter_choice(), "read-only")
-        self.assertEqual(consent.migrate_legacy()["status"], "kept")
 
-    def test_conflicting_legacy_sources_never_guess_consent(self):
-        adapter = json.loads(self.config.read_text())
-        adapter["sharing_choice"] = "read-only"
-        self.config.write_text(json.dumps(adapter))
-        self.legacy_community.write_text(json.dumps(
-            dict(schema="mindie-community-config/1", enabled=True,
-                 generation="g", enabled_at=1.0, repository="owner/repo",
-                 project_roots=[str(self.root)], idle_seconds=300)
-        ))
-        migrated = consent.migrate_legacy()
-        self.assertEqual(migrated["status"], "conflict")
-        self.assertFalse(consent.consent_path().exists())
-        self.assertIsNone(sharing.adapter_choice())
-        # An explicit user choice still records normally afterwards.
-        sharing.record_choice("later")
-        self.assertEqual(sharing.adapter_choice(), "later")
 
-    def test_damaged_legacy_source_is_a_fault_not_consent(self):
-        self.legacy_community.write_text("{broken")
-        migrated = consent.migrate_legacy()
-        self.assertEqual(migrated["status"], "error")
-        self.assertEqual(migrated["state"], "damaged-legacy")
-        self.assertFalse(consent.consent_path().exists())
-        # Existing installation: never re-onboarded.
-        self.assertIsNone(sharing.first_use())
 
     def test_record_choice_refuses_to_clear_damaged_consent(self):
         consent.consent_path().write_text("{broken")
@@ -102,23 +58,25 @@ class ConsentFixture(unittest.TestCase):
         self.assertEqual(consent.consent_path().read_text(), "{broken")
         self.assertEqual(consent.load()["state"], "corrupt")
 
-    def test_shared_authority_exists_means_legacy_pointer_is_not_consulted(self):
-        # The profile-shared file is the live authority once it exists; a
-        # legacy pointer naming an enabled file is never a fallback when the
-        # authority is damaged or unreadable.
+    def test_unsupported_pointer_cannot_select_an_alternate_authority(self):
         shared = consent.shared_community_path()
         shared.write_text("{broken")
-        self.legacy_community.write_text(json.dumps(
+        alternate = self.root / "old-community.json"
+        alternate.write_text(json.dumps(
             dict(schema="mindie-community-config/1", enabled=True,
                  generation="g", enabled_at=1.0, repository="owner/repo",
                  project_roots=[str(self.root)], idle_seconds=300)
         ))
+        config = json.loads(self.config.read_text())
+        config["community_config"] = str(alternate)
+        self.config.write_text(json.dumps(config))
         with self.assertRaises(ValueError):
             sharing.read()
         lease = dict(project_root=str(self.root), root_session="t",
                      activated_at=1.0)
         with self.assertRaises(ValueError):
             sharing.capture_allowed(lease, str(self.root))
+        self.assertEqual(shared.read_text(), "{broken")
 
     def test_consent_config_gates_the_capture_write_path(self):
         # Settings carrying the consent authority: capture requires a saved
@@ -153,13 +111,14 @@ class ConsentFixture(unittest.TestCase):
         settings["enabled_at"] = None
         shared.write_text(json.dumps(settings))
         self.assertFalse(sharing.capture_allowed(lease, str(self.root)))
-        # Legacy format without the field keeps previous read compatibility.
+        # A pre-release enabled flag is not a substitute for explicit consent.
         settings["enabled"] = True
         settings["enabled_at"] = 1.0
         del settings["consent_config"]
         shared.write_text(json.dumps(settings))
         authority.unlink()
-        self.assertTrue(sharing.capture_allowed(lease, str(self.root)))
+        with self.assertRaisesRegex(sharing.SharingError, "consent authority"):
+            sharing.capture_allowed(lease, str(self.root))
 
     def test_concurrent_field_updates_both_survive(self):
         consent.record_choice("later")
@@ -169,7 +128,7 @@ class ConsentFixture(unittest.TestCase):
             "import os, sys, time\n"
             "sys.path.insert(0, sys.argv[1])\n"
             "os.environ['MINDIE_AGENT_CONFIG'] = sys.argv[2]\n"
-            "import consent_store\n"
+            "from mindie_knowledge import consent_store\n"
             "real = consent_store._read_raw\n"
             "def slow(path):\n"
             "    found = real(path)\n"
@@ -196,56 +155,18 @@ class ConsentFixture(unittest.TestCase):
         self.assertEqual(saved["choice"], "contribute")
         self.assertEqual(saved["reporting"], "enabled")
 
-    def test_migration_stamp_preserves_a_nonconforming_document(self):
-        shared = consent.shared_community_path()
-        foreign = '{"schema":"foreign-format/1","payload":"preserve"}\n'
-        shared.write_text(foreign)
-        migrated = sharing.migrate_community_path()
-        self.assertEqual(shared.read_text(), foreign)  # bytes preserved
-        self.assertIsNotNone(migrated["detail"])  # fault reported, not silent
-        # Parseable but malformed managed values: also never stamped.
-        shared.write_text(json.dumps(
-            dict(schema="mindie-community-config/1", enabled="yes",
-                 project_roots="not-a-list", idle_seconds=300)
-        ))
-        before = shared.read_text()
-        migrated = sharing.migrate_community_path()
-        self.assertEqual(shared.read_text(), before)
-        self.assertIsNotNone(migrated["detail"])
-        # Managed values the adapter pre-filter tolerates but the core's
-        # authoritative normalize rejects (idle_seconds below the floor):
-        # bytes preserved, fault reported — the stamp is not a repair path.
-        shared.write_text(json.dumps(
-            dict(schema="mindie-community-config/1", enabled=False,
-                 repository="owner/repo", project_roots=[], idle_seconds=1)
-        ))
-        before = shared.read_text()
-        migrated = sharing.migrate_community_path()
-        self.assertEqual(shared.read_text(), before)
-        self.assertIn("normalize", migrated["detail"])
-        # A conforming document is stamped normally, managed keys untouched.
-        shared.write_text(json.dumps(
-            dict(schema="mindie-community-config/1", enabled=False,
-                 repository="owner/repo", project_roots=[], idle_seconds=300)
-        ))
-        migrated = sharing.migrate_community_path()
-        settings = json.loads(shared.read_text())
-        self.assertEqual(settings["consent_config"], str(consent.consent_path()))
-        self.assertFalse(settings["enabled"])
-        self.assertNotIn("enabled_at", settings)  # managed keys untouched
 
-    def test_read_and_noop_migration_create_nothing(self):
+    def test_read_creates_nothing(self):
         saved = consent.load()
         self.assertEqual(saved["state"], "missing")
-        self.assertEqual(consent.migrate_legacy()["status"], "absent")
         self.assertEqual(
             sorted(path.name for path in self.root.iterdir()),
             ["codex.json", "engine.json"],
         )
-        self.assertIsNotNone(sharing.first_use())  # genuinely unchosen
+        self.assertIsNone(sharing.first_use())  # existing config does not infer a choice
 
     def test_choice_then_first_use_is_none(self):
-        self.assertIsNotNone(sharing.first_use())
+        self.assertIsNone(sharing.first_use())
         sharing.record_choice("later")
         self.assertIsNone(sharing.first_use())
         self.assertEqual(sharing.adapter_choice(), "later")
@@ -262,73 +183,8 @@ class ConsentFixture(unittest.TestCase):
         sharing.configured_path().write_text("{broken")
         self.assertIsNone(sharing.first_use())
 
-    def test_legacy_community_file_is_adopted_once_at_boundary(self):
-        self.legacy_community.write_text(json.dumps(
-            dict(schema="mindie-community-config/1", enabled=False,
-                 repository="owner/repo", project_roots=[], idle_seconds=300)
-        ))
-        shared = consent.shared_community_path()
-        self.assertFalse(shared.exists())
-        # Reads are pure: no adoption copy, no pointer rewrite, no fallback.
-        resolved = sharing.configured_path()
-        self.assertEqual(resolved, self.legacy_community)
-        self.assertFalse(shared.exists())
-        self.assertEqual(
-            json.loads(self.config.read_text())["community_config"],
-            str(self.legacy_community),
-        )
-        # The explicit boundary migrates once and repoints adapter+engine.
-        migrated = sharing.migrate_community_path()
-        self.assertEqual(migrated["status"], "adopted")
-        self.assertEqual(sharing.configured_path(), shared)
-        self.assertTrue(shared.exists())
-        self.assertTrue(self.legacy_community.exists())  # evidence kept
-        adapter = json.loads(self.config.read_text())
-        self.assertEqual(adapter["community_config"], str(shared))
-        engine = json.loads(self.engine.read_text())
-        self.assertEqual(engine["community_config"], str(shared))
-        # The consent authority pointer is wired into the settings.
-        settings = json.loads(shared.read_text())
-        self.assertEqual(settings["consent_config"], str(consent.consent_path()))
-        # Idempotent: a later legacy write is not re-adopted.
-        self.legacy_community.write_text("{changed")
-        self.assertEqual(sharing.configured_path(), shared)
-        self.assertEqual(sharing.migrate_community_path()["status"], "current")
-        self.assertNotEqual(shared.read_text(), "{changed")
 
-    def test_existing_shared_authority_never_merges_legacy_scope(self):
-        shared = consent.shared_community_path()
-        shared.write_text(json.dumps(
-            dict(schema="mindie-community-config/1", enabled=False,
-                 repository="owner/repo", project_roots=[], idle_seconds=300)
-        ))
-        self.legacy_community.write_text(json.dumps(
-            dict(schema="mindie-community-config/1", enabled=True,
-                 generation="g", enabled_at=1.0, repository="owner/repo",
-                 project_roots=[str(self.root)], idle_seconds=300)
-        ))
-        migrated = sharing.migrate_community_path()
-        self.assertEqual(migrated["status"], "repointed")
-        self.assertIsNotNone(migrated["detail"])  # conflict diagnosed
-        settings = json.loads(shared.read_text())
-        self.assertFalse(settings["enabled"])  # shared scope wins unchanged
-        self.assertEqual(settings["project_roots"], [])
-        self.assertTrue(self.legacy_community.exists())
-        adapter = json.loads(self.config.read_text())
-        self.assertEqual(adapter["community_config"], str(shared))
 
-    def test_enabled_true_legacy_settings_imports_contribute_at_boundary(self):
-        self.legacy_community.write_text(json.dumps(
-            dict(schema="mindie-community-config/1", enabled=True,
-                 generation="g", enabled_at=1.0, repository="owner/repo",
-                 project_roots=[str(self.root)], idle_seconds=300)
-        ))
-        # Reads stay pure; the explicit boundary performs the one-time import.
-        self.assertIsNone(sharing.adapter_choice())
-        migrated = consent.migrate_legacy()
-        self.assertEqual(migrated["status"], "migrated")
-        self.assertEqual(migrated["choice"], "contribute")
-        self.assertEqual(sharing.adapter_choice(), "contribute")
 
     def test_cross_adapter_profile_shares_choice(self):
         consent.record_choice("later")

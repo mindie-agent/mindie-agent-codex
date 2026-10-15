@@ -19,7 +19,7 @@ import tempfile
 
 # -I intentionally discards ambient imports; helpers belong to this candidate.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from product_contract import identity, read_json, validate_receipt
+from product_contract import identity, native_version, read_json, validate_receipt
 from runtime_probe import build_probe_script
 
 
@@ -60,8 +60,8 @@ def adapter_check(source):
     ):
         raise ValueError("informational skill must be available on demand")
     hooks = read_json(plugin / "hooks/hooks.json")[0]["hooks"]
-    if set(hooks) != {"Stop"} or len(hooks["Stop"]) != 1:
-        raise ValueError("only one Stop hook is supported")
+    if set(hooks) != {"SessionStart", "Stop"} or any(len(v) != 1 for v in hooks.values()):
+        raise ValueError("one SessionStart and one Stop hook are required")
     entries = hooks["Stop"][0]["hooks"]
     if len(entries) != 1 or "timeout" in entries[0]:
         raise ValueError("Stop must not impose an execution deadline")
@@ -82,12 +82,11 @@ def adapter_check(source):
         "history_import.py",
         "agent_worker.py",
         "capture_config.py",
-        "service_handoff.py",
-        "auto_update.py",
-        "update_launcher.py",
+        "entry.py",
+        "bootstrap.py",
+        "service_client.py",
         "mcp_catalog.json",
         "agent_diagnostics.py",
-        "runtime_launcher.py",
     ):
         if not (plugin / "scripts" / name).is_file():
             raise ValueError("missing bounded runtime entry: " + name)
@@ -101,15 +100,16 @@ def adapter_check(source):
 
 
 def release_check(plugin):
-    """A normal product version must declare both durable state boundaries."""
-    version = read_json(plugin / ".codex-plugin/plugin.json")[0]["version"]
+    """Validate protection declarations; component versions do not imply formats."""
+    version = native_version(plugin)
     if re.fullmatch(r"\d+\.\d+\.\d+", version):
-        from mindie_knowledge.state_layout import RELEASE_VERSION as knowledge_release
-        from receipt_layout import RELEASE_VERSION as receipt_release
-        if knowledge_release is None or receipt_release is None:
-            raise CheckFailure('adapter', 'release_state_undeclared')
-        if knowledge_release != version or receipt_release != version:
-            raise CheckFailure('adapter', 'release_version_mismatch')
+        from mindie_knowledge import state_layout
+        import receipt_layout
+        for layout in (state_layout, receipt_layout):
+            if (type(layout.FORMAT) is not int or layout.FORMAT < 1
+                    or not isinstance(layout.RELEASE_VERSION, str)
+                    or not re.fullmatch(r"\d+\.\d+\.\d+", layout.RELEASE_VERSION)):
+                raise CheckFailure('adapter', 'release_state_undeclared')
 
 
 def installed_revisions(pins):

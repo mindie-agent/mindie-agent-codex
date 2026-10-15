@@ -1,10 +1,8 @@
-"""Admission operations inside the committed runtime generation.
+"""Admission operations inside the fixed installed runtime.
 
-Wrapper entrypoints (Stop hook, MCP gate, updater) run under a plain
-interpreter and never import the knowledge core; every admission read or
-write is dispatched here, spawned with the committed generation's
-interpreter. This is the adapter's only caller of the shared core Admission
-store, so one committed generation (interpreter + scripts + core) handles
+Wrapper entrypoints (Stop hook and MCP gate) dispatch admission reads or writes
+here with the fixed release interpreter. This is the adapter's only caller of
+the shared core Admission store, so one release (interpreter + scripts + core) handles
 each operation coherently. The model never reaches this helper: the native
 session identity comes only from this process's own environment, and every
 payload is shape-checked.

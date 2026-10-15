@@ -28,11 +28,23 @@ def installed_scanner():
     return _SCANNER
 
 
-def public_engine_config(root, domain="test", **extra):
+def public_engine_config(root, domain="test", *, adapter_profile=None, **extra):
     """Current production configuration shape for isolated test services."""
-    return dict(root=str(root), domain=domain, capture_mode="public-transcript",
-                redactor_executable=installed_scanner(),
-                transcript_adapter=str(SCRIPTS / "codex_transcript.py"), **extra)
+    result = dict(root=str(root), domain=domain, capture_mode="public-transcript",
+                  redactor_executable=installed_scanner(),
+                  transcript_adapter=str(SCRIPTS / "codex_transcript.py"), **extra)
+    if adapter_profile is not None:
+        profile = Path(adapter_profile).resolve()
+        result.update(
+            service_launch_context=dict(paths={
+                "MINDIE_AGENT_CONFIG": str(profile),
+                "CODEX_HOME": str(profile.parent / "codex-home"),
+            }, environment=[]),
+            summary_command=[sys.executable, str(Path(__file__).with_name("no_model_summary.py"))],
+            product_validation=dict(schema="mindie-candidate-check/1", publication={},
+                                    native_version="0.0.1", source_sha256="a" * 64),
+        )
+    return result
 
 
 @contextmanager

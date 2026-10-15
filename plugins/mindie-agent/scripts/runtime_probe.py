@@ -1,4 +1,4 @@
-"""Candidate-private runtime checks; the installed updater never imports this API."""
+"""Candidate-owned runtime checks invoked by the fixed runtime preparation."""
 
 import os
 
@@ -28,7 +28,7 @@ if missing_packages:
     missing.append("missing packages: " + ", ".join(missing_packages))
 else:
     try:
-        from mindie_knowledge.loop.cli import ensure_service, load_transcript_adapter
+        from mindie_knowledge.loop.cli import ensure_service, prepare_service, load_transcript_adapter
         from mindie_knowledge.loop.activation import Admission
         from mindie_knowledge.loop.lifecycle import retire_service, restore_service, inspect_retirement
         from mindie_knowledge.materials.summarizer import SummaryLedger, MAX_PROMPT_BYTES, MAX_RESPONSE_BYTES, LANGMEM_VERSION

@@ -11,6 +11,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import tomllib
 
 PRODUCT_SCHEMA = "mindie-product/1"
 RECEIPT_SCHEMA = "mindie-candidate-check/1"
@@ -132,31 +133,49 @@ def read_json(path):
 
 
 def requirements(source):
-    """The existing requirements file is the only runtime revision authority."""
-    path = Path(source) / "runtime-requirements.txt"
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("runtime requirements must be a regular file")
-    with path.open("rb") as stream:
-        raw = stream.read(65537)
-    if len(raw) > 65536:
-        raise ValueError("runtime requirements exceed the metadata byte bound")
+    """uv's project and complete lock own the runtime dependency selection."""
+    source = package_root(source)
+    raw = (source / "pyproject.toml").read_bytes()
+    project = tomllib.loads(raw.decode("utf-8"))
+    sources = project["tool"]["uv"]["sources"]
     pins = {}
-    pattern = re.compile(r"([a-z-]+) @ git\+https://github.com/mindie-agent/(knowledge|remote-dev)@([0-9a-f]{40})\Z")
     expected = {"mindie-knowledge": "knowledge", "remote-dev": "remote-dev"}
-    for line in raw.decode("utf-8").splitlines():
-        if not line.strip() or line.startswith("#"):
-            continue
-        match = pattern.fullmatch(line)
-        if not match or expected.get(match[1]) != match[2] or match[1] in pins:
+    for name, repo in expected.items():
+        value = sources.get(name, {})
+        if (set(value) != {"git", "rev"}
+                or value["git"] != f"https://github.com/mindie-agent/{repo}"
+                or not isinstance(value["rev"], str) or not HEX40.fullmatch(value["rev"])):
             raise ValueError("runtime dependencies require exact official commit pins")
-        pins[match[1]] = match[3]
-    if set(pins) != set(expected):
-        raise ValueError("invalid runtime package combination")
-    return pins, hashlib.sha256(raw).hexdigest()
+        pins[name] = value["rev"]
+    lock = (source / "uv.lock").read_bytes()
+    locked = tomllib.loads(lock.decode("utf-8"))
+    for name, repo in expected.items():
+        packages = [item for item in locked["package"] if item["name"] == name]
+        if (len(packages) != 1
+                or packages[0].get("source", {}).get("git", "").split("#")[-1] != pins[name]):
+            raise ValueError("uv.lock differs from the declared exact runtime pins")
+    return pins, hashlib.sha256(raw + b"\0" + lock).hexdigest()
+
+
+def package_root(source):
+    source = Path(source)
+    nested = source / "plugins/mindie-agent"
+    return nested if nested.is_dir() else source
+
+
+def native_version(source):
+    source = package_root(source)
+    manifest = read_json(source / ".codex-plugin/plugin.json")[0]["version"]
+    project = tomllib.loads((source / "pyproject.toml").read_text(encoding="utf-8"))
+    if (not isinstance(manifest, str)
+            or not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+!-]{0,79}", manifest)
+            or project["project"]["version"] != manifest):
+        raise ValueError("native manifest and packaged project versions differ")
+    return manifest
 
 
 def product(source):
-    value, raw = read_json(Path(source) / "product-contract.json")
+    value, raw = read_json(package_root(source) / "product-contract.json")
     if not isinstance(value, dict) or set(value) != {"schema", "validation", "publication"}:
         raise ValueError("invalid product declaration")
     if value["schema"] != PRODUCT_SCHEMA or value["validation"] != RECEIPT_SCHEMA:
@@ -187,18 +206,11 @@ def source_root(scripts):
 
 def source_identity(source):
     """Bind preparation to source bytes, including the candidate validator."""
-    source = Path(source)
-    plugin = source / "plugins/mindie-agent"
-    if not plugin.is_dir():
-        plugin = source
-    files = [source / "product-contract.json", source / "runtime-requirements.txt"]
-    files.extend(path for path in plugin.rglob("*")
-                 if "__pycache__" not in path.parts and path.suffix != ".pyc"
-                 and (path.is_file() or path.is_symlink())
-                 and path not in files)
+    source = package_root(source)
+    files = package_files(source)
     digest = hashlib.sha256()
     size = 0
-    for path in sorted(files):
+    for path in sorted(files, key=lambda item: item.relative_to(source).as_posix()):
         if path.is_symlink() or not path.is_file():
             raise ValueError("candidate source must contain regular files")
         with path.open("rb") as stream:
@@ -212,6 +224,16 @@ def source_identity(source):
     return digest.hexdigest()
 
 
+def package_files(source):
+    """The shipped plugin payload; build and interpreter caches are not source."""
+    source = package_root(source)
+    excluded = {"__pycache__", ".git", ".venv", "build", "dist"}
+    return [path for path in source.rglob("*")
+            if not any(part in excluded or part.endswith(".egg-info")
+                       for part in path.relative_to(source).parts)
+            and path.suffix != ".pyc" and (path.is_file() or path.is_symlink())]
+
+
 def identity(source, revision=None):
     declaration, product_digest = product(source)
     pins, requirement_digest = requirements(source)
@@ -219,6 +241,7 @@ def identity(source, revision=None):
     if revision is not None and not HEX40.fullmatch(revision):
         raise ValueError("candidate revision must be an immutable commit")
     return dict(schema=RECEIPT_SCHEMA, candidate_revision=revision,
+                native_version=native_version(source),
                 source_sha256=source_digest, product_sha256=product_digest,
                 requirements_sha256=requirement_digest, runtime=pins,
                 publication=declaration["publication"])

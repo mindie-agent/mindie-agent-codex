@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from auto_update import Updater, atomic, fold_feed_results  # noqa: E402
+from feed_sync import fold_feed_results  # noqa: E402
 
 
 def _row(repository, status, **extra):
@@ -127,105 +127,3 @@ class FoldFeedTests(unittest.TestCase):
                     json.dumps([{"status": "synced"}]), "junk\n[]"):
             with self.assertRaises(ValueError):
                 fold_feed_results(raw)
-
-
-class CheckKnowledgeTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
-        self.config = self.root / "adapter.json"
-        self.engine = self.root / "engine.json"
-        atomic(self.engine, {"root": str(self.root / "data")})
-        atomic(
-            self.config,
-            dict(python=sys.executable, engine_config=str(self.engine)),
-        )
-        atomic(
-            self.root / "updater.json",
-            dict(
-                root=str(self.root),
-                adapter_config=str(self.config),
-                repository="unused",
-                channel="main",
-                python=sys.executable,
-                codex="codex",
-                uv="uv",
-                codex_home=str(self.root),
-            ),
-        )
-        self.updater = Updater(self.root / "updater.json")
-        self.updater.save("up_to_date", current={"revision": "abc"})
-
-    def tearDown(self):
-        cleanup_temporary_directory(self.temp)
-
-    def test_records_results_and_clears_error(self):
-        self.updater.save(
-            "up_to_date",
-            knowledge_error="old",
-            knowledge_status="sync_failed",
-        )
-        payload = json.dumps([_row("a", "synced", commit="c1")])
-        with patch.object(self.updater, "command", return_value=payload):
-            with patch("auto_update.update_lock"):
-                self.updater.check_knowledge()
-        state = self.updater.state
-        self.assertEqual(state["knowledge_status"], "ok")
-        self.assertIsNone(state["knowledge_error"])
-        self.assertEqual(state["knowledge_results"][0]["repository"], "a")
-        self.assertEqual(state["status"], "up_to_date")
-
-    def test_partial_effects_survive_plugin_check_and_persisted_state(self):
-        payloads = [
-            [_row("a", "partial", commit="new", metadata_committed=True,
-                  failed_stage="material-promotion", detail="current-file promotion failed")],
-            [_row("a", "synced", commit="new", cleanup_status="failed",
-                  cleanup_error="staging removal denied")],
-            [_row("a", "synced", commit="new", receipt_status="failed",
-                  receipt_error="OSError: receipt write denied")],
-        ]
-        for payload in payloads:
-            with self.subTest(payload=payload), patch.object(self.updater, "command", return_value=json.dumps(payload)) as sync, \
-                 patch("auto_update.update_lock"), patch.object(self.updater, "_check_plugin", side_effect=lambda: self.updater.state) as plugin:
-                result = self.updater._check_locked()
-            plugin.assert_called_once()
-            sync.assert_called_once()
-            self.assertEqual(result["status"], "up_to_date")
-            self.assertEqual(result["knowledge_status"], "degraded")
-            self.assertEqual(result["knowledge_results"], payload)
-            self.assertEqual(json.loads(self.updater.state_path.read_text())["knowledge_results"], payload)
-            self.assertTrue(result["knowledge_error"])
-
-    def test_malformed_clears_stale_results_and_keeps_plugin_state(self):
-        self.updater.save(
-            "up_to_date",
-            knowledge_results=[_row("stale", "synced")],
-            knowledge_feeds=1,
-            knowledge_status="ok",
-        )
-        with patch.object(self.updater, "command", return_value=""):
-            with patch("auto_update.update_lock"):
-                with patch.object(self.updater, "_check_plugin",
-                                  return_value=self.updater.state):
-                    result = self.updater._check_locked()
-        self.assertEqual(result["status"], "up_to_date")
-        self.assertEqual(result["knowledge_status"], "sync_failed")
-        self.assertIsNone(result.get("knowledge_results"))
-        self.assertIsNone(result.get("knowledge_feeds"))
-        self.assertTrue(result["knowledge_error"])
-
-    def test_plugin_still_runs_after_knowledge_failure(self):
-        plugin = {"status": "installed"}
-        with patch.object(self.updater, "command", side_effect=RuntimeError("boom")):
-            with patch("auto_update.update_lock"):
-                with patch.object(
-                    self.updater, "_check_plugin", return_value=plugin
-                ) as check_plugin:
-                    result = self.updater._check_locked()
-        check_plugin.assert_called_once()
-        self.assertEqual(result["status"], "installed")
-        self.assertEqual(self.updater.state["knowledge_status"], "sync_failed")
-
-
-if __name__ == "__main__":
-    unittest.main()

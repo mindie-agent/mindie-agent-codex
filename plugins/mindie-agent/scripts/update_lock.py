@@ -1,11 +1,11 @@
-"""Shared/exclusive non-blocking file locks with a platform boundary.
+"""Shared/exclusive file locks with a platform boundary.
 
 POSIX uses flock; Windows uses LockFileEx (implemented, not yet verified on
 real hardware). `update_lock(config)` locks the sidecar next to the adapter
-config; `file_lock(path)` locks any explicit path (updater check serialization).
+config; `file_lock(path)` locks the explicit runtime preparation path.
 
 Same-thread nested acquires of the *same* mode reenter so check/claim/finish
-can hold the generation lock while an outer knowledge call already holds it.
+can hold the profile lock while an outer configuration operation already holds it.
 A nested acquire of the opposite mode fails immediately: never upgrade
 shared to exclusive (or the reverse) in-process, which would deadlock with
 LOCK_NB or with Windows per-handle byte-range locks.
@@ -17,8 +17,6 @@ from pathlib import Path
 import threading
 
 _tls = threading.local()
-_generation_guard = threading.Lock()
-_generation_fds = set()
 
 if os.name == "posix":
     import fcntl
@@ -97,7 +95,7 @@ def _held():
 
 
 @contextmanager
-def update_lock(config, *, exclusive=False):
+def update_lock(config, *, exclusive=False, blocking=False):
     path = Path(config).with_suffix(".update.lock")
     key = str(path.absolute())
     locks = _held()
@@ -113,36 +111,9 @@ def update_lock(config, *, exclusive=False):
             if state["depth"] == 0:
                 locks.pop(key, None)
         return
-    with file_lock(path, exclusive=exclusive):
+    with file_lock(path, exclusive=exclusive, blocking=blocking):
         locks[key] = {"exclusive": exclusive, "depth": 1}
         try:
             yield
         finally:
             locks.pop(key, None)
-
-
-@contextmanager
-def generation_lease(path):
-    """A process-held generation lease also inherited by owned POSIX helpers.
-
-    Only an actual acquired lease enters this in-memory registry. No caller
-    environment or supplied descriptor can bypass ownership validation in the
-    stable launcher's selection path. flock survives until every inherited
-    descriptor is closed, including after the launcher itself is killed.
-    """
-    with file_lock(path) as descriptor:
-        if os.name == 'posix':
-            with _generation_guard:
-                _generation_fds.add(descriptor)
-        try:
-            yield
-        finally:
-            if os.name == 'posix':
-                with _generation_guard:
-                    _generation_fds.remove(descriptor)
-
-
-def generation_descriptors():
-    """The stable launcher owns these descriptors for its entire call lifetime."""
-    with _generation_guard:
-        return tuple(_generation_fds)

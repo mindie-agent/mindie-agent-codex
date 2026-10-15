@@ -10,7 +10,7 @@ from unittest.mock import patch
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
 import native_context
-from session_gate import generation_env
+from session_gate import runtime_env
 
 
 class NativeContextTests(unittest.TestCase):
@@ -50,7 +50,7 @@ class NativeContextTests(unittest.TestCase):
             config.write_text(json.dumps({"native_context": expected}), encoding="utf-8")
             with patch.dict(os.environ, {"CODEX_HOME": str(base / "wrong-home"),
                                          "MINDIE_CODEX_BIN": str(base / "wrong-bin")}):
-                env = generation_env(config)
+                env = runtime_env(config)
             self.assertEqual({key: env[key] for key in native_context.KEYS}, expected)
             self.assertEqual(env["MINDIE_AGENT_CONFIG"], str(config))
 
@@ -62,7 +62,7 @@ class NativeContextTests(unittest.TestCase):
                 with self.subTest(value=value):
                     config.write_text(json.dumps({"native_context": value}), encoding="utf-8")
                     with self.assertRaises(ValueError):
-                        generation_env(config)
+                        runtime_env(config)
 
     def test_capture_contains_only_paths_and_default_home_is_explicit(self):
         with tempfile.TemporaryDirectory() as temporary, \

@@ -25,7 +25,10 @@ import weakref
 from bounded_process import run, ProcessResult
 from diagnostic_support import attach as attach_diagnostic
 from diagnostic_support import failure as diagnostic_failure
-from session_gate import IDENTITY, Sessions, config_path, generation_env, runtime_scripts
+from session_gate import (
+    IDENTITY, Sessions, config_path, installed_binding, runtime_binding,
+    runtime_env, runtime_scripts,
+)
 from update_lock import update_lock, file_lock
 from receipt_layout import prepare_layout
 import receipt_layout
@@ -298,12 +301,8 @@ class RemoteReceipts:
 
 def _adapter_config():
     path = config_path()
-    if not path.is_file():
-        raise ValueError(
-            "MindIE adapter configuration is required to locate the runtime "
-            "interpreter; remote execution fails closed"
-        )
-    return json.loads(path.read_text(encoding='utf-8'))
+    from product_contract import read_json
+    return read_json(path)[0]
 
 
 class Gate:
@@ -313,28 +312,24 @@ class Gate:
         self.tools = json.loads(CATALOG.read_text(encoding='utf-8'))[surface]
         self.connection_id = uuid.uuid4().hex
         self._remote_receipts = {}
+        self.config = config_path()
+        self.binding = installed_binding()
+        if self.binding is None and self.config.is_file():
+            self.binding = runtime_binding(_adapter_config())
 
     def call(self, request, cancel=None, *, timeout=None, cli_identity=None):
-        if self.surface == "remote":
-            # General remote path: no MindIE activation, lease, knowledge
-            # service or capture state is consulted or created.
-            return self._remote_call(request, cancel, timeout, cli_identity)
-        # Discovery does not create capture state. The native or trusted CLI
-        # boundary verifies task identity; ordinary reads need no capture lease.
-        # Runtime failures remain visible without an implicit execution TTL.
         try:
-            if not config_path().is_file():
-                raise ValueError(
-                    "MindIE adapter configuration is required; remote execution fails closed"
-                )
-            if cli_identity is None:
-                session = native_identity(request)
-                # Identity never comes from arguments or another task's lease.
-            else:
-                # Domain CLI path: no host metadata exists outside MCP, so the
-                # explicit environment-supplied identity is checked directly.
-                session, token = cli_identity
-            with update_lock(self.sessions.config):
+            with update_lock(self.config):
+                if (self.config != config_path() or self.binding is None
+                        or runtime_binding(_adapter_config()) != self.binding):
+                    raise ValueError(
+                        "reload_required: installed runtime changed; reload the native plugin before calling tools"
+                    )
+                if self.surface == "remote":
+                    return self._remote_call(request, cancel, timeout, cli_identity)
+                # Discovery creates no capture state. Task identity comes from
+                # the native metadata or the trusted CLI, never tool arguments.
+                session = native_identity(request) if cli_identity is None else cli_identity[0]
                 return self._call(request, session, cancel, timeout=timeout)
         except Exception as exc:
             return call_failure(exc)
@@ -423,7 +418,7 @@ class Gate:
                     json.dumps(payload),
                     timeout=bound,
                     cancel=cancel,
-                    env=generation_env(config_path()),
+                    env=runtime_env(config_path()),
                 )
             stage = "helper_response"
             result = runtime_result(output)
@@ -484,7 +479,7 @@ class Gate:
             )
             bound = timeout
             try:
-                # Exactly one committed generation: the recorded interpreter
+                # Exactly one installed runtime: the recorded interpreter
                 # plus the recorded scripts directory, read in one config load
                 # while the operation lock is held by Gate.call.
                 stage = "helper_run"
@@ -496,7 +491,7 @@ class Gate:
                     json.dumps(payload),
                     timeout=bound,
                     cancel=cancel,
-                    env=generation_env(self.sessions.config),
+                    env=runtime_env(self.sessions.config),
                     max_output=KNOWLEDGE_MAX_OUTPUT,
                     allow_service=True,
                 )
@@ -539,6 +534,8 @@ class Gate:
 
 
 def serve(surface):
+    from importlib.metadata import version
+    adapter_version = version("mindie-agent-codex")
     gate = Gate(surface)
     output_lock, pending_lock = threading.Lock(), threading.Lock()
     pending = {}
@@ -594,7 +591,7 @@ def serve(surface):
                         dict(
                             protocolVersion="2025-11-25",
                             capabilities={"tools": {}},
-                            serverInfo=dict(name="mindie-" + surface, version="0.2.0"),
+                            serverInfo=dict(name="mindie-" + surface, version=adapter_version),
                         ),
                     )
                 elif method == "ping":

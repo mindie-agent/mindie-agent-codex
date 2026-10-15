@@ -12,7 +12,6 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
-import auto_update
 import bounded_process
 import setup as setup_script
 import candidate_validate
@@ -29,36 +28,54 @@ class RuntimeProbeTests(unittest.TestCase):
         self.source = Path(self.temp.name)
         self.scripts = self.source / "plugins/mindie-agent/scripts"
         self.scripts.mkdir(parents=True)
-        for filename in ('product-contract.json', 'runtime-requirements.txt'):
-            shutil.copyfile(ROOT / filename, self.source / filename)
+        for filename in ('product-contract.json', 'pyproject.toml', 'uv.lock'):
+            shutil.copyfile(SCRIPTS.parent / filename, self.scripts.parent / filename)
+        shutil.copytree(SCRIPTS.parent / '.codex-plugin', self.scripts.parent / '.codex-plugin')
         self.validator = self.scripts / 'candidate_validate.py'
         self.validator.write_text(RECEIPT)
 
     def invoke(self, *, command=None):
-        return auto_update.Updater.probe_runtime(
-            SimpleNamespace(command=command or (lambda argv, **kw: run(argv, '', **kw).checked_stdout())),
-            sys.executable, self.scripts, revision='a' * 40)
+        return product_contract.probe(sys.executable, self.scripts,
+            command or (lambda argv, **kw: run(argv, '', **kw).checked_stdout()), revision='a' * 40)
 
-    def test_normal_product_version_requires_matching_release_state(self):
+    def test_release_requires_format_and_protection_without_version_ordering(self):
         from mindie_knowledge import state_layout
         import receipt_layout
         plugin = self.scripts.parent
         manifest = plugin / '.codex-plugin/plugin.json'
-        manifest.parent.mkdir()
-        manifest.write_text(json.dumps(dict(version='1.0.0')))
-        for knowledge, receipt in ((None, None), ('1.0.0', None), (None, '1.0.0'), ('1.0.0', '0.9.0')):
+        manifest.write_text(json.dumps(dict(version='0.0.2')))
+        project = plugin / 'pyproject.toml'
+        project.write_text(project.read_text().replace('version = "0.0.1"', 'version = "0.0.2"'))
+        for knowledge, receipt in ((None, None), ('0.0.1', None), (None, '0.0.1'),
+                                   ('invalid', '0.0.1')):
             with self.subTest(knowledge=knowledge, receipt=receipt), \
                     patch.object(state_layout, 'RELEASE_VERSION', knowledge), \
                     patch.object(receipt_layout, 'RELEASE_VERSION', receipt):
-                with self.assertRaisesRegex(ValueError, 'release_state_undeclared|release_version_mismatch'):
+                with self.assertRaisesRegex(ValueError, 'release_state_undeclared'):
                     candidate_validate.release_check(plugin)
-        with patch.object(state_layout, 'RELEASE_VERSION', '1.0.0'), \
-                patch.object(receipt_layout, 'RELEASE_VERSION', '1.0.0'):
-            candidate_validate.release_check(plugin)
+        for knowledge, receipt in (('0.0.1', '0.0.1'), ('4.2.0', '0.0.1'),
+                                   ('0.0.1', '9.0.0')):
+            with self.subTest(knowledge=knowledge, receipt=receipt), \
+                    patch.object(state_layout, 'RELEASE_VERSION', knowledge), \
+                    patch.object(receipt_layout, 'RELEASE_VERSION', receipt):
+                candidate_validate.release_check(plugin)
+        for layout in (state_layout, receipt_layout):
+            for invalid in (None, True, 0, '1'):
+                with self.subTest(layout=layout.__name__, format=invalid), \
+                        patch.object(layout, 'FORMAT', invalid):
+                    with self.assertRaisesRegex(ValueError, 'release_state_undeclared'):
+                        candidate_validate.release_check(plugin)
         manifest.write_text(json.dumps(dict(version='0.1.0+codex.development')))
+        project.write_text(project.read_text().replace('version = "0.0.2"', 'version = "0.1.0+codex.development"'))
         with patch.object(state_layout, 'RELEASE_VERSION', None), \
                 patch.object(receipt_layout, 'RELEASE_VERSION', None):
             candidate_validate.release_check(plugin)
+
+    def test_native_manifest_must_match_packaged_version(self):
+        manifest = self.scripts.parent / '.codex-plugin/plugin.json'
+        manifest.write_text(json.dumps(dict(version='0.0.2')))
+        with self.assertRaisesRegex(ValueError, 'versions differ'):
+            candidate_validate.release_check(self.scripts.parent)
 
     def test_candidate_script_owns_validation_not_current_private_probe(self):
         # Candidate may replace its private API completely. The running updater
@@ -152,7 +169,7 @@ class RuntimeProbeTests(unittest.TestCase):
         self.validator.write_text(RECEIPT + '# changed\n')
         with self.assertRaisesRegex(ValueError, 'does not match'):
             product_contract.validate_receipt(json.dumps(receipt), product_contract.identity(self.source, 'a' * 40))
-        path = self.source / 'runtime-requirements.txt'
+        path = self.scripts.parent / 'pyproject.toml'
         path.write_text(path.read_text().replace(product_contract.requirements(self.source)[0]['mindie-knowledge'], 'b' * 40))
         with self.assertRaises(ValueError):
             product_contract.validate_receipt(json.dumps(receipt), product_contract.identity(self.source, 'a' * 40))

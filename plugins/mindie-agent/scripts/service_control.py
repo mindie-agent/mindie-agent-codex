@@ -42,7 +42,7 @@ def _hints(sharing_view, view):
 
 
 def status():
-    # The bootstrap selected this complete runtime under its generation lock.
+    # The bootstrap selected this complete runtime under its profile lock.
     # Core imports belong here, never in the stdlib bootstrap or Stop path.
     from mindie_knowledge.loop.diagnostics import snapshot
 

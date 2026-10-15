@@ -26,132 +26,66 @@ The shared knowledge runtime owns retrieval, task admission, contribution
 receipts and local cleanup. Claude Code and Kimi have independent adapters.
 Old business Skills and profiling remain deferred.
 
-## Install on macOS
+## Install
 
-Requires Python 3.11+, Git, `uv`, and an authenticated Codex CLI with native
-plugin support.
+Requires Git, `uv`, and an authenticated Codex CLI with native plugin support.
+On native Windows, Git for Windows also supplies the supported SSH executable.
+Use Linux-native Codex, Git and uv inside WSL, with profile, SQLite and runtime
+files on the Linux filesystem. Do not substitute Windows executables through
+`/mnt/c`.
 
-Installation probes the actual pinned runtime, including ReMe, LangMem and the
-summary outcome ledger. SQLite stores metadata; retrieval does not require FTS5
-or `contentless_delete`.
-
-[product-contract.json](product-contract.json) binds the public content baseline,
-its declaration digest and candidate validation protocol. Runtime commit pins
-live only in [runtime-requirements.txt](runtime-requirements.txt). The candidate's
-own interpreter verifies its installed pins and APIs; the running updater checks
-a bounded receipt instead of importing a different runtime's private API.
-Content may advance under the same declaration without a plugin release.
-Changed declarations require a matching product combination and fail before
-installation, publication or feed promotion when they do not match. Cached
-candidates recheck local runtime and packaged bytes before installation.
-
-Sign in to Codex, then install the release source. The `v0.0.1` tag is being
-prepared and these release commands become available when it is published.
-Development validation uses an explicitly selected candidate checkout.
+The first ordinary release is `0.0.1` (`v0.0.1`). It is still being prepared;
+these release commands become usable only after the release catalog exists:
 
 ```sh
-git clone --branch v0.0.1 --depth 1 https://github.com/mindie-agent/mindie-agent-codex.git
-cd mindie-agent-codex
-MINDIE_DATA="${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent"
-MINDIE_BOOTSTRAP="$MINDIE_DATA/codex-bootstrap/runtime"
-uv venv --python 3.11 "$MINDIE_BOOTSTRAP"
-uv pip install --python "$MINDIE_BOOTSTRAP/bin/python" -r runtime-requirements.txt
-"$MINDIE_BOOTSTRAP/bin/python" plugins/mindie-agent/scripts/setup.py install \
-  --knowledge-python "$MINDIE_BOOTSTRAP/bin/python" --root "$MINDIE_DATA"
-"$MINDIE_BOOTSTRAP/bin/python" plugins/mindie-agent/scripts/auto_update.py enable \
-  --source-root "$PWD" --root "$MINDIE_DATA/updates" --channel release
+codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref stable
+codex plugin add mindie-agent@mindie-agent --json
 ```
 
-Setup writes MindIE-owned configuration and defaults community contribution to
-off. The updater packages the source, installs through the native Codex plugin
-API, verifies the selected version and registers the macOS update schedule.
-After both steps succeed, the downloaded repository can be moved or removed.
-Keep the persistent data directory and bootstrap interpreter: the updater and
-retained native entries use them even after a managed runtime is selected.
-The updater never resets or stashes a developer checkout.
+The `stable` Git catalog must name the exact released plugin commit. Candidate
+acceptance instead selects an explicit candidate Git ref; it does not track
+unreleased `main`. Native Codex owns plugin registration, refresh and removal.
+There is no MindIE code-update daemon or separate release resolver.
 
-Review and trust a changed Stop Hook in the native Codex UI when you want it to
-run, then start a new task. Hook trust belongs to the user; installation and
-updates do not grant it. Use Codex's native permission controls for tools.
+SessionStart and MCP initialization prepare the plugin's own
+[pyproject.toml](plugins/mindie-agent/pyproject.toml) and
+[uv.lock](plugins/mindie-agent/uv.lock) with `uv sync --locked --no-editable`.
+uv manages Python 3.13, dependency resolution, installation locking and its
+artifact cache. Preparation is not tool readiness: an interrupted or failed
+initialization remains unavailable until a later successful initialization.
+Stop never downloads Python or installs a runtime.
+The declared native MCP startup window is ten minutes, including first-use
+downloads/builds and waiting for concurrent preparation. This does not change
+tool-call deadlines. A failed preparation retains its safe stage and a private
+`prepare-*.log` beside the release entry; no tools are advertised as ready.
 
-Default configuration is `~/.config/mindie-agent/codex.json`; data is under
-`~/.local/share/mindie-agent`. For a separate installation, supply `--config`
-to setup and `MINDIE_AGENT_CONFIG` to the one-time updater enable command.
-The generated Skill, MCP and Hook entries retain that configuration binding;
-ordinary later tasks do not need to export it.
+[The product declaration](plugins/mindie-agent/product-contract.json) binds the
+public content contract. Preparation verifies exact installed Git revisions,
+runtime APIs, the publication declaration, and installed adapter bytes. The
+complete runtime lives outside the disposable native plugin cache. Its key
+includes plugin/lock bytes and Python ABI/platform; the release entry is fixed
+under `PLUGIN_DATA/releases/0.0.1/entry.py`. Preparation cannot overwrite an
+existing release entry/runtime with different bytes. An illegal same-version
+republish does not activate its new bytes: warm entries continue their verified
+binding, while explicit preparation detects the conflict. A corrupt completed
+runtime is not silently repaired in place. Warm entries do not hash the
+disposable native cache. Existing sessions retain their fixed release runtime.
 
-## Install on Windows PowerShell
+Default adapter configuration is `~/.config/mindie-agent/codex.json`; persistent
+knowledge data is `~/.local/share/mindie-agent`. `MINDIE_AGENT_CONFIG` selects an
+explicit profile. Sharing starts off/unconfigured. Existing consent and project
+scope are reused; installation never grants native Hook trust or permissions.
+Use the host's trust controls and sign-in. A selected provider's secrets are
+never copied into a runtime receipt or configuration-selection pointer.
 
-Requires Python 3.11+, Git for Windows, `uv`, and an authenticated Codex CLI
-with native plugin support. Git must be available on PATH; remote development
-uses its bundled `usr/bin/ssh.exe` with the existing SSH configuration.
-Run these commands from the downloaded repository in PowerShell; the default
-schedule uses the current user's Windows Task Scheduler task.
-
-```powershell
-git clone --branch v0.0.1 --depth 1 https://github.com/mindie-agent/mindie-agent-codex.git
-Set-Location mindie-agent-codex
-$Repo = (Get-Location).Path
-$Data = Join-Path $env:LOCALAPPDATA 'MindIEAgent'
-$Bootstrap = Join-Path $Data 'codex-bootstrap\runtime'
-$Config = Join-Path $Data 'codex.json'
-$UpdaterSettings = Join-Path $Data 'updater.json'
-New-Item -ItemType Directory -Force -Path $Data | Out-Null
-uv venv --python 3.11 $Bootstrap
-uv pip install --python (Join-Path $Bootstrap 'Scripts\python.exe') `
-  -r (Join-Path $Repo 'runtime-requirements.txt')
-$env:MINDIE_AGENT_CONFIG = $Config
-& (Join-Path $Bootstrap 'Scripts\python.exe') `
-  (Join-Path $Repo 'plugins\mindie-agent\scripts\setup.py') install `
-  --knowledge-python (Join-Path $Bootstrap 'Scripts\python.exe') `
-  --config $Config --root $Data
-& (Join-Path $Bootstrap 'Scripts\python.exe') `
-  (Join-Path $Repo 'plugins\mindie-agent\scripts\auto_update.py') `
-  --settings $UpdaterSettings enable --source-root $Repo `
-  --root (Join-Path $Data 'updates') --channel release --schedule auto
-& (Join-Path $Bootstrap 'Scripts\python.exe') `
-  (Join-Path $Data 'updates\launcher.py') $UpdaterSettings status
-```
-
-The enable command validates and installs the plugin through Codex's native
-plugin API before registering the task; the final command reads status.
-To install and validate it without a
-periodic task, use `--schedule manual`; this mode persists and reports the
-manual check command. Windows CI exercises the pinned runtime and process
-contracts. A native Codex install and real Windows host acceptance still need
-to be recorded separately.
-
-## Install on WSL/Linux
-
-Use the same runtime prerequisites and shell setup as macOS. On Linux the
-default schedule is a per-user systemd timer, enabled only when that user's
-systemd manager responds. In WSL, this requires systemd to be enabled and the
-user manager to be available. If that scheduler is unavailable, use
-`--schedule manual`; it still performs the full runtime probe, native plugin
-install and selection readback, then saves a manual scheduling state.
-
-```sh
-MINDIE_DATA="${XDG_DATA_HOME:-$HOME/.local/share}/mindie-agent"
-MINDIE_BOOTSTRAP="$MINDIE_DATA/codex-bootstrap/runtime"
-MINDIE_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/codex.json"
-MINDIE_UPDATER_SETTINGS="${XDG_CONFIG_HOME:-$HOME/.config}/mindie-agent/updater.json"
-uv venv --python 3.11 "$MINDIE_BOOTSTRAP"
-uv pip install --python "$MINDIE_BOOTSTRAP/bin/python" -r runtime-requirements.txt
-MINDIE_AGENT_CONFIG="$MINDIE_CONFIG" \
-  "$MINDIE_BOOTSTRAP/bin/python" plugins/mindie-agent/scripts/setup.py install \
-  --knowledge-python "$MINDIE_BOOTSTRAP/bin/python" \
-  --config "$MINDIE_CONFIG" --root "$MINDIE_DATA"
-MINDIE_AGENT_CONFIG="$MINDIE_CONFIG" \
-  "$MINDIE_BOOTSTRAP/bin/python" plugins/mindie-agent/scripts/auto_update.py \
-  --settings "$MINDIE_UPDATER_SETTINGS" enable --source-root "$PWD" \
-  --root "$MINDIE_DATA/updates" --channel release --schedule auto
-"$MINDIE_BOOTSTRAP/bin/python" "$MINDIE_DATA/updates/launcher.py" \
-  "$MINDIE_UPDATER_SETTINGS" status
-```
-
-Change the final option to `--schedule manual` on systems without a responding
-per-user systemd manager. Automatic Linux checks run as the same user every
-five minutes while that manager is running.
+Codex 0.153.4's legacy MCP schema supports declared environment names but does
+not provide `PLUGIN_DATA`. One launcher contains the tested fixed-layout
+fallback under `CODEX_HOME/plugins/{data,cache}`; it never scans versions or
+selects a newest directory. The portable MCP schema cannot preserve arbitrary
+provider environment names on this host. SessionStart can supply that context;
+an authenticated live exact service can be reused. If it dies and the MCP
+process lacks a required custom provider key, the cold call fails explicitly and
+requests a new native session. It never silently selects another provider.
 
 ## Everyday use and task boundaries
 
@@ -230,128 +164,66 @@ local diagnostics.
 
 The shared reporter uses bounded structured evidence without a model. Business
 nonzero exits, permissions, normal network failures and cancellation are not
-reported as product defects. Existing updater checks perform offline retention
-with reporting off. See the [shared diagnostics contract](https://github.com/mindie-agent/diagnostics).
+reported as product defects. SessionStart performs offline retention
+with reporting off; the diagnostics component owns reporter scheduling. See the [shared diagnostics contract](https://github.com/mindie-agent/diagnostics).
 
 ## Updates and failures
 
-The macOS LaunchAgent, Windows Task Scheduler task, or Linux systemd user timer
-checks the adapter's selected release channel and public knowledge feed every five
-minutes. On unsupported systems, or when Linux has no responding per-user
-systemd manager, explicit `--schedule manual` mode still installs the validated
-plugin and records that no scheduler is registered. This work does not open
-model tasks or grant contribution authority. Runtime dependencies follow exact reviewed commits in
-`runtime-requirements.txt`; code, interpreter, configuration and plugin files
-switch as one generation.
-
-Only actual in-flight calls or maintenance postpone switching. Idle task grants
-and unresolved receipts do not block an update. Native definitions retain an installation-level launcher path. Selection and
-generation lease acquisition share the update lock; an executing process keeps
-its selected generation until exit. Remote job state remains available, and
-new tool definitions refresh according to the native host lifecycle. Interrupted installation restores the prior configuration
-and native package, with readback. Changed Hook dependencies require fresh
-native trust. Generation cleanup keeps current and candidate pointers, interrupted
-transactions and active process leases. Untracked directories are reported and
-retained; elapsed age alone never authorizes deletion.
-
-Business MCP calls and each admitted Stop delivery get one attempt, without an
-automatic model retry. The adapter adds no default execution deadline to a
-Stop event or capability call. Stop emits the inert protocol response and keeps
-internal failures in durable Agent diagnostics; it cannot request another model
-turn. Input/output byte limits, concurrency limits, owner cancellation and
-process-tree cleanup remain enforced. Explicit remote execution limits follow
-the requested operation; long remote work uses owned jobs with status and
-cancellation.
-
-Setup installs a checksum-pinned Gitleaks release once. Stop processing performs
-no downloads and has no model dependency. A missing or failed scanner leaves
-the input unread instead of publishing unredacted content. Public messages are
-not shortened to fit a model; the parser advances at complete message boundaries.
-
-Setup and updates install the required LangMem index worker with the explicit
-`gpt-5.6-luna` / `low` native policy. It reads complete new blocks plus short
-previous navigation and returns block titles/summaries and updated navigation;
-it cannot rewrite source bodies. Blocks are at most 16 KiB and each serialized
-user prompt is at most 64 KiB. The worker and its identity check have no default
-execution deadline; service shutdown or revoked authority cancels their owned
-processes. Bounded waits after a terminal result concern cleanup only, and
-cleanup failure does not erase the completed result. Native system/context
-overhead is included in recorded usage.
-Returned output survives local processing failures without another paid call.
-Failed or uncertain model calls require explicit retry and retain prior usage.
-Missing worker configuration blocks publication and remains a visible failure.
-Consumers reuse producer indexes without model calls. Explicit historical import
-uses the same incremental pipeline; there is no final full-transcript merge.
-See [the transcript contract](docs/public-transcript.md).
-
-The updater records preparation and install outcomes. A known temporary
-network failure keeps the installed generation and is retried by the existing
-schedule, with backoff. Incompatible content stays quarantined. A certificate
-failure is a local trust problem, not bad content, and is retried after
-backoff; TLS validation stays enabled. From any
-directory, use the stable launcher (set the two variables as in the
-installation example in a new shell):
+Codex refreshes configured Git marketplaces according to its native lifecycle.
+An explicit refresh uses:
 
 ```sh
-"$MINDIE_BOOTSTRAP/bin/python" "$MINDIE_DATA/updates/launcher.py" \
-  "$HOME/.config/mindie-agent/updater.json" status
-"$MINDIE_BOOTSTRAP/bin/python" "$MINDIE_DATA/updates/launcher.py" \
-  "$HOME/.config/mindie-agent/updater.json"
+codex plugin marketplace upgrade mindie-agent --json
 ```
 
-The second command checks for updates. It takes no operation argument, which
-is what the scheduler runs. `status`, `disable`, and `uninstall` are the other
-launcher operations; `uninstall` accepts `--purge` only. These dispatch to the
-committed generation, not a stale controller copy. New installs default to the
-ordinary `release` channel; development tracking uses explicit `--channel main`.
-An unavailable Release is reported as a failed check without falling back to
-`main`. Old business Skill migration is not part of this update.
+MindIE does not wrap this command in another native mutation transaction.
+Every published version has immutable bytes. SessionStart and explicit `sync`
+refresh public knowledge through the shared Feed's interval/backoff rules;
+there is no promise of a separate five-minute refresh during a long session.
+Local content remains reference material, and retained stale content is labeled.
 
-The first internal product release is `0.0.1`, with Git tag `v0.0.1`; it uses
-the existing normal `release` channel. Internal testing does not relax data
-protection. Both knowledge and receipt layout modules declare `RELEASE_VERSION`
-as `0.0.1`, including installations from the candidate branch. This preparation
-does not itself publish a Release or complete native acceptance.
-Candidate validation rejects a normal plugin version unless both declarations
-match it. The release channel also requires a normal tag and the matching
-source version, including cached candidates; a development build cannot enter
-that channel with unprotected state.
+The installed adapter configuration names one exact runtime and engine. Ordinary
+SessionStart, MCP and Stop may prepare a genuinely empty profile, but never
+replace a different existing installation. A loaded MCP process verifies its
+installation identity before each tool call; changed bindings produce
+`reload_required` before any tool side effect. Reloading code is not a request
+to authorize capture again: saved contribution scope, disabled choice and
+reporting choice remain independent user data.
 
-Knowledge state and remote request receipts have independent format
-directories. A development format change selects fresh state while preserving
-configuration and the old directories. Released state remains protected even
-when a later development build uses it. Compatible updates retain material,
-cursors, paid model attempts and consumed remote requests, including uncertain
-external writes. An incompatible released format requires an explicit
-migration in that candidate; until one exists, the updater rejects it before
-retiring the old service, writing an installation transaction or replacing the
-native package. It does not clear the state and report a successful upgrade.
-Future migrations and native release acceptance need their own evidence.
+This first, unreleased 0.0.1 does not migrate development updater generations,
+scheduled tasks, transaction journals or inferred consent. Unsupported existing
+layouts fail visibly without changing their files. Their data, paid-attempt and
+unknown-operation receipts remain evidence. Future released data formats and
+interfaces require compatibility decisions based on their actual contracts;
+product version ordering is not a service-routing protocol.
+
+Transcript bodies remain complete and mechanically redacted. The summary worker
+has no default total execution deadline; cancellation and ownership loss remain
+visible. A completed model result and its usage survive cleanup/accounting
+failure. Failed or uncertain paid work is never automatically replayed. Native
+and background acceptance is separate from unit tests or runtime preparation.
 
 ## Stop or uninstall
 
-Task deactivation revokes that task's automatic capture binding. Sharing-disable stops
-contribution for its configured scope; neither removes the plugin nor stops
-model-free updates. To stop automatic updates, use the stable launcher:
+Use the native plugin controls to disable or remove the plugin. On the verified
+Codex versions the removal command is:
 
 ```sh
-"$MINDIE_BOOTSTRAP/bin/python" "$MINDIE_DATA/updates/launcher.py" \
-  "$HOME/.config/mindie-agent/updater.json" disable
+codex plugin remove mindie-agent@mindie-agent --json
 ```
 
-To remove the updater, run the same command with `uninstall` instead of
-`disable`. Add `--purge` only to that `uninstall`, and only when no live
-generation or recovery journal remains. Then remove MindIE Agent in Codex's
-Plugins UI. Updater uninstall does not uninstall the native plugin. A failed
-schedule cancellation preserves
-its files and reports failure. Close tasks using the plugin before removal;
-keep retained runtimes, receipts and caches while old entries may use them.
-Do not recursively delete the shared data directory. Removing one adapter does
-not revoke or remove the shared reporter; disable reporting separately only
-when you want that choice to apply to all adapters.
+Close tasks using the plugin and retire its exact knowledge service before
+removal. Native removal clears plugin installation/cache, not the shared
+knowledge data, consent, paid-attempt receipts or fixed runtimes. Retain those
+while a loaded entry or pending operation may use them; no automatic purge or
+new runtime garbage collector is introduced. Disable shared fault reporting
+separately only when that is the intended choice for all adapters.
 
-See [framework stability and verification](docs/framework-stability.md) for the
-current behavior, reproducible checks and acceptance boundaries.
+For optional operator commands, use the fixed release `entry.py` with `bridge`
+and the existing command, for example `bridge sharing-disable`, `bridge status`
+or `bridge history-import --source /absolute/transcript.jsonl`. These are not
+prerequisites for ordinary tasks. `sync` performs an explicit model-free feed
+refresh; `configure` preserves the existing profile's sharing semantics.
 
 ## Evidence and follow-up
 
@@ -364,12 +236,12 @@ recorded revisions. Component checks are diagnostic and do not replace native
 or hardware acceptance.
 
 ```sh
-# Runtime pins are declared once in runtime-requirements.txt. Contract tests
+# Runtime pins are declared by the plugin pyproject.toml and uv.lock. Contract tests
 # archive those exact commits and name the missing checkout variable on failure.
 export MINDIE_CORE_REPO=/path/to/knowledge-checkout   # contains the declared core commit
 export MINDIE_KIMI_REPO=/path/to/kimi-adapter-checkout  # contains 90f73e76c6087ce091570f2d151b709145c913bc
-.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
-.venv/bin/python -m unittest tests.test_parallel_codex_contract -v
+uv run --project plugins/mindie-agent --no-sync python -m unittest discover -s tests -p 'test_*.py'
+uv run --project plugins/mindie-agent --no-sync python -m unittest tests.test_parallel_codex_contract -v
 ```
 
 Merging this pre-release adapter permits integrated main-branch and Windows

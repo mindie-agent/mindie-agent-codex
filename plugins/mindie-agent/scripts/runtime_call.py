@@ -1,12 +1,7 @@
-"""One authorized call in the configured interpreter; no request replay.
+"""One authorized call in this fixed release runtime; no request replay.
 
-This module always executes inside one committed runtime generation: when an
-older loaded entrypoint spawns it with a stale interpreter or from a stale
-path, it re-execs the generation-recorded copy under the generation's
-interpreter before touching the payload. Admission checks use the shared
-core store directly (this process is the generation), and the knowledge
-call's outcome accounting (failure circuit, with the read-rejection
-exemption) is recorded here where the trusted disposition is known.
+Admission belongs to the shared core. Each request uses the exact installed
+configuration; no script/runtime reselection.
 """
 
 import json
@@ -23,7 +18,7 @@ def _transient_unavailable(exc):
     }
 
 from diagnostic_support import attach, failure, reference
-from session_gate import IDENTITY, config_path, generation_env, runtime_scripts
+from session_gate import IDENTITY, config_path, runtime_env, runtime_scripts
 
 
 def knowledge_names():
@@ -69,7 +64,7 @@ def call(payload):
     args, name = payload["arguments"], payload["name"]
     if payload["surface"] != "knowledge":
         raise ValueError("unknown plugin surface")
-    from mindie_knowledge.loop.cli import ensure_service
+    from service_client import connect
     from mindie_knowledge.loop.transport import RequestRejected, rpc
 
     internal = payload.get("internal") is True
@@ -84,7 +79,7 @@ def call(payload):
             raise ValueError("knowledge attach requires enabled community sharing")
     else:
         raise ValueError("unknown knowledge tool")
-    connection = ensure_service(config["engine_config"])
+    connection = connect(config["engine_config"])
     if name == "knowledge_attach":
         # Admission is owned by the existing lease; startup needs no
         # second attach protocol or duplicate session registry.
@@ -272,39 +267,10 @@ def remote(payload):
 
 
 
-def redispatch():
-    """Route this call through the one committed generation under its lock.
-
-    The adapter config records (python, runtime_scripts) atomically at every
-    install. An old loaded wrapper that still points at its own cached copy
-    re-execs the recorded generation's copy with the recorded interpreter
-    instead of mixing an old script with a new interpreter or library.
-    """
-    config = json.loads(config_path().read_text(encoding='utf-8'))
-    python, scripts = config.get("python"), config.get("runtime_scripts")
-    if (not isinstance(python, str) or not os.path.isabs(python)
-            or not isinstance(scripts, str) or not os.path.isabs(scripts)):
-        raise ValueError("selected generation requires absolute interpreter and script paths")
-    target = (Path(scripts) / "runtime_call.py").resolve(strict=True)
-    # Keep the interpreter's lexical venv identity. Resolving both symlinks
-    # would equate unrelated virtualenvs using one shared Python binary.
-    same_python = os.path.normcase(os.path.abspath(python)) == os.path.normcase(os.path.abspath(sys.executable))
-    if target == Path(__file__).resolve() and same_python:
-        return
-    command = [python, str(target)]
-    if os.name == "nt":
-        from bounded_process import run
-        output = run(command, sys.stdin.buffer.read().decode("utf-8"), env=generation_env()).checked_stdout()
-        sys.stdout.write(output)
-        raise SystemExit(0)
-    os.execve(python, command, generation_env())
-
-
 if __name__ == "__main__":
-    stage = "generation_dispatch"
+    stage = "request"
     execution = "not_started"
     try:
-        redispatch()
         stage = "request"
         raw = sys.stdin.buffer.read()
         payload = json.loads(raw)

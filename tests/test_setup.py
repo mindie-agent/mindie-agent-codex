@@ -36,6 +36,76 @@ def run_setup(python, *args, real_probe=False, env=None):
 
 
 class SetupTests(unittest.TestCase):
+    def test_first_codex_install_reuses_unconfigured_disabled_shared_document(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            config = base / "codex.json"
+            consent = base / "mindie-consent.json"
+            community = base / "mindie-community.json"
+            community.write_text(json.dumps(dict(
+                schema="mindie-community-config/1", enabled=False,
+                generation=None, enabled_at=None, repository=None,
+                branch="main", project_roots=[], idle_seconds=300,
+                consent_config=str(consent),
+            )))
+            before = community.read_bytes()
+            result = run_setup(sys.executable, "--config", config, "--root", base / "data")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(community.read_bytes(), before)
+            self.assertFalse(consent.exists())
+            receipt = json.loads(result.stdout)
+            self.assertIsNone(receipt["reused_choice"])
+            self.assertEqual(receipt["sharing"], "off")
+            self.assertIn("off/unconfigured", receipt["next"])
+
+    def test_first_codex_install_reuses_other_adapter_scope_and_consent_unchanged(self):
+        from mindie_knowledge import consent_store
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                config = base / "codex.json"
+                consent = base / "mindie-consent.json"
+                community = base / "mindie-community.json"
+                consent_store.record_choice(consent, "contribute" if enabled else "disabled")
+                consent_store.record_reporting(consent, "disabled")
+                community.write_text(json.dumps(dict(
+                    schema="mindie-community-config/1", enabled=enabled,
+                    generation="other-adapter", enabled_at=1.0, repository="owner/shared",
+                    branch="main", project_roots=[str(base)], idle_seconds=300,
+                    consent_config=str(consent), visibility="public",
+                    sibling_extension={"preserve": True},
+                )))
+                before = consent.read_bytes(), community.read_bytes()
+                result = run_setup(sys.executable, "--config", config, "--root", base / "data")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((consent.read_bytes(), community.read_bytes()), before)
+                receipt = json.loads(result.stdout)
+                self.assertEqual(receipt["reused_choice"], "contribute" if enabled else "disabled")
+                self.assertEqual(receipt["sharing"], "enabled" if enabled else "off")
+                self.assertIsNone(receipt["next"])
+                self.assertEqual(json.loads(config.read_text())["community_config"], str(community))
+
+    def test_first_install_preserves_invalid_shared_authority_before_store_or_config(self):
+        from mindie_knowledge import consent_store
+        for contents in ("{broken", json.dumps(dict(
+            schema="mindie-community-config/1", enabled=False,
+            project_roots=[], idle_seconds=300,
+        ))):
+            with self.subTest(contents=contents), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                config = base / "codex.json"
+                consent = base / "mindie-consent.json"
+                community = base / "mindie-community.json"
+                consent_store.record_choice(consent, "disabled")
+                community.write_text(contents)
+                before = consent.read_bytes(), community.read_bytes()
+                result = run_setup(sys.executable, "--config", config, "--root", base / "data")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("existing shared community configuration", result.stderr)
+                self.assertEqual((consent.read_bytes(), community.read_bytes()), before)
+                self.assertFalse(config.exists())
+                self.assertFalse((base / "data").exists())
+
     def test_invalid_service_environment_binding_fails_before_config_publication(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary).resolve()
@@ -197,11 +267,8 @@ class SetupTests(unittest.TestCase):
             again = run_setup(sys.executable, "--config", config, "--root", base / "data")
             self.assertNotEqual(again.returncode, 0)
             self.assertIn("configuration already exists", again.stderr)
-            # Post-install configure must work even though engine config exists
-            # and must drop the retired session_activation alias.
-            engine_value = json.loads(engine.read_text())
-            engine_value["session_activation"] = str(config)
-            engine.write_text(json.dumps(engine_value))
+            # Sharing changes do not rewrite either installation binding.
+            installed_bytes = config.read_bytes(), engine.read_bytes()
             scope = base / "scope"
             scope.mkdir()
             configured = subprocess.run(
@@ -237,7 +304,31 @@ class SetupTests(unittest.TestCase):
                 settings["consent_config"],
                 str(config.with_name("mindie-consent.json")),
             )
-            self.assertNotIn("session_activation", json.loads(engine.read_text()))
+            self.assertEqual((config.read_bytes(), engine.read_bytes()), installed_bytes)
+
+    def test_configure_rejects_corrupt_or_development_engine_before_writes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            config = base / "codex.json"
+            installed = run_setup(sys.executable, "--config", config, "--root", base / "data")
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            engine = config.with_name("codex.engine.json")
+            original = json.loads(engine.read_text())
+            scope = base / "scope"
+            scope.mkdir()
+            for invalid in (b"{broken", json.dumps(dict(original, session_activation=str(config))).encode()):
+                with self.subTest(invalid=invalid[:20]):
+                    engine.write_bytes(invalid)
+                    before = {path.name: path.read_bytes() for path in base.iterdir() if path.is_file()}
+                    result = subprocess.run([
+                        sys.executable, str(SCRIPTS / "setup.py"), "configure",
+                        "--config", str(config), "--community-repository", "owner/explicit",
+                        "--community-project-root", str(scope), "--community-visibility", "public",
+                    ], text=True, capture_output=True, timeout=30)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("engine configuration is unavailable or unsupported", result.stderr)
+                    self.assertEqual(
+                        {path.name: path.read_bytes() for path in base.iterdir() if path.is_file()}, before)
 
     def test_configure_preserves_a_damaged_community_document(self):
         for module in setup_script.PROBE_MODULES:

@@ -21,7 +21,7 @@ STOP = json.loads((PLUGIN / "hooks/hooks.json").read_text())["hooks"]["Stop"][0]
     "hooks"
 ][0]
 sys.path.insert(0, str(ROOT / "plugins/mindie-agent/scripts"))
-from auto_update import stop_hook_commands
+from native_entry import neutral_hook_commands as stop_hook_commands
 import windows_process
 
 
@@ -101,12 +101,10 @@ class StopHookTests(unittest.TestCase):
                      'MINDIE_DIAGNOSTICS_ROOT': diagnostics, **env},
             )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), {})
-        if failed:
-            self.assertEqual(result.stderr.strip(),
-                "MindIE Stop helper failed; capture completion is unconfirmed; no automatic retry.")
-        else:
-            self.assertEqual(result.stderr.strip(), "")
+        self.assertEqual(json.loads(result.stdout),
+            {"systemMessage": "MindIE Stop helper failed; capture completion is unconfirmed; no automatic retry."}
+            if failed else {})
+        self.assertEqual(result.stderr.strip(), "")
         return event
 
     def test_evicted_plugin_cache_does_not_resume_conversation(self):
@@ -161,18 +159,19 @@ class StopHookTests(unittest.TestCase):
                 [json.loads(line) for line in received.read_text().splitlines()], [event]
             )
 
-    def test_configured_hook_expands_plugin_root_with_spaces(self):
+    def test_configured_hook_reuses_fixed_data_entry_with_spaces(self):
         with tempfile.TemporaryDirectory() as root:
             plugin = Path(root) / "plugin with spaces"
-            scripts = plugin / "scripts"
+            data = Path(root) / "plugin data with spaces"
+            scripts = data / "releases/0.0.1"
             scripts.mkdir(parents=True)
             received = Path(root) / "received.jsonl"
-            (scripts / "bridge.py").write_text(
+            (scripts / "entry.py").write_text(
                 "import os, sys\n"
                 "with open(os.environ['HOOK_TEST_RECEIVED'], 'a') as stream:\n"
                 "    stream.write(sys.stdin.read() + '\\n')\n"
             )
-            event = self.run_stop(plugin, configured=True,
+            event = self.run_stop(plugin, configured=True, PLUGIN_DATA=str(data),
                                   HOOK_TEST_RECEIVED=str(received))
             self.assertEqual([json.loads(line) for line in received.read_text().splitlines()], [event])
 

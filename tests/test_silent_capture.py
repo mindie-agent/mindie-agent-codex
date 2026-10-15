@@ -12,7 +12,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
-from tests.process_fixtures import cleanup_temporary_directory
+from tests.process_fixtures import cleanup_temporary_directory, public_engine_config
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
 sys.path.insert(0, str(SCRIPTS))
@@ -36,26 +36,28 @@ class SilentCaptureTests(unittest.TestCase):
         self.profile = self.root / 'profile'
         self.config = self.root / 'adapter.json'
         self.engine = self.root / 'engine.json'
-        self.community = self.root / 'community.json'
+        self.community = self.root / 'mindie-community.json'
         self.admission = self.root / 'admission.sqlite3'
         self.scope = self.root / 'project'
         self.scope.mkdir()
         self.enabled = time.time() - 20
         self.settings = dict(schema='mindie-community-config/1', enabled=True,
             generation='g1', enabled_at=self.enabled, repository='mindie-agent/knowledge',
-            branch='main', project_roots=[str(self.scope)], idle_seconds=300, visibility='public')
+            branch='main', project_roots=[str(self.scope)], idle_seconds=300, visibility='public',
+            consent_config=str(self.root / 'mindie-consent.json'))
         self.community.write_text(json.dumps(self.settings))
-        self.engine.write_text(json.dumps(dict(root=str(self.root / 'data'), domain='test',
+        self.engine.write_text(json.dumps(public_engine_config(self.root / 'data', adapter_profile=self.config,
             admission_path=str(self.admission), community_config=str(self.community),
-            redactor_executable=str(self.root / 'scanner'), transcript_adapter=str(SCRIPTS / 'codex_transcript.py'))))
+            )))
         self.config.write_text(json.dumps(dict(admission_path=str(self.admission),
             engine_config=str(self.engine), community_config=str(self.community))))
+        import consent
+        consent.record_choice("contribute", self.config)
         store = Store(self.root / 'data', 'test')
         store.db.commit()
         store.close()
         self.stack.enter_context(patch.dict(os.environ, MINDIE_AGENT_CONFIG=str(self.config),
             CODEX_HOME=str(self.profile), MINDIE_DIAGNOSTICS_ROOT=str(self.root / 'diagnostics')))
-        self.stack.enter_context(patch.object(sharing, 'consent_allows', return_value=True))
         self.stack.enter_context(patch('mindie_knowledge.loop.handoff._probe', return_value='absent'))
         self.wake = self.stack.enter_context(patch('mindie_knowledge.loop.handoff.request_wake',
             return_value=dict(wake='requested', runtime='unavailable', reason='requested')))
@@ -155,6 +157,10 @@ class SilentCaptureTests(unittest.TestCase):
             input=''.join(json.dumps(frame)+'\n' for frame in frames), text=True,
             capture_output=True, timeout=8)
         self.assertEqual(result.returncode, 0, result.stderr)
+        from importlib.metadata import version
+        initialized = next(json.loads(line)['result'] for line in result.stdout.splitlines()
+                           if json.loads(line).get('id') == 1)
+        self.assertEqual(initialized['serverInfo']['version'], version("mindie-agent-codex"))
         response = next(json.loads(line)['result'] for line in result.stdout.splitlines()
                         if json.loads(line).get('id') == 2)
         projection = response['structuredContent']['agent_diagnostics']
@@ -246,22 +252,3 @@ class SilentCaptureTests(unittest.TestCase):
         result = diagnostic_support.attach(source, dict(incident_id='a'*32, logging_failed=False))
         self.assertEqual(result['content'], source['content'])
         self.assertEqual(result['diagnostic']['incident_id'], 'a'*32)
-
-    def test_stable_stop_failure_before_bridge_stays_silent_and_pending(self):
-        stable = self.root / 'installation'
-        stable.mkdir()
-        for name in ('runtime_launcher.py', 'update_lock.py', 'diagnostic_support.py',
-                     'diagnostic_fallback.py', 'agent_diagnostics.py'):
-            shutil.copy2(SCRIPTS / name, stable / name)
-        for broken, expected in ((self.root / 'missing.json', 'generation_unavailable'),
-                                 (self.config, 'generation_busy')):
-            from update_lock import update_lock
-            with ExitStack() as held:
-                if broken == self.config:
-                    held.enter_context(update_lock(self.config, exclusive=True))
-                result = subprocess.run([sys.executable, str(stable / 'runtime_launcher.py'),
-                    '--config', str(broken), 'stop'], capture_output=True, text=True, timeout=5)
-            self.assertEqual((result.returncode, result.stdout.strip(), result.stderr), (1, '{}', ''))
-            projection = agent_diagnostics.pending()
-            self.assertIn(expected, [item['code'] for item in projection['items']])
-            agent_diagnostics.acknowledge(projection)

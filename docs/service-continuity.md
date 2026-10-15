@@ -1,59 +1,44 @@
-# Service continuity during plugin updates
+# Installed service identity
 
-An updater used to stop an idle knowledge service and install the next plugin
-without restoring the service. A later query hid the defect by starting it;
-a task that only used remote development could then deliver a Stop event to
-no service and lose that increment.
+Native Codex owns plugin distribution and updates. uv prepares the complete
+locked, noneditable runtime. MindIE has no code-update scheduler, mutable
+current-generation registry, native transaction recovery manager, version
+ordering or service-successor chain.
 
-The update transaction now confirms that the exact old loopback endpoint has
-exited, switches the native package and committed runtime tuple, and makes
-one restoration attempt while retaining the exclusive operation lock.
-Restoration uses the selected interpreter and engine configuration directly,
-never a shared-lock launcher. Core startup remains one owned spawn with
-authenticated readiness and cancellation, without an execution deadline; a
-live process alone is not readiness, and the returned service must be unfrozen.
+A prepared release entry points to one installed interpreter and package outside
+the native disposable cache. The existing user adapter configuration is the only
+installation binding. SessionStart and MCP can initialize an empty profile;
+ordinary entries cannot replace a different binding. Stop cannot download or
+prepare a runtime. Warm entries do not hash the disposable native source.
+Explicit preparation rejects different bytes under an already prepared release
+identifier; a warm entry continues its original fixed runtime, never activates
+an illegal same-version replacement.
 
-Only a service stopped by this updater invocation is eligible for updater
-restoration. A service already absent before the update stays absent; revoked
-or explicitly unbound task leases do not authorize updater restoration. No task is
-activated, no transcript is replayed, and no model call belongs to the updater.
+The shared core authenticates the exact engine configuration and owns one service.
+A ready service may be reused without resupplying provider environment secrets.
+A cold start requires the selected provider context and fails explicitly when it
+is missing. A long-lived MCP process freezes its installation identity in memory
+and checks the user configuration under the existing profile lock before each
+request. A changed binding produces `reload_required`, without dispatching a
+request or selecting another runtime. There is no promise of transparent
+cross-version execution by old loaded sessions.
 
-Stop has its own automatic boundary: the current native task with approved
-contribution scope first durably hands off its capture reference, then may
-request one coalesced wake when the service is absent. Knowledge queries retain
-on-demand startup. Hook acceptance, a live worker, organized experience and a
-submitted PR are separate outcomes. This change requires new native acceptance;
-the historical update-continuity evidence below does not establish it.
+Authorization is separate from code identity. Current explicit consent, scope,
+disabled/reporting choices, full materials, state FORMAT, usage and uncertain
+operation receipts remain authoritative user data. Code reload does not ask for
+consent again. This unreleased version drops development-generation migration
+and consent inference; unsupported layouts are rejected without modifying or
+removing their existing files.
 
-Rollback restores a service only after both the retained native package and
-the exact old pointer are proven restored. Failed or interrupted handoff is
-kept in the existing updater status as service_handoff. Same-revision checks
-and successful Feed sync cannot hide it. A later scheduler invocation does
-not interpret that marker as permission to spawn or retry restoration.
+The model-free cache experiment established why fixed entries are necessary:
+Codex 0.153.4 evicts the prior cache after a marketplace update while the existing
+app-server still holds old commands. Native SessionStart, MCP and late
+UserPromptSubmit control then ran from fixed entries with zero external provider
+requests. This is path-lifetime evidence, not natural Stop collection acceptance.
 
-The selected native profile is retained for the replacement service. Claude
-Code imports only supported provider/model/effort values from that profile's
-user settings into its isolated organizer; it does not import hooks, tools,
-MCP configuration or project settings. Secret values never enter updater status.
-
-## Validation boundary
-
-Real local-daemon acceptance covers live, absent, revoked and rollback paths
-for Kimi and Claude Code. Those cases use a controlled native-install boundary;
-they establish actual process/endpoint/admission behavior, not native package
-installation or model authentication. Native acceptance is recorded separately.
-Windows real-machine acceptance remains with the maintainer after merge.
-
-A real macOS Codex install of candidate `d60fc415` reused an isolated native
-profile with an existing explicitly admitted task. The operator first established
-an old live service, separately from the test outcome. The reviewed updater
-fetched the local candidate commit, built the official pinned runtime, installed
-through the real Codex CLI and verified the selected native version. In 4.64 s,
-the updater replaced the old service PID/endpoint with the selected generation's
-unfrozen service and reported `service_handoff.status=restored`. Cleanup confirmed
-zero remaining owned daemon processes. No native-install seam, model, manual
-post-update ensure or global configuration change was involved. This proves
-native installation and service continuity; it does not claim new Stop delivery.
-
-Component regression checks: 118 passed and 27 subtests passed. These are
-separate from the native evidence above.
+Failure projection is also native: fixed `systemMessage` warning JSON is observed
+in `hook/completed` for SessionStart and Stop on 0.153.4 with a synthetic loopback
+response. It grants no continuation, retry or tool decision. Exact alpha source
+confirms the same Stop warning parser; Windows native observation remains a
+separate gate. Full-body capture, index/usage and cleanup acceptance is recorded
+against the final released runtime separately from these component controls.

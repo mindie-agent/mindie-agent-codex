@@ -10,7 +10,7 @@ expiry, no failure-count pause and no runtime/config fingerprint.
 
 This wrapper stays free of core imports: it binds the native task identity,
 validates shapes, holds the update lock for every store operation, and
-dispatches into the committed runtime generation (``admission_ops.py`` under
+dispatches into the fixed installed runtime (``admission_ops.py`` under
 the configured interpreter), so an old cached entrypoint never mixes an old
 script with a new interpreter or library.
 """
@@ -29,43 +29,39 @@ IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
 # MINDIE_AGENT_CONFIG must not override an installed binding.
 _DISPATCH_CONFIG = "_MINDIE_AGENT_DISPATCH_CONFIG"
 _explicit_config = None
+_installed_binding = None
 
 
-def bind_explicit_config(path=None):
+def bind_explicit_config(path=None, *, binding=None):
     """Process-local adapter path from `--config`. None clears the override.
 
     Also pins MINDIE_AGENT_CONFIG for child dispatch. Does not set native
     task identity.
     """
-    global _explicit_config
+    global _explicit_config, _installed_binding
     if path is None:
         _explicit_config = None
+        _installed_binding = None
         return None
     resolved = Path(path).expanduser().absolute()
+    if _installed_binding is not None and resolved != _explicit_config:
+        raise ValueError("reload_required: this process is bound to another installation")
     _explicit_config = resolved
+    if binding is not None:
+        _installed_binding = binding
     os.environ["MINDIE_AGENT_CONFIG"] = str(resolved)
     return resolved
 
 
-def _installation_binding():
-    """Packaged sidecar next to this script; missing means unbound source."""
-    path = Path(__file__).resolve().parent / "installation.json"
-    if not path.exists():
-        return None
-    if not path.is_file():
-        raise ValueError("installation config binding is not a file")
-    try:
-        data = json.loads(path.read_text(encoding='utf-8'))
-    except (OSError, ValueError) as exc:
-        raise ValueError("installation config binding is unreadable") from exc
-    if not isinstance(data, dict):
-        raise ValueError("installation config binding is invalid")
-    value = data.get("adapter_config")
-    if not isinstance(value, str) or not os.path.isabs(value):
-        raise ValueError(
-            "installation config binding requires an absolute adapter_config"
-        )
-    return Path(value).expanduser().absolute()
+def runtime_binding(config):
+    """Code identity only; contribution and reporting choices remain mutable."""
+    return {key: config.get(key) for key in
+            ("python", "runtime_scripts", "engine_config", "product_validation")}
+
+
+def installed_binding():
+    """Identity frozen by the native entry while it held the profile lock."""
+    return _installed_binding
 
 
 def _dispatch_config():
@@ -83,9 +79,6 @@ def config_path():
     dispatched = _dispatch_config()
     if dispatched is not None:
         return dispatched
-    bound = _installation_binding()
-    if bound is not None:
-        return bound
     return (
         Path(
             os.environ.get(
@@ -98,15 +91,15 @@ def config_path():
 
 
 def runtime_scripts(config):
-    """Committed generation's scripts dir recorded at install; the wrapper's
-    own directory for a pre-update setup layout."""
+    """Installed scripts directory recorded at setup;
+    only explicit installed paths are accepted."""
     value = (config or {}).get("runtime_scripts")
     if isinstance(value, str) and os.path.isabs(value):
         return value
-    return str(Path(__file__).parent)
+    raise ValueError("adapter configuration lacks an absolute runtime_scripts path")
 
 
-def generation_env(config=None):
+def runtime_env(config=None):
     """Pin a helper to this adapter config and the committed interpreter.
 
     PYTHONPATH is omitted so a developer checkout cannot mask the runtime
@@ -163,7 +156,7 @@ class Sessions:
         return config
 
     def _op(self, operation, payload):
-        """One committed generation (config + scripts + interpreter) under the
+        """One installed runtime (config + scripts + interpreter) under the
         operation lock. The helper receives the operation argv and the exact
         config path so a custom Sessions(path=...) never rereads the default
         or MINDIE_AGENT_CONFIG production state.
@@ -177,7 +170,7 @@ class Sessions:
                     json.dumps(payload),
                     timeout=self.op_timeout,
                     max_output=32768,
-                    env=generation_env(self.config),
+                    env=runtime_env(self.config),
                     allow_service=operation == "stop_capture",
                 )
                 envelope = json.loads(completed.stdout)

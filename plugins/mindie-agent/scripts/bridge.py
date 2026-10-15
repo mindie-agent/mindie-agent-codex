@@ -29,7 +29,7 @@ from session_gate import (
     Sessions,
     bind_explicit_config,
     config_path,
-    generation_env,
+    runtime_env,
     runtime_scripts,
 )
 import sharing
@@ -200,7 +200,7 @@ def bind(lease):
                 ],
                 json.dumps(payload),
                 timeout=None,
-                env=generation_env(config_file),
+                env=runtime_env(config_file),
                 allow_service=True,
             ).checked_stdout()
         result = json.loads(output)
@@ -211,37 +211,13 @@ def bind(lease):
         return f"unbound:{type(exc).__name__}"
 
 
-def _entry_migration(config_file):
-    """One-time convergence at the explicit entry-attach boundary.
-
-    Imports validated legacy consent evidence into the profile authority and
-    converges the community settings path; both are idempotent. A failure is
-    reported in the activation result (capture stays fail-closed), never
-    hidden and never blocking the read-only binding itself.
-    """
-    import consent
-
-    notes = {}
-    try:
-        migrated = consent.migrate_legacy(config_file)
-        if migrated.get("status") not in {"kept", "absent"}:
-            notes["consent"] = migrated
-    except Exception as exc:
-        notes["consent"] = dict(status="failed", error=type(exc).__name__)
-    try:
-        moved = sharing.migrate_community_path(config_file)
-        if moved.get("status") != "current" or moved.get("detail"):
-            notes["community"] = moved
-    except Exception as exc:
-        notes["community"] = dict(status="failed", error=type(exc).__name__)
-    return notes or None
 
 
-def _generation_identity():
-    """The actually running plugin generation, for verifiable binding proof.
+def _runtime_identity():
+    """The actually running plugin runtime, for verifiable binding proof.
 
     ``scripts`` is the resolved directory of this running bridge.py; ``build``
-    carries the packaged generation's revision/version stamp when present.
+    carries the installed runtime's revision/version stamp when present.
     A test profile can check these against the selected candidate instead of
     trusting whichever stale cache copy a host or model happened to open.
     """
@@ -262,18 +238,13 @@ def _generation_identity():
 
 
 def activate(operation):
-    migration = None
-    if operation == "activate":
-        migration = _entry_migration(config_path())
     result = getattr(Sessions(), operation)()
     if operation != "activate":
         return result
-    scripts, build = _generation_identity()
+    scripts, build = _runtime_identity()
     result["scripts"] = str(scripts)
     if build:
         result["build"] = build
-    if migration:
-        result["migration"] = migration
     return _prepare_capture(result)
 
 
@@ -296,7 +267,7 @@ def _prepare_capture(result):
             # only. No cold start, no bind, no collection preparation.
             result["capture"] = "disabled"
     except (OSError, ValueError) as exc:
-        # Binding may already exist. Preserve its receipt and migration details
+        # Binding may already exist. Preserve its receipt
         # while reporting that required capture preparation did not complete.
         return dict(result, status="degraded", capture="unavailable", experience="unavailable",
                     error=dict(stage="capture-configuration", type=type(exc).__name__),
@@ -370,7 +341,7 @@ def _status_failure(state, stage, exc, config_file, selected=None):
     }
     recovery = {
         "invalid_config": "Inspect the named config and correct its JSON or required absolute runtime paths, then run status. Existing state has not been reinitialized.",
-        "update_busy": "An update holds the generation lock. Let that operation finish, then explicitly run status; installation is not missing.",
+        "update_busy": "An update holds the profile lock. Let that operation finish, then explicitly run status; installation is not missing.",
         "helper_failed": "Inspect the selected runtime and the reported helper stage, then explicitly run status. No recovery action was started.",
     }
     if selected:
@@ -440,7 +411,7 @@ def offline_status():
             stage = "helper_run"
             output = run(
                 [config["python"], str(Path(runtime_scripts(config)) / "service_control.py"), "status"],
-                "", timeout=None, max_output=32768, env=generation_env(config_file),
+                "", timeout=None, max_output=32768, env=runtime_env(config_file),
             ).checked_stdout()
             stage = "helper_response"
             payload = json.loads(output)
@@ -564,7 +535,7 @@ def sharing_operation(operation, extra=None):
         raise ValueError(
             "read-only/later product modes were removed. Configure the "
             "destination and scope with bridge.py config, or explicitly "
-            "disable capture with sharing-disable. Saved legacy settings are preserved."
+            "disable capture with sharing-disable. Saved settings are preserved."
         )
     if operation == "sharing-enable":
         settings = sharing.set_enabled(True)
@@ -612,7 +583,7 @@ def contribution(operation, batch_id):
             "",
             timeout=None,
             max_output=65536,
-            env=generation_env(config_file),
+            env=runtime_env(config_file),
         ).checked_stdout()
     result = json.loads(output)
     if not isinstance(result, dict):
@@ -625,7 +596,7 @@ def history_import(argv):
 
     Stream per-file receipts rather than buffering a whole library or imposing
     a Hook deadline on a user-requested bulk operation. Ctrl-C stops the import.
-    The generation lock keeps scripts and interpreter coherent until it exits.
+    The profile lock keeps scripts and interpreter coherent until it exits.
     """
     import subprocess
 
@@ -633,7 +604,7 @@ def history_import(argv):
     with update_lock(config_file):
         config = json.loads(config_file.read_text(encoding='utf-8'))
         command = [config['python'], str(Path(runtime_scripts(config)) / 'history_import.py'), *argv]
-        options = dict(stdin=subprocess.DEVNULL, env=generation_env(config_file))
+        options = dict(stdin=subprocess.DEVNULL, env=runtime_env(config_file))
         if os.name != 'nt':
             return subprocess.call(command, **options)
         # The explicit import may prepare the domain service. Give its helper
@@ -681,7 +652,7 @@ def configure(argv):
             "",
             timeout=None,
             max_output=65536,
-            env=generation_env(config_file),
+            env=runtime_env(config_file),
         ).checked_stdout()
     result = json.loads(output)
     if not isinstance(result, dict):
@@ -745,7 +716,7 @@ def _reporting_unavailable(stage, exc):
 
 
 def _adapter_python(config_file):
-    """Read the selected interpreter under the generation lock, then release it."""
+    """Read the selected interpreter under the profile lock, then release it."""
     with update_lock(config_file):
         fd = os.open(config_file, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
         try:
@@ -804,7 +775,7 @@ def reporting_operation(operation):
                 timeout=None,
                 max_output=65536,
                 allowed_returncodes=(0, 1),
-                env=generation_env(config_file),
+                env=runtime_env(config_file),
             ).checked_stdout()
             _print_reporting_json(output, "helper_response")
         except SystemExit:
@@ -841,7 +812,7 @@ def reporting_operation(operation):
                 timeout=None,
                 max_output=65536,
                 allowed_returncodes=(0, 1),
-                env=generation_env(config_file),
+                env=runtime_env(config_file),
             ).checked_stdout()
             _print_reporting_json(output, "helper_response")
         except SystemExit:
@@ -877,7 +848,7 @@ def reporting_operation(operation):
             timeout=None,
             max_output=65536,
             allowed_returncodes=(0, 1),
-            env=generation_env(config_file),
+            env=runtime_env(config_file),
         ).checked_stdout()
         _print_reporting_json(output, "helper_response")
     except SystemExit:
@@ -1014,7 +985,7 @@ def main():
                     "",
                     timeout=None,
                     max_output=32768,
-                    env=generation_env(config_file),
+                    env=runtime_env(config_file),
                 ).checked_stdout(),
                 end="",
             )

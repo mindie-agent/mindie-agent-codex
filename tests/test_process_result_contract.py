@@ -52,14 +52,6 @@ class ProcessResultTests(unittest.TestCase):
         self.assertEqual(result.execution, 'unknown')
         self.assertIn({'stage': 'reap_process', 'error_type': 'OSError'}, result.cleanup)
 
-    def test_selected_missing_generation_cannot_run_old_copy(self):
-        with tempfile.TemporaryDirectory() as directory:
-            config = Path(directory) / 'adapter.json'
-            config.write_text('{"python":' + __import__('json').dumps(sys.executable)
-                              + ',"runtime_scripts":' + __import__('json').dumps(directory) + '}')
-            with patch.object(runtime_call, 'config_path', return_value=config):
-                with self.assertRaises(FileNotFoundError):
-                    runtime_call.redispatch()
 
     def test_nonexistent_executable_is_not_started(self):
         with self.assertRaises(OSError) as caught:

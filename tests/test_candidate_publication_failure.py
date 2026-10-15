@@ -198,8 +198,9 @@ class PublicationFailureTests(unittest.TestCase):
             source = Path(directory)
             scripts = source / SCRIPTS.relative_to(ROOT)
             scripts.mkdir(parents=True)
-            for name in ("product-contract.json", "runtime-requirements.txt"):
-                shutil.copyfile(ROOT / name, source / name)
+            for name in ("product-contract.json", "pyproject.toml", "uv.lock"):
+                shutil.copyfile(SCRIPTS.parent / name, scripts.parent / name)
+            shutil.copytree(SCRIPTS.parent / ".codex-plugin", scripts.parent / ".codex-plugin")
             failure = dict(stage="publication_fetch", code="revision_read_failed", process=dict(
                 execution="completed", reason="nonzero_exit", returncode=128,
                 cleanup_failed=True,

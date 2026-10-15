@@ -13,7 +13,7 @@ The engine configuration records the explicit neutral admission database
 (`admission_path`) and the adapter-owned transcript parser
 (`transcript_adapter`, the installed codex_transcript.py exporting
 FileIdentity/identify/read_material); the adapter configuration additionally
-records the committed generation's scripts directory (`runtime_scripts`).
+records the fixed installed scripts directory (`runtime_scripts`).
 """
 
 import argparse
@@ -23,7 +23,6 @@ from pathlib import Path
 import re
 import secrets
 import sys
-import tempfile
 import time
 
 from bounded_process import run
@@ -34,7 +33,7 @@ import sharing
 
 SCRIPTS = Path(__file__).parent.absolute()
 
-# Setup and updater use the same material-index and runtime API contract.
+# Setup and bootstrap use the same material-index and runtime API contract.
 
 
 def probe_runtime(python):
@@ -60,22 +59,6 @@ def write_private(path, value):
     with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
         json.dump(value, stream, ensure_ascii=False, indent=2)
         stream.write("\n")
-
-
-def replace_private(path, value):
-    """Atomic rewrite of an existing MindIE JSON file (0600)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(dir=path.parent, prefix=".mindie-")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(value, stream, ensure_ascii=False, indent=2)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.chmod(name, 0o600)
-        os.replace(name, path)
-    finally:
-        Path(name).unlink(missing_ok=True)
 
 
 def community_settings(args, parser, python, *, scripts=SCRIPTS):
@@ -157,12 +140,18 @@ def interactive_choice(args, parser):
     parser.error("configuration was not completed; no product mode was selected")
 
 
-def install(args, parser):
+def install(args, parser, *, validation=None):
     if not args.knowledge_python:
         parser.error("install requires --knowledge-python")
     python = str(Path(args.knowledge_python).expanduser().absolute())
     # Keep the venv executable path; resolving its symlink loses its site-packages.
-    validation = probe_runtime(python)
+    if validation is None:
+        validation = probe_runtime(python)
+    else:
+        # Only bootstrap's exact verified immutable runtime reuses its
+        # publication read. There is no command-line bypass.
+        product_contract.validate_receipt(
+            json.dumps(validation), product_contract.identity(SCRIPTS.parent))
     declaration, _ = product_contract.product(product_contract.source_root(SCRIPTS))
     transcript_adapter = str(SCRIPTS / "codex_transcript.py")
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args.domain):
@@ -171,7 +160,7 @@ def install(args, parser):
     engine_config = config.with_name(config.stem + ".engine.json")
     community_config = config.with_name("mindie-community.json")
     admission_path = config.with_name(config.stem + ".admission.sqlite3")
-    if config.exists() or engine_config.exists() or community_config.exists():
+    if os.path.lexists(config) or os.path.lexists(engine_config):
         parser.error(
             "configuration already exists; use setup.py configure to record "
             "sharing on this installation, or choose --config"
@@ -190,6 +179,29 @@ def install(args, parser):
             f"({saved['error']}); inspect and remove it explicitly before "
             "recording a new choice"
         )
+    shared_community = None
+    if os.path.lexists(community_config):
+        from mindie_knowledge.loop.settings import normalize
+        try:
+            shared_community = product_contract.read_json(community_config)[0]
+            normalize(sharing.validate(shared_community))
+            if (shared_community.get("consent_config") != str(consent.consent_path_for(config))
+                    or shared_community["enabled"]
+                    and (saved["state"] != "ok" or not saved["choice"])):
+                raise ValueError("shared settings lack explicit profile consent")
+        except (OSError, ValueError) as exc:
+            parser.error(
+                "existing shared community configuration is unavailable or unsupported; "
+                f"configuration was not changed ({type(exc).__name__})"
+            )
+        if any(getattr(args, name) for name in (
+            "community_repository", "community_project_root", "community_account",
+            "community_fork", "community_visibility", "community_branch",
+        )):
+            parser.error(
+                "shared community settings already exist and will be reused; "
+                "use configure after installation to change the saved selection"
+            )
     sharing_choice = None
     if args.interactive and reused_choice is None:
         sharing_choice = interactive_choice(args, parser)
@@ -254,14 +266,15 @@ def install(args, parser):
                 admission_path=str(admission_path),
                 transcript_adapter=transcript_adapter,
                 domain=args.domain,
-                sharing="enabled" if community is not None else "off",
+                sharing="enabled" if (community or shared_community or {}).get("enabled") is True
+                        and (sharing_choice or reused_choice) == "contribute" else "off",
                 sharing_choice=sharing_choice,
                 reused_choice=reused_choice,
                 next=(
                     None
-                    if community is not None
-                    else "sharing is off/unconfigured; first explicit invocation "
-                    "asks only for missing destination and scope, or run scripts/setup.py configure "
+                    if community is not None or reused_choice is not None
+                    else "sharing is off/unconfigured; when explicitly requested, "
+                    "record the destination and scope with scripts/setup.py configure "
                     "--community-repository OWNER/REPO "
                     "--community-project-root PATH --community-visibility public"
                 ),
@@ -271,6 +284,8 @@ def install(args, parser):
     )
 
 
+
+
 def configure(args, parser):
     """Supported post-install sharing configuration.
 
@@ -278,8 +293,7 @@ def configure(args, parser):
     because the engine configuration already exists. Enabling requires the
     full explicit selection (repository, scope, public visibility); sibling
     components' extension keys in an existing settings file are preserved.
-    This explicit boundary also converges the community path onto the
-    profile-shared authority and wires the consent authority pointer.
+    This explicit boundary updates only the declared profile authority.
     """
     config = args.config.expanduser().absolute()
     if not config.is_file():
@@ -287,13 +301,24 @@ def configure(args, parser):
             "no existing configuration; run setup.py install "
             "--knowledge-python PYTHON first"
         )
-    adapter = json.loads(config.read_text(encoding='utf-8'))
+    adapter = product_contract.read_json(config)[0]
     python = adapter.get("python")
     if not isinstance(python, str) or not python:
         parser.error("existing configuration has no runtime interpreter")
     scripts = adapter.get("runtime_scripts")
     if not isinstance(scripts, str) or not Path(scripts).is_absolute():
         parser.error("existing configuration has no selected product scripts")
+    from mindie_knowledge.loop.cli import config_at
+    try:
+        engine_path = adapter["engine_config"]
+        if not isinstance(engine_path, str) or not Path(engine_path).is_absolute():
+            raise ValueError("engine_config must be absolute")
+        config_at(engine_path)
+    except (OSError, ValueError, KeyError) as exc:
+        parser.error(
+            "existing engine configuration is unavailable or unsupported; "
+            f"configuration was not changed ({type(exc).__name__})"
+        )
     community = community_settings(args, parser, python, scripts=Path(scripts))
     if community is None:
         parser.error(
@@ -307,11 +332,7 @@ def configure(args, parser):
     if saved["state"] in {"corrupt", "unreadable"}:
         parser.error("saved setup state is damaged; configuration was not changed")
     with sharing.community_write_lock(config):
-        # One context for the whole boundary: converge adapter/engine/worker
-        # onto the profile-shared path, then resolve and re-read the current
-        # authority before writing.
-        moved = sharing._migrate_community_locked(config)
-        community_config = Path(moved["path"])
+        community_config = sharing.configured_path(config)
         # A damaged or non-conforming document fails here with its bytes
         # preserved — a managed mutation is never an implicit repair by
         # replacement. A parseable document is rewritten normally (explicit
@@ -359,23 +380,6 @@ def configure(args, parser):
         community_config.parent.mkdir(parents=True, exist_ok=True)
         if merged != old:
             sharing.write(community_config, merged)
-    adapter["community_config"] = str(community_config)
-    adapter.pop("sharing_choice", None)  # retired migration source
-    adapter.pop("session_activation", None)
-    engine_path = Path(adapter.get("engine_config") or "")
-    if engine_path.is_file():
-        try:
-            engine = json.loads(engine_path.read_text(encoding='utf-8'))
-        except (OSError, ValueError):
-            engine = None
-        if isinstance(engine, dict) and "session_activation" in engine:
-            engine.pop("session_activation", None)
-            if "admission_path" not in engine and isinstance(
-                adapter.get("admission_path"), str
-            ):
-                engine["admission_path"] = adapter["admission_path"]
-            replace_private(engine_path, engine)
-    replace_private(config, adapter)
     consent.record_choice("contribute", config)
     print(
         json.dumps(
@@ -450,7 +454,7 @@ def main():
     parser.add_argument(
         "--interactive",
         action="store_true",
-        help="Offer the three first-use sharing choices; never default yes. "
+        help="Confirm the explicit contribution destination and scope; never default yes. "
         "Headless install (the default) leaves sharing unconfigured/off.",
     )
     args = parser.parse_args()

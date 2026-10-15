@@ -82,7 +82,6 @@ def _cleanup(process, result, *, selector=None, threads=()):
 
 def _spawn(command, stdin, env, *, allow_service=False):
     if POSIX:
-        from update_lock import generation_descriptors
         started, notify = os.pipe()
         owner_read, owner_write = os.pipe()
         try:
@@ -91,7 +90,7 @@ def _spawn(command, stdin, env, *, allow_service=False):
                  str(os.getpid()), str(notify), str(owner_read), *command],
                 stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 start_new_session=True, env=env,
-                pass_fds=(*generation_descriptors(), notify, owner_read),
+                pass_fds=(notify, owner_read),
             )
             process._mindie_owner_fd = owner_write
         except BaseException:
