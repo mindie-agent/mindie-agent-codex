@@ -31,6 +31,7 @@ import urllib.error
 import urllib.request
 
 from bounded_process import classify_transport_text, run
+from native_context import capture as capture_native_context
 import product_contract
 from session_gate import config_path, runtime_scripts
 from update_lock import file_lock, update_lock
@@ -657,6 +658,8 @@ class Updater:
         mcp = read(plugin / ".mcp.json")
         from diagnostic_support import environment_context
         diagnostic_context = environment_context(read(self.config))
+        native = capture_native_context(home=self.settings["codex_home"],
+                                        binary=self.settings["codex"])
         for name, server in mcp["mcpServers"].items():
             server["command"] = self.settings["python"]
             role = {"mindie-knowledge": "knowledge-mcp", "mindie-remote-dev": "remote-mcp"}[name]
@@ -665,6 +668,7 @@ class Updater:
             env = dict(server.get("env") or {})
             env["MINDIE_AGENT_CONFIG"] = config_value
             env.update(diagnostic_context)
+            env.update(native)
             server["env"] = env
             server.pop("env_vars", None)
         atomic(plugin / ".mcp.json", mcp)
@@ -1184,6 +1188,8 @@ class Updater:
                         runtime_scripts=str(Path(candidate["plugin"]) / "scripts"),
                         admission_path=admission_path,
                         product_validation=candidate["validation"],
+                        native_context=capture_native_context(
+                            home=self.settings["codex_home"], binary=self.settings["codex"]),
                     ),
                 )
                 try:
@@ -2184,10 +2190,18 @@ def enable(args):
         adapter = read(adapter_path)
         context = environment_context(adapter)
         context.update(capture_environment_context())
+        changed = False
         if context and adapter.get("diagnostics_context") != context:
             adapter["diagnostics_context"] = context
+            changed = True
+        native = capture_native_context(home=settings["codex_home"], binary=settings["codex"])
+        if adapter.get("native_context") != native:
+            adapter["native_context"] = native
+            changed = True
+        if changed:
             atomic(adapter_path, adapter)
     apply_environment_context(adapter)
+    os.environ.update(native)
     root.mkdir(parents=True, exist_ok=True)
     atomic(settings_path, settings)
     updater = Updater(settings_path)

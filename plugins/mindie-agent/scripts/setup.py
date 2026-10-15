@@ -225,6 +225,8 @@ def install(args, parser):
     diagnostic_context = capture_environment_context()
     if diagnostic_context:
         adapter["diagnostics_context"] = diagnostic_context
+    from native_context import capture as capture_native_context
+    adapter["native_context"] = capture_native_context()
     write_private(config, adapter)
     if sharing_choice:
         # The explicit install-time choice lands directly in the consent

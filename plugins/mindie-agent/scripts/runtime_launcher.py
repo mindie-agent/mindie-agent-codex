@@ -31,6 +31,13 @@ def selected(config, root, lifetime):
                        for path in context.values())):
             raise ValueError("invalid installation diagnostics context")
         os.environ.update(context)
+        native = value.get("native_context", {})
+        if (not isinstance(native, dict)
+                or set(native) - {"CODEX_HOME", "MINDIE_CODEX_BIN"}
+                or any(not isinstance(path, str) or not Path(path).is_absolute()
+                       for path in native.values())):
+            raise ValueError("invalid installation native context")
+        os.environ.update(native)
         scripts = Path(value["runtime_scripts"]).resolve(strict=True)
         generation = scripts.parent.parent
         if generation.parent != (root / "generations").resolve() or scripts != generation / "plugin/scripts":

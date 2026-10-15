@@ -17,7 +17,7 @@ sys.path.insert(0, str(SCRIPTS))
 import agent_worker as worker
 import process_guard as guard
 from mindie_knowledge.materials import summarizer
-from k3_material_fixture import request, completion
+from k3_material_fixture import request, completion, isolate_native_profile
 
 
 def process_with_events(events, wait=False):
@@ -28,6 +28,9 @@ def process_with_events(events, wait=False):
 
 
 class OrganizerCategoryTests(unittest.TestCase):
+    def setUp(self):
+        isolate_native_profile(self)
+
     def test_k3_01_known_model_rejection_is_not_unknown_paid_outcome(self):
         payload = request(worker)
         rejection = "HTTP 400: This model is not supported when using Codex with a ChatGPT account"

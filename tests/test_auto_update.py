@@ -38,7 +38,7 @@ class LocalUpdater(Updater):
 
     def command(self, args, **kwargs):
         args = [str(arg) for arg in args]
-        if args[0] == "fixture-codex":
+        if Path(args[0]).name == "fixture-codex":
             marketplace = self.root / "fixture-marketplace.json"
             if args[1:4] == ["plugin", "marketplace", "list"]:
                 return json.dumps(
@@ -236,7 +236,7 @@ class AutoUpdateTests(unittest.TestCase):
                 repository=str(self.remote),
                 channel="main",
                 python=sys.executable,
-                codex="fixture-codex",
+                codex=str(self.base / "fixture-codex"),
                 uv="fixture-uv",
                 codex_home=str(self.base / "codex"),
             ),
@@ -424,7 +424,8 @@ class AutoUpdateTests(unittest.TestCase):
         for name, server in mcp["mcpServers"].items():
             with self.subTest(server=name):
                 self.assertEqual(server["env"]["MINDIE_AGENT_CONFIG"], expected)
-                self.assertEqual(list(server["env"]), ["MINDIE_AGENT_CONFIG"])
+                self.assertEqual(set(server["env"]),
+                                 {"MINDIE_AGENT_CONFIG", "CODEX_HOME", "MINDIE_CODEX_BIN"})
                 self.assertNotIn("env_vars", server)
         command = read(plugin / "hooks/hooks.json")["hooks"]["Stop"][0]["hooks"][0][
             "command"
@@ -449,9 +450,12 @@ class AutoUpdateTests(unittest.TestCase):
             bind_explicit_config(None)
         binding = read(plugin / "scripts/installation.json")
         self.assertEqual(binding, {"adapter_config": expected})
+        # Compare with the validated checkout: Git may select CRLF on Windows
+        # even when this test runner's source archive contains LF.
         self.assertEqual(
             (plugin / "scripts/windows_process.py").read_bytes(),
-            (SCRIPTS / "windows_process.py").read_bytes(),
+            (Path(result["current"]["source"]) /
+             "plugins/mindie-agent/scripts/windows_process.py").read_bytes(),
         )
 
     def test_saved_diagnostic_context_survives_native_packaging_and_update(self):
@@ -470,10 +474,13 @@ class AutoUpdateTests(unittest.TestCase):
                 result = self.check()
                 self.assertEqual(result["status"], "installed")
                 self.assertEqual(read(self.config)["diagnostics_context"], context)
+                native = auto_update.capture_native_context(
+                    home=read(self.settings)["codex_home"], binary=read(self.settings)["codex"])
+                self.assertEqual(read(self.config)["native_context"], native)
                 mcp = read(Path(result["current"]["plugin"]) / ".mcp.json")
                 for server in mcp["mcpServers"].values():
                     self.assertEqual(server["env"], dict(
-                        context, MINDIE_AGENT_CONFIG=str(self.config.absolute())))
+                        context, **native, MINDIE_AGENT_CONFIG=str(self.config.absolute())))
                 # The scheduler/helper command starts with a stripped host env.
                 with patch.dict(os.environ, {}, clear=True), patch("auto_update.run") as run:
                     run.return_value.cleanup = []
@@ -841,7 +848,8 @@ class AutoUpdateTests(unittest.TestCase):
         original = self.updater.command
 
         def crash(args, **kwargs):
-            if [str(a) for a in args][:3] == ["fixture-codex", "plugin", "add"]:
+            if ([str(a) for a in args][:3]
+                    == [str(self.base / "fixture-codex"), "plugin", "add"]):
                 raise KeyboardInterrupt("simulated process loss")
             return original(args, **kwargs)
 
@@ -1194,8 +1202,11 @@ class AutoUpdateTests(unittest.TestCase):
         )
         self.assertEqual(verified["version"], current["version"])
         self.assertEqual(read(self.config)["diagnostics_context"], context)
+        native = auto_update.capture_native_context(home=settings["codex_home"], binary=settings["codex"])
+        self.assertEqual(read(self.config)["native_context"], native)
         for server in read(Path(current["plugin"]) / ".mcp.json")["mcpServers"].values():
             self.assertEqual({key: server["env"][key] for key in context}, context)
+            self.assertEqual({key: server["env"][key] for key in native}, native)
 
 
 class UpdateIdleTests(unittest.TestCase):

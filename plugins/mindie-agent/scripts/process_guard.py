@@ -70,7 +70,7 @@ def _native_error_reason(event):
     return 'native_turn_failed' if event['type'] == 'turn.failed' else 'native_event_error'
 
 
-def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=False):
+def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=False, env=None):
     # The knowledge service owns one group for worker + Codex + descendants.
     started = time.monotonic()
     receipt = {} if receipt is None else receipt
@@ -95,16 +95,17 @@ def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=Fals
             if POSIX:
                 if inherited:
                     process = subprocess.Popen(command, stdin=input_file,
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
                 else:
                     from bounded_process import _spawn
-                    process = _spawn(command, input_file, None)
+                    process = _spawn(command, input_file, env)
             else:
                 process = windows_process.spawn(
                     command,
                     stdin=input_file,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
+                    env=env,
                 )
         except OSError as exc:
             receipt['elapsed_ms'] = round((time.monotonic() - started) * 1000)

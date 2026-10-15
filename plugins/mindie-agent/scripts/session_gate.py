@@ -118,7 +118,9 @@ def generation_env(config=None):
     env["PYTHONIOENCODING"] = "utf-8"
     selected = str(Path(config or config_path()).absolute())
     from diagnostic_support import read_environment_context
+    from native_context import read as read_native_context
     env.update(read_environment_context(selected))
+    env.update(read_native_context(selected))
     env["MINDIE_AGENT_CONFIG"] = selected
     env[_DISPATCH_CONFIG] = selected
     return env

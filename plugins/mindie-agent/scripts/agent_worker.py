@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,7 @@ import time
 
 from mindie_knowledge.materials import summarizer
 import process_guard
+import summary_provider
 from process_guard import InvalidResultError, NativeFailure, NativeStartError, OutputLimitExceeded, run_codex
 
 SUMMARY_MODEL = "gpt-5.6-luna"
@@ -28,12 +30,16 @@ class ConfigurationError(ValueError):
     pass
 
 
-def identity():
+def identity(route=None):
     # Read the implementation actually executing, not merely its command path.
-    sources = (Path(__file__), Path(process_guard.__file__), Path(summarizer.__file__))
+    sources = (Path(__file__), Path(process_guard.__file__), Path(summarizer.__file__),
+               Path(summary_provider.__file__))
     implementation = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sources}
     implementation["native_command"] = os.environ.get("MINDIE_CODEX_BIN", "codex")
-    return summarizer.policy_identity(model=SUMMARY_MODEL, effort=SUMMARY_EFFORT,
+    route = summary_provider.selected(SUMMARY_MODEL) if route is None else route
+    if route["provider"] is not None:
+        implementation["provider_route_sha256"] = route["route_sha256"]
+    return summarizer.policy_identity(model=route["model"], effort=SUMMARY_EFFORT,
                                       implementation=implementation)
 
 
@@ -45,6 +51,7 @@ class NativeSummaryModel:
                             turn_failed=False, request_rejected=False, usage=None, elapsed_ms=0, cleanup_failed=False)
         self.raw_result = None
         self.calls = 0
+        self.route = None
 
     def invoke(self, messages):
         from langchain_core.messages import AIMessage
@@ -55,18 +62,25 @@ class NativeSummaryModel:
         prompt = summarizer.render_prompt(data)
         if len(prompt.encode("utf-8")) > summarizer.MAX_PROMPT_BYTES:
             raise summarizer.SummaryInputError("complete prompt exceeds budget")
-        with tempfile.TemporaryDirectory(prefix="mindie-summary-") as directory:
+        directory = tempfile.mkdtemp(prefix="mindie-summary-")
+        try:
+            route = self.route or summary_provider.selected(SUMMARY_MODEL)
+            env = summary_provider.environment(route, directory)
             schema = Path(directory) / "schema.json"
             schema.write_text(json.dumps(summarizer.output_schema(
                 [message.id for message in messages if message.id])), encoding="utf-8")
-            command = [os.environ.get("MINDIE_CODEX_BIN", "codex"), "exec", "--model", SUMMARY_MODEL,
-                       "-c", f'model_reasoning_effort="{SUMMARY_EFFORT}"', "--ignore-user-config", "--ignore-rules",
+            command = [os.environ.get("MINDIE_CODEX_BIN", "codex"), "exec", "--model", route["model"],
+                       "-c", f'model_reasoning_effort="{SUMMARY_EFFORT}"', "--ignore-rules",
                        "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-C", directory,
                        "-c", "features.hooks=false", "-c", "features.apps=false",
                        "-c", "features.shell_tool=false", "-c", "features.multi_agent=false",
+                       "-c", "features.plugins=false", "-c", "features.skip_host_skill_discovery=true",
+                       "-c", "features.skill_search=false",
                        "-c", "features.unbounded_connection_retries=false", "-c", 'web_search="disabled"',
                        "--output-schema", str(schema), "--json", "-"]
-            run_codex(command, prompt, receipt=self.receipt, defer_cleanup=True)
+            if env is None:
+                command.insert(2, "--ignore-user-config")
+            run_codex(command, prompt, receipt=self.receipt, defer_cleanup=True, env=env)
             if not self.receipt["turn_completed"]:
                 raise NativeFailure("native execution did not report completion")
             try:
@@ -82,12 +96,25 @@ class NativeSummaryModel:
             except UnicodeError:
                 raise InvalidResultError("summary output is unavailable or invalid") from None
             return AIMessage(content=self.raw_result)
+        finally:
+            try:
+                shutil.rmtree(directory)
+            except OSError:
+                self.receipt["cleanup_failed"] = True
+                try:
+                    from diagnostic_support import failure
+                    failure("summary", stage="temporary-profile-cleanup", category="internal",
+                            exception=OSError("summary temporary profile cleanup failed"),
+                            reportable=False)
+                except Exception:
+                    pass
 
 
 def _category(error):
     if getattr(error, 'mindie_category', None) == 'configuration':
         return 'configuration'
-    if isinstance(error, (ConfigurationError, NativeStartError, ImportError)):
+    if isinstance(error, (ConfigurationError, summary_provider.ProviderConfigurationError,
+                          NativeStartError, ImportError)):
         return "configuration"
     if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
         return "deadline"
@@ -102,6 +129,8 @@ def _category(error):
 
 
 def _reason(error, receipt):
+    if isinstance(error, summary_provider.ProviderConfigurationError):
+        return "configuration_invalid"
     if isinstance(error, summarizer.SummaryResultError):
         return error.reason
     if receipt.get("request_rejected"):
@@ -136,8 +165,10 @@ def run(payload):
     model = NativeSummaryModel()
     result, error, error_reason, status = None, None, None, "returned"
     try:
-        if payload["policy_identity"] != identity():
+        route = summary_provider.selected(SUMMARY_MODEL)
+        if payload["policy_identity"] != identity(route):
             raise ConfigurationError("summary worker policy changed")
+        model.route = route
         result = summarizer.summarize_batch(payload, model)
     except Exception as exc:
         error = _category(exc)

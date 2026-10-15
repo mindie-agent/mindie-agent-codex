@@ -11,10 +11,13 @@ SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
 sys.path.insert(0, str(SCRIPTS))
 import agent_worker
 from mindie_knowledge.materials import summarizer
-from k3_material_fixture import request, result, completion
+from k3_material_fixture import request, result, completion, isolate_native_profile
 
 
 class SummaryModelTests(unittest.TestCase):
+    def setUp(self):
+        isolate_native_profile(self)
+
     def invoke(self, payload, metadata):
         captured = []
         def native(command, prompt, **options):

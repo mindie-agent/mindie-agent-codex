@@ -16,7 +16,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
 sys.path.insert(0, str(SCRIPTS))
 import agent_worker as worker
 import process_guard as guard
-from k3_material_fixture import request, result
+from k3_material_fixture import request, result, isolate_native_profile
 from mindie_knowledge.loop.process import bounded_run
 from mindie_knowledge.materials import summarizer
 
@@ -37,6 +37,9 @@ def program(rows, tail=''):
 
 
 class NativeSummaryResultTests(unittest.TestCase):
+    def setUp(self):
+        isolate_native_profile(self)
+
     def execute(self, payload, rows, tail=''):
         # Large output must exercise the result stream, not Windows' much
         # smaller command-line limit before the fake native process starts.

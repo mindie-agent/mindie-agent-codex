@@ -52,6 +52,8 @@ class SetupTests(unittest.TestCase):
                                    "--root", folder / "data", env=env)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 adapter = json.loads(config.read_text())
+                self.assertEqual(adapter["native_context"]["CODEX_HOME"],
+                                 str(Path(env.get("CODEX_HOME") or Path.home() / ".codex").absolute()))
                 if explicit:
                     self.assertEqual(adapter["diagnostics_context"], context)
                 else:
