@@ -744,7 +744,8 @@ class AutoUpdateTests(unittest.TestCase):
     def test_prepared_plugin_edit_prevents_native_installation(self):
         candidate = self.updater.prepare(self.sha)
         script = Path(candidate["plugin"]) / "scripts/bridge.py"
-        script.write_text(script.read_text() + "\n# corrupted packaged entry\n")
+        script.write_text(script.read_text(encoding="utf-8") + "\n# corrupted packaged entry\n",
+                          encoding="utf-8")
         with self.assertRaisesRegex(auto_update.Incompatible, "plugin bytes changed"):
             self.updater.install(candidate)
         self.assertEqual(read(self.config), self.initial)
@@ -806,7 +807,8 @@ class AutoUpdateTests(unittest.TestCase):
         candidate = self.updater.prepare(self.sha)
         source = Path(candidate["source"])
         script = source / "plugins/mindie-agent/scripts/candidate_validate.py"
-        script.write_text(script.read_text() + "\n# concurrent change\n")
+        script.write_text(script.read_text(encoding="utf-8") + "\n# concurrent change\n",
+                          encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "does not match"):
             self.updater.install(candidate)
         self.assertEqual(read(self.config), self.initial)
@@ -1275,7 +1277,8 @@ class AutoUpdateTests(unittest.TestCase):
                 0
             ]["command"]
             self.assertEqual(command, previous_command)
-            self.assertIn(f"# {name} stop behavior", (plugin / "scripts" / name).read_text())
+            self.assertIn(f"# {name} stop behavior",
+                          (plugin / "scripts" / name).read_text(encoding="utf-8"))
             self.assertEqual(read(self.config)["runtime_scripts"], str(plugin / "scripts"))
             previous, previous_command = plugin, command
 
