@@ -150,14 +150,19 @@
         }
       ],
       "code_paths": [
-        "scripts/native_entry.py:launcher_code"
+        "scripts/native_entry.py:launcher_code",
+        "scripts/native_entry.py:hook_launcher_code"
       ],
       "test_ids": [
-        "tests/test_locked_runtime.py::RuntimeTests.test_fixed_entry_prefers_prepared_release_after_cache_eviction"
+        "tests/test_locked_runtime.py::RuntimeTests.test_fixed_entry_prefers_prepared_release_after_cache_eviction",
+        "tests/test_native_hook_entry.py::NativeHookEntryTests.test_same_loaded_command_uses_exact_active_prepared_entry_without_native_cache",
+        "tests/test_native_hook_entry.py::NativeHookEntryTests.test_hook_commands_do_not_change_with_release_but_mcp_keeps_fixed_entry"
       ],
       "evidence_refs": [
         "https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core-plugins/src/store.rs",
-        "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/core-plugins/src/store.rs"
+        "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/core-plugins/src/store.rs",
+        "https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/hooks/src/engine/discovery.rs",
+        "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/hooks/src/engine/discovery.rs"
       ]
     },
     "native.hook-envelope": {

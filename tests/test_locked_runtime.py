@@ -45,9 +45,9 @@ class RuntimeTests(unittest.TestCase):
         record.assert_called_once()
 
     def test_session_hook_keeps_diagnostics_while_stop_stays_neutral(self):
-        commands = native_entry.hook_commands('0.0.1', 'session-start')
+        commands = native_entry.hook_commands('session-start')
         self.assertNotIn('2>&1', commands['command'])
-        self.assertIn('2>&1', native_entry.hook_commands('0.0.1', 'stop')['command'])
+        self.assertIn('2>&1', native_entry.hook_commands('stop')['command'])
 
     def test_short_stop_cannot_download_or_prepare(self):
         args=native_entry.command_args('0.0.1','stop')

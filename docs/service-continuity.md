@@ -43,6 +43,17 @@ app-server still holds old commands. Native SessionStart, MCP and late
 UserPromptSubmit control then ran from fixed entries with zero external provider
 requests. This is path-lifetime evidence, not natural Stop collection acceptance.
 
+Hook command text is also independent of the plugin version. A running
+app-server can retain old plugin declarations after an external native update;
+changing the command and its trusted hash made a new thread silently omit
+SessionStart/Stop in the isolated two-runtime experiment. The Hook facade reads
+the canonical profile, checks its exact prepared runtime receipt, and executes
+that immutable entry. Only an absent profile may bootstrap from the native
+`PLUGIN_ROOT`; a missing or mismatched installed entry is an error. No new
+selector or trust authority is introduced. Native version/cache changes with
+identical command text retained the same trusted hashes in the model-free
+0.153.4 control; full natural capture remains a separate acceptance gate.
+
 Failure projection is also native: fixed `systemMessage` warning JSON is observed
 in `hook/completed` for SessionStart and Stop on 0.153.4 with a synthetic loopback
 response. It grants no continuation, retry or tool decision. Exact alpha source

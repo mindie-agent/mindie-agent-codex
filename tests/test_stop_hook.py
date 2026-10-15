@@ -171,8 +171,14 @@ class StopHookTests(unittest.TestCase):
                 "with open(os.environ['HOOK_TEST_RECEIVED'], 'a') as stream:\n"
                 "    stream.write(sys.stdin.read() + '\\n')\n"
             )
+            validation = dict(schema="mindie-candidate-check/1", status="validated",
+                              native_version="0.0.1")
+            config = Path(root) / "adapter.json"
+            config.write_text(json.dumps(dict(python=sys.executable, product_validation=validation)))
+            (scripts / "runtime.json").write_text(json.dumps(
+                dict(python=sys.executable, validation=validation)))
             event = self.run_stop(plugin, configured=True, PLUGIN_DATA=str(data),
-                                  HOOK_TEST_RECEIVED=str(received))
+                                  HOOK_TEST_RECEIVED=str(received), MINDIE_AGENT_CONFIG=str(config))
             self.assertEqual([json.loads(line) for line in received.read_text().splitlines()], [event])
 
     def test_real_bridge_missing_config_does_not_write_state(self):
