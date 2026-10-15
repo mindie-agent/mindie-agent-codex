@@ -12,7 +12,7 @@ import sysconfig
 import tempfile
 
 from product_contract import package_files, source_identity, probe, identity, validate_receipt, native_version
-from update_lock import file_lock
+from bootstrap_lock import exclusive_lock
 from diagnostic_fallback import _private_mkdir
 from bounded_process import run
 
@@ -78,7 +78,7 @@ def ensure_runtime(source, data):
     runtime = data / "runtimes" / key
     python = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     receipt = release / "runtime.json"
-    with file_lock(release / "prepare.lock", exclusive=True, blocking=True):
+    with exclusive_lock(release / "prepare.lock"):
         if receipt.exists():
             existing = json.loads(receipt.read_text(encoding="utf-8"))
             if existing.get("key") != key or existing.get("python") != str(python):

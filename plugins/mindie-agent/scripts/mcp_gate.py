@@ -26,7 +26,7 @@ from bounded_process import run, ProcessResult
 from diagnostic_support import attach as attach_diagnostic
 from diagnostic_support import failure as diagnostic_failure
 from session_gate import (
-    IDENTITY, Sessions, config_path, installed_binding, runtime_binding,
+    IDENTITY, Sessions, config_path,
     runtime_env, runtime_scripts,
 )
 from update_lock import update_lock, file_lock
@@ -51,7 +51,15 @@ class InvalidToolArguments(ValueError):
     """Rejected by the declared tool schema before any runtime dispatch."""
 
 
+class SwitchingRuntime(RuntimeError):
+    """The operation lock was unavailable before any request admission."""
+
+
 def call_failure(exc):
+    if isinstance(exc, SwitchingRuntime):
+        return dict(failure("MindIE is switching its idle runtime; this call has not started."),
+                    structuredContent=dict(code="temporary_unavailable",
+                                           execution="not_started", automatic_retry=False))
     if isinstance(exc, InvalidToolArguments):
         message = (f"Request rejected before execution: {str(exc)[:240]}. "
                    "Correct the arguments once using the tool schema; "
@@ -313,18 +321,16 @@ class Gate:
         self.connection_id = uuid.uuid4().hex
         self._remote_receipts = {}
         self.config = config_path()
-        self.binding = installed_binding()
-        if self.binding is None and self.config.is_file():
-            self.binding = runtime_binding(_adapter_config())
 
     def call(self, request, cancel=None, *, timeout=None, cli_identity=None):
         try:
-            with update_lock(self.config):
-                if (self.config != config_path() or self.binding is None
-                        or runtime_binding(_adapter_config()) != self.binding):
-                    raise ValueError(
-                        "reload_required: installed runtime changed; reload the native plugin before calling tools"
-                    )
+            with ExitStack() as lock:
+                try:
+                    lock.enter_context(update_lock(self.config))
+                except BlockingIOError:
+                    raise SwitchingRuntime() from None
+                if self.config != config_path():
+                    raise ValueError("this MCP process is bound to another installation profile")
                 if self.surface == "remote":
                     return self._remote_call(request, cancel, timeout, cli_identity)
                 # Discovery creates no capture state. Task identity comes from
@@ -541,6 +547,9 @@ def serve(surface):
     pending = {}
     capacity = threading.BoundedSemaphore(4)
     executor = ThreadPoolExecutor(max_workers=4)
+    from update_trigger import Maintenance
+    maintenance = Maintenance(gate.config)
+    maintenance.trigger()
 
     def send(value):
         with output_lock:
@@ -599,6 +608,7 @@ def serve(surface):
                 elif method == "tools/list":
                     respond(identifier, dict(tools=gate.tools))
                 elif method == "tools/call":
+                    maintenance.trigger()
                     with pending_lock:
                         if (
                             identifier in pending
@@ -631,6 +641,7 @@ def serve(surface):
                     )
                 )
     finally:
+        maintenance.close()
         with pending_lock:
             for event in pending.values():
                 event.set()

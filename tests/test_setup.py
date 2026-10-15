@@ -22,7 +22,8 @@ def run_setup(python, *args, real_probe=False, env=None):
     command = [sys.executable, str(SCRIPTS / "setup.py")]
     if not real_probe:
         helper = ("import sys; sys.path.insert(0, sys.argv.pop(1)); "
-                  "import setup,product_contract; "
+                  "import setup,product_contract,release_metadata; "
+                  "release_metadata.require_harness=lambda source: '0.153.4'; "
                   "setup.probe_runtime=lambda python: dict(product_contract.identity(product_contract.source_root(setup.SCRIPTS)),status=\"validated\"); "
                   "setup.main()")
         command = [sys.executable, "-c", helper, str(SCRIPTS)]

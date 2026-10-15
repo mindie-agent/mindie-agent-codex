@@ -38,14 +38,15 @@ The first ordinary release is `0.0.1` (`v0.0.1`). It is still being prepared;
 these release commands become usable only after the release catalog exists:
 
 ```sh
-codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref stable
+codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.0.1
 codex plugin add mindie-agent@mindie-agent --json
 ```
 
-The `stable` Git catalog must name the exact released plugin commit. Candidate
-acceptance instead selects an explicit candidate Git ref; it does not track
-unreleased `main`. Native Codex owns plugin registration, refresh and removal.
-There is no MindIE code-update daemon or separate release resolver.
+The initial Git catalog uses the immutable Release tag, so a native refresh
+cannot advance it to an unselected version. Candidate acceptance uses an explicit
+candidate Git ref. Native Codex owns plugin registration, installation and removal;
+the shared Release selector supplies only the highest compatible ordinary Release.
+There is no MindIE code-update daemon.
 
 SessionStart and MCP initialization prepare the plugin's own
 [pyproject.toml](plugins/mindie-agent/pyproject.toml) and
@@ -69,13 +70,16 @@ existing release entry/runtime with different bytes. An illegal same-version
 republish does not activate its new bytes: warm entries continue their verified
 binding, while explicit preparation detects the conflict. A corrupt completed
 runtime is not silently repaired in place. Warm entries do not hash the
-disposable native cache. Existing sessions retain their fixed release runtime.
+disposable native cache. Existing native sessions retain their stable facade;
+each operation dispatches the complete runtime binding from the adapter profile.
 
 Default adapter configuration is `~/.config/mindie-agent/codex.json`; persistent
 knowledge data is `~/.local/share/mindie-agent`. `MINDIE_AGENT_CONFIG` selects an
 explicit profile. Sharing starts off/unconfigured. Existing consent and project
-scope are reused; installation never grants native Hook trust or permissions.
-Use the host's trust controls and sign-in. A selected provider's secrets are
+scope are reused. First installation does not grant native Hook trust or permissions;
+use the host's trust controls and sign-in. Silent updates inherit only this plugin's
+previously enabled and trusted SessionStart/Stop hooks through the host's config API.
+Explicit disablement and revoked trust are preserved. A selected provider's secrets are
 never copied into a runtime receipt or configuration-selection pointer.
 
 Codex 0.153.4's legacy MCP schema supports declared environment names but does
@@ -169,26 +173,40 @@ with reporting off; the diagnostics component owns reporter scheduling. See the 
 
 ## Updates and failures
 
-Codex refreshes configured Git marketplaces according to its native lifecycle.
-An explicit refresh uses:
+Each Release includes [Harness compatibility and interface declarations](plugins/mindie-agent/harness-compatibility.json).
+The supported Codex versions are currently exactly `0.153.4` and
+`0.162.0-alpha.17.2`; these two verified points do not imply support for versions
+between them. Initial preparation checks the actual selected executable.
 
-```sh
-codex plugin marketplace upgrade mindie-agent --json
-```
+After 24 hours since the last successful Release check, the next natural MCP use
+starts one background check. A successful check with no newer Release also advances
+that clock. Offline and failed checks retain a separate short backoff; ordinary tool
+calls do not wait for a network request. Stop never checks for an update.
+The shared selector considers normal, published Releases with validated metadata,
+selects the highest compatible version and never downgrades.
 
-MindIE does not wrap this command in another native mutation transaction.
+For a selected update, MindIE changes only its own official marketplace source through
+the native config API to a local catalog containing that exact Git SHA. Native install
+then owns the candidate's checkout and installed record. The catalog is derived input,
+not a second version registry. Other marketplaces and explicitly disabled plugins are
+not changed. A failed or uncertain native operation retains its execution facts and
+is not inferred successful from a matching version alone.
+
 Every published version has immutable bytes. SessionStart and explicit `sync`
 refresh public knowledge through the shared Feed's interval/backoff rules;
 there is no promise of a separate five-minute refresh during a long session.
 Local content remains reference material, and retained stale content is labeled.
 
-The installed adapter configuration names one exact runtime and engine. Ordinary
-SessionStart, MCP and Stop may prepare a genuinely empty profile, but never
-replace a different existing installation. A loaded MCP process verifies its
-installation identity before each tool call; changed bindings produce
-`reload_required` before any tool side effect. Reloading code is not a request
-to authorize capture again: saved contribution scope, disabled choice and
-reporting choice remain independent user data.
+The adapter profile names one complete interpreter, helper package and engine.
+Candidate download and locked preparation happen outside its operation lock.
+In-flight business calls retain a shared lock; an update that finds them busy waits
+for another natural use. Only an idle service is retired, and the canonical binding
+is published after the exact candidate service reports ready. The control observation
+window is 30 seconds; it never terminates business/model work. A partial handoff remains
+visible in `status`, including known ready state and a separate publication error.
+Prepared candidates retry this control boundary without refetching or reinstalling.
+Existing facades dispatch subsequent calls to the complete selected runtime, with no
+reload prompt. Saved contribution scope, disabled and reporting choices remain unchanged.
 
 This first, unreleased 0.0.1 does not migrate development updater generations,
 scheduled tasks, transaction journals or inferred consent. Unsupported existing

@@ -67,6 +67,23 @@ class StatusErrors(unittest.TestCase):
             self.assertEqual(payload["commands"]["status"][1], str(root / "bridge.py"))
             self.assertNotIn("PRIVATE_PROVIDER_MARKER", process.stdout + process.stderr)
 
+    def test_update_receipt_failure_preserves_known_service_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "service_control.py").write_text(
+                "import json; print(json.dumps({'service':{'state':'ready'}}))")
+            path = root / "adapter.json"
+            path.write_text(json.dumps(dict(python=sys.executable,
+                engine_config=str(root / "engine.json"), runtime_scripts=str(root))))
+            updates = path.with_suffix(".updates")
+            updates.mkdir()
+            (updates / "status.json").write_text("{PRIVATE_STATUS_MARKER")
+            process, payload = self.call(path)
+            self.assertEqual(process.returncode, 1)
+            self.assertEqual(payload["service"]["state"], "ready")
+            self.assertEqual(payload["updates"]["status"], "unavailable")
+            self.assertNotIn("PRIVATE_STATUS_MARKER", process.stdout + process.stderr)
+
     @unittest.skipUnless(hasattr(os, "mkfifo"), "requires POSIX FIFO")
     def test_fifo_configuration_fails_without_waiting_for_a_writer(self):
         with tempfile.TemporaryDirectory() as directory:

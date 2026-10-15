@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = ["mindie-knowledge", "remote-dev"]
 
 [tool.uv.sources]
-mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "6a4bbf824820b9a72bb81de71034d11a8596e697" }
+mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "4dff3df8d029345248b66787162f250b4907881b" }
 remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "dc3f7cecdd9cabbc3cc222f576725d69514cfdf7" }
 
 [tool.setuptools]
@@ -20,7 +20,7 @@ include-package-data = false
 
 [tool.setuptools.package-data]
 mindie_codex = [
-  "pyproject.toml", "uv.lock", "product-contract.json",
+  "pyproject.toml", "uv.lock", "product-contract.json", "harness-compatibility.json",
   ".codex-plugin/plugin.json", ".mcp.json",
   "hooks/*.json", "skills/*/*.md", "skills/*/agents/*.yaml",
   "skills/*/references/*.md", "skills/*/assets/*", "assets/*", "scripts/*.json"

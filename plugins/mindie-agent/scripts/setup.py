@@ -152,6 +152,8 @@ def install(args, parser, *, validation=None):
         # publication read. There is no command-line bypass.
         product_contract.validate_receipt(
             json.dumps(validation), product_contract.identity(SCRIPTS.parent))
+    from release_metadata import require_harness
+    require_harness(SCRIPTS.parent)
     declaration, _ = product_contract.product(product_contract.source_root(SCRIPTS))
     transcript_adapter = str(SCRIPTS / "codex_transcript.py")
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args.domain):

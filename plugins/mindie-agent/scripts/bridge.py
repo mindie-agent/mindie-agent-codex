@@ -417,6 +417,18 @@ def offline_status():
             payload = json.loads(output)
             if not isinstance(payload, dict):
                 raise ValueError("status response must be an object")
+            stage = "update_status"
+            from update_trigger import directory, read_optional
+            updates = directory(config_file)
+            try:
+                payload["updates"] = dict(
+                    check=read_optional(updates / "status.json"),
+                    trigger_failure=read_optional(updates / "trigger-failure.json"),
+                )
+            except (OSError, ValueError) as exc:
+                payload["updates"] = dict(status="unavailable", stage=stage,
+                                          error_type=type(exc).__name__)
+                return payload, 1
             return payload, 0
     except Exception as exc:
         if stage == "update_lock" and isinstance(exc, BlockingIOError):

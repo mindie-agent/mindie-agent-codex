@@ -29,26 +29,22 @@ IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
 # MINDIE_AGENT_CONFIG must not override an installed binding.
 _DISPATCH_CONFIG = "_MINDIE_AGENT_DISPATCH_CONFIG"
 _explicit_config = None
-_installed_binding = None
 
 
-def bind_explicit_config(path=None, *, binding=None):
+def bind_explicit_config(path=None):
     """Process-local adapter path from `--config`. None clears the override.
 
     Also pins MINDIE_AGENT_CONFIG for child dispatch. Does not set native
     task identity.
     """
-    global _explicit_config, _installed_binding
+    global _explicit_config
     if path is None:
         _explicit_config = None
-        _installed_binding = None
         return None
     resolved = Path(path).expanduser().absolute()
-    if _installed_binding is not None and resolved != _explicit_config:
-        raise ValueError("reload_required: this process is bound to another installation")
+    if _explicit_config is not None and resolved != _explicit_config:
+        raise ValueError("this process is bound to another installation profile")
     _explicit_config = resolved
-    if binding is not None:
-        _installed_binding = binding
     os.environ["MINDIE_AGENT_CONFIG"] = str(resolved)
     return resolved
 
@@ -57,11 +53,6 @@ def runtime_binding(config):
     """Code identity only; contribution and reporting choices remain mutable."""
     return {key: config.get(key) for key in
             ("python", "runtime_scripts", "engine_config", "product_validation")}
-
-
-def installed_binding():
-    """Identity frozen by the native entry while it held the profile lock."""
-    return _installed_binding
 
 
 def _dispatch_config():

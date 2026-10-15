@@ -212,8 +212,7 @@ class RuntimeTests(unittest.TestCase):
                 self.assertEqual(entry.profile(release, SCRIPTS.parent), config)
                 adapter["python"] = "/other/runtime"
                 config.write_text(json.dumps(adapter))
-                with self.assertRaisesRegex(ValueError, "unsupported_development_replacement"):
-                    entry.profile(release)
+                self.assertEqual(entry.profile(release), config)
                 self.assertEqual(json.loads(config.read_text()), adapter)
                 self.assertEqual(engine.read_bytes(), before[1])
 
@@ -231,7 +230,7 @@ class RuntimeTests(unittest.TestCase):
                 transcript_adapter=str(entry.SCRIPTS / "codex_transcript.py"))))
             before = {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()}
             with patch.dict(os.environ, {"MINDIE_AGENT_CONFIG": str(config)}):
-                with self.assertRaisesRegex(ValueError, "unsupported development"):
+                with self.assertRaisesRegex(ValueError, "unsupported installation"):
                     entry.profile(release)
             self.assertEqual(
                 {p.name: p.read_bytes() for p in root.iterdir()
@@ -297,14 +296,14 @@ class RuntimeTests(unittest.TestCase):
                 build_ready = root / "build-ready"
                 build = (
                     "import sys,time;from pathlib import Path;"
-                    f"sys.path.insert(0,{str(SCRIPTS)!r});from update_lock import file_lock;"
-                    f"\nwith file_lock({str(build_lock)!r},exclusive=True):"
+                    f"sys.path.insert(0,{str(SCRIPTS)!r});from bootstrap_lock import exclusive_lock;"
+                    f"\nwith exclusive_lock({str(build_lock)!r}):"
                     f"\n Path({str(build_ready)!r}).touch();time.sleep(30)\n"
                 )
                 installer = (
                     "import os,sys,time,json,subprocess;from pathlib import Path;"
-                    f"sys.path.insert(0,{str(SCRIPTS)!r});from update_lock import file_lock;"
-                    f"\nwith file_lock({str(installer_lock)!r},exclusive=True):"
+                    f"sys.path.insert(0,{str(SCRIPTS)!r});from bootstrap_lock import exclusive_lock;"
+                    f"\nwith exclusive_lock({str(installer_lock)!r}):"
                     f"\n child=subprocess.Popen([sys.executable,'-c',{build!r}])"
                     f"\n while not Path({str(build_ready)!r}).exists(): time.sleep(.01)"
                     f"\n Path({str(ready)!r}).write_text(json.dumps(dict(group=os.getpgrp(),pid=os.getpid(),build=child.pid)))"
@@ -356,29 +355,35 @@ class RuntimeTests(unittest.TestCase):
                             except ProcessLookupError:
                                 pass
 
-    def test_loaded_mcp_rejects_replaced_binding_before_receipts_or_dispatch(self):
+    def test_loaded_mcp_delegates_whole_current_helper_after_switch(self):
         import mcp_gate
+        import session_gate
+        self.addCleanup(session_gate.bind_explicit_config, None)
         with tempfile.TemporaryDirectory() as directory:
-            config = Path(directory) / "adapter.json"
-            original = dict(python=sys.executable, runtime_scripts=str(SCRIPTS),
-                            engine_config=str(Path(directory) / "engine.json"),
-                            product_validation={"source_sha256": "fixed"})
+            root = Path(directory)
+            config = root / "adapter.json"
+            old, new = root / "old", root / "new"
+            old.mkdir(); new.mkdir()
+            for path, text in ((old, "old"), (new, "new")):
+                (path / "runtime_call.py").write_text(
+                    "import json,sys;print(json.dumps({'content':[{'type':'text','text':" + repr(text)
+                    + "}],'structuredContent':{'python':sys.executable,'helper':__file__}}))")
+            original = dict(python=os.path.abspath(sys.executable), runtime_scripts=str(old),
+                            engine_config=str(root / "engine.json"))
             config.write_text(json.dumps(original))
-            with patch.object(mcp_gate, "config_path", return_value=config):
-                knowledge = mcp_gate.Gate("knowledge")
-                remote = mcp_gate.Gate("remote")
-                replacement = dict(original, python="/different/runtime")
-                config.write_text(json.dumps(replacement))
-                for gate in (knowledge, remote):
-                    with self.subTest(surface=gate.surface), \
-                            patch.object(gate, "_call", side_effect=AssertionError("dispatch")), \
-                            patch.object(gate, "_remote_call", side_effect=AssertionError("receipt claim")):
-                        result = gate.call({}, cli_identity=("task", None))
-                        self.assertTrue(result["isError"])
-                        self.assertIn("reload_required", result["content"][0]["text"])
-                self.assertEqual(json.loads(config.read_text()), replacement)
-                self.assertEqual(sorted(path.name for path in Path(directory).iterdir()),
-                                 ["adapter.json", "adapter.update.lock"])
+            with patch.dict(os.environ, {"MINDIE_AGENT_CONFIG": str(config),
+                                         "MINDIE_REMOTE_STATE_DIR": str(root / "receipts")}), \
+                    patch.object(mcp_gate, "runtime_env", return_value=dict(os.environ)):
+                gate = mcp_gate.Gate("remote")
+                request = {"id": 1, "params": {"name": "remote_read", "arguments": {"host": "fixture", "path": "/"}}}
+                first = gate.call(request, cli_identity=("task", None))
+                self.assertEqual(first["content"][0]["text"], "old")
+                config.write_text(json.dumps(dict(original, runtime_scripts=str(new))))
+                request["id"] = 2
+                second = gate.call(request, cli_identity=("task", None))
+                self.assertEqual(second["content"][0]["text"], "new")
+                self.assertEqual(second["structuredContent"]["helper"], str(new / "runtime_call.py"))
+                self.assertEqual(second["structuredContent"]["python"], os.path.abspath(sys.executable))
 
     def test_loaded_mcp_keeps_explicit_mutable_choices_on_the_same_binding(self):
         import mcp_gate
@@ -394,24 +399,19 @@ class RuntimeTests(unittest.TestCase):
                     self.assertEqual(gate.call({}), {"isError": False})
                     dispatch.assert_called_once()
 
-    def test_mcp_constructed_after_replacement_keeps_native_entry_identity(self):
+    def test_switch_gate_rejects_before_remote_receipt_or_dispatch(self):
         import mcp_gate
-        import session_gate
-        self.addCleanup(session_gate.bind_explicit_config, None)
+        from update_lock import update_lock
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "adapter.json"
-            original = dict(python=sys.executable, runtime_scripts=str(SCRIPTS),
-                            engine_config=str(Path(directory) / "engine.json"))
-            config.write_text(json.dumps(original))
-            with patch.dict(os.environ, {"MINDIE_AGENT_CONFIG": str(config)}):
-                session_gate.bind_explicit_config(
-                    config, binding=session_gate.runtime_binding(original))
-                config.write_text(json.dumps(dict(original, python="/replacement/runtime")))
+            config.write_text("{}")
+            with patch.object(mcp_gate, "config_path", return_value=config):
                 gate = mcp_gate.Gate("remote")
-                with patch.object(gate, "_remote_call", side_effect=AssertionError("receipt claim")):
+                with update_lock(config, exclusive=True), \
+                        patch.object(gate, "_remote_call", side_effect=AssertionError("admitted")):
                     result = gate.call({})
-                self.assertTrue(result["isError"])
-                self.assertIn("reload_required", result["content"][0]["text"])
+            self.assertEqual(result["structuredContent"]["code"], "temporary_unavailable")
+            self.assertEqual(result["structuredContent"]["execution"], "not_started")
 
     def test_native_stop_rechecks_binding_under_lock_before_dispatch(self):
         import session_gate
@@ -423,11 +423,13 @@ class RuntimeTests(unittest.TestCase):
             (release / "runtime.json").write_text(json.dumps(
                 dict(python=sys.executable, validation={})))
             config = root / "adapter.json"
-            config.write_text(json.dumps(dict(python="/replacement/runtime",
+            engine = root / "engine.json"
+            engine.write_text(json.dumps({"transcript_adapter": "/wrong/adapter.py", "product_validation": {}}))
+            config.write_text(json.dumps(dict(python="/replacement/runtime", engine_config=str(engine),
                 runtime_scripts=str(SCRIPTS), product_validation={})))
             with patch.dict(os.environ, {"MINDIE_AGENT_CONFIG": str(config)}), \
                     patch.object(sys, "argv", ["entry", "--release", str(release), "stop"]), \
                     patch.object(entry, "profile", return_value=config), \
                     patch.object(entry, "dispatch", side_effect=AssertionError("capture")):
-                with self.assertRaisesRegex(ValueError, "unsupported_development_replacement"):
+                with self.assertRaisesRegex(ValueError, "unsupported installation"):
                     entry.main()

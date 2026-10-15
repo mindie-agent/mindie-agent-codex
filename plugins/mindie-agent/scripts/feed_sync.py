@@ -99,3 +99,11 @@ def sync(config):
         return dict(status='degraded', feeds=rows, detail=detail,
                     cleanup=result.cleanup, execution=result.execution)
     return dict(status=status, feeds=rows, detail=detail)
+
+
+if __name__ == "__main__":
+    import sys
+    from product_contract import read_json
+    value = sync(read_json(sys.argv[1])[0]["engine_config"])
+    print(json.dumps(value))
+    raise SystemExit(0 if value["status"] == "ok" else 1)

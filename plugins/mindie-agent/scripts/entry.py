@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import product_contract
 from diagnostic_fallback import _private_mkdir
-from session_gate import bind_explicit_config, runtime_binding
+from session_gate import bind_explicit_config, runtime_scripts, runtime_env
 from setup import install
 from update_lock import update_lock
 SCRIPTS = Path(__file__).resolve().parent
@@ -28,19 +28,16 @@ class ProfileUnavailable(ValueError):
 
 def _installed_profile(config, receipt):
     adapter = read(config)
-    if (adapter.get("python") != sys.executable
-            or adapter.get("runtime_scripts") != str(SCRIPTS)
-            or adapter.get("product_validation") != receipt["validation"]):
-        raise ProfileUnavailable(
-            "unsupported_development_replacement: this runtime cannot replace the "
-            "existing installation; its configuration, data and consent are preserved."
-        )
+    python = adapter.get("python")
+    scripts = Path(runtime_scripts(adapter))
+    if not isinstance(python, str) or not os.path.isabs(python):
+        raise ProfileUnavailable("installed profile lacks an absolute runtime interpreter")
     engine = Path(adapter["engine_config"])
     value = read(engine)
     if ("client_contract" in value
-            or value.get("transcript_adapter") != str(SCRIPTS / "codex_transcript.py")
-            or value.get("product_validation") != receipt["validation"]):
-        raise ProfileUnavailable("unsupported development profile; preserve its data and explicit consent; finish installation before using this runtime")
+            or value.get("transcript_adapter") != str(scripts / "codex_transcript.py")
+            or value.get("product_validation") != adapter.get("product_validation")):
+        raise ProfileUnavailable("unsupported installation profile; configuration, data and consent are preserved")
     return config
 
 
@@ -70,23 +67,12 @@ def profile(release, source=None, *, prepare=True):
 
 
 def session_start(config):
-    from service_client import connect
-    from bootstrap import preparing
+    from bounded_process import run
     adapter = read(config)
-    # SessionStart may start this exact installation, never activate another
-    # release or alter an existing profile's runtime identity.
-    with preparing("service-start"), update_lock(config):
-        connect(adapter["engine_config"])
-    from feed_sync import sync
-    with preparing("feed-refresh"):
-        feed = sync(adapter["engine_config"])
-    from diagnostic_maintenance import maintain
-    with preparing("diagnostic-maintenance"):
-        diagnostics = maintain(config)
-    print(json.dumps(dict(status="ready", feed=feed, diagnostics=diagnostics)), file=sys.stderr)
-    if (feed.get("status") != "ok"
-            or diagnostics.get("status") not in {"ok", "complete", "unchanged"}):
-        raise RuntimeError("MindIE session preparation is incomplete; inspect local status")
+    result = run([adapter["python"], "-I",
+                  str(Path(runtime_scripts(adapter)) / "session_maintenance.py"), str(config)],
+                 "", env=runtime_env(config), allow_service=True)
+    print(result.checked_stdout(), file=sys.stderr)
 
 
 def dispatch(args, config):
@@ -95,11 +81,8 @@ def dispatch(args, config):
         session_start(config)
         return
     if args.role == 'sync':
-        from feed_sync import sync
-        value = sync(read(config)['engine_config'])
-        print(json.dumps(value))
-        return 0 if value['status'] == 'ok' else 1
-    if args.role == 'configure':
+        target, arguments = 'feed_sync.py', [str(config)]
+    elif args.role == 'configure':
         target, arguments = 'setup.py', ['configure', '--config', str(config), *remaining]
     elif args.role == 'bridge':
         target, arguments = 'bridge.py', remaining
@@ -109,9 +92,23 @@ def dispatch(args, config):
         target, arguments = {'stop': ('bridge.py', ['stop']),
                              'knowledge-mcp': ('bridge.py', ['mcp']),
                              'remote-mcp': ('remote_bridge.py', [])}[args.role]
-    script = SCRIPTS / target
-    sys.argv = [str(script), *arguments]
-    runpy.run_path(str(script), run_name='__main__')
+    if args.role in {"knowledge-mcp", "remote-mcp"} or (
+            args.role == "bridge" and remaining[:1] == ["mcp"]):
+        # This stable facade owns the native protocol. Each tools/call
+        # dispatches the complete selected helper under the operation lock.
+        script = SCRIPTS / target
+        sys.argv = [str(script), *arguments]
+        runpy.run_path(str(script), run_name='__main__')
+    else:
+        from bounded_process import run
+        adapter = read(config)
+        script = Path(runtime_scripts(adapter)) / target
+        data = sys.stdin.read() if args.role == "stop" else ""
+        result = run([adapter["python"], "-I", str(script), *arguments],
+                     data, env=runtime_env(config), allow_service=True,
+                     allowed_returncodes=(0, 1, 2))
+        print(result.checked_stdout(), end="")
+        return result.returncode
 
 
 def main():
@@ -131,7 +128,7 @@ def main():
             # Bind before any helper side effect. MCP keeps this identity in
             # memory and reacquires the same lock for each request.
             _installed_profile(config, read(args.release / "runtime.json"))
-            bind_explicit_config(config, binding=runtime_binding(read(config)))
+            bind_explicit_config(config)
             os.environ.update(runtime_env(config))
             mcp = args.role in {'knowledge-mcp', 'remote-mcp'} or (
                 args.role == 'bridge' and args.arguments[:1] == ['mcp'])

@@ -47,6 +47,8 @@ else:
         from mindie_knowledge.loop.history_import import import_transcript
         from mindie_knowledge.loop.transport import Service
         from mindie_knowledge.loop import documents, locks
+        from mindie_knowledge.releases import select_release, validate_compatibility
+        from mindie_knowledge.releases_io import fetch_releases, verify_release_source
         from mindie_knowledge.community import submit_batch, reconcile_batch
         from remote_dev.mcp.tools import call_tool
     except Exception as exc:
@@ -94,6 +96,16 @@ else:
             missing.append("summary protocol byte bounds are inconsistent")
         if not callable(getattr(locks, "lock_held", None)):
             missing.append("core locks lacks lock_held")
+        if not all(callable(getattr(locks, name, None))
+                   for name in ("lock_file", "try_lock_file", "unlock_file")):
+            missing.append("core shared/exclusive file lock API is incomplete")
+        if not all(callable(fn) for fn in
+                   (select_release, validate_compatibility, fetch_releases, verify_release_source)):
+            missing.append("release compatibility API is incomplete")
+        if "control_timeout" not in inspect.signature(retire_service).parameters:
+            missing.append("retirement control observation is unavailable")
+        if "probe_timeout" not in inspect.signature(prepare_service).parameters:
+            missing.append("startup probe observation is unavailable")
         if not callable(call_tool):
             missing.append("remote_dev call_tool is unavailable")
         if not callable(getattr(Engine, "stop_if_idle", None)):
