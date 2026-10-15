@@ -1,4 +1,4 @@
 # First 0.0.1 candidate; publish and review the pinned commit before release.
 # The updater validates and installs this complete runtime set.
-mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@61a59981d07de3ab2809f84a38360b4f3f50cd58
+mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@810408228a362fcdd81e3d109322b01e9789900c
 remote-dev @ git+https://github.com/mindie-agent/remote-dev@dc3f7cecdd9cabbc3cc222f576725d69514cfdf7
