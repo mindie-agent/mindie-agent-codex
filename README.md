@@ -82,9 +82,11 @@ ordinary later tasks do not need to export it.
 
 ## Install on Windows PowerShell
 
-Requires Python 3.11+, Git, `uv`, and an authenticated Codex CLI with native
-plugin support. Run these commands from the downloaded repository in PowerShell;
-the default schedule uses the current user's Windows Task Scheduler task.
+Requires Python 3.11+, Git for Windows, `uv`, and an authenticated Codex CLI
+with native plugin support. Git must be available on PATH; remote development
+uses its bundled `usr/bin/ssh.exe` with the existing SSH configuration.
+Run these commands from the downloaded repository in PowerShell; the default
+schedule uses the current user's Windows Task Scheduler task.
 
 ```powershell
 git clone --branch v0.0.1 --depth 1 https://github.com/mindie-agent/mindie-agent-codex.git
