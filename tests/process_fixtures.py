@@ -10,6 +10,7 @@ import sys
 import tarfile
 import tempfile
 import time
+from contextlib import contextmanager
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
@@ -34,6 +35,64 @@ def public_engine_config(root, domain="test", **extra):
                 transcript_adapter=str(SCRIPTS / "codex_transcript.py"), **extra)
 
 
+@contextmanager
+def owned_fixture_process(command, **kwargs):
+    """The test parent retains the Job/group until all its writers are gone."""
+    from mindie_knowledge.loop.process import terminate_tree
+
+    if os.name == "nt":
+        from mindie_knowledge.windows_process import spawn_owned
+        process = spawn_owned(command, **kwargs)
+    else:
+        process = subprocess.Popen(command, start_new_session=True, **kwargs)
+    try:
+        yield process
+    finally:
+        primary = sys.exc_info()[1]
+        try:
+            terminate_tree(process, wait=True)
+            process.wait(timeout=2)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+        except Exception as exc:
+            if primary is None:
+                raise
+            primary.add_note("owned fixture cleanup also failed: " + repr(exc))
+
+
+def run_owned_fixture(command, *, input="", timeout, diagnose, **kwargs):
+    """A test watchdog, with retained output and no unowned timed-out helper."""
+    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as error:
+        try:
+            with owned_fixture_process(
+                command, stdin=subprocess.PIPE, stdout=output, stderr=error, **kwargs
+            ) as process:
+                try:
+                    process.communicate(input.encode("utf-8"), timeout=timeout)
+                except subprocess.TimeoutExpired as exc:
+                    try:
+                        exc.add_note("fixture stage at timeout: " + json.dumps(diagnose()))
+                    except Exception as diagnostic_error:
+                        exc.add_note("fixture diagnosis also failed: " + repr(diagnostic_error))
+                    raise
+        except subprocess.TimeoutExpired as exc:
+            output.seek(0)
+            error.seek(0)
+            exc.output = output.read().decode("utf-8", errors="replace")
+            exc.stderr = error.read().decode("utf-8", errors="replace")
+            exc.add_note("helper stdout: " + exc.output)
+            exc.add_note("helper stderr: " + exc.stderr)
+            raise
+        output.seek(0)
+        error.seek(0)
+        return subprocess.CompletedProcess(
+            command, process.returncode,
+            output.read().decode("utf-8", errors="replace"),
+            error.read().decode("utf-8", errors="replace"),
+        )
+
+
 def stop_owned_knowledge_service(engine_config, *, timeout=8):
     """Request shutdown through the exact test engine endpoint and wait for it.
 
@@ -45,19 +104,28 @@ def stop_owned_knowledge_service(engine_config, *, timeout=8):
     from mindie_knowledge.loop.cli import config_at, connect, rpc
     from mindie_knowledge.loop.locks import lock_held
     from mindie_knowledge.state_layout import state_root
+    from mindie_knowledge.filesystem import filesystem_path
 
     engine_config = Path(engine_config)
     # A cold Stop returns before its detached starter publishes the service.
     # Wait for that exact test's starter to finish before asking the endpoint
     # to stop; an absent endpoint while startup is pending is not cleanup.
     config = config_at(engine_config)
-    domain = Path(config["root"]) / config["domain"]
+    domain = filesystem_path(config["root"]) / config["domain"]
+    deadline = time.monotonic() + timeout
+    # A service can still be creating its layout. Observe its real startup
+    # locks before reading layout; a missing/corrupt layout is never ignored.
+    for name in ("start.lock", "state-layout.lock"):
+        lock = domain / name
+        while lock.exists() and lock_held(lock) is not False:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("owned test startup lock has not been released: " + name)
+            time.sleep(.05)
     wake_path = state_root(config["root"], config["domain"]) / "wake.json"
     try:
         wake_pid = json.loads(wake_path.read_text(encoding="utf-8")).get("wake_pid")
     except FileNotFoundError:
         wake_pid = None
-    deadline = time.monotonic() + timeout
     while type(wake_pid) is int and _process_running(wake_pid):
         if time.monotonic() >= deadline:
             raise RuntimeError("owned test startup has not completed")
