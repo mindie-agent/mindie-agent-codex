@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from tests.process_fixtures import run_owned_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/mindie-agent/scripts"
@@ -15,25 +16,50 @@ sys.path.insert(0, str(SCRIPTS))
 import setup as setup_script
 
 
-def run_setup(python, *args, real_probe=False, env=None):
+def run_setup(python, *args, real_probe=False, real_store=False, env=None):
     # Config-write cases isolate the product verification boundary. Candidate
     # ownership, real subprocess failures and receipt identities have their
     # own tests; no config unit case downloads publication history.
-    command = [sys.executable, str(SCRIPTS / "setup.py")]
-    if not real_probe:
-        helper = ("import sys; sys.path.insert(0, sys.argv.pop(1)); "
-                  "import setup,product_contract,release_metadata; "
-                  "release_metadata.require_harness=lambda source: '0.153.4'; "
-                  "setup.probe_runtime=lambda python: dict(product_contract.identity(product_contract.source_root(setup.SCRIPTS)),status=\"validated\"); "
-                  "setup.main()")
-        command = [sys.executable, "-c", helper, str(SCRIPTS)]
-    return subprocess.run(
-        [*command, "--knowledge-python", str(python), *map(str, args)],
-        text=True,
-        capture_output=True,
-        timeout=30,
-        env=env,
-    )
+    with tempfile.TemporaryDirectory() as watch:
+        stage = Path(watch) / "stage"
+        helper = (
+            "import sys\nfrom pathlib import Path\n"
+            "sys.path.insert(0,sys.argv.pop(1))\n"
+            "stage=Path(sys.argv.pop(1));stage.write_text('import_setup')\n"
+            "import setup,product_contract,release_metadata,capture_config\n"
+            "def observed(name,operation):\n"
+            " def invoke(*args,**kwargs):\n"
+            "  stage.write_text(name)\n"
+            "  return operation(*args,**kwargs)\n"
+            " return invoke\n")
+        if not real_probe:
+            helper += (
+                "release_metadata.require_harness=lambda source:'0.153.4'\n"
+                "setup.probe_runtime=lambda python:dict(product_contract.identity("
+                "product_contract.source_root(setup.SCRIPTS)),status='validated')\n")
+        if not real_store:
+            # Config/consent tests exercise real schema checks, but storage
+            # initialization belongs to the two explicit integration cases.
+            helper += (
+                "def validate_store_config(python,scripts,config):\n"
+                " from mindie_knowledge.loop.service_context import validate\n"
+                " from mindie_knowledge.git_layout import validate_config_feed_layout\n"
+                " validate(config);validate_config_feed_layout(config)\n"
+                "capture_config.prepare_store=validate_store_config\n")
+        helper += (
+            "capture_config.prepare=observed('prepare_capture',capture_config.prepare)\n"
+            "capture_config.prepare_store=observed('prepare_store',capture_config.prepare_store)\n"
+            "setup.probe_runtime=observed('probe_runtime',setup.probe_runtime)\n"
+            "setup.write_private=observed('publish_config',setup.write_private)\n"
+            "stage.write_text('setup_main');setup.main()\n"
+            "stage.write_text('completed')\n")
+        return run_owned_fixture(
+            [sys.executable, "-c", helper, str(SCRIPTS), str(stage),
+             "--knowledge-python", str(python), *map(str, args)],
+            timeout=30, env=env,
+            diagnose=lambda: dict(stage=stage.read_text() if stage.exists() else "python_startup",
+                                  real_probe=real_probe, real_store=real_store),
+        )
 
 
 class SetupTests(unittest.TestCase):
@@ -204,7 +230,7 @@ class SetupTests(unittest.TestCase):
             before = {str(path.relative_to(base)): path.read_bytes()
                       for path in base.rglob('*') if path.is_file() and path.suffix != '.lock'}
             config = base / 'codex.json'
-            result = run_setup(sys.executable, '--config', config, '--root', base / 'data')
+            result = run_setup(sys.executable, '--config', config, '--root', base / 'data', real_store=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('knowledge store preparation failed', result.stdout + result.stderr)
             self.assertIn('database', result.stdout + result.stderr)
@@ -223,7 +249,7 @@ class SetupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             config = base / "codex.json"
-            result = run_setup(sys.executable, "--config", config, "--root", base / "data")
+            result = run_setup(sys.executable, "--config", config, "--root", base / "data", real_store=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             engine = config.with_name("codex.engine.json")
             if os.name == "posix":
