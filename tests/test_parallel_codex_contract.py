@@ -32,6 +32,8 @@ from tests.process_fixtures import (
     extract_git_archive,
     stop_owned_knowledge_service,
     installed_scanner,
+    recorded_wake_runtime,
+    wake_requests,
 )
 
 
@@ -430,6 +432,7 @@ class LaneCase(unittest.TestCase):
 
 class ConsentGateTests(LaneCase):
     def test_corrupt_transcript_fails_without_claiming_complete_capture(self):
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.write_consent("contribute", reporting="disabled")
         self.write_community(enabled=True)
         self.open_store()
@@ -454,8 +457,10 @@ class ConsentGateTests(LaneCase):
             self.assertEqual(discarded[0]['reason'], 'invalid record')
         finally:
             store.close()
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"task-main"})
 
     def test_stop_stores_public_body_and_export_without_tool_or_hidden_material(self):
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.write_consent("contribute", reporting="disabled")
         self.write_community(enabled=True)
         self.open_store()
@@ -491,6 +496,7 @@ class ConsentGateTests(LaneCase):
             self.assertEqual(public["entry"]["title"], "Synthetic summary")
         finally:
             store.close()
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"task-main"})
 
     def test_disallowed_consent_does_not_capture_or_call_the_model(self):
         """community.enabled=true must not collect when consent is not contribute."""
@@ -542,6 +548,7 @@ class ConsentGateTests(LaneCase):
                 )
 
     def test_contribute_stop_is_durable_and_the_worker_runs_once(self):
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.write_consent("contribute", reporting="disabled")
         self.write_community(enabled=True)
         self.open_store()
@@ -571,6 +578,7 @@ class ConsentGateTests(LaneCase):
             row["status"] for row in self.capture_rows()
         ]
         self.assertNotIn("queued", saved, self.capture_rows())
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"task-main"})
 
     def test_stop_uses_the_native_thread_not_a_parent_session_id(self):
         self.write_consent("contribute", reporting="disabled")
@@ -600,6 +608,7 @@ class ConsentGateTests(LaneCase):
         self.assertNotIn(PARENT_SECRET, self.model_text())
 
     def test_fork_worker_does_not_send_inherited_parent_text(self):
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.write_consent("contribute", reporting="disabled")
         self.write_community(enabled=True)
         self.open_store()
@@ -625,9 +634,11 @@ class ConsentGateTests(LaneCase):
         self.assertEqual(self.model_text(), "")
         self.assertIn(CHILD_FACT, observed, observed[:600])
         self.assertNotIn(PARENT_SECRET, observed, observed[:600])
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"child-task"})
 
     def test_material_before_admission_does_not_reach_the_worker(self):
         """Records timestamped before the admission boundary stay unauthorized."""
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.write_consent("contribute", reporting="disabled")
         self.write_community(enabled=True)
         self.open_store()
@@ -644,6 +655,7 @@ class ConsentGateTests(LaneCase):
             self.drain_worker()
         self.assertNotIn(PRE_ADMISSION, self.saved_text())
         self.assertEqual(self.model_text(), "")
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"task-main"})
 
 
 class AuthorityMigrationTests(LaneCase):

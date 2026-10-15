@@ -15,6 +15,7 @@ import time
 import unittest
 from unittest.mock import patch
 from tests.process_fixtures import cleanup_temporary_directory, stop_owned_knowledge_service, copy_runtime_scripts
+from tests.process_fixtures import recorded_wake_runtime, wake_requests
 
 from tests.process_fixtures import public_engine_config
 
@@ -553,6 +554,7 @@ class SessionGateTests(unittest.TestCase):
     def test_hook_delivery_is_once_and_not_for_other_sessions(self):
         from mindie_knowledge.loop.store import Store
 
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.enable_sharing()
         self.activate()
         store = Store(self.root / "data", "test")
@@ -572,10 +574,12 @@ class SessionGateTests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(other, 0)
         self.assertEqual(self.attempts(), 0)
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"manual-A"})
 
     def test_repeated_stop_keeps_one_capture_without_burning_a_claim(self):
         from mindie_knowledge.loop.store import Store
 
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.enable_sharing()
         self.activate()
         Store(self.root / "data", "test").close()
@@ -590,6 +594,7 @@ class SessionGateTests(unittest.TestCase):
             db.close()
         self.assertEqual(count, 1)
         self.assertEqual(self.attempts(), 0)
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"manual-A"})
 
     def test_slow_capture_helper_continues_past_the_old_hook_budget(self):
         marker = self.runtime_fixture(delay=2.1)

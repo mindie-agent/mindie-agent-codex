@@ -17,6 +17,7 @@ import unittest
 from tests.process_fixtures import cleanup_temporary_directory
 from unittest.mock import patch
 from tests.process_fixtures import stop_owned_knowledge_service
+from tests.process_fixtures import recorded_wake_runtime, wake_requests, consume_queued_captures
 
 ROOT = Path(__file__).resolve().parents[1]
 from tests.process_fixtures import public_engine_config
@@ -184,6 +185,7 @@ class GateTests(SharingFixture):
         from datetime import datetime, timezone
         from contextlib import closing
         from mindie_knowledge.loop.store import Store
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.write_sharing()
         self.activate()
         self.prepare_store()
@@ -211,14 +213,11 @@ class GateTests(SharingFixture):
         self.assertTrue(all(summary == '' for summary, _ in rows))
         from mindie_knowledge.filesystem import resolved_path
         self.assertTrue(any(transcript == str(resolved_path(event['transcript_path'])) for _, transcript in rows))
+        consume_queued_captures(self.engine)
         with closing(Store(self.root / 'data', 'test')) as store:
-            until = time.monotonic() + 5
-            while time.monotonic() < until:
-                docs = store.drafts_changed()
-                if docs and docs[0]['content'].count('public-marker-') == 3:
-                    break
-                time.sleep(.05)
+            docs = store.drafts_changed()
             self.assertEqual(docs[0]['content'].count('public-marker-'), 3)
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"manual-A"})
 
     def test_missing_disabled_and_malformed_config_skip_before_any_claim(self):
         self.activate()
@@ -243,6 +242,7 @@ class GateTests(SharingFixture):
                 self.assertEqual(self.attempts(), 0)
 
     def test_scope_comes_from_native_metadata_not_the_event_cwd(self):
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.write_sharing()
         self.activate()
         outside = self.root / "outside"
@@ -253,6 +253,7 @@ class GateTests(SharingFixture):
         )
         self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
         self.assertEqual(self.attempts(), 0)
+        self.assertEqual(wake_requests(wake), [])
         self.prepare_store()
         # An absolute event cwd outside the scope does not block capture: the
         # authorized scope comes from the named native transcript metadata.
@@ -262,6 +263,7 @@ class GateTests(SharingFixture):
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
         self.assertEqual(self.captures(), 1)
         self.assertEqual(self.attempts(), 0)
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"manual-A"})
         # Native metadata outside the approved roots captures nothing, even
         # when the event cwd points inside an allowed directory.
         self.native_transcript(scope=outside)
@@ -277,6 +279,7 @@ class GateTests(SharingFixture):
 
     def test_transcript_event_without_final_summary_is_valid(self):
         # No final summary, but a transcript location: the event is admitted.
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.write_sharing()
         self.activate()
         self.prepare_store()
@@ -284,6 +287,7 @@ class GateTests(SharingFixture):
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
         self.assertEqual(self.captures(), 1)
         self.assertEqual(self.attempts(), 0)
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"manual-A"})
         # The same turn is one row, and recursion is dropped.
         self.bridge("stop", self.event(transcript_path=str(self.codex_home / "sessions/synthetic-transcript.jsonl")))
         self.bridge(
@@ -302,6 +306,7 @@ class GateTests(SharingFixture):
         # the forwarded transcript artifact is the binding evidence: a Stop
         # event naming this task but forwarding ANOTHER session's transcript
         # writes no capture row and no model work.
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.write_sharing()
         self.activate()
         self.prepare_store()
@@ -320,6 +325,7 @@ class GateTests(SharingFixture):
         self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
         self.assertEqual(self.captures(), 0)
         self.assertEqual(self.attempts(), 0)
+        self.assertEqual(wake_requests(wake), [])
         # The task's own transcript captures normally.
         own = self.codex_home / "sessions/own.jsonl"
         own.write_text(
@@ -335,6 +341,7 @@ class GateTests(SharingFixture):
         result = self.bridge("stop", self.event(transcript_path=str(own)))
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
         self.assertEqual(self.captures(), 1)
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"manual-A"})
 
     def test_env_thread_disagreeing_with_event_session_drops_capture(self):
         # When the host does supply CODEX_THREAD_ID to the hook process, an
@@ -357,6 +364,7 @@ class GateTests(SharingFixture):
         self.assertEqual(self.attempts(), 0)
 
     def test_complete_event_with_held_open_stdin_forwards_once(self):
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.write_sharing()
         self.activate()
         self.prepare_store()
@@ -365,6 +373,7 @@ class GateTests(SharingFixture):
         self.assertEqual((code, json.loads(stdout)), (0, {}))
         self.assertLess(elapsed, 2.0)
         self.assertEqual(self.captures(), 1)
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"manual-A"})
         self.assertEqual(self.attempts(), 0)
         code, stdout, _stderr, elapsed = self.bridge_stop_held_open(payload)
         self.assertEqual((code, json.loads(stdout)), (0, {}))
@@ -381,6 +390,7 @@ class GateTests(SharingFixture):
         self.assertFalse(self.community.exists())
 
     def test_verified_native_metadata_repairs_incomplete_automatic_binding(self):
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.write_sharing()
         self.prepare_store()
         # A verified current transcript supplies the missing capture metadata.
@@ -399,6 +409,7 @@ class GateTests(SharingFixture):
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
         self.assertEqual(self.captures(), 1)
         self.assertEqual(self.attempts(), 0)
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"manual-A"})
 
     def test_sharing_toggle_does_not_invalidate_ordinary_activation(self):
         self.write_sharing()
