@@ -50,7 +50,8 @@ def profile(release, source=None, *, prepare=True):
         raise ValueError("release interpreter differs from its prepared runtime")
     config = Path(os.environ.get("MINDIE_AGENT_CONFIG", Path.home() / ".config/mindie-agent/codex.json")).expanduser().absolute()
     if os.path.lexists(config):
-        return _installed_profile(config, receipt)
+        with update_lock(config, blocking=prepare):
+            return _installed_profile(config, receipt)
     if not prepare:
         raise RuntimeError("MindIE release profile is not prepared; start a new native session")
     if source is not None and source.is_dir():
@@ -126,7 +127,7 @@ def main():
         config = profile(
             args.release, args.source if args.role == 'session-start' else None,
             prepare=args.role != 'stop')
-        with update_lock(config):
+        with update_lock(config, blocking=args.role != 'stop'):
             # Bind before any helper side effect. MCP keeps this identity in
             # memory and reacquires the same lock for each request.
             _installed_profile(config, read(args.release / "runtime.json"))

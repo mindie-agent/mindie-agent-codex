@@ -128,7 +128,71 @@ class RuntimeTests(unittest.TestCase):
                     entry.profile(release,prepare=False)
             self.assertFalse(base.parent.exists())
 
-    def test_warm_stop_checks_exact_profile_without_lock_or_source_hash(self):
+    def test_cold_mcp_waits_for_profile_publication_but_stop_does_not(self):
+        import subprocess
+        from contextlib import ExitStack
+        from tests.process_fixtures import owned_fixture_process
+        from update_lock import update_lock
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            python = os.path.abspath(sys.executable)
+            release = root / "release"
+            release.mkdir()
+            (release / "runtime.json").write_text(json.dumps(
+                dict(python=python, validation={})))
+            config, engine = root / "adapter.json", root / "engine.json"
+            adapter = dict(python=python, runtime_scripts=str(SCRIPTS),
+                           engine_config=str(engine), product_validation={})
+            engine.write_text(json.dumps(dict(
+                transcript_adapter=str(SCRIPTS / "codex_transcript.py"), product_validation={})))
+            config.write_text("{")  # Real installation publishes while holding its exclusive lock.
+            waiting, dispatched = root / "waiting", root / "dispatched"
+            common = (
+                "import sys,os;from pathlib import Path;"
+                f"sys.path.insert(0,{str(SCRIPTS)!r});import entry,session_gate;"
+                f"os.environ['MINDIE_AGENT_CONFIG']={str(config)!r};"
+            )
+            initialize = common + (
+                "from contextlib import contextmanager\n"
+                "lock=entry.update_lock\n"
+                "@contextmanager\n"
+                "def observed(*args,**kwargs):\n"
+                f" Path({str(waiting)!r}).touch()\n"
+                " with lock(*args,**kwargs):yield\n"
+                "entry.update_lock=observed\n"
+                "session_gate.runtime_env=lambda _:{}\n"
+                f"entry.dispatch=lambda *_:Path({str(dispatched)!r}).touch()\n"
+                f"sys.argv=['entry','--release',{str(release)!r},'knowledge-mcp']\n"
+                "entry.main()\n"
+            )
+            with ExitStack() as children:
+                with update_lock(config, exclusive=True):
+                    process = children.enter_context(owned_fixture_process(
+                        [python, "-c", initialize],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE))
+                    until = time.monotonic() + 10
+                    while not waiting.exists() and time.monotonic() < until:
+                        if process.poll() is not None:
+                            stdout, stderr = process.communicate(timeout=10)
+                            self.fail(f"initializer failed before lock acquisition: {stdout!r} {stderr!r}")
+                        time.sleep(.01)
+                    self.assertTrue(waiting.exists())
+                    self.assertIsNone(process.poll())
+                    self.assertFalse(dispatched.exists())
+                    stop = subprocess.run(
+                        [python, "-c", common +
+                         f"\ntry:entry.profile(Path({str(release)!r}),prepare=False)\n"
+                         "except BlockingIOError:print('stop-lock-unavailable')\n"],
+                        capture_output=True, text=True, timeout=10)
+                    self.assertEqual(stop.returncode, 0, stop.stderr)
+                    self.assertEqual(stop.stdout.strip(), "stop-lock-unavailable")
+                    config.write_text(json.dumps(adapter))
+                stdout, stderr = process.communicate(timeout=10)
+                self.assertEqual(process.returncode, 0, stdout + stderr)
+                self.assertTrue(dispatched.exists())
+
+    def test_warm_stop_checks_exact_profile_without_source_hash(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             release = root / "release"
@@ -143,7 +207,6 @@ class RuntimeTests(unittest.TestCase):
                                               product_validation={})))
             before = config.read_bytes(), engine.read_bytes()
             with patch.dict(os.environ, {"MINDIE_AGENT_CONFIG": str(config)}), \
-                    patch.object(entry, "update_lock", side_effect=AssertionError("warm lock")), \
                     patch.object(product_contract, "identity", side_effect=AssertionError("warm source hash")):
                 self.assertEqual(entry.profile(release, prepare=False), config)
                 self.assertEqual(entry.profile(release, SCRIPTS.parent), config)
@@ -170,7 +233,9 @@ class RuntimeTests(unittest.TestCase):
             with patch.dict(os.environ, {"MINDIE_AGENT_CONFIG": str(config)}):
                 with self.assertRaisesRegex(ValueError, "unsupported development"):
                     entry.profile(release)
-            self.assertEqual({p.name: p.read_bytes() for p in root.iterdir() if p.is_file()}, before)
+            self.assertEqual(
+                {p.name: p.read_bytes() for p in root.iterdir()
+                 if p.is_file() and p.suffix != ".lock"}, before)
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO")
     def test_nonregular_profile_is_not_first_install_or_a_blocking_read(self):
@@ -185,7 +250,7 @@ class RuntimeTests(unittest.TestCase):
                     patch.object(entry, "install", side_effect=AssertionError("new install")):
                 with self.assertRaisesRegex(ValueError, "regular file"):
                     entry.profile(release)
-            self.assertFalse((root / "adapter.update.lock").exists())
+            self.assertTrue(config.exists())
 
     def test_installer_failure_keeps_private_output_and_never_publishes_ready(self):
         from bounded_process import run

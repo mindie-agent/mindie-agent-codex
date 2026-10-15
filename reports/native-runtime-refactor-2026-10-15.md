@@ -106,3 +106,23 @@ They must verify body/index/usage, host-exit consumption, harmless remote MCP,
 disable/cancellation and keep-data uninstall. Component tests, cache controls,
 local Git delivery and source review do not substitute for those native gates
 or public GitHub delivery. Benchmark work remains a separate task.
+
+## Native cold preparation follow-up
+
+The model-free macOS Git-marketplace gate at `d47e4a4` completed uv runtime
+installation but failed MCP initialization: concurrent native entry processes
+met the profile installer's exclusive lock and raised `BlockingIOError`.
+Cached tool declarations did not establish a connected MCP runtime. Its receipt
+and diagnostics remain in `codex-installed-payload-d47e4a4`; no provider request
+or model action was submitted.
+
+Initialization now waits on that existing OS lock before reading a published
+profile and before binding its identity. Short Stop still acquires the lock
+without waiting and reports the established native warning if unavailable.
+There is no retry loop, new deadline, state record, or lock held over an MCP
+business request. The real two-process regression holds the installer lock,
+proves MCP has reached and is waiting at that boundary, verifies Stop returns
+promptly, then publishes the complete profile and observes MCP dispatch.
+The affected runtime/service/setup selection passed 37 tests in 6.421 seconds.
+This closes the lock regression at source level; a new native installed-byte
+gate must identify the new revision rather than relabel the failed receipt.
