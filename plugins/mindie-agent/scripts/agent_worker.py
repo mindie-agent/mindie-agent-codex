@@ -13,10 +13,10 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 
 from mindie_knowledge.materials import summarizer
+from mindie_knowledge.loop import summary_scratch
 import process_guard
 import summary_provider
 from process_guard import InvalidResultError, NativeFailure, NativeStartError, OutputLimitExceeded, run_codex
@@ -33,7 +33,7 @@ class ConfigurationError(ValueError):
 def identity(route=None):
     # Read the implementation actually executing, not merely its command path.
     sources = (Path(__file__), Path(process_guard.__file__), Path(summarizer.__file__),
-               Path(summary_provider.__file__))
+               Path(summary_provider.__file__), Path(summary_scratch.__file__))
     implementation = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sources}
     implementation["native_command"] = os.environ.get("MINDIE_CODEX_BIN", "codex")
     route = summary_provider.selected(SUMMARY_MODEL) if route is None else route
@@ -62,7 +62,7 @@ class NativeSummaryModel:
         prompt = summarizer.render_prompt(data)
         if len(prompt.encode("utf-8")) > summarizer.MAX_PROMPT_BYTES:
             raise summarizer.SummaryInputError("complete prompt exceeds budget")
-        directory = tempfile.mkdtemp(prefix="mindie-summary-")
+        directory, managed = summary_scratch.create_profile(prefix="mindie-summary-")
         try:
             route = self.route or summary_provider.selected(SUMMARY_MODEL)
             env = summary_provider.environment(route, directory)
@@ -81,7 +81,7 @@ class NativeSummaryModel:
                        "--output-schema", str(schema), "--json", "-"]
             if env is None:
                 command.insert(2, "--ignore-user-config")
-            run_codex(command, prompt, receipt=self.receipt, defer_cleanup=True, env=env)
+            run_codex(command, prompt, receipt=self.receipt, defer_cleanup=managed, env=env)
             if not self.receipt["turn_completed"]:
                 raise NativeFailure("native execution did not report completion")
             try:
@@ -99,13 +99,14 @@ class NativeSummaryModel:
             return AIMessage(content=self.raw_result)
         finally:
             try:
-                shutil.rmtree(directory)
-            except OSError:
+                if not managed:
+                    shutil.rmtree(directory)
+            except OSError as exc:
                 self.receipt["cleanup_failed"] = True
                 try:
                     from diagnostic_support import failure
                     failure("summary", stage="temporary-profile-cleanup", category="internal",
-                            exception=OSError("summary temporary profile cleanup failed"),
+                            exception=exc,
                             reportable=False)
                 except Exception:
                     pass
@@ -130,7 +131,8 @@ def _category(error):
 
 
 def _reason(error, receipt):
-    if isinstance(error, summary_provider.ProviderConfigurationError):
+    if isinstance(error, (summary_provider.ProviderConfigurationError,
+                          summary_scratch.ScratchOwnershipError)):
         return "configuration_invalid"
     if isinstance(error, summarizer.SummaryResultError):
         return error.reason

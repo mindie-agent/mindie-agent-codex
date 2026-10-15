@@ -47,7 +47,7 @@ class SummaryModelTests(unittest.TestCase):
         self.assertIn('features.shell_tool=false', command)
         self.assertNotIn('--output-last-message', command)
         self.assertIsNone(options.get('timeout'))
-        self.assertTrue(options['defer_cleanup'])
+        self.assertFalse(options['defer_cleanup'])
         self.assertIn('fallible reference index', prompt)
         self.assertIn('Retain failed attempts', prompt)
         summarizer.validate_outcome(value, payload)
@@ -135,6 +135,18 @@ class SummaryModelTests(unittest.TestCase):
         self.assertEqual(value['error'], 'configuration')
         self.assertEqual(value['model_calls'], 0)
         self.assertEqual(value['billing_status'], 'not_called')
+
+    def test_incomplete_managed_owner_is_rejected_before_native_model(self):
+        payload = request(agent_worker)
+        with patch.dict(os.environ, MINDIE_MAINTENANCE_GROUP='1',
+                        MINDIE_MAINTENANCE_OWNER=str(os.getppid())), \
+                patch.object(agent_worker, 'run_codex') as native:
+            value = agent_worker.run(payload)
+        self.assertEqual(value['status'], 'failed')
+        self.assertEqual(value['error'], 'configuration')
+        self.assertEqual(value['error_reason'], 'configuration_invalid')
+        self.assertEqual(value['model_calls'], 0)
+        native.assert_not_called()
 
     def test_k3_03_body_replacement_is_not_metadata(self):
         payload = request(agent_worker, 'K3-03')

@@ -88,6 +88,9 @@ def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=Fals
     deferred_to_core = defer_cleanup and (inherited or (
         not POSIX and os.environ.get('MINDIE_MAINTENANCE_GROUP') == '1'
         and os.environ.get('MINDIE_MAINTENANCE_OWNER', '').isdecimal()))
+    env = {key: value for key, value in (os.environ if env is None else env).items()
+           if key not in {"MINDIE_MAINTENANCE_GROUP", "MINDIE_MAINTENANCE_OWNER",
+                          "MINDIE_SUMMARY_SCRATCH"}}
     with tempfile.TemporaryFile() as input_file:
         input_file.write(prompt.encode())
         input_file.seek(0)

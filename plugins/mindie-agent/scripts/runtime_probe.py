@@ -40,6 +40,7 @@ else:
         from mindie_knowledge.state_layout import state_root
         from mindie_knowledge.filesystem import resolved_path, path_identity
         from mindie_knowledge.loop.service_context import validate as validate_service_context
+        from mindie_knowledge.loop.summary_scratch import create_profile, ScratchOwnershipError
         from mindie_knowledge.publication_contract import read_git_contract, parse_contract
         from mindie_knowledge.loop.transcript_redaction import install_scanner
         from mindie_knowledge.loop.history_import import import_transcript
@@ -56,6 +57,12 @@ else:
             missing.append("knowledge path identity API is incomplete")
         if not callable(validate_service_context):
             missing.append("knowledge service launch context API is incomplete")
+        if (not callable(create_profile)
+                or set(inspect.signature(create_profile).parameters) != {{"prefix"}}
+                or getattr(ScratchOwnershipError, "mindie_category", None) != "configuration"):
+            missing.append("knowledge summary scratch ownership API is incomplete")
+        if "on_result" not in inspect.signature(bounded_run).parameters:
+            missing.append("summary invocation lacks durable result delivery")
         if set(inspect.signature(Store.explain).parameters) != {{"self", "ref"}}:
             missing.append("knowledge explain is not the ref-only block API")
         if "continuation" not in inspect.signature(Store.query).parameters:
