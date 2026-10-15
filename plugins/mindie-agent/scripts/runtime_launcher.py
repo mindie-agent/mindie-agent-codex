@@ -22,8 +22,15 @@ ROLES = {"knowledge-mcp": ("bridge.py", ["mcp"]),
 def selected(config, root, lifetime):
     with update_lock(config):
         value = json.loads(config.read_text(encoding="utf-8"))
-        from diagnostic_support import apply_environment_context
-        apply_environment_context(value)
+        # This stable bootstrap can select an older generation during rollback.
+        # Keep its two-path binding independent of generation-specific helpers.
+        context = value.get("diagnostics_context", {})
+        if (not isinstance(context, dict)
+                or set(context) - {"MINDIE_DIAGNOSTICS_CONFIG", "MINDIE_DIAGNOSTICS_ROOT"}
+                or any(not isinstance(path, str) or not Path(path).is_absolute()
+                       for path in context.values())):
+            raise ValueError("invalid installation diagnostics context")
+        os.environ.update(context)
         scripts = Path(value["runtime_scripts"]).resolve(strict=True)
         generation = scripts.parent.parent
         if generation.parent != (root / "generations").resolve() or scripts != generation / "plugin/scripts":

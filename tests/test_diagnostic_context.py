@@ -67,8 +67,11 @@ class DiagnosticContextTests(unittest.TestCase):
             }
             for name in ("runtime_launcher.py", "update_lock.py", "diagnostic_support.py"):
                 shutil.copy2(SCRIPTS / name, root / name)
+            (root / "diagnostic_support.py").write_text(
+                "raise RuntimeError('stable diagnostic metadata must not load on success')\n")
             probe = (
                 "import json,os,subprocess,sys\n"
+                "import diagnostic_support\n"
                 "from diagnostic_support import CONTEXT_ENV\n"
                 "from session_gate import generation_env\n"
                 "child='import os,json;print(json.dumps({k:os.environ.get(k) "
@@ -76,7 +79,8 @@ class DiagnosticContextTests(unittest.TestCase):
                 "result=subprocess.run([sys.executable,'-c',child],env=generation_env(),"
                 "capture_output=True,text=True,check=True)\n"
                 "print(json.dumps(dict(native={k:os.environ.get(k) for k in CONTEXT_ENV},"
-                "helper=json.loads(result.stdout))))\n"
+                "helper=json.loads(result.stdout),"
+                "diagnostics_source=diagnostic_support.__file__)))\n"
             )
             # The host supplies only the bound adapter path; it filters the
             # diagnostic overrides just as the native Codex MCP launcher did.
@@ -103,7 +107,26 @@ class DiagnosticContextTests(unittest.TestCase):
                             env=environment, capture_output=True, text=True, timeout=10)
                         self.assertEqual(result.returncode, 0, result.stderr)
                         self.assertEqual(json.loads(result.stdout),
-                                         {"native": selected, "helper": selected})
+                                         {"native": selected, "helper": selected,
+                                          "diagnostics_source": str(scripts / "diagnostic_support.py")})
+            # A retained or rolled-back generation predates the new helper API.
+            # The stable launcher still restores the optional path context.
+            (scripts / "diagnostic_support.py").write_text("LEGACY = True\n")
+            legacy_probe = (
+                "import json,os,diagnostic_support\n"
+                "assert diagnostic_support.LEGACY\n"
+                "print(json.dumps({key:os.environ.get(key) for key in "
+                + repr(tuple(selected)) + "}))\n"
+            )
+            for name in ("bridge.py", "remote_bridge.py"):
+                (scripts / name).write_text(legacy_probe)
+            for role in ("knowledge-mcp", "remote-mcp", "stop"):
+                result = subprocess.run(
+                    [sys.executable, str(root / "runtime_launcher.py"), "--config",
+                     str(config), role],
+                    env=environment, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), selected)
             self.assertFalse((base / "policy.json").exists())
             self.assertFalse((base / "events").exists())
 
