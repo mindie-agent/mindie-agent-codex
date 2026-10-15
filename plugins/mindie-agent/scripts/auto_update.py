@@ -32,7 +32,8 @@ import urllib.error
 import urllib.request
 
 from bounded_process import ProcessCleanupError, classify_transport_text, run
-from native_context import capture as capture_native_context
+from native_context import (KEYS as NATIVE_PATH_KEYS, capture as capture_native_context,
+                            service_launch_context)
 import product_contract
 from session_gate import config_path, runtime_scripts
 from update_lock import file_lock, update_lock
@@ -671,21 +672,17 @@ class Updater:
             {"revision": revision, "version": manifest["version"]},
         )
         mcp = read(plugin / ".mcp.json")
-        from diagnostic_support import environment_context
-        diagnostic_context = environment_context(read(self.config))
         native = capture_native_context(home=self.settings["codex_home"],
                                         binary=self.settings["codex"])
+        context = service_launch_context(
+            self.config, dict(read(self.config), native_context=native))
         for name, server in mcp["mcpServers"].items():
             server["command"] = self.settings["python"]
             role = {"mindie-knowledge": "knowledge-mcp", "mindie-remote-dev": "remote-mcp"}[name]
             server["args"] = [str(self.root / "runtime_launcher.py"), "--config", config_value, role]
             server["cwd"] = str(self.root)
-            env = dict(server.get("env") or {})
-            env["MINDIE_AGENT_CONFIG"] = config_value
-            env.update(diagnostic_context)
-            env.update(native)
-            server["env"] = env
-            server.pop("env_vars", None)
+            server["env"] = dict(context["paths"])
+            server["env_vars"] = list(context["environment"])
         atomic(plugin / ".mcp.json", mcp)
         argv = [
             self.settings["python"],
@@ -1213,7 +1210,28 @@ class Updater:
         if result != {"status": "compatible"}:
             raise Incompatible("candidate did not confirm persisted-state compatibility")
 
+    def _package_service_context(self, candidate):
+        """Read the declaration covered by the verified native package hash."""
+        try:
+            servers = read(Path(candidate["plugin"]) / ".mcp.json")["mcpServers"]
+            if not isinstance(servers, dict) or set(servers) != {"mindie-knowledge", "mindie-remote-dev"}:
+                raise ValueError()
+            declarations = [
+                dict(paths=server["env"], environment=server["env_vars"])
+                for server in servers.values()
+            ]
+            context = declarations[0]
+            if (not isinstance(context["paths"], dict)
+                    or not isinstance(context["environment"], list)
+                    or any(value != context for value in declarations)):
+                raise ValueError()
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise Incompatible("packaged service launch declarations are inconsistent") from exc
+        return context
+
     def _commit_generation(self, candidate, adapter, capture_config):
+        if capture_config.get("service_launch_context") != self._package_service_context(candidate):
+            raise Incompatible("transaction service context differs from the verified native package")
         engine = read(adapter["engine_config"])
         # One committed generation: worker, transcript parser and
         # interpreter move together; the neutral admission store and
@@ -1253,8 +1271,11 @@ class Updater:
                 runtime_scripts=str(Path(candidate["plugin"]) / "scripts"),
                 admission_path=admission_path,
                 product_validation=candidate["validation"],
-                native_context=capture_native_context(
-                    home=self.settings["codex_home"], binary=self.settings["codex"]),
+                native_context={
+                    key: value for key, value in
+                    capture_config["service_launch_context"]["paths"].items()
+                    if key in NATIVE_PATH_KEYS
+                },
             ),
         )
         try:
@@ -1325,6 +1346,9 @@ class Updater:
             # Dependency preparation happens only for an owned installation
             # and before stopping its service. Stop hooks never download.
             capture_config = self.prepare_capture(candidate)
+            # Use the names and paths already bound into the verified native
+            # package, including during recovery of this same transaction.
+            capture_config["service_launch_context"] = self._package_service_context(candidate)
             idle_helper = Path(candidate["plugin"]) / "scripts/service_handoff.py"
             if not idle_helper.is_file():
                 raise Incompatible("updater is missing service_handoff.py")
@@ -1378,7 +1402,8 @@ class Updater:
                 # The Hook never initializes or migrates persistent state.
                 store_ready = json.loads(self.command(
                     [candidate["python"], Path(candidate["plugin"]) / "scripts/capture_config.py", "prepare-store"],
-                    data=json.dumps(read(adapter["engine_config"])), on_failure=store_failure))
+                    data=json.dumps(dict(read(adapter["engine_config"]), **capture_config)),
+                    on_failure=store_failure))
                 if store_ready != {"status": "ready"}:
                     raise RuntimeError("candidate knowledge store preparation did not confirm readiness")
                 market = self.root / "marketplace"

@@ -208,11 +208,6 @@ def install(args, parser):
     value.update(prepare(python, SCRIPTS))
     if args.domain == declaration["publication"]["domain"] and not args.no_public_feed:
         value["feeds"] = [product_contract.publication_feed(declaration)]
-    # The short Stop path only admits into an existing store. Initialize it
-    # with the pinned core here, without starting a service or calling a model.
-    # A damaged existing authority fails before installation config is written.
-    prepare_store(python, SCRIPTS, value)
-    write_private(engine_config, value)
     adapter = dict(
         python=python,
         engine_config=str(engine_config),
@@ -225,8 +220,14 @@ def install(args, parser):
     diagnostic_context = capture_environment_context()
     if diagnostic_context:
         adapter["diagnostics_context"] = diagnostic_context
-    from native_context import capture as capture_native_context
+    from native_context import capture as capture_native_context, service_launch_context
     adapter["native_context"] = capture_native_context()
+    value["service_launch_context"] = service_launch_context(config, adapter)
+    # The short Stop path only admits into an existing store. Initialize it
+    # with the pinned core here, without starting a service or calling a model.
+    # A damaged existing authority fails before installation config is written.
+    prepare_store(python, SCRIPTS, value)
+    write_private(engine_config, value)
     write_private(config, adapter)
     if sharing_choice:
         # The explicit install-time choice lands directly in the consent

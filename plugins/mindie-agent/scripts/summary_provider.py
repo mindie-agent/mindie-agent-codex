@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import tomllib
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
@@ -19,6 +20,10 @@ _CREDENTIAL_QUERY = {"key", "api_key", "apikey", "token", "access_token", "auth"
                      "client_secret", "password"}
 _CREDENTIAL_HEADER = {"authorization", "proxy-authorization", "api-key", "x-api-key",
                       "x-auth-token", "cookie", "ocp-apim-subscription-key"}
+NATIVE_AUTH_ENV = (
+    "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "OPENAI_FEDERATION_RULE_ID",
+    "OPENAI_IDENTITY_TOKEN_FILE", "OPENAI_WORKLOAD_IDENTITY_CONTEXT",
+)
 
 
 class ProviderConfigurationError(ValueError):
@@ -82,14 +87,14 @@ def _route_headers(provider):
             for key, value in sorted(headers)]
 
 
-def selected(model):
-    """Honor the installed native home, including the ordinary default home."""
-    home = os.environ.get("CODEX_HOME") or Path.home() / ".codex"
+def _selected_provider(home=None, *, project=True):
+    """Read the selected provider without requiring its current credentials."""
+    home = home or os.environ.get("CODEX_HOME") or Path.home() / ".codex"
     path = Path(home).expanduser() / "config.toml"
     try:
         path.lstat()
     except FileNotFoundError:
-        return {"model": model, "provider": None}
+        return {}, "openai", None
     except OSError:
         raise ProviderConfigurationError("summary_provider_document_unavailable") from None
     raw = _read(path, 256 * 1024)
@@ -97,17 +102,23 @@ def selected(model):
         config = tomllib.loads(raw)
     except ValueError:
         raise ProviderConfigurationError("summary_provider_config_invalid") from None
-    if config.get("profile") is not None:
+    if project and config.get("profile") is not None:
         raise ProviderConfigurationError("summary_native_profile_selection_unsupported")
     name = config.get("model_provider", "openai")
     providers = config.get("model_providers", {})
     if not isinstance(name, str) or not isinstance(providers, dict):
         raise ProviderConfigurationError("summary_provider_config_invalid")
     if name == "openai" and name not in providers:
-        return {"model": model, "provider": None}
+        return config, name, None
     source = providers.get(name)
     if not isinstance(source, dict):
+        if not project and name not in providers:
+            # Installation only declares available names. A missing route is
+            # still rejected by selected() before any summary invocation.
+            return config, name, {}
         raise ProviderConfigurationError("summary_selected_provider_missing")
+    if not project:
+        return config, name, source
     if set(source) - (_STRINGS | _BOOLEANS | _TABLES | _NUMBERS):
         raise ProviderConfigurationError("summary_provider_field_unsupported")
     provider = {}
@@ -123,6 +134,31 @@ def selected(model):
         if not valid:
             raise ProviderConfigurationError("summary_provider_field_invalid")
         provider[key] = value
+    return config, name, provider
+
+
+def environment_keys(home=None):
+    """Declare only provider-selected names; never snapshot credential values."""
+    _, _, provider = _selected_provider(home, project=False)
+    if provider is None:
+        return list(NATIVE_AUTH_ENV)
+    headers = provider.get("env_http_headers", {})
+    if not isinstance(headers, dict):
+        raise ProviderConfigurationError("summary_provider_environment_name_invalid")
+    names = list(headers.values())
+    if "env_key" in provider:
+        names.append(provider["env_key"])
+    if any(not isinstance(name, str) or
+           re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None for name in names):
+        raise ProviderConfigurationError("summary_provider_environment_name_invalid")
+    return sorted(set(names))
+
+
+def selected(model):
+    """Honor the installed native home, including the ordinary default home."""
+    config, name, provider = _selected_provider()
+    if provider is None:
+        return {"model": model, "provider": None}
     required_env = list(provider.get("env_http_headers", {}).values())
     if "env_key" in provider:
         required_env.append(provider["env_key"])

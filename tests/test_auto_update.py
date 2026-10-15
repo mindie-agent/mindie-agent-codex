@@ -21,6 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
 import auto_update
+import native_context
+import summary_provider
 import product_contract
 import candidate_validate
 from bounded_process import ProcessResult
@@ -439,7 +441,8 @@ class AutoUpdateTests(unittest.TestCase):
                 self.assertEqual(server["env"]["MINDIE_AGENT_CONFIG"], expected)
                 self.assertEqual(set(server["env"]),
                                  {"MINDIE_AGENT_CONFIG", "CODEX_HOME", "MINDIE_CODEX_BIN"})
-                self.assertNotIn("env_vars", server)
+                self.assertEqual(server["env_vars"], sorted(
+                    (*native_context.TRANSPORT_ENV, *summary_provider.NATIVE_AUTH_ENV)))
         command = read(plugin / "hooks/hooks.json")["hooks"]["Stop"][0]["hooks"][0][
             "command"
         ]
@@ -490,6 +493,9 @@ class AutoUpdateTests(unittest.TestCase):
                 native = auto_update.capture_native_context(
                     home=read(self.settings)["codex_home"], binary=read(self.settings)["codex"])
                 self.assertEqual(read(self.config)["native_context"], native)
+                engine = read(read(self.config)["engine_config"])
+                self.assertEqual(engine["service_launch_context"]["paths"], dict(
+                    context, **native, MINDIE_AGENT_CONFIG=str(self.config.absolute())))
                 mcp = read(Path(result["current"]["plugin"]) / ".mcp.json")
                 for server in mcp["mcpServers"].values():
                     self.assertEqual(server["env"], dict(
@@ -502,6 +508,67 @@ class AutoUpdateTests(unittest.TestCase):
                     child_env = run.call_args.kwargs["env"]
                     self.assertEqual({k: child_env[k] for k in context}, context)
         self.assertFalse((self.base / "reporting.json").exists())
+
+    def test_prepared_provider_names_survive_install_recovery_without_secret_values(self):
+        home = Path(self.updater.settings["codex_home"])
+        provider = home / "config.toml"
+        provider.write_text(
+            'model_provider="selected"\n[model_providers.selected]\n'
+            'env_key="SELECTED_PROVIDER_KEY"\n'
+            '[model_providers.selected.env_http_headers]\n'
+            '"X-Provider-Key"="SELECTED_HEADER_KEY"\n'
+            '[model_providers.other]\nenv_key="UNRELATED_KEY"\n', encoding="utf-8")
+        with patch.dict(os.environ, {
+            "SELECTED_PROVIDER_KEY": "PRIVATE_PROVIDER_CANARY",
+            "SELECTED_HEADER_KEY": "PRIVATE_HEADER_CANARY",
+        }):
+            candidate = self.updater.prepare(self.sha)
+        expected = self.updater._package_service_context(candidate)
+        self.assertEqual(set(expected["environment"]), {
+            *native_context.TRANSPORT_ENV, "SELECTED_PROVIDER_KEY", "SELECTED_HEADER_KEY",
+        })
+        package = read(Path(candidate["plugin"]) / ".mcp.json")
+        for server in package["mcpServers"].values():
+            self.assertEqual(server["env_vars"], expected["environment"])
+            self.assertEqual(server["env"], expected["paths"])
+        self.assertNotIn("CANARY", json.dumps([candidate, package]))
+        self.assertNotIn("UNRELATED_KEY", json.dumps([candidate, package]))
+
+        command = self.updater.command
+        prepared_engines = []
+        def observe_store(args, **kwargs):
+            if len(args) > 2 and str(args[1]).endswith("capture_config.py") and args[2] == "prepare-store":
+                prepared_engines.append(json.loads(kwargs["data"]))
+            return command(args, **kwargs)
+        with patch.object(self.updater, "command", side_effect=observe_store), \
+                patch.object(self.updater, "_commit_generation", side_effect=KeyboardInterrupt("fixture crash")):
+            with self.assertRaises(KeyboardInterrupt):
+                self.updater.install(candidate)
+        self.assertEqual(prepared_engines[0]["service_launch_context"], expected)
+        journal = read(self.root / "transaction.json")
+        self.assertEqual(journal["capture_config"]["service_launch_context"], expected)
+        provider.write_text(
+            'model_provider="changed"\n[model_providers.changed]\n'
+            'env_key="CHANGED_AFTER_PREPARATION"\n', encoding="utf-8")
+        with patch.object(auto_update, "service_launch_context",
+                          side_effect=AssertionError("recovery must use its validated declaration")):
+            self.updater.recover()
+        self.assertEqual(read(read(self.config)["engine_config"])["service_launch_context"], expected)
+        self.assertEqual(self.updater.installs, 1)
+
+    def test_recovery_rejects_context_not_bound_to_the_native_package(self):
+        with patch.object(self.updater, "_commit_generation", side_effect=KeyboardInterrupt("fixture crash")):
+            with self.assertRaises(KeyboardInterrupt):
+                self.check()
+        journal = read(self.root / "transaction.json")
+        journal["capture_config"]["service_launch_context"]["paths"]["CODEX_HOME"] = str(
+            self.base / "wrong-home")
+        atomic(self.root / "transaction.json", journal)
+        with self.assertRaisesRegex(auto_update.Incompatible, "differs from the verified native package"):
+            self.updater.recover()
+        self.assertEqual(self.updater.installs, 1)
+        self.assertEqual(read(self.config), self.initial)
+        self.assertTrue((self.root / "transaction.json").exists())
 
     def test_generated_bridge_init_binds_installation_config_without_env(self):
         result = self.check()

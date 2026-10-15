@@ -36,6 +36,24 @@ def run_setup(python, *args, real_probe=False, env=None):
 
 
 class SetupTests(unittest.TestCase):
+    def test_invalid_service_environment_binding_fails_before_config_publication(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            home = base / "native-home"
+            home.mkdir()
+            (home / "config.toml").write_text(
+                'model_provider="fixture"\n[model_providers.fixture]\n'
+                'env_key="PYTHONPATH"\n', encoding="utf-8")
+            config = base / "adapter.json"
+            result = run_setup(
+                sys.executable, "--config", config, "--root", base / "data",
+                env=dict(os.environ, CODEX_HOME=str(home)),
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("service_launch_context_invalid", result.stderr + result.stdout)
+            self.assertFalse(config.exists())
+            self.assertFalse((base / "adapter.engine.json").exists())
+
     def test_setup_saves_only_explicit_diagnostic_path_overrides(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary).resolve()
@@ -44,6 +62,7 @@ class SetupTests(unittest.TestCase):
                 "MINDIE_DIAGNOSTICS_ROOT": str(base / "diagnostic-events"),
             }
             clean = {key: value for key, value in os.environ.items() if key not in context}
+            clean["CODEX_HOME"] = str(base / "native-home")
             for explicit in (False, True):
                 folder = base / str(explicit)
                 config = folder / "codex.json"
@@ -52,6 +71,11 @@ class SetupTests(unittest.TestCase):
                                    "--root", folder / "data", env=env)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 adapter = json.loads(config.read_text())
+                engine = json.loads(Path(adapter["engine_config"]).read_text())
+                self.assertEqual(engine["service_launch_context"]["paths"]["MINDIE_AGENT_CONFIG"],
+                                 str(config))
+                self.assertEqual(engine["service_launch_context"]["paths"]["CODEX_HOME"],
+                                 clean["CODEX_HOME"])
                 self.assertEqual(adapter["native_context"]["CODEX_HOME"],
                                  str(Path(env.get("CODEX_HOME") or Path.home() / ".codex").absolute()))
                 if explicit:

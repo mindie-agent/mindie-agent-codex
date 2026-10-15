@@ -14,6 +14,33 @@ from session_gate import generation_env
 
 
 class NativeContextTests(unittest.TestCase):
+    def test_service_context_binds_selected_paths_and_only_environment_names(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            native_home = base / "native"
+            native_home.mkdir()
+            (native_home / "config.toml").write_text(
+                'model_provider="chosen"\n[model_providers.chosen]\n'
+                'env_key="TASK_PROVIDER_KEY"\n'
+                '[model_providers.other]\nenv_key="UNRELATED_KEY"\n', encoding="utf-8")
+            config = base / "adapter.json"
+            adapter = dict(
+                native_context={"CODEX_HOME": str(native_home), "MINDIE_CODEX_BIN": str(base / "codex")},
+                diagnostics_context={"MINDIE_DIAGNOSTICS_ROOT": str(base / "events")},
+            )
+            with patch.dict(os.environ, {"CODEX_HOME": str(base / "wrong"),
+                                         "TASK_PROVIDER_KEY": "PRIVATE_CANARY",
+                                         "UNRELATED_KEY": "OTHER_CANARY"}):
+                value = native_context.service_launch_context(config, adapter)
+            self.assertEqual(value["paths"], {
+                **adapter["native_context"], **adapter["diagnostics_context"],
+                "MINDIE_AGENT_CONFIG": str(config),
+            })
+            self.assertEqual(set(value["environment"]),
+                             {*native_context.TRANSPORT_ENV, "TASK_PROVIDER_KEY"})
+            self.assertNotIn("CANARY", json.dumps(value))
+            self.assertNotIn("UNRELATED_KEY", value["environment"])
+
     def test_saved_installation_wins_over_wrong_or_missing_host_paths(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary).resolve()

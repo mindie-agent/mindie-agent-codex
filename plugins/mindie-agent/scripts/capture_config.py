@@ -42,7 +42,9 @@ if __name__ == "__main__":
     if sys.argv[1:] == ['prepare-store']:
         try:
             from mindie_knowledge.loop.store import Store
+            from mindie_knowledge.loop.service_context import validate
             config = json.load(sys.stdin)
+            validate(config)
             store = Store(config['root'], config['domain'])
             store.close()
         except Exception as exc:

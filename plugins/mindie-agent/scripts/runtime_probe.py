@@ -39,6 +39,7 @@ else:
         from mindie_knowledge.loop.store import Store
         from mindie_knowledge.state_layout import state_root
         from mindie_knowledge.filesystem import resolved_path, path_identity
+        from mindie_knowledge.loop.service_context import validate as validate_service_context
         from mindie_knowledge.publication_contract import read_git_contract, parse_contract
         from mindie_knowledge.loop.transcript_redaction import install_scanner
         from mindie_knowledge.loop.history_import import import_transcript
@@ -53,6 +54,8 @@ else:
             missing.append("knowledge state compatibility API is incomplete")
         if not callable(resolved_path) or not callable(path_identity):
             missing.append("knowledge path identity API is incomplete")
+        if not callable(validate_service_context):
+            missing.append("knowledge service launch context API is incomplete")
         if set(inspect.signature(Store.explain).parameters) != {{"self", "ref"}}:
             missing.append("knowledge explain is not the ref-only block API")
         if "continuation" not in inspect.signature(Store.query).parameters:

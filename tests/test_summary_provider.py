@@ -70,6 +70,39 @@ class ProviderTests(unittest.TestCase):
             value = worker.run(payload)
         return value, observed
 
+    def test_service_environment_declares_names_without_credentials_or_route_check(self):
+        self.config(extra='env_key="_SERVICE_AUTH"\n'
+                          'env_http_headers={Authorization="_SERVICE_AUTH",Tenant="SERVICE_TENANT"}\n'
+                          'future_provider_option=true')
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(provider.environment_keys(self.home),
+                             ["SERVICE_TENANT", "_SERVICE_AUTH"])
+        with self.assertRaisesRegex(provider.ProviderConfigurationError, "field_unsupported"):
+            provider.selected("gpt-5.6-luna")
+
+    def test_service_environment_rejects_malformed_names(self):
+        for extra in ('env_key=3', 'env_key="bad name"', 'env_http_headers="not a map"'):
+            with self.subTest(extra=extra):
+                self.config(extra=extra)
+                with self.assertRaisesRegex(provider.ProviderConfigurationError,
+                                            "environment_name_invalid"):
+                    provider.environment_keys(self.home)
+
+    def test_builtin_declares_native_auth_names_without_reading_values(self):
+        (self.home / "config.toml").write_text("", encoding="utf-8")
+        with patch.dict(os.environ, {"CODEX_API_KEY": "PRIVATE_BUILTIN_CANARY"}):
+            names = provider.environment_keys(self.home)
+        self.assertEqual(names, list(provider.NATIVE_AUTH_ENV))
+        self.assertNotIn("CANARY", json.dumps(names))
+        self.config(extra='env_key="CUSTOM_AUTH"')
+        self.assertEqual(provider.environment_keys(self.home), ["CUSTOM_AUTH"])
+
+    def test_unconfigured_route_has_no_declared_auth_and_still_fails_summary(self):
+        (self.home / "config.toml").write_text('model_provider="pending"\n', encoding="utf-8")
+        self.assertEqual(provider.environment_keys(self.home), [])
+        with self.assertRaisesRegex(provider.ProviderConfigurationError, "selected_provider_missing"):
+            provider.selected("gpt-5.6-luna")
+
     def test_custom_provider_is_private_and_only_selected_routing_crosses(self):
         self.config(extra='http_headers={Authorization="SYNTHETIC_HEADER"}')
         (self.home / "auth.json").write_text('{"private":"NEVER_COPY_AUTH"}', encoding="utf-8")

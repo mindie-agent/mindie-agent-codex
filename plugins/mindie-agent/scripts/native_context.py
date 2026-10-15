@@ -6,6 +6,12 @@ import shutil
 import stat
 
 KEYS = {"CODEX_HOME", "MINDIE_CODEX_BIN"}
+TRANSPORT_ENV = (
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
+    "CODEX_CA_CERTIFICATE",
+)
 
 
 def environment(adapter):
@@ -30,6 +36,20 @@ def capture(*, home=None, binary=None):
             expanded = Path(resolved)
         result["MINDIE_CODEX_BIN"] = str(expanded.absolute())
     return result
+
+
+def service_launch_context(config, adapter):
+    """Bind installed paths and allowed names, without persisting secret values."""
+    from diagnostic_support import environment_context
+    from summary_provider import environment_keys
+
+    native = environment(adapter)
+    paths = dict(native, **environment_context(adapter))
+    paths["MINDIE_AGENT_CONFIG"] = str(Path(config).expanduser().absolute())
+    names = sorted(set((*TRANSPORT_ENV, *environment_keys(native.get("CODEX_HOME")))))
+    # The selected runtime validates this declaration during prepare-store,
+    # before installation publishes it. Setup itself remains stdlib-only.
+    return dict(paths=paths, environment=names)
 
 
 def read(config):

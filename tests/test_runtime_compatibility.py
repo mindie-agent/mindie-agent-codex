@@ -65,6 +65,10 @@ class RuntimeCompatibilityTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "knowledge path identity API is incomplete"):
             Probe("import mindie_knowledge.filesystem as F; F.resolved_path = None").probe_runtime(sys.executable)
 
+    def test_old_runtime_without_service_context_is_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, "knowledge service launch context API is incomplete"):
+            Probe("import mindie_knowledge.loop.service_context as S; S.validate = None").probe_runtime(sys.executable)
+
     def test_unmodified_pinned_runtime_passes_candidate_private_probe(self):
         # The product envelope and setup boundary have independent tests.
         self.assertEqual(Probe('').probe_runtime(sys.executable).strip(), 'OK')
