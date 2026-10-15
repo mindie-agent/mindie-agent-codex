@@ -75,6 +75,7 @@ class NativeSummaryModel:
                        "-c", "features.hooks=false", "-c", "features.apps=false",
                        "-c", "features.shell_tool=false", "-c", "features.multi_agent=false",
                        "-c", "features.plugins=false", "-c", "features.skip_host_skill_discovery=true",
+                       "-c", "suppress_unstable_features_warning=true",
                        "-c", "features.skill_search=false",
                        "-c", "features.unbounded_connection_retries=false", "-c", 'web_search="disabled"',
                        "--output-schema", str(schema), "--json", "-"]

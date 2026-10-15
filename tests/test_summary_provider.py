@@ -81,6 +81,7 @@ class ProviderTests(unittest.TestCase):
         self.assertNotIn("--ignore-user-config", seen["command"])
         self.assertIn("features.plugins=false", seen["command"])
         self.assertIn("features.skip_host_skill_discovery=true", seen["command"])
+        self.assertIn("suppress_unstable_features_warning=true", seen["command"])
         self.assertIn("features.skill_search=false", seen["command"])
         self.assertEqual(set(seen["config"]), {"model_provider", "model_providers"})
         self.assertEqual(set(seen["config"]["model_providers"]), {"selected"})
