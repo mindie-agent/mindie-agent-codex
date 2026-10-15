@@ -256,7 +256,8 @@ class SilentCaptureTests(unittest.TestCase):
         self.assertEqual(len(projected['items']), 65)
         self.assertEqual(next(item for item in projected['items'] if item['code']=='projection_overflow')['count'], 6)
         from mindie_knowledge.loop import agent_diagnostics as core
-        self.assertEqual(Path(core.__file__).read_bytes(), Path(agent_diagnostics.__file__).read_bytes())
+        self.assertEqual(Path(core.__file__).read_text(encoding='utf-8'),
+                         Path(agent_diagnostics.__file__).read_text(encoding='utf-8'))
 
     def test_failed_diagnostic_recorder_remains_pending_without_masking_results(self):
         with patch.object(diagnostic_support, '_record', side_effect=OSError('synthetic recorder fault')):
