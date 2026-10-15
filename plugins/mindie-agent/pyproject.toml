@@ -11,7 +11,7 @@ dependencies = ["mindie-knowledge", "remote-dev"]
 
 [tool.uv.sources]
 mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "81fb4e222f0cba5cffe50824ffd55b33d312283d" }
-remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "077f2b55618aabd264bf7cfc89a0280abf753ef7" }
+remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "46a91a5b409506760ea530f7037a3f9f04d9a2d7" }
 
 [tool.setuptools]
 packages = ["mindie_codex", "mindie_codex.scripts"]
