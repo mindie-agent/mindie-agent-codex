@@ -92,13 +92,13 @@ def community_write_lock(config_file=None):
     return consent_store._UpdateLock(shared.with_name(shared.name + ".lock"))
 
 
-def configured_path(config_file=None):
+def configured_path(config_file=None, *, adapter=None):
     """The explicit profile authority; no legacy pointer fallback."""
     import consent
 
     config_file = Path(config_file or config_path())
     shared = consent.shared_community_path_for(config_file)
-    config = json.loads(config_file.read_text(encoding='utf-8'))
+    config = adapter if adapter is not None else json.loads(config_file.read_text(encoding='utf-8'))
     value = config.get("community_config")
     if not isinstance(value, str) or not os.path.isabs(value) or Path(value) != shared:
         raise SharingError(
@@ -239,10 +239,10 @@ def normalize_with_runtime(settings, python, config_file=None, *, previous=None)
     return value["ok"]
 
 
-def read(config_file=None):
+def read(config_file=None, *, adapter=None):
     """Cheap fail-closed view for capture precheck; no interpreter spawn."""
     try:
-        raw = json.loads(configured_path(config_file).read_text(encoding='utf-8'))
+        raw = json.loads(configured_path(config_file, adapter=adapter).read_text(encoding='utf-8'))
         settings = validate(raw)
     except FileNotFoundError:
         return None
@@ -276,7 +276,7 @@ def consent_allows(settings, config_file=None):
     return view["choice"] == "contribute"
 
 
-def capture_allowed(lease, cwd, config_file=None):
+def capture_allowed(lease, cwd, config_file=None, *, adapter=None):
     """active lease AND community enabled AND lease project root in scope,
     plus the consent gate when the settings carry the consent authority.
 
@@ -284,7 +284,7 @@ def capture_allowed(lease, cwd, config_file=None):
     caller-supplied cwd pointing into an allowed directory. Anything
     unreadable or incomplete fails closed for capture only.
     """
-    settings = read(config_file)
+    settings = read(config_file, adapter=adapter)
     if settings is None or not settings["enabled"]:
         return False
     if consent_allows(settings, config_file) is False:
@@ -412,7 +412,7 @@ def set_enabled(enable, config_file=None):
     return normalized
 
 
-def status(config_file=None, saved=None):
+def status(config_file=None, saved=None, *, adapter=None):
     """Read-only sharing status; initializes no service, model or database.
 
     One consent authority read per call (``saved`` may carry a caller's
@@ -428,7 +428,7 @@ def status(config_file=None, saved=None):
         return dict(state="malformed", detail="saved setup state is damaged",
                     sharing_choice=choice, first_use=None)
     try:
-        path = configured_path(config_file)
+        path = configured_path(config_file, adapter=adapter)
     except (OSError, ValueError) as exc:
         return dict(
             state="unconfigured",

@@ -4,6 +4,9 @@ import ast
 import json
 from pathlib import Path
 import re
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from product_contract import native_version, package_root, read_json
 

@@ -113,6 +113,13 @@ remains authoritative. Repeated events keep the existing binding and do not
 replay captured material. Optional configuration and operator commands remain
 available when requested. See [capture and operation lifecycle](plugins/mindie-agent/skills/mindie-agent/references/activation-lifecycle.md).
 
+Stop reads one complete installed binding and commits the existing capture queue
+without waiting for the update cutover lock. A retired runtime cannot wake itself;
+the selected service consumes the same durable queue. Contribution and scope are
+checked against their live saved authorities. A failed handoff or a confirmed
+consumer failure produces a static native warning without requesting another turn;
+queue acceptance alone does not claim that collection or indexing finished.
+
 ## Optional experience sharing
 
 With contribution off, there is no Stop capture, transcript reading, draft

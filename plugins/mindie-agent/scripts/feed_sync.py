@@ -1,5 +1,9 @@
 """Session-start and explicit feed refresh; shared Feed owns intervals/backoff."""
 import json
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 _FEED_OK = frozenset({"synced", "unchanged"})
 _FEED_PENDING = frozenset({"busy", "deferred"})

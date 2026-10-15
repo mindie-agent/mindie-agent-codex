@@ -23,6 +23,8 @@ import sys
 import threading
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from bounded_process import run
 from session_gate import (
     Inactive,
@@ -458,6 +460,10 @@ def _observe_stop(result):
         _record_stop("handoff", "internal")
         return False
     stage = result.get("stage")
+    if stage == "accepted-local" and (result.get("wake") == "failed"
+                                      or result.get("reason") == "worker-dead"):
+        _record_stop("handoff", "consumer_unavailable")
+        return False
     if stage in {"inert", "organized", "no-new-material", "no-shareable-material",
                  "cancelled", "discarded", "processing", "accepted-runtime",
                  "apply-pending", "accepted-local"}:
@@ -474,13 +480,18 @@ def _observe_stop(result):
     return False
 
 
-def stop():
+def stop(*, adapter=None, hook_input=None):
     try:
-        settings = sharing.read()
+        if adapter is None:
+            from product_contract import read_json
+            adapter = read_json(config_path())[0]
+        if not isinstance(adapter, dict):
+            raise ValueError("invalid Stop binding")
+        settings = sharing.read(adapter=adapter)
         # Missing setup is an Agent diagnostic; an explicit disable is inert.
         # Neither branch reads stdin, starts a helper or creates a capture row.
         if settings is None:
-            disabled = sharing.status().get("state") == "disabled"
+            disabled = sharing.status(adapter=adapter).get("state") == "disabled"
             if not disabled:
                 _record_stop("configuration", "missing_configuration")
             print("{}")
@@ -493,7 +504,7 @@ def stop():
         print("{}")
         return 1
     try:
-        event = hook_event(_read_hook_stdin())
+        event = hook_event(_read_hook_stdin() if hook_input is None else hook_input)
         # This host delivers no native thread identity to the hook process
         # (verified on codex-cli 0.153.4: the hook env carries CODEX_HOME
         # only). When a host does supply CODEX_THREAD_ID, a disagreement with
@@ -522,7 +533,7 @@ def stop():
         return 1
     failed = False
     try:
-        result = Sessions()._op(
+        result = Sessions(stop_adapter=adapter)._op(
             "stop_capture", {"event": event, "session": event["session_id"]}
         )
         failed = not _observe_stop(result)
@@ -888,6 +899,17 @@ def _optional_config_prefix(argv):
 
 def main():
     argv = _optional_config_prefix(sys.argv[1:])
+    if argv == ["stop", "--snapshot"]:
+        try:
+            envelope = json.loads(_read_hook_stdin())
+            if (not isinstance(envelope, dict) or set(envelope) != {"adapter", "hook_input"}
+                    or not isinstance(envelope["hook_input"], str)):
+                raise ValueError("invalid internal Stop envelope")
+            raise SystemExit(stop(adapter=envelope["adapter"], hook_input=envelope["hook_input"]))
+        except (OSError, ValueError, TypeError) as exc:
+            _record_stop("envelope", "invalid_snapshot", exc)
+            print("{}")
+            raise SystemExit(1)
     if not argv or argv[0] not in OPERATIONS | CONTRIBUTION_OPERATIONS:
         print("Unsupported MindIE entry operation", file=sys.stderr)
         raise SystemExit(1)

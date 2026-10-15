@@ -17,6 +17,7 @@ script with a new interpreter or library.
 
 import json
 import os
+from contextlib import nullcontext
 from pathlib import Path
 import re
 
@@ -90,7 +91,7 @@ def runtime_scripts(config):
     raise ValueError("adapter configuration lacks an absolute runtime_scripts path")
 
 
-def runtime_env(config=None):
+def runtime_env(config=None, *, adapter=None):
     """Pin a helper to this adapter config and the committed interpreter.
 
     PYTHONPATH is omitted so a developer checkout cannot mask the runtime
@@ -102,10 +103,10 @@ def runtime_env(config=None):
     # user's profile, which disagrees with bounded_process's UTF-8 contract.
     env["PYTHONIOENCODING"] = "utf-8"
     selected = str(Path(config or config_path()).absolute())
-    from diagnostic_support import read_environment_context
-    from native_context import read as read_native_context
-    env.update(read_environment_context(selected))
-    env.update(read_native_context(selected))
+    from diagnostic_support import environment_context, read_environment_context
+    from native_context import environment, read as read_native_context
+    env.update(read_environment_context(selected) if adapter is None else environment_context(adapter))
+    env.update(read_native_context(selected) if adapter is None else environment(adapter))
     env["MINDIE_AGENT_CONFIG"] = selected
     env[_DISPATCH_CONFIG] = selected
     return env
@@ -118,9 +119,10 @@ class Inactive(ValueError):
 
 
 class Sessions:
-    def __init__(self, path=None, *, op_timeout=None):
+    def __init__(self, path=None, *, op_timeout=None, stop_adapter=None):
         self.config = Path(path or config_path())
         self.op_timeout = op_timeout
+        self.stop_adapter = stop_adapter
 
     @property
     def path(self):
@@ -152,8 +154,12 @@ class Sessions:
         config path so a custom Sessions(path=...) never rereads the default
         or MINDIE_AGENT_CONFIG production state.
         """
-        with update_lock(self.config):
-            config = self._config()
+        # Stop only commits the existing capture queue. Holding the code
+        # cutover lock here would lose a once-delivered native Stop event.
+        with nullcontext() if operation == "stop_capture" else update_lock(self.config):
+            config = self.stop_adapter if operation == "stop_capture" and self.stop_adapter is not None else self._config()
+            if operation == "stop_capture":
+                payload = dict(payload, _adapter=config)
             helper = Path(runtime_scripts(config)) / "admission_ops.py"
             try:
                 completed = run(
@@ -161,7 +167,7 @@ class Sessions:
                     json.dumps(payload),
                     timeout=self.op_timeout,
                     max_output=32768,
-                    env=runtime_env(self.config),
+                    env=runtime_env(self.config, adapter=config),
                     allow_service=operation == "stop_capture",
                 )
                 envelope = json.loads(completed.stdout)

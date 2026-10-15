@@ -26,8 +26,8 @@ class ProfileUnavailable(ValueError):
     """Static caller guidance for an unsupported or replaced installation."""
 
 
-def _installed_profile(config, receipt):
-    adapter = read(config)
+def _installed_profile(config, receipt, *, adapter=None):
+    adapter = read(config) if adapter is None else adapter
     python = adapter.get("python")
     scripts = Path(runtime_scripts(adapter))
     if not isinstance(python, str) or not os.path.isabs(python):
@@ -75,7 +75,7 @@ def session_start(config):
     print(result.checked_stdout(), file=sys.stderr)
 
 
-def dispatch(args, config):
+def dispatch(args, config, *, stop_adapter=None):
     remaining = args.arguments
     if args.role == 'session-start':
         session_start(config)
@@ -101,11 +101,14 @@ def dispatch(args, config):
         runpy.run_path(str(script), run_name='__main__')
     else:
         from bounded_process import run
-        adapter = read(config)
+        adapter = stop_adapter if stop_adapter is not None else read(config)
         script = Path(runtime_scripts(adapter)) / target
         data = sys.stdin.read() if args.role == "stop" else ""
+        if args.role == "stop":
+            data = json.dumps(dict(adapter=adapter, hook_input=data))
+            arguments = ["stop", "--snapshot"]
         result = run([adapter["python"], "-I", str(script), *arguments],
-                     data, env=runtime_env(config), allow_service=True,
+                     data, env=runtime_env(config, adapter=adapter), allow_service=True,
                      allowed_returncodes=(0, 1, 2))
         print(result.checked_stdout(), end="")
         return result.returncode
@@ -121,6 +124,17 @@ def main():
     from bootstrap import preparing
     from session_gate import runtime_env
     with preparing("profile-binding"):
+        if args.role == "stop":
+            # Atomic canonical publication gives this invocation one complete
+            # runtime identity; its immutable engine can enqueue after retirement.
+            receipt = read(args.release / "runtime.json")
+            if receipt["python"] != sys.executable:
+                raise ValueError("release interpreter differs from its prepared runtime")
+            config = Path(os.environ.get("MINDIE_AGENT_CONFIG", Path.home() / ".config/mindie-agent/codex.json")).expanduser().absolute()
+            adapter = read(config)
+            _installed_profile(config, receipt, adapter=adapter)
+            bind_explicit_config(config)
+            return dispatch(args, config, stop_adapter=adapter)
         config = profile(
             args.release, args.source if args.role == 'session-start' else None,
             prepare=args.role != 'stop')

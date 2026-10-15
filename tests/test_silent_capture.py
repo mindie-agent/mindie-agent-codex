@@ -97,6 +97,26 @@ class SilentCaptureTests(unittest.TestCase):
         self.assertNotIn('OLD_OFF_WINDOW', captured['text'])
         self.assertEqual(self.accept(event)['capture_id'], result['capture_id'])
 
+    def test_stop_snapshot_queues_after_canonical_replacement_and_reads_live_consent(self):
+        event = self.event()
+        adapter = json.loads(self.config.read_text())
+        self.config.write_text("replaced canonical is not this invocation's binding")
+        with patch.object(admission_ops, "read_config", side_effect=AssertionError("reread")):
+            result = admission_ops.operation("stop_capture", dict(event=event, _adapter=adapter))
+        self.assertEqual(result["stage"], "accepted-local")
+        with closing(sqlite3.connect(self.root / "data/test/state-v1/state-v4.sqlite3")) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM captures").fetchone()[0], 1)
+        import consent
+        consent.record_choice("disabled", self.config)
+        self.wake.reset_mock()
+        with patch.object(codex_transcript, "capture_source", side_effect=AssertionError("disabled read")):
+            result = admission_ops.operation("stop_capture", dict(
+                event=dict(event, turn_id="later"), _adapter=adapter))
+        self.assertEqual(result["reason"], "sharing-disabled")
+        self.wake.assert_not_called()
+        with closing(sqlite3.connect(self.root / "data/test/state-v1/state-v4.sqlite3")) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM captures").fetchone()[0], 1)
+
     def test_scope_and_sibling_artifact_cannot_create_a_binding(self):
         result = self.accept(self.event(scope=self.root / 'other'))
         self.assertEqual(result['reason'], 'out-of-scope')

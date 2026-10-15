@@ -25,6 +25,8 @@ import secrets
 import sys
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from bounded_process import run
 import consent
 from runtime_probe import PROBE_MODULES

@@ -81,7 +81,10 @@ def checked_token(payload):
 
 
 def operation(name, payload):
-    config = read_config()
+    config = payload.get("_adapter") if name == "stop_capture" else None
+    config = read_config() if config is None else config
+    if not isinstance(config, dict):
+        raise ValueError("invalid internal Stop binding")
     store = admission(config)
     if name == "activate":
         root = payload.get("project_root")
@@ -153,9 +156,9 @@ def operation(name, payload):
         if not isinstance(session, str) or not IDENTITY.fullmatch(session):
             raise ValueError("Valid MindIE session identity required")
         import sharing
-        settings = sharing.read()
+        settings = sharing.read(adapter=config)
         if settings is None:
-            if sharing.status().get("state") == "disabled":
+            if sharing.status(adapter=config).get("state") == "disabled":
                 return dict(stage="inert", reason="sharing-disabled")
             return dict(stage="unavailable", reason="missing-configuration")
         if not settings['enabled'] or sharing.consent_allows(settings) is False:
@@ -164,7 +167,7 @@ def operation(name, payload):
         source = codex_transcript.capture_source(event.get('transcript_path'), session)
         candidate = dict(project_root=source['project_root'], root_session=session,
                          activated_at=max(settings['enabled_at'], source['created_at']))
-        if not sharing.capture_allowed(candidate, None):
+        if not sharing.capture_allowed(candidate, None, adapter=config):
             return dict(stage="inert", reason="out-of-scope")
         inspected = store.inspect(session)
         if inspected.get("status") == "unavailable":
