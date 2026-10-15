@@ -130,6 +130,7 @@
         "tests/test_locked_runtime.py::RuntimeTests.test_native_startup_window_covers_installation_without_changing_tool_timeouts"
       ],
       "evidence_refs": [
+        "docs/harness-interfaces.md#native-turn-interruption",
         "https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core-plugins/src/loader.rs",
         "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/core-plugins/src/loader.rs"
       ]
