@@ -83,8 +83,9 @@ def _bounded_path(value, name):
 _HOOK_TOKEN = re.compile(rb'["{}\[\]]')
 
 
-def _read_hook_stdin():
+def _read_hook_stdin(*, max_bytes=None):
     """Frame one byte-bounded event; wait for the caller while it owns us."""
+    max_bytes = MAX_HOOK_BYTES if max_bytes is None else max_bytes
     buf = bytearray()
     finished = threading.Event()
     errors = []
@@ -100,7 +101,7 @@ def _read_hook_stdin():
                 if not chunk:
                     return
                 buf.extend(chunk)
-                if len(buf) > MAX_HOOK_BYTES:
+                if len(buf) > max_bytes:
                     raise ValueError('hook event exceeds its byte bound')
                 pos = int(escaped)
                 escaped = False
@@ -901,7 +902,9 @@ def main():
     argv = _optional_config_prefix(sys.argv[1:])
     if argv == ["stop", "--snapshot"]:
         try:
-            envelope = json.loads(_read_hook_stdin())
+            # The raw event and 64 KiB adapter are already bounded. Re-encoding
+            # adds escaping/spacing plus the fixed envelope keys.
+            envelope = json.loads(_read_hook_stdin(max_bytes=2 * (MAX_HOOK_BYTES + 65536) + 64))
             if (not isinstance(envelope, dict) or set(envelope) != {"adapter", "hook_input"}
                     or not isinstance(envelope["hook_input"], str)):
                 raise ValueError("invalid internal Stop envelope")

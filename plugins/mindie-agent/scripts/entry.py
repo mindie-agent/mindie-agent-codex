@@ -103,9 +103,11 @@ def dispatch(args, config, *, stop_adapter=None):
         from bounded_process import run
         adapter = stop_adapter if stop_adapter is not None else read(config)
         script = Path(runtime_scripts(adapter)) / target
-        data = sys.stdin.read() if args.role == "stop" else ""
+        data = ""
         if args.role == "stop":
-            data = json.dumps(dict(adapter=adapter, hook_input=data))
+            from bridge import _read_hook_stdin
+            data = _read_hook_stdin().decode("utf-8")
+            data = json.dumps(dict(adapter=adapter, hook_input=data), ensure_ascii=False)
             arguments = ["stop", "--snapshot"]
         result = run([adapter["python"], "-I", str(script), *arguments],
                      data, env=runtime_env(config, adapter=adapter), allow_service=True,

@@ -15,6 +15,7 @@ from product_contract import package_files, source_identity, probe, identity, va
 from bootstrap_lock import exclusive_lock
 from diagnostic_fallback import _private_mkdir
 from bounded_process import run
+from windows_process import exec_or_wait
 
 
 @contextmanager
@@ -101,12 +102,13 @@ def ensure_runtime(source, data):
             # Hook output. It is diagnostic evidence, never readiness authority.
             descriptor, log = tempfile.mkstemp(prefix="prepare-", suffix=".log", dir=release)
             os.close(descriptor)
-            # Redirect before exec so installer progress survives caller loss;
-            # the existing owned runner still contains uv and all descendants.
-            redirect = ("import os,sys;"
+            # Keep the redirector alive until the real installer exits. Windows
+            # CRT exec starts a new PID; treating that redirector exit as uv's
+            # completion would make the owned runner terminate uv prematurely.
+            redirect = ("import os,sys,subprocess;"
                         "fd=os.open(sys.argv[1],os.O_WRONLY|os.O_APPEND);"
                         "os.dup2(fd,1);os.dup2(fd,2);os.close(fd);"
-                        "os.execv(sys.argv[2],sys.argv[2:])")
+                        "sys.exit(subprocess.run(sys.argv[2:]).returncode)")
             run([sys.executable, "-I", "-c", redirect, log, uv, "sync",
                  "--project", str(source), "--locked", "--no-editable", "--no-dev",
                  "--python", sys.executable], "", env=env).checked_stdout()
@@ -132,7 +134,9 @@ def publish_entry(python, scripts, release):
         f"entry={str(scripts / 'entry.py')!r}\n"
         "env={k:v for k,v in os.environ.items() if k!='PYTHONPATH'}\n"
         f"release={str(release)!r}\n"
-        "os.execve(python,[python,'-I',entry,'--release',release,*sys.argv[1:]],env)\n"
+        f"sys.path.insert(0,{str(scripts)!r})\n"
+        "from windows_process import exec_or_wait\n"
+        "exec_or_wait([python,'-I',entry,'--release',release,*sys.argv[1:]],env)\n"
     )
     target = release / "entry.py"
     if target.exists():
@@ -156,7 +160,7 @@ def main():
     data = Path(sys.argv[1])
     python, scripts, release = ensure_runtime(source, data)
     entry = release / "entry.py"
-    os.execve(str(python), [str(python), str(entry), *sys.argv[2:]], dict(os.environ))
+    exec_or_wait([str(python), str(entry), *sys.argv[2:]], dict(os.environ))
 
 
 if __name__ == "__main__":

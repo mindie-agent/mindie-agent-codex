@@ -279,17 +279,34 @@ if __name__ == "__main__":
         sys.stdout.buffer.write((json.dumps(call(payload), ensure_ascii=False) + "\n").encode("utf-8"))
         sys.stdout.buffer.flush()
     except Exception as exc:
+        try:
+            from mindie_knowledge.loop.transport import FeedUnavailableError
+        except ImportError:
+            # A missing runtime dependency must retain the original failure.
+            feed_unavailable = False
+        else:
+            feed_unavailable = isinstance(exc, FeedUnavailableError)
+        if feed_unavailable:
+            stage, execution = "query-source", "not_started"
+        message = (
+            "Knowledge query unavailable: a configured feed has no verified installed snapshot. "
+            "The query did not run; inspect the feed sync result. No automatic retry."
+            if feed_unavailable else
+            f"MindIE {stage}: {type(exc).__name__}; execution={execution}; no automatic retry."
+        )
         shaped = dict(
             content=[
                 dict(
                     type="text",
-                    text=f"MindIE {stage}: {type(exc).__name__}; execution={execution}; no automatic retry.",
+                    text=message,
                 )
             ],
             isError=True,
             structuredContent=dict(component="mindie-agent-codex", stage=stage,
                                    execution=execution, automatic_retry=False),
         )
+        if feed_unavailable:
+            shaped["structuredContent"]["code"] = "feed_unavailable"
         diagnostic = reference({"diagnostic": getattr(exc, "mindie_diagnostic", None)})
         # RequestRejected derives ValueError. MaintenanceCancelled may derive
         # RuntimeError; match the class name statically so discovery does not
@@ -298,6 +315,7 @@ if __name__ == "__main__":
         internal = (ImportError, AttributeError, KeyError, TypeError, RuntimeError)
         if (
             diagnostic is None
+            and not feed_unavailable
             and isinstance(exc, internal)
             and type(exc).__name__ != "MaintenanceCancelled"
         ):

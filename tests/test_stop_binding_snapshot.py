@@ -20,6 +20,34 @@ from update_lock import update_lock
 
 
 class StopBindingTests(unittest.TestCase):
+    def test_snapshot_framing_preserves_native_bound_with_escaped_maximum(self):
+        native_limit = 1024
+        prefix, suffix = b'{"body":"', b'"}'
+        body_size = native_limit - len(prefix) - len(suffix)
+        raw = prefix + b"\\\\" * (body_size // 2) + b"x" * (body_size % 2) + suffix
+        self.assertEqual(len(raw), native_limit)
+        encoded = json.dumps(dict(adapter={"text": "x" * 65520},
+                                  hook_input=raw.decode()), ensure_ascii=False).encode()
+        self.assertGreater(len(encoded), native_limit)
+        with patch.object(bridge, "MAX_HOOK_BYTES", native_limit), \
+                patch.object(bridge.sys.stdin, "fileno", return_value=0), \
+                patch.object(bridge.os, "read", return_value=raw):
+            self.assertEqual(bridge._read_hook_stdin(), raw)
+        with patch.object(bridge, "MAX_HOOK_BYTES", native_limit), \
+                patch.object(bridge.sys.stdin, "fileno", return_value=0), \
+                patch.object(bridge.os, "read", return_value=raw + b" "), \
+                self.assertRaisesRegex(ValueError, "byte bound"):
+            bridge._read_hook_stdin()
+        with patch.object(bridge, "MAX_HOOK_BYTES", native_limit), \
+                patch.object(sys, "argv", ["bridge.py", "stop", "--snapshot"]), \
+                patch.object(bridge.sys.stdin, "fileno", return_value=0), \
+                patch.object(bridge.os, "read", return_value=encoded), \
+                patch.object(bridge, "stop", return_value=0) as stop, \
+                self.assertRaises(SystemExit) as exited:
+            bridge.main()
+        self.assertEqual(exited.exception.code, 0)
+        self.assertEqual(stop.call_args.kwargs["hook_input"], raw.decode())
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -48,7 +76,7 @@ class StopBindingTests(unittest.TestCase):
 
         with patch.dict(os.environ, MINDIE_AGENT_CONFIG=str(self.config)), \
                 patch.object(sys, "argv", ["entry.py", "--release", str(self.release), "stop"]), \
-                patch.object(sys, "stdin", io.StringIO('{"hook_event_name":"Stop"}')), \
+                patch.object(bridge, "_read_hook_stdin", return_value=b'{"hook_event_name":"Stop"}'), \
                 patch.object(entry, "update_lock", side_effect=AssertionError("Stop took cutover lock")), \
                 patch.object(entry, "bind_explicit_config"), \
                 patch("bounded_process.run", side_effect=dispatch), redirect_stdout(io.StringIO()):
