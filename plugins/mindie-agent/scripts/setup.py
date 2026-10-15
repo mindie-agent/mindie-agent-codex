@@ -221,6 +221,10 @@ def install(args, parser):
         runtime_scripts=str(SCRIPTS),
         product_validation=validation,
     )
+    from diagnostic_support import capture_environment_context
+    diagnostic_context = capture_environment_context()
+    if diagnostic_context:
+        adapter["diagnostics_context"] = diagnostic_context
     write_private(config, adapter)
     if sharing_choice:
         # The explicit install-time choice lands directly in the consent

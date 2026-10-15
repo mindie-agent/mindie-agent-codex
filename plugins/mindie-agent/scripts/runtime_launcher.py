@@ -22,6 +22,8 @@ ROLES = {"knowledge-mcp": ("bridge.py", ["mcp"]),
 def selected(config, root, lifetime):
     with update_lock(config):
         value = json.loads(config.read_text(encoding="utf-8"))
+        from diagnostic_support import apply_environment_context
+        apply_environment_context(value)
         scripts = Path(value["runtime_scripts"]).resolve(strict=True)
         generation = scripts.parent.parent
         if generation.parent != (root / "generations").resolve() or scripts != generation / "plugin/scripts":

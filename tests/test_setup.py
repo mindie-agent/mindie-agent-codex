@@ -36,6 +36,29 @@ def run_setup(python, *args, real_probe=False, env=None):
 
 
 class SetupTests(unittest.TestCase):
+    def test_setup_saves_only_explicit_diagnostic_path_overrides(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            context = {
+                "MINDIE_DIAGNOSTICS_CONFIG": str(base / "policy.json"),
+                "MINDIE_DIAGNOSTICS_ROOT": str(base / "diagnostic-events"),
+            }
+            clean = {key: value for key, value in os.environ.items() if key not in context}
+            for explicit in (False, True):
+                folder = base / str(explicit)
+                config = folder / "codex.json"
+                env = dict(clean, **context) if explicit else clean
+                result = run_setup(sys.executable, "--config", config,
+                                   "--root", folder / "data", env=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                adapter = json.loads(config.read_text())
+                if explicit:
+                    self.assertEqual(adapter["diagnostics_context"], context)
+                else:
+                    self.assertNotIn("diagnostics_context", adapter)
+            self.assertFalse((base / "policy.json").exists())
+            self.assertFalse((base / "diagnostic-events").exists())
+
     def test_missing_dependencies_fail_clearly_before_any_write(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

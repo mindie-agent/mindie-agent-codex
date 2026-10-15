@@ -117,6 +117,8 @@ def generation_env(config=None):
     # user's profile, which disagrees with bounded_process's UTF-8 contract.
     env["PYTHONIOENCODING"] = "utf-8"
     selected = str(Path(config or config_path()).absolute())
+    from diagnostic_support import read_environment_context
+    env.update(read_environment_context(selected))
     env["MINDIE_AGENT_CONFIG"] = selected
     env[_DISPATCH_CONFIG] = selected
     return env

@@ -458,6 +458,8 @@ class Updater:
             CODEX_HOME=self.settings["codex_home"],
             MINDIE_CODEX_BIN=self.settings["codex"],
         )
+        from diagnostic_support import apply_environment_context
+        apply_environment_context(read(self.config), env)
         completed = run(
             [str(arg) for arg in args], data, timeout=timeout, env=env,
             allowed_returncodes=allowed_returncodes, transport=transport,
@@ -653,6 +655,8 @@ class Updater:
             {"revision": revision, "version": manifest["version"]},
         )
         mcp = read(plugin / ".mcp.json")
+        from diagnostic_support import environment_context
+        diagnostic_context = environment_context(read(self.config))
         for name, server in mcp["mcpServers"].items():
             server["command"] = self.settings["python"]
             role = {"mindie-knowledge": "knowledge-mcp", "mindie-remote-dev": "remote-mcp"}[name]
@@ -660,6 +664,7 @@ class Updater:
             server["cwd"] = str(self.root)
             env = dict(server.get("env") or {})
             env["MINDIE_AGENT_CONFIG"] = config_value
+            env.update(diagnostic_context)
             server["env"] = env
             server.pop("env_vars", None)
         atomic(plugin / ".mcp.json", mcp)
@@ -2169,6 +2174,20 @@ def enable(args):
     settings["schedule_mode"] = schedule_mode
     if not settings["codex"] or not settings["uv"]:
         raise ValueError("codex and uv are required")
+    from diagnostic_support import (
+        apply_environment_context,
+        capture_environment_context,
+        environment_context,
+    )
+    adapter_path = Path(settings["adapter_config"])
+    with update_lock(adapter_path, exclusive=True):
+        adapter = read(adapter_path)
+        context = environment_context(adapter)
+        context.update(capture_environment_context())
+        if context and adapter.get("diagnostics_context") != context:
+            adapter["diagnostics_context"] = context
+            atomic(adapter_path, adapter)
+    apply_environment_context(adapter)
     root.mkdir(parents=True, exist_ok=True)
     atomic(settings_path, settings)
     updater = Updater(settings_path)
@@ -2356,6 +2375,10 @@ def main():
     remove = sub.add_parser("uninstall")
     remove.add_argument("--purge", action="store_true")
     args = parser.parse_args()
+    if args.operation != "enable":
+        from diagnostic_support import apply_environment_context
+        selected_settings = read(args.settings)
+        apply_environment_context(read(selected_settings["adapter_config"], {}))
     if args.operation == "enable":
         result = enable(args)
     elif args.operation == "status":

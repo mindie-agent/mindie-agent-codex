@@ -24,7 +24,8 @@ class GenerationLeaseLifetimeTests(unittest.TestCase):
                 base = Path(temporary).resolve()
                 root = base / 'updates'; root.mkdir()
                 config, settings, ready = base / 'adapter.json', base / 'settings.json', base / 'child.pid'
-                for name in ('runtime_launcher.py', 'update_launcher.py', 'update_lock.py'):
+                for name in ('runtime_launcher.py', 'update_launcher.py', 'update_lock.py',
+                             'diagnostic_support.py'):
                     shutil.copy2(SCRIPTS / name, root / name)
                 for revision in ('old', 'new'):
                     generation = root / 'generations' / revision

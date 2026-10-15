@@ -454,6 +454,35 @@ class AutoUpdateTests(unittest.TestCase):
             (SCRIPTS / "windows_process.py").read_bytes(),
         )
 
+    def test_saved_diagnostic_context_survives_native_packaging_and_update(self):
+        context = {
+            "MINDIE_DIAGNOSTICS_CONFIG": str(self.base / "reporting.json"),
+            "MINDIE_DIAGNOSTICS_ROOT": str(self.base / "diagnostic-events"),
+        }
+        atomic(self.config, dict(read(self.config), diagnostics_context=context))
+        for iteration in range(2):
+            with self.subTest(iteration=iteration):
+                if iteration:
+                    script = self.remote / "plugins/mindie-agent/scripts/bridge.py"
+                    script.write_text(script.read_text(encoding="utf-8") + "\n# next candidate\n",
+                                      encoding="utf-8")
+                    self.commit("next candidate")
+                result = self.check()
+                self.assertEqual(result["status"], "installed")
+                self.assertEqual(read(self.config)["diagnostics_context"], context)
+                mcp = read(Path(result["current"]["plugin"]) / ".mcp.json")
+                for server in mcp["mcpServers"].values():
+                    self.assertEqual(server["env"], dict(
+                        context, MINDIE_AGENT_CONFIG=str(self.config.absolute())))
+                # The scheduler/helper command starts with a stripped host env.
+                with patch.dict(os.environ, {}, clear=True), patch("auto_update.run") as run:
+                    run.return_value.cleanup = []
+                    run.return_value.checked_stdout.return_value = "{}"
+                    Updater.command(self.updater, [sys.executable, "-c", "pass"])
+                    child_env = run.call_args.kwargs["env"]
+                    self.assertEqual({k: child_env[k] for k in context}, context)
+        self.assertFalse((self.base / "reporting.json").exists())
+
     def test_generated_bridge_init_binds_installation_config_without_env(self):
         result = self.check()
         self.assertEqual(result["status"], "installed")
@@ -1132,6 +1161,10 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertFalse((self.root / "launcher.next").exists())
 
     def test_manual_enable_installs_native_plugin_and_persists_manual_state(self):
+        context = {
+            "MINDIE_DIAGNOSTICS_CONFIG": str(self.base / "explicit-policy.json"),
+            "MINDIE_DIAGNOSTICS_ROOT": str(self.base / "explicit-events"),
+        }
         args = SimpleNamespace(
             source_root=self.remote,
             root=self.root,
@@ -1142,6 +1175,7 @@ class AutoUpdateTests(unittest.TestCase):
         with (
             patch("auto_update.Updater", LocalUpdater),
             patch("auto_update.schedule_enable") as schedule,
+            patch.dict(os.environ, context),
         ):
             result = auto_update.enable(args)
         schedule.assert_not_called()
@@ -1159,6 +1193,9 @@ class AutoUpdateTests(unittest.TestCase):
             current["version"], current["plugin"]
         )
         self.assertEqual(verified["version"], current["version"])
+        self.assertEqual(read(self.config)["diagnostics_context"], context)
+        for server in read(Path(current["plugin"]) / ".mcp.json")["mcpServers"].values():
+            self.assertEqual({key: server["env"][key] for key in context}, context)
 
 
 class UpdateIdleTests(unittest.TestCase):
