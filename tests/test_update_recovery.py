@@ -599,7 +599,7 @@ class LauncherTests(unittest.TestCase):
     def test_real_status_has_no_side_effects(self):
         for name in (
             "auto_update.py", "bounded_process.py", "windows_process.py",
-            "product_contract.py", "session_gate.py", "update_lock.py",
+            "product_contract.py", "session_gate.py", "update_lock.py", "capture_errors.py",
         ):
             shutil.copy(SCRIPTS / name, self.plugin / "scripts" / name)
         self.settings.write_text(json.dumps({

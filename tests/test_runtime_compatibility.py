@@ -59,6 +59,12 @@ class RuntimeCompatibilityTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'explicit history import is unavailable'):
             Probe('import mindie_knowledge.loop.history_import as H; H.import_transcript = None').probe_runtime(sys.executable)
 
+    def test_old_runtime_without_path_identity_is_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, "pinned runtime import"):
+            Probe("import mindie_knowledge.filesystem as F; del F.path_identity").probe_runtime(sys.executable)
+        with self.assertRaisesRegex(RuntimeError, "knowledge path identity API is incomplete"):
+            Probe("import mindie_knowledge.filesystem as F; F.resolved_path = None").probe_runtime(sys.executable)
+
     def test_unmodified_pinned_runtime_passes_candidate_private_probe(self):
         # The product envelope and setup boundary have independent tests.
         self.assertEqual(Probe('').probe_runtime(sys.executable).strip(), 'OK')

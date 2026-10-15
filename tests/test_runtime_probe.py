@@ -69,6 +69,14 @@ class RuntimeProbeTests(unittest.TestCase):
         self.assertEqual(receipt['candidate_revision'], 'a' * 40)
         self.assertEqual(receipt['runtime'], product_contract.requirements(self.source)[0])
 
+    def test_candidate_requires_safe_capture_failure_projection_module(self):
+        shutil.copytree(ROOT / "plugins/mindie-agent", self.scripts.parent,
+                        dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+        candidate_validate.adapter_check(self.source)
+        (self.scripts / "capture_errors.py").unlink()
+        with self.assertRaisesRegex(ValueError, "missing bounded runtime entry: capture_errors.py"):
+            candidate_validate.adapter_check(self.source)
+
     def test_exit1_after_valid_receipt_is_not_success(self):
         self.validator.write_text(RECEIPT + "raise RuntimeError('controlled failure')\n")
         with self.assertRaisesRegex(product_contract.CandidateValidationError, 'process: nonzero_exit'):

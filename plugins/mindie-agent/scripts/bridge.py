@@ -544,7 +544,8 @@ def stop():
         )
         failed = not _observe_stop(result)
     except Inactive as exc:
-        _record_stop("helper", "unavailable", exc)
+        detail = exc.failure or {"stage": "helper", "code": "unavailable"}
+        _record_stop(detail["stage"], detail["code"], exc)
         failed = True
     except Exception as exc:
         # The hook never propagates a failure into the original task.

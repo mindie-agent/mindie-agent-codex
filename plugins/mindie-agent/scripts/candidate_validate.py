@@ -75,6 +75,7 @@ def adapter_check(source):
         "candidate_validate.py",
         "product_contract.py",
         "admission_ops.py",
+        "capture_errors.py",
         "codex_transcript.py",
         "history_import.py",
         "agent_worker.py",

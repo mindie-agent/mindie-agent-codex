@@ -21,6 +21,7 @@ from pathlib import Path
 import re
 
 from bounded_process import run
+from capture_errors import validated_failure
 from update_lock import update_lock
 
 IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
@@ -127,7 +128,9 @@ def generation_env(config=None):
 
 
 class Inactive(ValueError):
-    pass
+    def __init__(self, message, *, failure=None):
+        super().__init__(message)
+        self.failure = validated_failure(failure)
 
 
 class Sessions:
@@ -184,7 +187,8 @@ class Sessions:
                     detail = str(detail)[:240]
                     if completed.cleanup:
                         detail += "; owned-process cleanup also failed; do not repeat the operation"
-                    raise Inactive(detail)
+                    raise Inactive(detail, failure=envelope.get("failure")
+                                   if isinstance(envelope, dict) else None)
                 completed.checked_stdout()
             except Inactive:
                 raise

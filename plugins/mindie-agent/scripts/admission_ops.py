@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import re
 import sys
+from capture_errors import TranscriptSourceError
 
 IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
 
@@ -202,9 +203,12 @@ def main():
         result = operation(sys.argv[1], payload)
         print(json.dumps(dict(ok=True, result=result), ensure_ascii=False))
     except Exception as exc:
+        result = dict(ok=False, error=f"{type(exc).__name__}: {str(exc)[:240]}")
+        if isinstance(exc, TranscriptSourceError):
+            result["failure"] = exc.failure
         print(
             json.dumps(
-                dict(ok=False, error=f"{type(exc).__name__}: {str(exc)[:240]}"),
+                result,
                 ensure_ascii=False,
             )
         )

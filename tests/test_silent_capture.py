@@ -12,6 +12,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from tests.process_fixtures import cleanup_temporary_directory
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
 sys.path.insert(0, str(SCRIPTS))
@@ -19,6 +20,7 @@ import admission_ops
 import agent_diagnostics
 import codex_transcript
 import diagnostic_support
+import bridge
 import sharing
 from mindie_knowledge.loop.activation import Admission
 from mindie_knowledge.loop.store import Store
@@ -28,7 +30,9 @@ class SilentCaptureTests(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
-        self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
+        temporary = tempfile.TemporaryDirectory()
+        self.stack.callback(cleanup_temporary_directory, temporary)
+        self.root = Path(temporary.name)
         self.profile = self.root / 'profile'
         self.config = self.root / 'adapter.json'
         self.engine = self.root / 'engine.json'
@@ -99,6 +103,25 @@ class SilentCaptureTests(unittest.TestCase):
             self.accept(self.event(owner='sibling'))
         self.assertFalse(self.admission.exists())
         self.wake.assert_not_called()
+
+    def test_source_failure_crosses_real_helper_and_remains_pending(self):
+        event = self.event()
+        foreign = self.root / "other-profile/sessions/task.jsonl"
+        foreign.parent.mkdir(parents=True)
+        foreign.write_bytes(Path(event["transcript_path"]).read_bytes())
+        event["transcript_path"] = str(foreign)
+        config = json.loads(self.config.read_text())
+        config.update(python=sys.executable, runtime_scripts=str(SCRIPTS))
+        self.config.write_text(json.dumps(config))
+        with patch.dict(os.environ, CODEX_THREAD_ID="current"), \
+                patch.object(bridge, "_read_hook_stdin", return_value=json.dumps(event).encode()):
+            self.assertEqual(bridge.stop(), 1)
+        projection = agent_diagnostics.pending()
+        item = projection["items"][0]
+        self.assertEqual(item["code"], "transcript_outside_profile")
+        self.assertEqual(item["stage"], "transcript")
+        self.assertNotIn(str(foreign), json.dumps(projection))
+        self.assertFalse(self.admission.exists())
 
     def test_fork_boundary_and_explicit_task_revocation_are_preserved(self):
         event = self.event(fork=True)

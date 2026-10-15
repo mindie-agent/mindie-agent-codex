@@ -23,6 +23,7 @@ hook uses a cheap structural precheck only.
 
 import json
 import math
+import ntpath
 import os
 from pathlib import Path
 import re
@@ -261,7 +262,19 @@ def canonical_root(value):
         raise SharingError("community project roots must be path strings")
     if not os.path.isabs(value):
         raise SharingError("community project roots must be absolute: " + value[:80])
-    return Path(value).resolve().as_posix()
+    if os.name == 'nt':
+        value = ntpath.abspath(value)
+        if not value.startswith('\\\\?\\'):
+            value = '\\\\?\\UNC\\' + value[2:] if value.startswith('\\\\') else '\\\\?\\' + value
+    root = str(Path(value).resolve())
+    if os.name == 'nt':
+        # Comparison only: preserve extended paths at the actual I/O boundary.
+        if root[:8].casefold() == '\\\\?\\unc\\':
+            root = '\\\\' + root[8:]
+        elif root.startswith('\\\\?\\'):
+            root = root[4:]
+        root = ntpath.normcase(root)
+    return Path(root).as_posix()
 
 
 def validate(settings):
@@ -439,11 +452,11 @@ def capture_allowed(lease, cwd, config_file=None):
     ):
         raise SharingError("capture lease metadata is incomplete")
     try:
-        root = Path(lease["project_root"]).resolve().as_posix()
+        root = Path(canonical_root(lease["project_root"]))
     except (OSError, ValueError) as exc:
         raise SharingError("capture lease scope is unreadable") from exc
     return any(
-        root == allowed or root.startswith(allowed + "/")
+        root.is_relative_to(Path(allowed))
         for allowed in settings["project_roots"]
     )
 

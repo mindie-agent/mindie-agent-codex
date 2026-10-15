@@ -209,7 +209,8 @@ class GateTests(SharingFixture):
             db.close()
         self.assertEqual(len(rows), 3)
         self.assertTrue(all(summary == '' for summary, _ in rows))
-        self.assertTrue(any(transcript == str(Path(event['transcript_path']).resolve()) for _, transcript in rows))
+        from mindie_knowledge.filesystem import resolved_path
+        self.assertTrue(any(transcript == str(resolved_path(event['transcript_path'])) for _, transcript in rows))
         with closing(Store(self.root / 'data', 'test')) as store:
             until = time.monotonic() + 5
             while time.monotonic() < until:

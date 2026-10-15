@@ -14,6 +14,20 @@ from session_gate import Sessions, Inactive
 
 
 class FailureVisibilityTests(unittest.TestCase):
+    def test_helper_failure_projection_accepts_only_static_codes(self):
+        for failure in ({"stage": "transcript", "code": "private/path"},
+                        {"stage": "transcript", "code": []},
+                        {"stage": "private/path", "code": "transcript_outside_profile"},
+                        {"stage": "transcript", "code": "transcript_outside_profile",
+                         "detail": "private task content"}):
+            with self.subTest(failure=failure):
+                self.assertIsNone(Inactive("private detail", failure=failure).failure)
+        self.assertEqual(
+            Inactive("private detail", failure={"stage": "transcript",
+                "code": "transcript_outside_profile"}).failure,
+            {"stage": "transcript", "code": "transcript_outside_profile"},
+        )
+
     def test_stop_result_failures_remain_visible_when_diagnostics_fail(self):
         with patch('diagnostic_support.failure', side_effect=OSError('fixture logging unavailable')):
             for result in (None, {}, {'stage': 'failed'}, {'stage': 'unsupported'}):
