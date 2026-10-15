@@ -95,6 +95,33 @@ class FoldFeedTests(unittest.TestCase):
         self.assertIn("invalid package", summary)
         self.assertIn("cleanup failed", summary)
 
+    def test_completed_sync_with_receipt_failure_keeps_installed_commit(self):
+        for status in ("synced", "unchanged"):
+            with self.subTest(status=status):
+                payload = [_row("a", status, commit="new", receipt_status="failed",
+                                receipt_error="OSError: receipt write denied")]
+                aggregate, rows, summary = fold_feed_results(json.dumps(payload))
+                self.assertEqual(aggregate, "degraded")
+                self.assertEqual(rows, payload)
+                self.assertIn("a:" + status, summary)
+                self.assertIn("receipt failed: OSError: receipt write denied", summary)
+
+    def test_mixed_results_keep_all_secondary_failures(self):
+        payload = [
+            _row("a", "synced", commit="new", cleanup_status="failed",
+                 cleanup_error="staging locked", receipt_status="failed",
+                 receipt_error="receipt denied"),
+            _row("b", "partial", commit="next", metadata_committed=True,
+                 failed_stage="material-promotion"),
+            _row("c", "deferred", retained_commit="old"),
+        ]
+        aggregate, rows, summary = fold_feed_results(json.dumps(payload))
+        self.assertEqual(aggregate, "degraded")
+        self.assertEqual(rows, payload)
+        self.assertIn("cleanup failed: staging locked", summary)
+        self.assertIn("receipt failed: receipt denied", summary)
+        self.assertIn("metadata committed", summary)
+
     def test_malformed(self):
         for raw in ("", "not-json", "{}", json.dumps(["x"]),
                     json.dumps([{"status": "synced"}]), "junk\n[]"):
@@ -154,12 +181,15 @@ class CheckKnowledgeTests(unittest.TestCase):
                   failed_stage="material-promotion", detail="current-file promotion failed")],
             [_row("a", "synced", commit="new", cleanup_status="failed",
                   cleanup_error="staging removal denied")],
+            [_row("a", "synced", commit="new", receipt_status="failed",
+                  receipt_error="OSError: receipt write denied")],
         ]
         for payload in payloads:
-            with self.subTest(payload=payload), patch.object(self.updater, "command", return_value=json.dumps(payload)), \
+            with self.subTest(payload=payload), patch.object(self.updater, "command", return_value=json.dumps(payload)) as sync, \
                  patch("auto_update.update_lock"), patch.object(self.updater, "_check_plugin", side_effect=lambda: self.updater.state) as plugin:
                 result = self.updater._check_locked()
             plugin.assert_called_once()
+            sync.assert_called_once()
             self.assertEqual(result["status"], "up_to_date")
             self.assertEqual(result["knowledge_status"], "degraded")
             self.assertEqual(result["knowledge_results"], payload)

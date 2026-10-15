@@ -117,8 +117,8 @@ def fold_feed_results(output):
     attempt: all-pending folds to deferred. Mix of completed (synced/unchanged)
     with pending or failed folds to degraded. No completed rows plus at least
     one unavailable/invalid/exhausted folds to sync_failed. A partial commit
-    or completed sync with failed cleanup folds to degraded; its original
-    completion, failure stage and cleanup receipt remain separate in the row.
+    or completed sync with failed cleanup or receipt recording folds to degraded;
+    its original completion and secondary failures remain separate in the row.
     Unknown status or malformed stdout raises.
     """
     text = (output or "").strip()
@@ -145,7 +145,9 @@ def fold_feed_results(output):
         rows.append(item)
     good = sum(1 for row in rows if row["status"] in _FEED_OK)
     pending = sum(1 for row in rows if row["status"] in _FEED_PENDING)
-    failed = sum(1 for row in rows if row["status"] in _FEED_ERROR or row.get("cleanup_status") == "failed")
+    failed = sum(1 for row in rows if row["status"] in _FEED_ERROR
+                 or row.get("cleanup_status") == "failed"
+                 or row.get("receipt_status") == "failed")
     partial = any(row["status"] in _FEED_PARTIAL for row in rows)
     if not rows or (good == len(rows) and not failed):
         aggregate = "ok"
@@ -169,7 +171,8 @@ def _feed_error_summary(rows):
     parts = []
     for row in rows:
         cleanup_failed = row.get("cleanup_status") == "failed"
-        if row["status"] in _FEED_OK and not cleanup_failed:
+        receipt_failed = row.get("receipt_status") == "failed"
+        if row["status"] in _FEED_OK and not cleanup_failed and not receipt_failed:
             continue
         details = []
         if row.get("metadata_committed") is True:
@@ -178,6 +181,8 @@ def _feed_error_summary(rows):
             details.append("stage=" + str(row["failed_stage"])[:80])
         if cleanup_failed:
             details.append("cleanup failed: " + str(row.get("cleanup_error") or "unknown cause")[:80])
+        if receipt_failed:
+            details.append("receipt failed: " + str(row.get("receipt_error") or "unknown cause")[:80])
         detail = row.get("detail") or row.get("cause")
         if detail:
             details.append(str(detail)[:80])
