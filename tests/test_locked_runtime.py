@@ -7,7 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
-from contextlib import redirect_stderr
+from contextlib import ExitStack, redirect_stderr
 from unittest.mock import patch
 SCRIPTS=Path(__file__).resolve().parents[1]/'plugins/mindie-agent/scripts'
 sys.path.insert(0,str(SCRIPTS))
@@ -26,6 +26,18 @@ class RuntimeTests(unittest.TestCase):
                                  MINDIE_DIAGNOSTICS_CONFIG=str(Path(temporary.name) / 'policy.json'))
         environment.start()
         self.addCleanup(environment.stop)
+        self.addCleanup(self.close_diagnostics, Path(temporary.name).absolute())
+
+    @staticmethod
+    def close_diagnostics(root):
+        from mindie_diagnostics import logging as diagnostic_logging
+        # The test owns this temporary root; release its cached file handlers
+        # before Windows attempts to remove the directory.
+        with diagnostic_logging._LOCK:
+            for key, recorder in list(diagnostic_logging._FAILURE_RECORDERS.items()):
+                if Path(key[1]) == root:
+                    recorder.close()
+                    del diagnostic_logging._FAILURE_RECORDERS[key]
 
     def test_preparation_failure_preserves_static_stage_without_secret_or_double_record(self):
         import diagnostic_support
@@ -210,7 +222,7 @@ class RuntimeTests(unittest.TestCase):
                     patch.object(product_contract, "identity", side_effect=AssertionError("warm source hash")):
                 self.assertEqual(entry.profile(release, prepare=False), config)
                 self.assertEqual(entry.profile(release, SCRIPTS.parent), config)
-                adapter["python"] = "/other/runtime"
+                adapter["python"] = str(root / "other" / "runtime")
                 config.write_text(json.dumps(adapter))
                 self.assertEqual(entry.profile(release), config)
                 self.assertEqual(json.loads(config.read_text()), adapter)
@@ -359,7 +371,7 @@ class RuntimeTests(unittest.TestCase):
         import mcp_gate
         import session_gate
         self.addCleanup(session_gate.bind_explicit_config, None)
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as owned:
             root = Path(directory)
             config = root / "adapter.json"
             old, new = root / "old", root / "new"
@@ -375,6 +387,9 @@ class RuntimeTests(unittest.TestCase):
                                          "MINDIE_REMOTE_STATE_DIR": str(root / "receipts")}), \
                     patch.object(mcp_gate, "runtime_env", return_value=dict(os.environ)):
                 gate = mcp_gate.Gate("remote")
+                owned.callback(lambda: [
+                    receipt._ownership.close() for receipt in gate._remote_receipts.values()
+                ])
                 request = {"id": 1, "params": {"name": "remote_read", "arguments": {"host": "fixture", "path": "/"}}}
                 first = gate.call(request, cli_identity=("task", None))
                 self.assertEqual(first["content"][0]["text"], "old")
@@ -425,7 +440,7 @@ class RuntimeTests(unittest.TestCase):
             config = root / "adapter.json"
             engine = root / "engine.json"
             engine.write_text(json.dumps({"transcript_adapter": "/wrong/adapter.py", "product_validation": {}}))
-            config.write_text(json.dumps(dict(python="/replacement/runtime", engine_config=str(engine),
+            config.write_text(json.dumps(dict(python=str(root / "replacement" / "runtime"), engine_config=str(engine),
                 runtime_scripts=str(SCRIPTS), product_validation={})))
             with patch.dict(os.environ, {"MINDIE_AGENT_CONFIG": str(config)}), \
                     patch.object(sys, "argv", ["entry", "--release", str(release), "stop"]), \

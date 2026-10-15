@@ -26,7 +26,7 @@ class UpdateTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.config = self.root / "config.json"
         self.env = dict(CODEX_HOME=str(self.root / "native"),
-                        MINDIE_CODEX_BIN="/fixture/codex")
+                        MINDIE_CODEX_BIN=str(self.root / "fixture" / "codex"))
         self.config.write_text(json.dumps(dict(native_context=self.env)))
         self.metadata = release_metadata.metadata(SCRIPTS.parent, "a" * 40)
         self.release = dict(id=1, tag_name="v0.0.1", draft=False, prerelease=False,
