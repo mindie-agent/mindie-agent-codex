@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -40,6 +41,14 @@ class ActivationTests(unittest.TestCase):
     def run_activation(self, states):
         with patch("mindie_knowledge.loop.handoff._probe", side_effect=states):
             return release_activation.activate(self.config, self.prepared, control_seconds=.5)
+
+    def test_isolated_installed_entry_resolves_its_own_modules(self):
+        result = subprocess.run(
+            [sys.executable, "-I", "-c",
+             "import runpy,sys;runpy.run_path(sys.argv[1],run_name='isolated_entry_test')",
+             str(SCRIPTS / "release_activation.py")],
+            capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_idle_prepare_ready_then_publish_preserves_consent(self):
         result = self.run_activation(["absent", "ready"])

@@ -10,6 +10,8 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from product_contract import read_json
 from session_gate import runtime_binding
 from update_lock import update_lock
