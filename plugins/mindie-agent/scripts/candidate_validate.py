@@ -60,11 +60,19 @@ def adapter_check(source):
     ):
         raise ValueError("informational skill must be available on demand")
     hooks = read_json(plugin / "hooks/hooks.json")[0]["hooks"]
-    if set(hooks) != {"SessionStart", "Stop"} or any(len(v) != 1 for v in hooks.values()):
-        raise ValueError("one SessionStart and one Stop hook are required")
+    if set(hooks) != {"SessionStart", "Stop", "Interrupt"} or any(len(v) != 1 for v in hooks.values()):
+        raise ValueError("one SessionStart, Stop and Interrupt hook group is required")
     entries = hooks["Stop"][0]["hooks"]
     if len(entries) != 1 or "timeout" in entries[0]:
         raise ValueError("Stop must not impose an execution deadline")
+    expected_interrupt = [
+        dict(type="mcp_tool", server=server, tool="mindie_interrupt",
+             input=dict(thread_id="${session_id}", turn_id="${turn_id}"),
+             timeout=3, statusMessage="MindIE cancellation")
+        for server in ("mindie-knowledge", "mindie-remote-dev")
+    ]
+    if hooks["Interrupt"][0]["hooks"] != expected_interrupt:
+        raise ValueError("Interrupt must target both exact native MCP turn controls")
     for name in (
         "session_gate.py",
         "mcp_gate.py",

@@ -25,7 +25,8 @@
     "native.mcp-identity",
     "native.transcript",
     "native.summary-exec",
-    "native.hook-management"
+    "native.hook-management",
+    "native.interrupt-hook"
   ],
   "interface_registry": {
     "native.version": {
@@ -302,6 +303,41 @@
         "docs/harness-interfaces.md#native-management",
         "https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/app-server-protocol/src/protocol/common.rs",
         "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/app-server-protocol/src/protocol/common.rs"
+      ]
+    },
+    "native.interrupt-hook": {
+      "supported": [
+        {
+          "minimum": "0.153.4",
+          "maximum": "0.153.4",
+          "maximum_inclusive": true,
+          "include_prerelease": false
+        },
+        {
+          "minimum": "0.162.0-alpha.17.2",
+          "maximum": "0.162.0-alpha.17.2",
+          "maximum_inclusive": true,
+          "include_prerelease": true
+        }
+      ],
+      "code_paths": [
+        "scripts/native_entry.py:write_manifests",
+        "scripts/mcp_gate.py:interrupt_turn",
+        "scripts/mcp_gate.py:native_turn_identity",
+        "scripts/native_hooks.py:_own_handler"
+      ],
+      "test_ids": [
+        "tests/test_native_interrupt.py::NativeInterruptTests.test_hidden_control_bypasses_full_capacity_and_preserves_standard_cancel",
+        "tests/test_native_interrupt.py::NativeInterruptTests.test_invalid_or_contradictory_control_never_cancels",
+        "tests/test_native_hook_entry.py::NativeHookEntryTests.test_interrupt_hooks_target_both_existing_connections_with_exact_identity",
+        "tests/test_native_hooks.py::HookTests.test_interrupt_trust_is_limited_to_exact_previously_approved_handlers"
+      ],
+      "evidence_refs": [
+        "docs/harness-interfaces.md#native-interrupt-hook",
+        "https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/hooks/src/events/interrupt.rs",
+        "https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/hooks/src/engine/mcp_runner.rs",
+        "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/hooks/src/events/interrupt.rs",
+        "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/hooks/src/engine/mcp_runner.rs"
       ]
     }
   }

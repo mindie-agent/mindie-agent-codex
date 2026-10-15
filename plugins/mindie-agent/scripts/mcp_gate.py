@@ -36,6 +36,7 @@ import receipt_layout
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
 KNOWLEDGE_MAX_OUTPUT = 1024 * 1024
 CATALOG = Path(__file__).with_name("mcp_catalog.json")
+INTERRUPT_TOOL = "mindie_interrupt"
 RECEIPT_SCHEMA = {
     "authority": ("table", "authority", "CREATE TABLE authority(identity TEXT PRIMARY KEY, schema TEXT NOT NULL)"),
     "attempts": ("table", "attempts", "CREATE TABLE attempts (identity TEXT PRIMARY KEY, started REAL NOT NULL, status TEXT NOT NULL, owner TEXT NOT NULL)"),
@@ -163,6 +164,34 @@ def native_identity(request):
                 "Contradictory native task identity metadata; call rejected"
             )
     return thread
+
+
+def native_turn_identity(request):
+    thread = native_identity(request)
+    turn = request["params"]["_meta"]["x-codex-turn-metadata"].get("turn_id")
+    if not isinstance(turn, str) or not IDENTITY.fullmatch(turn):
+        raise ValueError("Invalid native turn identity metadata")
+    return thread, turn
+
+
+def interrupt_turn(request, pending):
+    """Signal existing calls only; the native Hook does not assert completion."""
+    params = request.get("params")
+    arguments = params.get("arguments") if isinstance(params, dict) else None
+    meta = params.get("_meta") if isinstance(params, dict) else None
+    if not isinstance(arguments, dict) or set(arguments) != {"thread_id", "turn_id"}:
+        raise ValueError("Invalid native interrupt identity")
+    scope = arguments["thread_id"], arguments["turn_id"]
+    if not all(isinstance(value, str) and IDENTITY.fullmatch(value) for value in scope):
+        raise ValueError("Invalid native interrupt identity")
+    if not isinstance(meta, dict) or meta.get("threadId") != scope[0]:
+        raise ValueError("Contradictory native interrupt identity")
+    if "x-codex-turn-metadata" in meta and native_turn_identity(request) != scope:
+        raise ValueError("Contradictory native interrupt identity")
+    for event, identity in pending.values():
+        if identity == scope:
+            event.set()
+    return dict(content=[dict(type="text", text="{}")], isError=False)
 
 
 class RemoteReceipts:
@@ -582,11 +611,11 @@ def serve(surface):
                 method, identifier = message.get("method"), message.get("id")
                 if method == "notifications/cancelled":
                     with pending_lock:
-                        event = pending.get(
+                        call = pending.get(
                             (message.get("params") or {}).get("requestId")
                         )
-                        if event:
-                            event.set()
+                        if call:
+                            call[0].set()
                     continue
                 if identifier is None:
                     continue
@@ -608,6 +637,21 @@ def serve(surface):
                 elif method == "tools/list":
                     respond(identifier, dict(tools=gate.tools))
                 elif method == "tools/call":
+                    if (message.get("params") or {}).get("name") == INTERRUPT_TOOL:
+                        try:
+                            with pending_lock:
+                                if identifier in pending:
+                                    raise ValueError("Duplicate native interrupt request identity")
+                                result = interrupt_turn(message, pending)
+                        except ValueError as exc:
+                            result = call_failure(exc)
+                        respond(identifier, result)
+                        continue
+                    try:
+                        identity = native_turn_identity(message)
+                    except ValueError as exc:
+                        respond(identifier, call_failure(exc))
+                        continue
                     maintenance.trigger()
                     with pending_lock:
                         if (
@@ -622,7 +666,7 @@ def serve(surface):
                             )
                             continue
                         event = threading.Event()
-                        pending[identifier] = event
+                        pending[identifier] = event, identity
                     executor.submit(execute, message, event)
                 else:
                     send(
@@ -643,6 +687,6 @@ def serve(surface):
     finally:
         maintenance.close()
         with pending_lock:
-            for event in pending.values():
+            for event, _ in pending.values():
                 event.set()
         executor.shutdown(wait=True)

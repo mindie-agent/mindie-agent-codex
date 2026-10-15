@@ -70,6 +70,38 @@ class HookTests(unittest.TestCase):
         self.assertEqual(result, [dict(key=self.rows[0]["key"], event="sessionStart",
                                       hash="new-sessionStart")])
 
+    def test_interrupt_trust_is_limited_to_exact_previously_approved_handlers(self):
+        path = self.root / "hooks/hooks.json"
+        value = json.loads(path.read_text())
+        value["hooks"]["Interrupt"] = [{"hooks": [dict(
+            type="mcp_tool", server=server, tool="mindie_interrupt", timeout=3,
+            input=dict(thread_id="${session_id}", turn_id="${turn_id}"))
+            for server in ("mindie-knowledge", "mindie-remote-dev")]}]
+        path.write_text(json.dumps(value))
+        self.rows = [dict(
+            pluginId=native_hooks.PLUGIN,
+            key=f"{native_hooks.PLUGIN}:hooks/hooks.json:interrupt:0:{index}",
+            eventName="interrupt", handlerType="mcpTool", server=server,
+            tool="mindie_interrupt", timeoutSec=3, currentHash="old-" + server,
+            trustStatus="trusted", enabled=(index == 0), sourcePath=str(path))
+            for index, server in enumerate(("mindie-knowledge", "mindie-remote-dev"))]
+        approved = native_hooks.snapshot("/native", {}, self.root)
+        self.assertEqual(len(approved), 1)
+        self.rows[0].update(currentHash="new-knowledge", trustStatus="modified")
+        result = native_hooks.preserve("/native", {}, self.root, approved)
+        self.assertEqual(result["trusted"], 1)
+        self.assertEqual(self.writes, [(self.rows[0]["key"], "old-mindie-knowledge")])
+        self.assertFalse(self.rows[1]["enabled"])
+        for field, changed in (("server", "unrelated"), ("tool", "other_tool"),
+                               ("key", "other:interrupt:0:0"),
+                               ("sourcePath", str(self.root / "other.json"))):
+            with self.subTest(field=field):
+                original = self.rows[0][field]
+                self.rows[0][field] = changed
+                with self.assertRaises(ValueError):
+                    native_hooks.snapshot("/native", {}, self.root)
+                self.rows[0][field] = original
+
     def test_explicit_disable_or_revoked_trust_is_preserved(self):
         self.rows[0]["enabled"] = False
         with patch.object(self.api, "write_trust", return_value=False) as write:

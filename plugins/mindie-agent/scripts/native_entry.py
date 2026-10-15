@@ -131,6 +131,12 @@ def write_manifests(root):
     hooks = {name: [{"hooks": [{"type": "command", "statusMessage": "MindIE Agent",
                                **hook_commands(role)}]}]
              for name, role in (("SessionStart", "session-start"), ("Stop", "stop"))}
+    hooks["Interrupt"] = [{"hooks": [
+        dict(type="mcp_tool", server=server, tool="mindie_interrupt",
+             input=dict(thread_id="${session_id}", turn_id="${turn_id}"),
+             timeout=3, statusMessage="MindIE cancellation")
+        for server in ("mindie-knowledge", "mindie-remote-dev")
+    ]}]
     (root / "hooks/hooks.json").write_text(json.dumps({"hooks": hooks}, indent=2) + "\n")
     servers = {}
     for name, role in (("mindie-knowledge", "knowledge-mcp"),

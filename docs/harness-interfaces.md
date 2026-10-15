@@ -52,7 +52,7 @@ defines cancellation as optional. The gap below fails MindIE's required native
 interruption behavior; it is not a claim that the host violates a mandatory MCP
 feature.
 
-Native turn interruption is an open release gate as of 2026-10-16. In an isolated
+The standard notification gap was observed on 2026-10-16. In an isolated
 macOS Codex `0.153.4` experiment, `turn/interrupt` was acknowledged, the native
 turn became `interrupted`, and the host remained responsive. However, a pending
 `remote_read` operation's helper and SSH subtree remained alive throughout the
@@ -78,9 +78,61 @@ The adapter handles `notifications/cancelled` for the matching pending request;
 does not prove that native turn interruption sends the notification. The
 `native.legacy-mcp` registry entry continues to describe configuration/loading
 support, not successful native cancellation. This observation does not classify
-`0.162.0-alpha.17.2` as failed: that binary has not undergone this interrupt
-experiment. No polling supervisor or automatic operation replay is provided
-as a substitute for missing host delivery.
+`0.162.0-alpha.17.2` as failed: that binary has not undergone this
+standard-notification experiment. No polling supervisor or automatic operation replay is provided
+as a substitute for missing host delivery. The native Hook route below addresses
+the confirmed main-thread delivery gap without relying on that notification.
+
+## Native Interrupt Hook
+
+The plugin declares native `Interrupt` hooks of type `mcp_tool` for both existing
+MCP servers. They call the unadvertised `mindie_interrupt` control on the same
+connection, with `${session_id}` and `${turn_id}` from the native Hook event.
+The control checks the native `_meta.threadId` against its argument, then signals
+only pending requests whose independently validated native thread and turn both
+match. It runs on the MCP reader before the worker capacity gate, so occupied
+tool slots cannot block cancellation. It reuses the same cancellation Events
+and owned-process cleanup as standard `notifications/cancelled`.
+
+A neutral Hook result confirms that matching calls were signalled, not that
+their business effects were undone or that cleanup completed. Each original
+call retains its own outcome and cleanup evidence. Malformed or contradictory
+control identities fail without signalling any request. Neither requests in
+other threads nor later turns are cancelled, and no operation is replayed.
+The control is not exposed to the model through `tools/list`.
+
+Both exact supported source revisions contain `events/interrupt.rs` and
+`engine/mcp_runner.rs`, including turn input and MCP argument-template expansion.
+An isolated native `0.153.4` prototype confirmed hidden control dispatch to the
+existing connection while a real SSH call was pending. The input identity
+matched the pending call; the Hook's metadata contained `threadId` but no nested
+turn metadata. Translating the control to the existing cancellation path
+removed the owned helper/SSH subtree in 70.33 ms, with the native host still
+responsive and the stalled listener open. The experiment used no external
+model and restored its task configuration. This prototype is interface evidence;
+the final product wiring has separate component and native acceptance records.
+
+The product implementation was then exercised on the same exact native version
+with a task-local overlay of the candidate MCP entry and the original installed
+runtime. Both native Interrupt handlers completed, including the knowledge
+connection with no pending call. A passive wire observer forwarded bytes without
+creating or translating cancellation messages. The remote control signalled the
+product's existing Event; the actual helper and SSH subtree exited in 73.40 ms
+while the stalled listener remained open. The host reported `interrupted` and
+remained responsive. All three task configuration files were restored exactly;
+no external model, summary, authentication or remote command occurred. This
+proves the product cancellation route, separately from installation of a final
+locked package on each release platform.
+
+Native `Interrupt` is a main-thread event: the documented contract excludes idle
+threads and subagents. This route therefore does not claim subagent interrupt
+delivery. A separate native Windows `0.162.0-alpha.17.2` interface fixture
+also confirmed the hidden control on the existing connection, exact input
+thread/turn, `threadId` metadata and a responsive interrupted host. It used a
+minimal MCP stub, so it does not prove cleanup through the final installed
+MindIE package. Exact Hook approvals use the existing native
+trust API; only previously enabled and trusted own handlers inherit approval,
+and an explicit disablement or revoked approval is preserved.
 
 ## Runtime and ownership boundary
 

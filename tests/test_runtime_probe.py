@@ -94,6 +94,26 @@ class RuntimeProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing bounded runtime entry: capture_errors.py"):
             candidate_validate.adapter_check(self.source)
 
+    def test_candidate_requires_both_exact_native_interrupt_controls(self):
+        shutil.copytree(ROOT / "plugins/mindie-agent", self.scripts.parent,
+                        dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__", "build", "*.egg-info"))
+        path = self.scripts.parent / "hooks/hooks.json"
+        original = json.loads(path.read_text(encoding="utf-8"))
+        candidate_validate.adapter_check(self.source)
+        for change in ("missing", "server", "turn"):
+            with self.subTest(change=change):
+                value = json.loads(json.dumps(original))
+                entries = value["hooks"]["Interrupt"][0]["hooks"]
+                if change == "missing":
+                    entries.pop()
+                elif change == "server":
+                    entries[0]["server"] = "foreign-server"
+                else:
+                    entries[0]["input"]["turn_id"] = "unscoped-turn"
+                path.write_text(json.dumps(value), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Interrupt must target both exact"):
+                    candidate_validate.adapter_check(self.source)
+
     def test_exit1_after_valid_receipt_is_not_success(self):
         self.validator.write_text(RECEIPT + "raise RuntimeError('controlled failure')\n")
         with self.assertRaisesRegex(product_contract.CandidateValidationError, 'process: nonzero_exit'):

@@ -13,7 +13,7 @@ from product_contract import read_json
 PLUGIN = "mindie-agent@mindie-agent"
 MARKETPLACE = "mindie-agent"
 OFFICIAL_SOURCE = "https://github.com/mindie-agent/mindie-agent-codex.git"
-EVENTS = {"sessionStart": "SessionStart", "stop": "Stop"}
+EVENTS = {"sessionStart": "SessionStart", "stop": "Stop", "interrupt": "Interrupt"}
 
 
 class NativeHooks:
@@ -168,14 +168,33 @@ class NativeHooks:
             error.process_result = getattr(cleanup, "process_result", None)
 
 
-def _own_command(hook, source):
+def _own_handler(hook, source):
     event = EVENTS.get(hook.get("eventName"))
-    if event is None or hook.get("handlerType") != "command":
+    if event is None:
         return False
     path = Path(source) / "hooks/hooks.json"
     if Path(hook["sourcePath"]).resolve() != path.resolve():
         raise ValueError("native hook source differs from the selected plugin")
     commands = read_json(path)[0]["hooks"].get(event, [])
+    if event == "Interrupt":
+        if hook.get("handlerType") != "mcpTool":
+            return False
+        if len(commands) != 1 or len(commands[0].get("hooks", [])) != 2:
+            raise ValueError("selected plugin interrupt envelope is ambiguous")
+        for index, server in enumerate(("mindie-knowledge", "mindie-remote-dev")):
+            if hook.get("key") != f"{PLUGIN}:hooks/hooks.json:interrupt:0:{index}":
+                continue
+            value = commands[0]["hooks"][index]
+            if (value.get("type") != "mcp_tool" or value.get("server") != server
+                    or value.get("tool") != "mindie_interrupt"
+                    or value.get("input") != dict(thread_id="${session_id}", turn_id="${turn_id}")
+                    or hook.get("server") != server or hook.get("tool") != value["tool"]
+                    or hook.get("timeoutSec") != value.get("timeout")):
+                raise ValueError("native interrupt handler differs from the installed payload")
+            return True
+        raise ValueError("native interrupt identity differs from the installed payload")
+    if hook.get("handlerType") != "command":
+        return False
     if len(commands) != 1 or len(commands[0].get("hooks", [])) != 1:
         raise ValueError("selected plugin hook envelope is ambiguous")
     value = commands[0]["hooks"][0]
@@ -189,7 +208,7 @@ def snapshot(native, env, source):
     with NativeHooks(native, env) as api:
         return [dict(key=row["key"], event=row["eventName"], hash=row["currentHash"])
                 for row in api.hooks()
-                if _own_command(row, source)
+                if _own_handler(row, source)
                 and row.get("enabled") is True and row.get("trustStatus") == "trusted"]
 
 
@@ -206,7 +225,7 @@ def preserve(native, env, source, approved):
             previous = expected.get(key)
             if previous is None:
                 continue
-            if key in selected or not _own_command(row, source):
+            if key in selected or not _own_handler(row, source):
                 raise ValueError("selected native hook identity is ambiguous")
             selected[key] = row
         if selected.keys() != expected.keys():
@@ -230,7 +249,7 @@ def preserve(native, env, source, approved):
         for row in api.hooks():
             key = row["key"], row["eventName"]
             if key in remaining:
-                if (not _own_command(row, source) or row.get("enabled") is not True
+                if (not _own_handler(row, source) or row.get("enabled") is not True
                         or row.get("trustStatus") != "trusted"
                         or row.get("currentHash") != remaining[key]):
                     raise ValueError("native hook trust readback differs from the selected payload")

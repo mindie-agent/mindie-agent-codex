@@ -23,6 +23,34 @@
           }
         ]
       }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "mindie-knowledge",
+            "tool": "mindie_interrupt",
+            "input": {
+              "thread_id": "${session_id}",
+              "turn_id": "${turn_id}"
+            },
+            "timeout": 3,
+            "statusMessage": "MindIE cancellation"
+          },
+          {
+            "type": "mcp_tool",
+            "server": "mindie-remote-dev",
+            "tool": "mindie_interrupt",
+            "input": {
+              "thread_id": "${session_id}",
+              "turn_id": "${turn_id}"
+            },
+            "timeout": 3,
+            "statusMessage": "MindIE cancellation"
+          }
+        ]
+      }
     ]
   }
 }

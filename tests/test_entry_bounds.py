@@ -147,7 +147,7 @@ class EntryBoundsTests(unittest.TestCase):
 
     def test_session_start_prepares_the_fixed_release(self):
         hooks = json.loads((SCRIPTS.parent / "hooks/hooks.json").read_text())
-        self.assertEqual(set(hooks["hooks"]), {"SessionStart", "Stop"})
+        self.assertEqual(set(hooks["hooks"]), {"SessionStart", "Stop", "Interrupt"})
         self.assertEqual(len(hooks["hooks"]["SessionStart"]), 1)
 
 

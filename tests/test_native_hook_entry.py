@@ -61,6 +61,20 @@ class NativeHookEntryTests(unittest.TestCase):
         self.assertIn("--offline", native_entry.hook_commands("stop")["command"])
         self.assertIn("--no-python-downloads", native_entry.hook_commands("stop")["command"])
 
+    def test_interrupt_hooks_target_both_existing_connections_with_exact_identity(self):
+        from mcp_gate import INTERRUPT_TOOL
+        (self.source / ".codex-plugin").mkdir(parents=True)
+        (self.source / "hooks").mkdir()
+        (self.source / ".codex-plugin/plugin.json").write_text(json.dumps(dict(version="0.0.1")))
+        native_entry.write_manifests(self.source)
+        hooks = json.loads((self.source / "hooks/hooks.json").read_text())["hooks"]["Interrupt"]
+        self.assertEqual(hooks, [{"hooks": [
+            dict(type="mcp_tool", server=server, tool=INTERRUPT_TOOL,
+                 input=dict(thread_id="${session_id}", turn_id="${turn_id}"),
+                 timeout=3, statusMessage="MindIE cancellation")
+            for server in ("mindie-knowledge", "mindie-remote-dev")
+        ]}])
+
     def test_same_loaded_command_uses_exact_active_prepared_entry_without_native_cache(self):
         old = self.prepared("0.0.1")
         self.assertEqual(self.launch("stop")[0][0], str(old))
