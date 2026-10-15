@@ -13,6 +13,7 @@ import base64
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -30,7 +31,7 @@ import time
 import urllib.error
 import urllib.request
 
-from bounded_process import classify_transport_text, run
+from bounded_process import ProcessCleanupError, classify_transport_text, run
 from native_context import capture as capture_native_context
 import product_contract
 from session_gate import config_path, runtime_scripts
@@ -101,6 +102,10 @@ class InstallRollbackError(RuntimeError):
         self.rollback_exception = rollback
         super().__init__(f"install failed ({type(original).__name__}); "
                          f"rollback failed ({type(rollback).__name__}); inspect both recorded stages")
+
+
+class NativeOutcomeUnknown(RuntimeError):
+    """No native mutation may follow until exact read-only reconciliation."""
 
 
 _FEED_OK = frozenset({"synced", "unchanged"})
@@ -476,6 +481,8 @@ class Updater:
             self.state["process_cleanup"] = dict(
                 status="failed", execution=completed.execution, returncode=completed.returncode,
                 issues=completed.cleanup, automatic_retry=False)
+            if getattr(self, "_native_mutation_active", False):
+                raise ProcessCleanupError(completed)
         return completed.stdout
 
     def save(self, status, **values):
@@ -483,7 +490,10 @@ class Updater:
         if status in {"installed", "up_to_date"}:
             if (self.state.get("service_handoff") or {}).get("status") in {"failed", "pending"}:
                 self.state["status"] = "degraded"
-            if self.state.get("launcher_error") or self.state.get("process_cleanup") or self.state.get("state_persistence"):
+            if (self.state.get("launcher_error") or self.state.get("process_cleanup")
+                    or self.state.get("state_persistence")
+                    or (self.state.get("native_install") or {}).get("operation_error")
+                    or (self.state.get("native_install") or {}).get("record_error")):
                 self.state["status"] = "partial"
         if getattr(self, "_state_write_error", None) is not None:
             raise self._state_write_error
@@ -927,6 +937,146 @@ class Updater:
                 value.pop(key, None)
             atomic(path, value)
 
+    def _native_snapshot(self):
+        entry = self.native_plugin_entry()
+        if entry is None:
+            return None
+        version = entry.get("version")
+        if not isinstance(version, str) or Path(version).name != version or version in {".", ".."}:
+            raise RuntimeError("native inventory version is invalid")
+        cache = Path(self.settings["codex_home"]) / "plugins/cache/mindie-agent/mindie-agent" / version
+        if not cache.is_dir():
+            raise RuntimeError("selected native cache is missing")
+        digest = hashlib.sha256()
+        for path in sorted(cache.rglob("*")):
+            if "__pycache__" in path.relative_to(cache).parts or path.suffix == ".pyc":
+                continue
+            if path.is_symlink():
+                raise RuntimeError("selected native cache contains a symbolic link")
+            if not path.is_file():
+                continue
+            name = path.relative_to(cache).as_posix().encode("utf-8")
+            digest.update(len(name).to_bytes(8, "big") + name)
+            file_digest = hashlib.sha256()
+            with path.open("rb") as stream:
+                while chunk := stream.read(1024 * 1024):
+                    file_digest.update(chunk)
+            digest.update(file_digest.digest())
+        return dict(selection={key: entry.get(key) for key in
+                    ("pluginId", "name", "version", "installed", "enabled")},
+                    tree_sha256=digest.hexdigest())
+
+    def _native_fact(self, journal, receipt, *, required=False):
+        # Keep the observed result even when recording it fails.
+        journal["native_install"] = receipt
+        self.state["native_install"] = receipt
+        try:
+            atomic(self.root / "transaction.json", journal)
+        except Exception as exc:
+            receipt["record_error"] = dict(error_type=type(exc).__name__)
+            if required:
+                raise
+
+    def _verify_native_target(self, journal, target):
+        if target == "candidate":
+            candidate = journal["candidate_generation"]
+            if product_contract.source_identity(candidate["plugin"]) != candidate["package_sha256"]:
+                raise Incompatible("prepared plugin bytes changed after validation")
+            self.verify_native(candidate["version"], candidate["plugin"])
+            expected_market = self.root / "marketplace"
+        else:
+            if journal.get("rollback_registration_only"):
+                if self._native_snapshot() != journal["previous_native"]:
+                    raise RuntimeError("previous native selection or bytes changed")
+            else:
+                self.verify_native(journal["previous_version"], journal["previous_plugin"])
+            expected_market = journal.get("marketplace")
+        market = self.marketplace()
+        if expected_market is None:
+            if market is not None:
+                raise RuntimeError("native marketplace is unexpectedly registered")
+        elif not market or Path(market["root"]).resolve() != Path(expected_market).resolve():
+            raise RuntimeError("native marketplace does not match the transaction target")
+
+    def _reconcile_native(self, journal, receipt):
+        receipt.pop("observed_target", None)
+        try:
+            self._verify_native_target(journal, receipt["target"])
+        except Exception as read_error:
+            receipt.update(outcome="unknown", readback_error=type(read_error).__name__)
+            # Exact unchanged selection AND bytes prove no plugin replacement.
+            # Marketplace changes are repaired only after this proof.
+            if receipt.get("execution_settled") and "before_native" in receipt:
+                try:
+                    if self._native_snapshot() == receipt["before_native"]:
+                        market = self.marketplace()
+                        allowed = {str((self.root / "marketplace").resolve())}
+                        if journal.get("marketplace"):
+                            allowed.add(str(Path(journal["marketplace"]).resolve()))
+                        if market is None or str(Path(market["root"]).resolve()) in allowed:
+                            receipt["outcome"] = "unchanged"
+                except Exception as snapshot_error:
+                    receipt["snapshot_error"] = type(snapshot_error).__name__
+        else:
+            receipt["observed_target"] = "verified"
+            if (receipt.get("process") or {}).get("cleanup"):
+                # A matching directory is not proof that an unreaped writer
+                # cannot change it later. Preserve the observation and intent.
+                receipt["outcome"] = "unknown"
+            else:
+                receipt.update(outcome="verified", reconciled=True)
+            receipt.pop("readback_error", None)
+            receipt.pop("snapshot_error", None)
+        self._native_fact(journal, receipt)
+        return receipt["outcome"]
+
+    def _mutate_native(self, journal, target, mutation):
+        receipt = dict(target=target, outcome="not-started",
+                       before_native=(journal["previous_native"] if target == "candidate"
+                                      else self._native_snapshot()), execution_settled=False)
+        # This intent must be durable before register/remove/add can run.
+        receipt["outcome"] = "unknown"
+        try:
+            self._native_fact(journal, receipt, required=True)
+        except Exception as exc:
+            receipt["outcome"] = "not-started"
+            exc.native_receipt = receipt
+            raise
+        original = None
+        self._native_mutation_active = True
+        try:
+            mutation()
+            receipt["execution_settled"] = True
+        except BaseException as exc:
+            original = exc
+            receipt["operation_error"] = dict(error_type=type(exc).__name__,
+                                             message=str(exc)[:240])
+            process = getattr(exc, "process_result", None)
+            if process is not None:
+                receipt["process"] = dict(execution=process.execution,
+                                        returncode=process.returncode, cleanup=process.cleanup)
+                # The owned runner records every failed termination/reap.
+                # A timeout can have unknown effects but a fully stopped tree.
+                receipt["execution_settled"] = not process.cleanup
+            if not isinstance(exc, Exception):
+                self._native_fact(journal, receipt)
+                raise
+        finally:
+            self._native_mutation_active = False
+        outcome = self._reconcile_native(journal, receipt)
+        if outcome != "verified":
+            error = NativeOutcomeUnknown("native mutation outcome unknown; no automatic rollback or replay")
+            if outcome == "unchanged":
+                error = original or RuntimeError("native target was not installed; previous bytes are unchanged")
+            error.native_receipt = receipt
+            raise error from original
+        return receipt
+
+    def _install_native(self, market):
+        self.register(market)
+        self.command([self.settings["codex"], "plugin", "add",
+                      "mindie-agent@mindie-agent", "--json"])
+
     def recover(self):
         journal_path = self.root / "transaction.json"
         if not journal_path.exists():
@@ -934,9 +1084,26 @@ class Updater:
         journal = read(journal_path)
         prepared = journal.get("candidate_generation")
         selected = read(self.config)
-        if (isinstance(prepared, dict) and journal.get("generation_committed") is True
-                and selected.get("runtime_scripts") == str(Path(prepared["plugin"]) / "scripts")
-                and selected.get("product_validation") == prepared.get("validation")):
+        generation_matches = (
+            isinstance(prepared, dict) and journal.get("generation_committed") is True
+            and selected.get("runtime_scripts") == str(Path(prepared["plugin"]) / "scripts")
+            and selected.get("product_validation") == prepared.get("validation"))
+        receipt = journal.get("native_install")
+        if receipt is not None:
+            self.state["native_install"] = receipt
+            if receipt.get("outcome") != "not-started":
+                if self._reconcile_native(journal, receipt) == "unknown":
+                    raise NativeOutcomeUnknown("native mutation still unknown; read-only reconciliation failed")
+            if (receipt.get("target") == "candidate" and receipt.get("outcome") == "verified"
+                    and not journal.get("rollback_requested") and not generation_matches):
+                self.state.pop("state_persistence", None)
+                self._commit_generation(prepared, journal["adapter"], journal["capture_config"])
+                result = self._finish_generation(prepared)
+                handoff = self.state.get("service_handoff")
+                if isinstance(handoff, dict) and isinstance(handoff.get("retirement"), dict):
+                    self.restore_service(True, handoff, prepared)
+                return result
+        if generation_matches:
             # Native install and the adapter pointer may be proven complete
             # while the final state save failed. Reconcile that exact result,
             # never reinstall or infer a rollback from the missing bookkeeping.
@@ -956,6 +1123,21 @@ class Updater:
             )
             journal_path.unlink()
             return
+        if receipt is None:
+            # Legacy journals need the same proof before any rollback write.
+            if not prepared:
+                raise NativeOutcomeUnknown("legacy native transaction lacks exact reconciliation identity")
+            self.verify_native(prepared["version"], prepared["plugin"])
+            if not journal.get("marketplace"):
+                raise RuntimeError("legacy transaction has no previous marketplace for rollback")
+            journal["previous_plugin"] = journal.get("link") or str(
+                Path(journal["marketplace"]) / "plugins/mindie-agent")
+        if (not journal.get("marketplace") and receipt
+                and receipt.get("target") == "candidate" and receipt.get("outcome") == "verified"):
+            raise RuntimeError("candidate native install is verified; no previous marketplace exists for rollback")
+        if (receipt and receipt.get("target") == "candidate"
+                and receipt.get("outcome") == "verified" and not receipt.get("execution_settled")):
+            raise NativeOutcomeUnknown("native target observed but process cleanup is unconfirmed; no rollback")
         if journal.get("recoveries", 0) >= ATTEMPTS:
             raise RuntimeError(
                 "rollback needs operator attention; automatic recovery exhausted"
@@ -966,17 +1148,23 @@ class Updater:
         atomic(self.config, journal["adapter"])
         if journal.get("link"):
             link(self.root / "marketplace/plugins/mindie-agent", journal["link"])
-        if journal.get("marketplace"):
-            self.register(journal["marketplace"])
-            self.command(
-                [
-                    self.settings["codex"],
-                    "plugin",
-                    "add",
-                    "mindie-agent@mindie-agent",
-                    "--json",
-                ]
-            )
+        if not (receipt and receipt.get("outcome") == "not-started"):
+            restored = (receipt and receipt.get("target") == "previous"
+                        and receipt.get("outcome") == "verified")
+            if not restored:
+                journal["rollback_registration_only"] = bool(
+                    receipt and receipt.get("target") == "candidate"
+                    and receipt.get("outcome") in {"unchanged", "not-started"})
+                def restore_native():
+                    if journal.get("marketplace"):
+                        self.register(journal["marketplace"])
+                    elif self.marketplace() is not None:
+                        self.command([self.settings["codex"], "plugin", "marketplace",
+                                      "remove", "mindie-agent", "--json"])
+                    if not journal["rollback_registration_only"]:
+                        self.command([self.settings["codex"], "plugin", "add",
+                                      "mindie-agent@mindie-agent", "--json"])
+                self._mutate_native(journal, "previous", restore_native)
         # Retained caches must not pollute the rollback either: the native
         # selection after recovery has to be the version the journal restored.
         if journal.get("marketplace") and journal.get("previous_version"):
@@ -1024,6 +1212,93 @@ class Updater:
         result = json.loads(self.command([candidate["python"], helper, adapter["engine_config"]]))
         if result != {"status": "compatible"}:
             raise Incompatible("candidate did not confirm persisted-state compatibility")
+
+    def _commit_generation(self, candidate, adapter, capture_config):
+        engine = read(adapter["engine_config"])
+        # One committed generation: worker, transcript parser and
+        # interpreter move together; the neutral admission store and
+        # any legacy activation key are adapter-scope, not per
+        # generation. The old session_activation alias is removed
+        # instead of kept as a second name.
+        engine.pop("session_activation", None)
+        engine.pop("agent_command", None)
+        # Metadata policy belongs to the installed adapter. Capture
+        # config replaces retired user-selected worker arguments.
+        engine.update(
+            transcript_adapter=str(
+                Path(candidate["plugin"]) / "scripts/codex_transcript.py"
+            ),
+        )
+        engine.update(capture_config)
+        declaration, _ = product_contract.product(candidate["source"])
+        publication = declaration["publication"]
+        engine["product_validation"] = candidate["validation"]
+        for feed in engine.get("feeds", []):
+            if feed.get("repository") == publication["repository"]:
+                feed["contract_sha256"] = publication["contract_sha256"]
+        admission_path = engine.get("admission_path")
+        if not isinstance(admission_path, str):
+            admission_path = str(
+                self.config.with_name(self.config.stem + ".admission.sqlite3")
+            )
+            engine["admission_path"] = admission_path
+        engine_path = Path(candidate["plugin"]).parent / "engine.json"
+        atomic(engine_path, engine)
+        atomic(
+            self.config,
+            dict(
+                adapter,
+                python=candidate["python"],
+                engine_config=str(engine_path),
+                runtime_scripts=str(Path(candidate["plugin"]) / "scripts"),
+                admission_path=admission_path,
+                product_validation=candidate["validation"],
+                native_context=capture_native_context(
+                    home=self.settings["codex_home"], binary=self.settings["codex"]),
+            ),
+        )
+        try:
+            # Upgrade boundary: converge the community path and the
+            # consent authority once. A deferred migration is recorded
+            # truthfully and retried at the next entry attach; it
+            # never fails the completed update.
+            import consent as _consent
+            import sharing as _sharing
+
+            _consent.migrate_legacy(self.config)
+            _sharing.migrate_community_path(self.config)
+        except Exception as migration_exc:
+            self.state["settings_migration"] = (
+                "deferred: " + type(migration_exc).__name__
+            )
+        self.project_publication(declaration)
+        committed_journal = read(self.root / "transaction.json")
+        self._generation_committed = True
+        self.state.update(current=candidate, candidate=candidate["revision"])
+        committed_journal["native_install"] = self.state["native_install"]
+        committed_journal["generation_committed"] = True
+        atomic(self.root / "transaction.json", committed_journal)
+
+    def _finish_generation(self, candidate):
+        result = self.save(
+            "installed",
+            error=None,
+            original_install_error=None,
+            rollback_error=None,
+            current=candidate,
+            candidate=candidate["revision"],
+            activation="task authorization preserved; refreshed host definitions load in new tasks; changed hooks require native trust review",
+        )
+        (self.root / "transaction.json").unlink()
+        try:
+            self.publish_stable_launcher()
+        except Exception as exc:
+            result = self.save("partial", launcher_error=dict(
+                stage="publish_stable_launcher", error_type=type(exc).__name__,
+                generation_committed=True, automatic_retry=False))
+        else:
+            self.state.pop("launcher_error", None)
+        return result
 
     def install(self, candidate):
         # Actual-idle switching: the exclusive operation lock waits for any
@@ -1108,16 +1383,21 @@ class Updater:
                     raise RuntimeError("candidate knowledge store preparation did not confirm readiness")
                 market = self.root / "marketplace"
                 plugin_link = market / "plugins/mindie-agent"
-                previous_native = self.native_plugin_entry()
+                previous_native = self._native_snapshot()
                 journal = dict(
                     adapter=adapter,
                     candidate=candidate["revision"],
                     candidate_generation=candidate,
                     marketplace=existing["root"] if existing else None,
                     link=str(plugin_link.resolve()) if plugin_link.exists() else None,
-                    previous_version=(previous_native or {}).get("version"),
+                    previous_version=((previous_native or {}).get("selection") or {}).get("version"),
+                    previous_native=previous_native,
+                    previous_plugin=(str((Path(existing["root"]) / "plugins/mindie-agent").resolve()) if existing else None),
+                    capture_config=capture_config,
+                    native_install=dict(target="candidate", outcome="not-started"),
                 )
                 atomic(self.root / "transaction.json", journal)
+                self.state["native_install"] = journal["native_install"]
                 atomic(
                     market / ".agents/plugins/marketplace.json",
                     dict(
@@ -1139,111 +1419,32 @@ class Updater:
                 )
                 link(plugin_link, candidate["plugin"])
                 final_proven = False
-                self.register(market)
-                self.command(
-                    [
-                        self.settings["codex"],
-                        "plugin",
-                        "add",
-                        "mindie-agent@mindie-agent",
-                        "--json",
-                    ]
-                )
-                    # The add receipt is not proof: retained caches compete in
-                # native discovery. Verify the actual resolved version AND
-                # its bytes or roll back instead of reporting a fake
-                # installed state.
-                self.verify_native(candidate["version"], candidate["plugin"])
-                engine = read(adapter["engine_config"])
-                # One committed generation: worker, transcript parser and
-                # interpreter move together; the neutral admission store and
-                # any legacy activation key are adapter-scope, not per
-                # generation. The old session_activation alias is removed
-                # instead of kept as a second name.
-                engine.pop("session_activation", None)
-                engine.pop("agent_command", None)
-                # Metadata policy belongs to the installed adapter. Capture
-                # config replaces retired user-selected worker arguments.
-                engine.update(
-                    transcript_adapter=str(
-                        Path(candidate["plugin"]) / "scripts/codex_transcript.py"
-                    ),
-                )
-                engine.update(capture_config)
-                declaration, _ = product_contract.product(candidate["source"])
-                publication = declaration["publication"]
-                engine["product_validation"] = candidate["validation"]
-                for feed in engine.get("feeds", []):
-                    if feed.get("repository") == publication["repository"]:
-                        feed["contract_sha256"] = publication["contract_sha256"]
-                admission_path = engine.get("admission_path")
-                if not isinstance(admission_path, str):
-                    admission_path = str(
-                        self.config.with_name(self.config.stem + ".admission.sqlite3")
-                    )
-                    engine["admission_path"] = admission_path
-                engine_path = Path(candidate["plugin"]).parent / "engine.json"
-                atomic(engine_path, engine)
-                atomic(
-                    self.config,
-                    dict(
-                        adapter,
-                        python=candidate["python"],
-                        engine_config=str(engine_path),
-                        runtime_scripts=str(Path(candidate["plugin"]) / "scripts"),
-                        admission_path=admission_path,
-                        product_validation=candidate["validation"],
-                        native_context=capture_native_context(
-                            home=self.settings["codex_home"], binary=self.settings["codex"]),
-                    ),
-                )
-                try:
-                    # Upgrade boundary: converge the community path and the
-                    # consent authority once. A deferred migration is recorded
-                    # truthfully and retried at the next entry attach; it
-                    # never fails the completed update.
-                    import consent as _consent
-                    import sharing as _sharing
-
-                    _consent.migrate_legacy(self.config)
-                    _sharing.migrate_community_path(self.config)
-                except Exception as migration_exc:
-                    self.state["settings_migration"] = (
-                        "deferred: " + type(migration_exc).__name__
-                    )
-                self.project_publication(declaration)
-                committed_journal = read(self.root / "transaction.json")
-                committed_journal["generation_committed"] = True
-                atomic(self.root / "transaction.json", committed_journal)
+                self._mutate_native(journal, "candidate", lambda: self._install_native(market))
+                self._commit_generation(candidate, adapter, capture_config)
                 final_proven = True
                 installed = True
-                self._generation_committed = True
-                result = self.save(
-                    "installed",
-                    error=None,
-                    original_install_error=None,
-                    rollback_error=None,
-                    current=candidate,
-                    candidate=candidate["revision"],
-                    activation="task authorization preserved; refreshed host definitions load in new tasks; changed hooks require native trust review",
-                )
-                (self.root / "transaction.json").unlink()
-                installed = True
-                try:
-                    self.publish_stable_launcher()
-                except Exception as exc:
-                    result = self.save("partial", launcher_error=dict(
-                        stage="publish_stable_launcher", error_type=type(exc).__name__,
-                        generation_committed=True, automatic_retry=False))
-                else:
-                    self.state.pop("launcher_error", None)
-                return result
+                return self._finish_generation(candidate)
             except Exception as install_exc:
-                if installed:
+                if installed or getattr(self, "_generation_committed", False):
                     # Business publication completed; a later persistence or
                     # cleanup error must not replay installation or rollback.
+                    final_proven = True
                     raise
                 final_proven = False
+                journal = read(self.root / "transaction.json", {})
+                receipt = self.state.get("native_install", journal.get("native_install", {}))
+                if receipt.get("outcome") == "unknown":
+                    # Reconciliation already ran; never mutate from this catch.
+                    raise
+                if journal:
+                    journal["rollback_requested"] = True
+                    journal["native_install"] = receipt
+                    try:
+                        atomic(self.root / "transaction.json", journal)
+                    except Exception as record_exc:
+                        receipt["record_error"] = dict(error_type=type(record_exc).__name__)
+                        install_exc.add_note("Rollback intent recording failed: " + type(record_exc).__name__)
+                        raise install_exc
                 try:
                     self.recover()
                 except Exception as rollback_exc:
@@ -1717,6 +1918,10 @@ class Updater:
         except Exception as exc:
             if exc is getattr(self, "_state_write_error", None):
                 raise
+            if getattr(self, "_generation_committed", False):
+                return self.save("partial", error="generation committed; bookkeeping failed: " + type(exc).__name__,
+                                 operation_error=dict(stage="commit_record", error_type=type(exc).__name__,
+                                                      automatic_retry=False))
             kind = self._remember_attempt(record, exc)
             if kind == "quarantine":
                 return self.save(

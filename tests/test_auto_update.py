@@ -23,6 +23,7 @@ sys.path.insert(0, str(SCRIPTS))
 import auto_update
 import product_contract
 import candidate_validate
+from bounded_process import ProcessResult
 from auto_update import Updater, atomic, read
 from session_gate import Sessions, bind_explicit_config
 from update_lock import update_lock
@@ -32,9 +33,16 @@ class LocalUpdater(Updater):
     installs = 0
     builds = 0
     fail_install = False
+    fail_before_install = False
     idle = True
     knowledge_calls = 0
     fail_knowledge = False
+
+    @staticmethod
+    def completed_error(message):
+        error = RuntimeError(message)
+        error.process_result = ProcessResult("completed", returncode=1)
+        return error
 
     def command(self, args, **kwargs):
         args = [str(arg) for arg in args]
@@ -59,6 +67,9 @@ class LocalUpdater(Updater):
                 )
             elif args[1:3] == ["plugin", "add"]:
                 self.installs += 1
+                if self.fail_before_install:
+                    self.fail_before_install = False
+                    raise self.completed_error("fixture installation did not change native state")
                 # Simulate the proven native behavior (codex-cli 0.153.4,
                 # isolated CODEX_HOME): add prunes all other version
                 # directories and caches the marketplace plugin tree
@@ -80,8 +91,8 @@ class LocalUpdater(Updater):
                     ignore=shutil.ignore_patterns("__pycache__"),
                 )
                 if self.fail_install:
-                    self.fail_install = False  # Rollback CLI succeeds.
-                    raise RuntimeError("fixture installation failed")
+                    self.fail_install = False  # The actual native effect already completed.
+                    raise self.completed_error("fixture installation failed")
             elif args[1:3] == ["plugin", "list"]:
                 return json.dumps(self.native_list())
             return "{}"
@@ -320,7 +331,9 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertEqual(read(self.config)["runtime_scripts"], str(Path(result["current"]["plugin"]) / "scripts"))
         installs = self.updater.installs
         self.assertTrue((self.root / "transaction.json").exists())
-        refreshed = self.check()
+        with patch.object(self.updater, "_commit_generation",
+                          side_effect=AssertionError("committed generation must not be rewritten")):
+            refreshed = self.check()
         self.assertEqual(refreshed["status"], "up_to_date")
         self.assertEqual(self.updater.installs, installs)
         self.assertFalse((self.root / "transaction.json").exists())
@@ -816,20 +829,20 @@ class AutoUpdateTests(unittest.TestCase):
 
     def test_failed_install_rolls_back_and_stops_after_three_attempts(self):
         for _ in range(3):
-            self.updater.fail_install = True
+            self.updater.fail_before_install = True
             self.assertEqual(self.check()["status"], "update_failed")
             self.assertEqual(read(self.config), self.initial)
             self.assertEqual(
                 read(self.root / "fixture-marketplace.json")["root"], str(self.remote)
             )
-            self.assertFalse((self.cache / "bridge.py").exists())
+            self.assertTrue((self.cache / "bridge.py").exists())
             self.assertFalse((self.root / "transaction.json").exists())
         count = self.updater.installs
         self.assertEqual(self.check()["status"], "attempts_exhausted")
         self.assertEqual(self.updater.installs, count)
 
     def test_install_failure_survives_restoration_state_write_failure(self):
-        self.updater.fail_install = True
+        self.updater.fail_before_install = True
         original = auto_update.atomic
         def fail_restoration(path, value):
             if Path(path) == self.updater.state_path and (value.get('service_handoff') or {}).get('restoration'):
@@ -850,7 +863,9 @@ class AutoUpdateTests(unittest.TestCase):
         def crash(args, **kwargs):
             if ([str(a) for a in args][:3]
                     == [str(self.base / "fixture-codex"), "plugin", "add"]):
-                raise KeyboardInterrupt("simulated process loss")
+                error = KeyboardInterrupt("simulated process loss")
+                error.process_result = ProcessResult("not_started")
+                raise error
             return original(args, **kwargs)
 
         with patch.object(self.updater, "command", side_effect=crash):
@@ -862,6 +877,283 @@ class AutoUpdateTests(unittest.TestCase):
         self.assertTrue((self.root / "transaction.json").exists())
         self.assertEqual(self.check()["status"], "installed")
         self.assertEqual(self.updater.state["attempts"][self.sha]["count"], 2)
+
+    def test_applied_native_error_is_reconciled_without_reinstall(self):
+        self.updater.fail_install = True
+        result = self.check()
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["current"]["revision"], self.sha)
+        self.assertEqual(self.updater.installs, 1)
+        self.assertEqual(result["native_install"]["outcome"], "verified")
+        self.assertEqual(result["native_install"]["operation_error"]["error_type"], "RuntimeError")
+        self.assertEqual(read(self.config)["runtime_scripts"],
+                         str(Path(result["current"]["plugin"]) / "scripts"))
+        self.assertFalse((self.root / "transaction.json").exists())
+
+    def test_unknown_native_result_blocks_writes_until_later_exact_reconciliation(self):
+        original = self.updater.native_plugin_entry
+        def unavailable_after_mutation():
+            if self.updater.installs:
+                raise OSError("fixture inventory unavailable")
+            return original()
+        self.updater.fail_install = True
+        with patch.object(self.updater, "native_plugin_entry", side_effect=unavailable_after_mutation):
+            first = self.check()
+            self.assertEqual(first["native_install"]["outcome"], "unknown")
+            self.assertEqual(read(self.config), self.initial)
+            journal = read(self.root / "transaction.json")
+            with patch.object(self.updater, "register") as register:
+                second = self.check()
+            register.assert_not_called()
+            self.assertEqual(second["native_install"]["outcome"], "unknown")
+            self.assertEqual(self.updater.installs, 1)
+            self.assertNotIn("rollback_requested", journal)
+        result = self.check()
+        self.assertEqual(result["current"]["revision"], self.sha)
+        self.assertEqual(result["native_install"]["outcome"], "verified")
+        self.assertEqual(self.updater.installs, 1)
+        self.assertFalse((self.root / "transaction.json").exists())
+
+    def test_native_intent_record_failure_prevents_every_native_write(self):
+        original = auto_update.atomic
+        def fail_intent(path, value):
+            receipt = value.get("native_install", {})
+            if Path(path) == self.root / "transaction.json" and receipt.get("outcome") == "unknown":
+                raise PermissionError("fixture intent record rejected")
+            return original(path, value)
+        with patch("auto_update.atomic", side_effect=fail_intent), \
+                patch.object(self.updater, "register") as register:
+            result = self.check()
+        register.assert_not_called()
+        self.assertEqual(self.updater.installs, 0)
+        self.assertEqual(result["native_install"]["outcome"], "not-started")
+        self.assertEqual(result["native_install"]["record_error"]["error_type"], "PermissionError")
+        self.assertEqual(read(self.config), self.initial)
+
+    def test_verified_native_receipt_record_failure_preserves_adoption(self):
+        original = auto_update.atomic
+        failed = []
+        def fail_receipt_once(path, value):
+            receipt = value.get("native_install", {})
+            if (Path(path) == self.root / "transaction.json"
+                    and receipt.get("target") == "candidate" and receipt.get("outcome") == "verified"
+                    and not value.get("generation_committed") and not failed):
+                failed.append(True)
+                raise PermissionError("fixture native receipt record rejected")
+            return original(path, value)
+        with patch("auto_update.atomic", side_effect=fail_receipt_once):
+            result = self.check()
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["current"]["revision"], self.sha)
+        self.assertEqual(result["native_install"]["outcome"], "verified")
+        self.assertEqual(result["native_install"]["record_error"]["error_type"], "PermissionError")
+        self.assertEqual(self.updater.installs, 1)
+
+    def test_unknown_native_record_error_never_becomes_rollback_permission(self):
+        original = auto_update.atomic
+        inventory = self.updater.native_plugin_entry
+        def unavailable_after_mutation():
+            if self.updater.installs:
+                raise OSError("fixture readback unavailable")
+            return inventory()
+        def fail_outcome(path, value):
+            receipt = value.get("native_install", {})
+            if Path(path) == self.root / "transaction.json" and receipt.get("readback_error"):
+                raise PermissionError("fixture outcome record rejected")
+            return original(path, value)
+        self.updater.fail_install = True
+        with patch("auto_update.atomic", side_effect=fail_outcome), \
+                patch.object(self.updater, "native_plugin_entry", side_effect=unavailable_after_mutation):
+            result = self.check()
+        receipt = result["native_install"]
+        self.assertEqual(receipt["outcome"], "unknown")
+        self.assertEqual(receipt["record_error"]["error_type"], "PermissionError")
+        self.assertEqual(receipt["operation_error"]["error_type"], "RuntimeError")
+        self.assertEqual(self.updater.installs, 1)
+        self.assertEqual(read(self.config), self.initial)
+        self.assertEqual(read(self.root / "transaction.json")["native_install"]["outcome"], "unknown")
+
+    def test_known_candidate_local_commit_failure_can_restore_previous_package(self):
+        with patch.object(self.updater, "_commit_generation", side_effect=OSError("fixture local commit failed")):
+            result = self.check()
+        self.assertEqual(result["status"], "update_failed")
+        self.assertEqual(self.updater.installs, 2)
+        self.assertEqual(result["native_install"]["target"], "previous")
+        self.assertEqual(result["native_install"]["outcome"], "verified")
+        self.assertEqual(read(self.config), self.initial)
+        self.assertFalse((self.root / "transaction.json").exists())
+
+    def test_rollback_unknown_result_stays_latest_and_is_not_replayed(self):
+        inventory = self.updater.native_plugin_entry
+        def unavailable_after_rollback():
+            if self.updater.installs >= 2:
+                raise OSError("fixture rollback inventory unavailable")
+            return inventory()
+        with patch.object(self.updater, "_commit_generation", side_effect=OSError("fixture local commit failed")), \
+                patch.object(self.updater, "native_plugin_entry", side_effect=unavailable_after_rollback):
+            first = self.check()
+            self.assertEqual(first["native_install"]["target"], "previous")
+            self.assertEqual(first["native_install"]["outcome"], "unknown")
+            with patch.object(self.updater, "register") as register:
+                self.check()
+            register.assert_not_called()
+            self.assertEqual(self.updater.installs, 2)
+        # A later read-only reconciliation proves the rollback; recovery does
+        # not repeat it. This call deliberately stops before a new update tick.
+        journal = read(self.root / "transaction.json")
+        journal["native_install"]["execution_settled"] = False
+        atomic(self.root / "transaction.json", journal)
+        self.updater.recover()
+        self.assertEqual(self.updater.installs, 2)
+        self.assertEqual(read(self.config), self.initial)
+        self.assertFalse((self.root / "transaction.json").exists())
+
+    def test_committed_generation_journal_failure_is_partial_not_reinstalled(self):
+        original = auto_update.atomic
+        def fail_committed_marker(path, value):
+            if Path(path) == self.root / "transaction.json" and value.get("generation_committed"):
+                raise OSError("fixture committed journal unavailable")
+            return original(path, value)
+        with patch("auto_update.atomic", side_effect=fail_committed_marker):
+            result = self.check()
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["current"]["revision"], self.sha)
+        self.assertEqual(self.updater.installs, 1)
+        self.assertTrue((self.root / "transaction.json").exists())
+        self.check()
+        self.assertEqual(self.updater.installs, 1)
+        self.assertFalse((self.root / "transaction.json").exists())
+
+    def test_partial_registration_restores_only_registration_after_exact_unchanged_proof(self):
+        command = self.updater.command
+        failed = []
+        def interrupted(args, **kwargs):
+            args = list(map(str, args))
+            if args[1:4] == ["plugin", "marketplace", "add"] and not failed:
+                failed.append(True)
+                raise self.updater.completed_error("fixture registration interrupted after remove")
+            return command(args, **kwargs)
+        with patch.object(self.updater, "command", side_effect=interrupted):
+            result = self.check()
+        self.assertEqual(result["status"], "update_failed")
+        self.assertEqual(self.updater.installs, 0)
+        self.assertEqual(read(self.root / "fixture-marketplace.json")["root"], str(self.remote))
+        self.assertEqual(result["native_install"]["target"], "previous")
+        self.assertEqual(result["native_install"]["outcome"], "verified")
+        self.assertEqual(read(self.config), self.initial)
+
+    def test_restart_after_applied_native_crash_commits_without_another_native_write(self):
+        command = self.updater.command
+        def crash_after_effect(args, **kwargs):
+            result = command(args, **kwargs)
+            if list(map(str, args))[1:3] == ["plugin", "add"]:
+                raise KeyboardInterrupt("fixture process lost after native completion")
+            return result
+        with patch.object(self.updater, "command", side_effect=crash_after_effect):
+            with self.assertRaises(KeyboardInterrupt):
+                self.check()
+        self.assertEqual(read(self.root / "transaction.json")["native_install"]["outcome"], "unknown")
+        with patch.object(self.updater, "register") as register:
+            result = self.check()
+        register.assert_not_called()
+        self.assertEqual(result["current"]["revision"], self.sha)
+        self.assertEqual(self.updater.installs, 1)
+
+    def test_legacy_transaction_requires_exact_candidate_before_restoring_previous(self):
+        with patch.object(self.updater, "_commit_generation", side_effect=KeyboardInterrupt("fixture crash")):
+            with self.assertRaises(KeyboardInterrupt):
+                self.check()
+        journal = read(self.root / "transaction.json")
+        journal.pop("native_install")
+        journal.pop("capture_config")
+        atomic(self.root / "transaction.json", journal)
+        self.updater.recover()
+        self.assertEqual(self.updater.installs, 2)
+        self.assertEqual(read(self.config), self.initial)
+        self.assertFalse((self.root / "transaction.json").exists())
+
+    def test_first_registration_without_plugin_effect_can_restore_absent_marketplace(self):
+        (self.root / "fixture-marketplace.json").unlink()
+        self.updater.fail_before_install = True
+        with patch.object(self.updater, "native_plugin_entry", return_value=None):
+            result = self.check()
+        self.assertEqual(result["status"], "update_failed")
+        self.assertEqual(self.updater.installs, 1)
+        self.assertFalse((self.root / "fixture-marketplace.json").exists())
+        self.assertEqual(result["native_install"]["target"], "previous")
+        self.assertEqual(result["native_install"]["outcome"], "verified")
+        self.assertEqual(read(self.config), self.initial)
+
+    def test_same_version_different_native_bytes_cannot_authorize_rollback(self):
+        command = self.updater.command
+        def wrong_bytes(args, **kwargs):
+            result = command(args, **kwargs)
+            if list(map(str, args))[1:3] == ["plugin", "add"]:
+                version = self.updater.native_list()["installed"][0]["version"]
+                victim = self.updater.native_cache() / version / "scripts/bridge.py"
+                victim.write_text("fixture different executable bytes", encoding="utf-8")
+                raise RuntimeError("fixture install lost outcome")
+            return result
+        with patch.object(self.updater, "command", side_effect=wrong_bytes):
+            result = self.check()
+        self.assertEqual(result["native_install"]["outcome"], "unknown")
+        self.assertEqual(self.updater.installs, 1)
+        self.assertEqual(read(self.config), self.initial)
+        self.assertTrue((self.root / "transaction.json").exists())
+
+    def test_unchanged_snapshot_does_not_authorize_writes_without_process_cleanup_proof(self):
+        for cleanup in (None, [{"stage": "terminate_owned_tree", "error_type": "PermissionError"}]):
+            with self.subTest(cleanup=cleanup):
+                error = RuntimeError("fixture native caller lost")
+                if cleanup is not None:
+                    error.process_result = ProcessResult("unknown", cleanup=cleanup)
+                with patch.object(self.updater, "_install_native", side_effect=error) as install, \
+                        patch.object(self.updater, "register") as register:
+                    result = self.check()
+                install.assert_called_once()
+                self.assertEqual(result["native_install"]["outcome"], "unknown")
+                self.assertFalse(result["native_install"]["execution_settled"])
+                register.assert_not_called()
+                self.assertEqual(self.updater.installs, 0)
+                self.assertEqual(read(self.config), self.initial)
+                self.assertTrue((self.root / "transaction.json").exists())
+                # Independent fixture cases; no native effect occurred.
+                (self.root / "transaction.json").unlink()
+                self.updater.state = {}
+                atomic(self.updater.state_path, {})
+
+    def test_completed_candidate_with_cleanup_failure_cannot_authorize_rollback(self):
+        command = self.updater.command
+        def completion_with_live_descendant(args, **kwargs):
+            result = command(args, **kwargs)
+            if list(map(str, args))[1:3] == ["plugin", "add"]:
+                error = RuntimeError("fixture cleanup failed")
+                error.process_result = ProcessResult("completed", returncode=0, cleanup=[
+                    dict(stage="terminate_owned_tree", error_type="PermissionError")])
+                raise error
+            return result
+        with patch.object(self.updater, "command", side_effect=completion_with_live_descendant), \
+                patch.object(self.updater, "_commit_generation", side_effect=OSError("fixture commit failed")):
+            result = self.check()
+        self.assertEqual(result["native_install"]["outcome"], "unknown")
+        self.assertEqual(result["native_install"]["observed_target"], "verified")
+        self.assertFalse(result["native_install"]["execution_settled"])
+        self.assertEqual(self.updater.installs, 1)
+        self.assertTrue((self.root / "transaction.json").exists())
+        with patch.object(self.updater, "register") as register:
+            self.check()
+        register.assert_not_called()
+        self.assertEqual(self.updater.installs, 1)
+
+    def test_native_command_cleanup_failure_stops_the_next_mutation(self):
+        result = ProcessResult("completed", returncode=0, stdout="{}", cleanup=[
+            dict(stage="terminate_owned_tree", error_type="PermissionError")])
+        with patch("auto_update.run", return_value=result), \
+                patch.object(self.updater, "_native_mutation_active", True, create=True):
+            with self.assertRaises(auto_update.ProcessCleanupError) as caught:
+                Updater.command(self.updater, [self.settings, "fixture"])
+        self.assertIs(caught.exception.process_result, result)
+        self.assertEqual(self.updater.state["process_cleanup"]["issues"], result.cleanup)
 
     def test_release_channel_resolves_annotated_tag_to_exact_commit(self):
         self.git("tag", "-a", "v1.0.0", "-m", "release")
@@ -962,7 +1254,7 @@ class AutoUpdateTests(unittest.TestCase):
         self.remote.joinpath("marker").write_text("new revision", encoding="utf-8")
         self.commit("failing candidate")
         for _ in range(3):
-            self.updater.fail_install = True
+            self.updater.fail_before_install = True
             self.assertEqual(self.check()["status"], "update_failed")
         self.assertEqual(self.check()["status"], "attempts_exhausted")
         self.assertGreaterEqual(self.updater.knowledge_calls, 6)
@@ -994,27 +1286,23 @@ class AutoUpdateTests(unittest.TestCase):
         retained = self.updater.native_cache() / "0.1.0+codex.20260919061330608250/scripts/bridge.py"
         self.assertFalse(retained.exists())
 
-    def test_wrong_native_selection_is_visible_and_rolls_back(self):
-        # Inject an incorrect native readback after add, independently of the
-        # host's own cache retention/pruning policy.
+    def test_wrong_native_selection_is_visible_without_blind_rollback(self):
+        # Neither the candidate nor the previous selection can be proven.
         original = self.updater.native_list
-        reads = 0
-        def wrong_selection_once():
-            nonlocal reads
+        def wrong_selection():
             value = original()
-            reads += 1
-            if reads == 2:
+            if self.updater.installs:
                 value["installed"][0]["version"] = "0.0.0"
             return value
-        with patch.object(self.updater, "native_list", side_effect=wrong_selection_once):
+        with patch.object(self.updater, "native_list", side_effect=wrong_selection):
             result = self.check()
         self.assertEqual(result["status"], "update_failed")
-        self.assertIn("native plugin selection", result["error"])
+        self.assertIn("native mutation outcome unknown", result["error"])
         self.assertNotIn("current", self.updater.state)
         self.assertEqual(read(self.config), self.initial)
-        self.assertFalse((self.root / "transaction.json").exists())
-        self.assertEqual(original()["installed"][0]["version"],
-                         read(self.remote / "plugins/mindie-agent/.codex-plugin/plugin.json")["version"])
+        self.assertTrue((self.root / "transaction.json").exists())
+        self.assertEqual(self.updater.installs, 1)
+        self.assertEqual(result["native_install"]["outcome"], "unknown")
 
     def test_fetch_deadline_and_network_backoff_do_not_spawn_models(self):
         with patch.object(
