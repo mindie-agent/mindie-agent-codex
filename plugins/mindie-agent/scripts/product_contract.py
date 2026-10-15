@@ -24,22 +24,62 @@ FAILURE_CODES = {
     "adapter": {"adapter_incompatible", "release_state_undeclared", "release_version_mismatch"},
     "runtime_pins": {"package_missing", "receipt_missing", "receipt_invalid", "revision_mismatch", "metadata_unavailable"},
     "runtime_api": {"api_incompatible"},
-    "publication_fetch": {"fetch_failed", "revision_mismatch"},
+    "publication_fetch": {"init_failed", "fetch_failed", "revision_read_failed", "revision_mismatch"},
     "publication_contract": {"contract_mismatch", "read_failed", "validator_mismatch"},
     "receipt": {"receipt_mismatch"},
     "validation": {"internal_error"},
     "process": {"nonzero_exit"},
 }
 FAILURE_COMPONENTS = {"mindie-knowledge", "remote-dev"}
+PUBLICATION_PROCESS_CODES = {"init_failed", "fetch_failed", "revision_read_failed"}
+
+
+def _valid_process_failure(value):
+    if (not isinstance(value, dict)
+            or set(value) != {"execution", "reason", "returncode", "cleanup_failed"}
+            or type(value["execution"]) is not str
+            or type(value["reason"]) is not str
+            or value["execution"] not in {"not_started", "completed", "unknown"}
+            or type(value["cleanup_failed"]) is not bool):
+        return False
+    execution, reason, code = value["execution"], value["reason"], value["returncode"]
+    if code is not None and (type(code) is not int or not -(2 ** 31) <= code < 2 ** 32):
+        return False
+    if execution == "not_started" and code is not None:
+        return False
+    if execution == "completed" and code is None:
+        return False
+    if reason == "nonzero_exit":
+        return execution == "completed" and code != 0
+    if reason == "cleanup_failed":
+        return execution == "completed" and code == 0 and value["cleanup_failed"]
+    if reason == "spawn_failed":
+        return execution != "completed"
+    if reason in {"timeout", "output_limit"}:
+        return execution == "unknown"
+    if reason == "owner_exited":
+        return execution != "completed"
+    if reason == "cancelled":
+        return True
+    if reason == "process_failed":
+        return execution != "completed" or code == 0
+    return False
 
 
 class CandidateValidationError(RuntimeError):
-    """Only protocol-owned stage/code/component fields reach public callers."""
+    """Only protocol-owned fields and validated process facts reach callers."""
     def __init__(self, failure):
         self.stage = failure["stage"]
         self.code = failure["code"]
         self.component = failure.get("component")
+        self.process = failure.get("process")
         suffix = " (" + self.component + ")" if self.component else ""
+        if self.process is not None:
+            suffix += (
+                f" (execution={self.process['execution']}, reason={self.process['reason']},"
+                f" returncode={self.process['returncode']},"
+                f" cleanup_failed={self.process['cleanup_failed']})"
+            )
         super().__init__(f"Candidate validation failed at {self.stage}: {self.code}{suffix}; not retried")
 
 
@@ -51,10 +91,18 @@ def failure_receipt(output, expected, returncode):
         value = json.loads(output, object_pairs_hook=_object)
         failure = value["failure"]
         if (not isinstance(failure, dict)
-                or set(failure) not in ({"stage", "code"}, {"stage", "code", "component"})
+                or set(failure) not in (
+                    {"stage", "code"}, {"stage", "code", "component"},
+                    {"stage", "code", "process"},
+                )
                 or failure.get("stage") not in FAILURE_CODES
                 or failure.get("code") not in FAILURE_CODES[failure["stage"]]
                 or ("component" in failure and failure["component"] not in FAILURE_COMPONENTS)
+                or ("process" in failure and (
+                    failure["stage"] != "publication_fetch"
+                    or failure["code"] not in PUBLICATION_PROCESS_CODES
+                    or not _valid_process_failure(failure["process"])
+                ))
                 or value != dict(expected, status="failed", failure=failure)
                 or returncode == 0):
             return fallback

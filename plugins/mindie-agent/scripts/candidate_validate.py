@@ -24,10 +24,12 @@ from runtime_probe import build_probe_script
 
 
 class CheckFailure(ValueError):
-    def __init__(self, stage, code, component=None):
+    def __init__(self, stage, code, component=None, *, process=None):
         self.failure = dict(stage=stage, code=code)
         if component is not None:
             self.failure["component"] = component
+        if process is not None:
+            self.failure["process"] = process
         super().__init__(stage + ": " + code)
 
 
@@ -136,22 +138,54 @@ def runtime_check(scripts):
         raise ValueError(output.getvalue().strip() or "candidate runtime probe returned no result")
 
 
+def publication_git(args, code, env):
+    """Project only execution facts from one owned Git process."""
+    from bounded_process import run
+
+    try:
+        result = run(args, "", timeout=None, env=env, allowed_returncodes=None)
+    except Exception as exc:
+        result = getattr(exc, "process_result", None)
+        execution = result.execution if result is not None else "unknown"
+        returncode = result.returncode if result is not None else None
+        cleanup_failed = bool(result.cleanup) if result is not None else False
+        reason = "process_failed"
+        if execution == "not_started":
+            reason = "spawn_failed"
+        elif execution == "completed" and returncode != 0:
+            reason = "nonzero_exit"
+        elif execution == "unknown" and isinstance(exc, TimeoutError):
+            reason = "timeout"
+        raise CheckFailure("publication_fetch", code, process=dict(
+            execution=execution, reason=reason, returncode=returncode,
+            cleanup_failed=cleanup_failed,
+        )) from exc
+    if result.execution != "completed" or result.returncode != 0 or result.cleanup:
+        reason = ("process_failed" if result.execution != "completed"
+                  else "nonzero_exit" if result.returncode != 0 else "cleanup_failed")
+        raise CheckFailure("publication_fetch", code, process=dict(
+            execution=result.execution, reason=reason, returncode=result.returncode,
+            cleanup_failed=bool(result.cleanup),
+        ))
+    return result.stdout
+
+
 def publication_contract(publication):
     """One bounded, read-only fetch; no checkout, Git hooks or retries."""
-    from bounded_process import run
     from mindie_knowledge.publication_contract import read_git_contract
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1",
                GIT_CONFIG_GLOBAL=os.devnull)
     with tempfile.TemporaryDirectory(prefix="mindie-publication-contract-") as directory:
         git = ["git", "-c", "core.hooksPath=" + os.devnull, "-C", directory]
-        checked("publication_fetch", "fetch_failed", lambda: run(
-            git + ["init", "--bare", "--quiet"], "", timeout=None, env=env).checked_stdout())
-        checked("publication_fetch", "fetch_failed", lambda: run(
-            git + ["fetch", "--no-auto-maintenance", "--depth=1", "--no-tags",
-                   "https://github.com/" + publication["repository"] + ".git",
-                   publication["verified_commit"]], "", timeout=None, env=env).checked_stdout())
-        observed = checked("publication_fetch", "fetch_failed", lambda: run(
-            git + ["rev-parse", "FETCH_HEAD"], "", timeout=None, env=env).checked_stdout()).strip()
+        publication_git(git + ["init", "--bare", "--quiet"], "init_failed", env)
+        publication_git(git + [
+            "fetch", "--no-auto-maintenance", "--depth=1", "--no-tags",
+            "https://github.com/" + publication["repository"] + ".git",
+            publication["verified_commit"],
+        ], "fetch_failed", env)
+        observed = publication_git(
+            git + ["rev-parse", "FETCH_HEAD"], "revision_read_failed", env,
+        ).strip()
         if observed != publication["verified_commit"]:
             raise CheckFailure("publication_fetch", "revision_mismatch")
         try:
