@@ -29,25 +29,42 @@
 
 **MindIE Agent for OpenAI Codex CLI** (`mindie-agent-codex`) is the official native OpenAI Codex CLI plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent). Working directly inside your business repository and native Codex sessions, it provides **`vLLM-Ascend` domain knowledge retrieval**, **SSH remote Ascend NPU execution**, and a **privacy-gated experience loop**.
 
-Designed around the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md), the plugin works on demand with **zero daily activation ceremony**, while keeping all errors and uncertain external effects explicitly visible to the caller.
+Designed around the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md), **domain knowledge and the Skill system are invoked manually on demand via `/mindie-agent` (or `$mindie-agent`)** so they never interfere with unrelated tasks, while **`mindie-remote-dev` remote NPU tools trigger automatically by default** in everyday conversation—keeping all errors and uncertain external effects explicitly visible to the caller.
 
 ---
 
-## Why Use This Plugin?
+## Why Use This Plugin? (Trigger Modes & Usage Examples)
 
-Here are three practical ways `mindie-agent-codex` accelerates daily Ascend inference and `vLLM-Ascend` engineering:
+MindIE Agent uses a two-mode trigger model—**manual on-demand activation for domain knowledge & skills** plus **default automatic triggering for remote NPU execution**:
 
-### Scenario 1: Search Verified `vLLM-Ascend` Troubleshooting Cases on Demand (`mindie-knowledge`)
+| Capability | Trigger Mode | When to Use | How to Trigger |
+| :--- | :--- | :--- | :--- |
+| **Experience, Knowledge & Skill System**<br/>(`mindie-knowledge` + `mindie-agent` Skill) | **🎯 Manual Trigger** | When troubleshooting Ascend / `vLLM-Ascend` errors, adapting operators, debugging Graph Mode failures, or tuning performance/accuracy and you want historical experience, domain knowledge, and Skill guidance | Explicitly type **`/mindie-agent` (or `$mindie-agent`) + your problem description** |
+| **Remote Ascend NPU Execution**<br/>(`mindie-remote-dev` MCP toolset) | **⚡ Default Auto-Trigger** | When syncing local edits to a remote Ascend server/container, running NPU builds/tests, checking `npu-smi`, or streaming long job logs | **No prefix command needed**—just describe the remote task in natural language |
+
+### Scenario 1: Type `/mindie-agent` (or `$mindie-agent`) to Invoke Experience, Knowledge & Skills (Manual Trigger)
 > **The Problem**: Tracking down the exact root cause and environment conditions for an `HCCL` timeout, an `ACL` operator error, a Graph Mode compilation failure, or precision drift across scattered Issues takes hours.  
-> **How It Helps**: Paste the error output directly into Codex. The plugin searches locally synced [`knowledge-vllm-ascend`](https://github.com/mindie-agent/knowledge-vllm-ascend) packages using BM25 and block-citation retrieval, returning verified engineering cases with **applicable versions, evidence, and known caveats**.
+> **Copy-Paste Example**:
+> ```text
+> /mindie-agent I'm hitting an HCCL AllReduce timeout (hcclRet=4) running DeepSeek-R1 with vllm-ascend on 8x Ascend 910B (CANN 8.0.RC3). Please check past experience and help me find the root cause.
+> ```
+> **What Happens**: Typing `/mindie-agent` (or `$mindie-agent`) activates the `mindie-agent` Skill and searches locally synced [`knowledge-vllm-ascend`](https://github.com/mindie-agent/knowledge-vllm-ascend) packages using BM25 and block-citation retrieval, returning verified engineering cases with **applicable versions, evidence, and known caveats**.
 
-### Scenario 2: Edit Locally, Build & Test on Remote Ascend NPU Servers (`mindie-remote-dev`)
-> **The Problem**: You code on a macOS or Windows laptop while the Ascend NPU environment lives on a remote Linux server. Manually syncing patches and watching long test runs slows down every iteration.  
-> **How It Helps**: Ask Codex to *"sync my current patch to the remote Ascend server, run the unit tests, and stream the logs."* The `mindie-remote-dev` MCP server provides editor-grade remote file operations, patching, managed background jobs, live log streaming, and artifact sync over SSH—completely independent of knowledge capture consent.
+### Scenario 2: Everyday Conversation Automatically Triggers Remote Ascend NPU Execution (`mindie-remote-dev` Default Auto-Trigger)
+> **The Problem**: You code on a macOS or Windows laptop while the Ascend NPU environment lives on a remote Linux server or container. Manually syncing patches and watching long test runs slows down every iteration.  
+> **Copy-Paste Example (no slash command required)**:
+> ```text
+> Connect to the vllm_dev container on my remote 910B server, check current NPU memory usage, and sync my local rotary_embedding.py changes to run the corresponding pytest unit test.
+> ```
+> **What Happens**: The `mindie-remote-dev` MCP server is always on and **triggers automatically by default** whenever your prompt involves remote servers, containers, or NPU commands—providing editor-grade remote file operations, patching, managed background jobs, live log streaming, and artifact sync over SSH, completely independent of knowledge capture consent.
 
-### Scenario 3: Turn Debugging Sessions into Sanitized Community Knowledge (Opt-In)
+### Scenario 3: Invoke `/mindie-agent` & Turn Debugging Sessions into Sanitized Community Knowledge (Opt-In)
 > **The Problem**: Hard-won debugging insights usually vanish when a terminal session ends, yet sharing raw transcripts risks exposing internal IPs, keys, or private paths.  
-> **How It Helps**: Community sharing is **off by default**. Only when you explicitly opt in for an approved public repository does the plugin extract public conversation messages on `Stop` (or via explicit `history-import`), redact secrets locally with deterministic rules and Gitleaks `8.30.1`, generate block navigation summaries, and open a sanitized GitHub PR.
+> **Copy-Paste Example**:
+> ```text
+> /mindie-agent Help me diagnose this custom Ascend operator build failure using the knowledge base and our remote NPU container, and let's capture the sanitized takeaways once the test passes.
+> ```
+> **What Happens**: Community sharing is **off by default**. Only when you explicitly opt in for an approved public repository does the plugin extract public conversation messages on `Stop` (or via explicit `history-import`), redact secrets locally with deterministic rules and Gitleaks `8.30.1`, generate block navigation summaries, and open a sanitized GitHub PR.
 > - Read the **[Contribution Notice / 用户须知](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md)** for full details on visible-message filtering, redaction limits, and public Git history.
 > - For an optional multi-task Git worktree layout for `vllm` and `vllm-ascend`, see **[Workspace Setup](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md)** and [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace).
 
@@ -113,7 +130,7 @@ codex plugin list --json
 
 ## Everyday Usage & Operator Commands
 
-Ordinary tasks require **no operator commands** (you can also invoke `$mindie-agent` inside a session for interactive setup). To inspect status, update sharing consent, import historical sessions, or manage fault reporting, run `bridge` through the persistent release `entry.py`:
+Once installed, **`mindie-remote-dev` remote NPU tools trigger automatically by default** in everyday conversation; whenever you want to invoke historical Ascend experience, domain knowledge, and the Skill system, manually type **`/mindie-agent <problem description>`** (or **`$mindie-agent <problem description>`**) inside your session. To inspect status, update sharing consent, import historical sessions, or manage fault reporting, run `bridge` through the persistent release `entry.py`:
 
 | Action | Command Example | Description |
 |---|---|---|
