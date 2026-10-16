@@ -1,5 +1,7 @@
 # Public transcript capture
 
+[中文](public-transcript.zh.md) | English · [Documentation Index](README.en.md)
+
 The Codex reader retains native `response_item` public user/assistant text,
 including attributed commentary and final messages. It excludes tools, hidden
 reasoning, system/developer messages, injected catalogs, duplicate wrappers and

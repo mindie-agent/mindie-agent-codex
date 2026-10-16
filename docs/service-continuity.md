@@ -1,5 +1,7 @@
 # Installed service identity
 
+[中文](service-continuity.zh.md) | English · [Documentation Index](README.en.md)
+
 Native Codex owns plugin distribution and installed-state facts. uv prepares the
 complete locked, noneditable runtime. The shared Release selector chooses the
 highest compatible ordinary Release; the adapter projects it into the native

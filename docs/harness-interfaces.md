@@ -1,5 +1,7 @@
 # Codex Harness interface evidence
 
+[中文](harness-interfaces.zh.md) | English · [Documentation Index](README.en.md)
+
 The machine-checked registry is `plugins/mindie-agent/harness-compatibility.json`.
 It declares two singleton intervals: Codex `0.153.4` and
 `0.162.0-alpha.17.2`. The declaration does not claim continuous support between

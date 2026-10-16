@@ -1,5 +1,7 @@
 # Framework stability — 2026-09-28
 
+[中文](framework-stability.zh.md) | English · [Documentation Index](README.en.md)
+
 Historical evidence for the revisions named below. Current task admission,
 execution lifetime and diagnostic delivery are described in the [README](../README.md);
 older activation requirements and elapsed-time limits here are not current policy.
