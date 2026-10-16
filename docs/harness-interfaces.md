@@ -7,9 +7,10 @@ those endpoints. CI resolves each registered production symbol and test method,
 then uses the shared metadata validator to check every declared interval against
 every used interface.
 
-These are candidate interface declarations, not a released support guarantee or
-proof of cancellation for every native agent. The active-main-thread route and
-the unresolved child-agent boundary below have separate acceptance evidence.
+These declarations describe the tested interfaces, with the child-agent
+cancellation limitation below accepted for `0.0.1`. They do not imply
+cancellation support for every native agent. The active-main-thread route and
+the child-agent limitation have separate evidence.
 
 Official source revisions used for this boundary are
 `3d2ee51ca2d5db578f328aa75e20aa22c0197c9a` and
@@ -52,9 +53,10 @@ A local catalog source never participates in native Git-marketplace refresh.
 ## Native turn interruption
 
 The [MCP cancellation specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/utilities/cancellation)
-defines cancellation as optional. The gap below fails MindIE's required native
-interruption behavior; it is not a claim that the host violates a mandatory MCP
-feature.
+defines cancellation as optional. Missing delivery is an operational limitation,
+not a claim that the host violates a mandatory MCP feature. The plugin addresses
+the main-thread case through the native Hook below and documents the child case
+as a known limitation.
 
 The standard notification gap was observed on 2026-10-16. In an isolated
 macOS Codex `0.153.4` experiment, `turn/interrupt` was acknowledged, the native
@@ -160,7 +162,20 @@ MindIE package. Exact Hook approvals use the existing native
 trust API; only previously enabled and trusted own handlers inherit approval,
 and an explicit disablement or revoked approval is preserved.
 
-## Child-agent cancellation remains a release gate
+## Known limitation: child-agent cancellation
+
+The missing child cancellation signal is an accepted known limitation of
+`0.0.1`, not a release blocker. An interrupted child turn can leave its pending
+local helper/SSH operation running. If a remote command has already started,
+its execution or side effects may also continue; a native `interrupted` result
+does not establish remote cancellation or rollback. Deliberately durable remote
+jobs have a separate job identity and lifecycle: local transport cleanup is not
+proof that a job stopped.
+
+The plugin retains its existing main-thread Interrupt, standard MCP cancellation
+and connection-EOF cleanup paths. It adds no compensating watcher, process
+registry, arbitrary business deadline or privately distributed Harness.
+This limitation does not disable normal capture, summary or update behavior.
 
 Separate native experiments on macOS `0.153.4` and native Windows
 `0.162.0-alpha.17.2` spawned a child with its own pending MCP request, then
@@ -181,6 +196,15 @@ The separate alpha `close_agent` exploration repeated calls because of a fixture
 loop defect and has no valid one-shot close receipt. It is not a substitute for
 the child-interrupt test.
 
+An independent check of official `0.163.0` on 2026-10-16 used the exact macOS ARM
+asset and source commit `83086188ae0614bd882818ff1aa23f3194962012`.
+After the parent completed, direct child interruption again produced
+`interrupted` without cancellation, request release or EOF during an eight-second
+observation. The same MCP process and host remained alive and the host responded.
+The probe failed explicitly, then fixture cleanup completed without failure.
+It used three loopback synthetic responses and no external model requests.
+This narrow experiment does not add `0.163.0` to the plugin's supported versions.
+
 Both exact source revisions explicitly skip `Interrupt` for subagents.
 `SubagentStop` can run in the child's execution context, but is dispatched on
 normal completion; the `TurnAborted` path does not dispatch it. `SessionEnd` is
@@ -189,14 +213,23 @@ cannot deliver the missing child cancellation signal. The locked SDK exposes
 explicit request cancellation but does not automatically cancel when the
 response future is dropped.
 
-The minimum upstream repair belongs at the Harness's submitted MCP request
-boundary: retain the exact connection/request ID, disarm on a consumed terminal
-response, and send standard cancellation when the owning future is dropped.
-Legacy calls and modern continuations must use the same ownership rule. A
-task-local proposal is under review; no installed Harness was patched and it
-does not close this gate. Notification dispatch is not proof of rollback or
-server-side cleanup. Until that native behavior is implemented and verified,
-the main-thread passes must not be described as all-agent cancellation support.
+Follow-up is tracked in [openai/codex#26956](https://github.com/openai/codex/issues/26956),
+where supplementary direct-child evidence has been posted. Isolated validation
+reused [euri10's existing request-scoped cancellation patch](https://github.com/euri10/codex/commit/e3f31734819f7e414972c7ec19b83938cb71e476)
+without evolving a separate implementation. Full MCP-client tests passed on
+macOS and WSL. A local experimental binary delivered exact request cancellation
+in a protocol fixture; a separate installed MindIE child invocation reclaimed
+six local helper/SSH processes in about 266 ms while preserving the same MCP,
+native host and stalled listener. The listener supplied no SSH banner, so this
+did not execute or stop a remote command. The parent had completed, and the
+selected child MCP was initialized before the operation; active-parent
+propagation and cold-start performance were not established.
+
+Those results belong to an isolated patched Harness, not an official release or
+the plugin payload. Official adoption and a released version still need their
+own verification before this limitation can be removed. Notification dispatch
+alone is not proof of rollback or server-side cleanup, and main-thread passes
+must not be described as all-agent cancellation support.
 
 ## Runtime and ownership boundary
 

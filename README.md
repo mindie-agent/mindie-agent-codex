@@ -42,8 +42,7 @@ user manager, unsupported version or unverified containment is reported as a
 service error; the plugin does not silently start an unprotected replacement.
 Check the user manager with `systemctl --user show --property=Version`.
 
-The first ordinary release is `0.0.1` (`v0.0.1`). It is still being prepared;
-these release commands become usable only after the release catalog exists:
+Install `0.0.1` from its immutable Release tag, `v0.0.1`:
 
 Run these commands in a macOS/WSL shell or native Windows PowerShell, using the
 same Codex profile throughout:
@@ -57,7 +56,7 @@ codex plugin add mindie-agent@mindie-agent --json
 codex plugin list --json
 ```
 
-Check the actual CLI version against the candidate interface declaration below
+Check the actual CLI version against the supported versions below
 and confirm that the native installed record reports `mindie-agent@mindie-agent`,
 version `0.0.1`, enabled in the intended profile. Start a new native Codex session
 to complete preparation, then confirm native tool discovery exposes both
@@ -66,8 +65,8 @@ listing alone does not prove that the MCP servers are ready. Preserve any
 initialization failure instead of treating missing tools as a completed install.
 
 The initial Git catalog uses the immutable Release tag, so a native refresh
-cannot advance it to an unselected version. Candidate acceptance uses an explicit
-candidate Git ref. Native Codex owns plugin registration, installation and removal;
+cannot advance it to an unselected version.
+Native Codex owns plugin registration, installation and removal;
 the shared Release selector supplies only the highest compatible ordinary Release.
 There is no MindIE code-update daemon.
 
@@ -204,13 +203,18 @@ with reporting off; the diagnostics component owns reporter scheduling. See the 
 ## Updates and failures
 
 Each Release includes [Harness compatibility and interface declarations](plugins/mindie-agent/harness-compatibility.json).
-The candidate registry declares exactly `0.153.4` and `0.162.0-alpha.17.2`;
+The registry declares exactly `0.153.4` and `0.162.0-alpha.17.2`;
 these two version points do not imply support for versions between them.
 Initial preparation checks the actual selected executable. The
-[child-agent cancellation gate](docs/harness-interfaces.md#child-agent-cancellation-remains-a-release-gate)
-is still open on those official versions, so the declaration is not a complete
-release acceptance claim. A task-local patched executable does not establish
-support for an unmodified official binary.
+[child-agent cancellation limitation](docs/harness-interfaces.md#known-limitation-child-agent-cancellation)
+is accepted for `0.0.1`: an interrupted child turn may leave its pending local
+helper/SSH operation and any already-started remote command running. The native
+main-thread Interrupt route is verified separately; ordinary capture, summary
+and update behavior is unchanged. Durable remote jobs have their own job
+lifecycle, and a turn interruption does not confirm that such a job stopped.
+The plugin adds no compensating watcher, arbitrary business deadline or private
+Harness distribution. An official fix remains follow-up work; experimental
+patched executables do not expand the declared support.
 
 After 24 hours since the last successful Release check, the next natural MCP use
 starts one background check. A successful check with no newer Release also advances
@@ -242,7 +246,7 @@ Prepared candidates retry this control boundary without refetching or reinstalli
 Existing facades dispatch subsequent calls to the complete selected runtime, with no
 reload prompt. Saved contribution scope, disabled and reporting choices remain unchanged.
 
-This first, unreleased 0.0.1 does not migrate development updater generations,
+Release `0.0.1` does not migrate development updater generations,
 scheduled tasks, transaction journals or inferred consent. Unsupported existing
 layouts fail visibly without changing their files. Their data, paid-attempt and
 unknown-operation receipts remain evidence. Future released data formats and
