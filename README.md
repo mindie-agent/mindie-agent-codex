@@ -41,7 +41,7 @@ MindIE Agent 采用**「知识与 Skill 手动按需触发 + 远端执行工具�
 | :--- | :--- | :--- | :--- |
 | **经验、知识库与 Skill 系统**<br/>（`mindie-knowledge` + `mindie-agent` Skill） | **🎯 手动触发** | 遇到昇腾 / `vLLM-Ascend` 报错排障、算子适配、图模式编译异常、精度/性能调优，需要调取历史踩坑经验、领域知识库与专业 Skill 引导时 | 在输入框中显式输入 **`/mindie-agent`（或 `$mindie-agent`）+ 你的问题描述**（所有配置与状态管理也统一包在 `/mindie-agent` 内） |
 | **远端昇腾 NPU 开发与执行**<br/>（`mindie-remote-dev` MCP 工具集） | **⚡ 默认自动触发** | 日常需要将本地改动同步到远端昇腾服务器/容器、在 NPU 上跑编译/测试、查看 `npu-smi` 或实时轮询长日志时 | **无需输入任何前置命令**，直接用自然语言描述远端操作即可 |
-| **社区经验脱敏沉淀闭环**<br/>（`Stop` 后台采集 + Gitleaks 脱敏） | **🔄 开启后每次默认自动触发** | 安装或首次配置时选择开启社区贡献后 | **无需在对话中特意提及**——每次排障对话结束时后台全自动完成脱敏与知识 PR 沉淀 |
+| **排障经验沉淀与社区共建**<br/>（`Stop` 后台采集 + Gitleaks 脱敏） | **🔄 后台静默运行** | 希望将有价值的排障过程脱敏沉淀回开源知识库时 | **一次开启，全程无感**——首次配置开启后，每次会话结束自动在后台完成本地脱敏与知识 PR 整理 |
 
 ### 场景 1：输入 `/mindie-agent`（或 `$mindie-agent`）唤醒经验、知识库与 Skill 排障（手动触发）
 > **痛点**：遇到 `HCCL` 通信超时、`ACL` 算子报错、图模式（Graph Mode）编译异常或精度问题时，在海量 Issue 和文档里翻找适用条件非常耗时。  
@@ -59,13 +59,13 @@ MindIE Agent 采用**「知识与 Skill 手动按需触发 + 远端执行工具�
 > ```
 > **会发生什么**：内置的 `mindie-remote-dev` 工具集作为常驻 MCP 服务，会在识别到远端开发意图时**默认自动触发**，提供编辑器语义的远端文件读写、补丁应用、受管后台作业、实时日志追踪与产物同步。即使不开启知识贡献，`remote-dev` 也能完全独立运行。
 
-### 场景 3：开启一次社区贡献，后续每次排障经验后台全自动脱敏沉淀（无需每次说明）
+### 场景 3：排障经验后台静默沉淀，反哺开源社区（一次开启，全程无感）
 > **痛点**：花半天定位完一个棘手的算子或推理 Bug，关掉终端后排障思路就丢了；想分享给社区又担心泄露内部 IP、密钥或私有路径。  
-> **用法示例（平时正常提问排障即可，无需在对话里叮嘱“帮我把经验沉淀下来”）**：
+> **用法示例（像平时一样正常提问排障即可）**：
 > ```text
 > /mindie-agent 帮我结合知识库和远端 NPU 容器定位一下当前 vllm-ascend 自定义算子编译失败的问题，并跑通对应的单测。
 > ```
-> **会发生什么**：社区贡献**默认关闭**。只要你在安装后首次配置时选择开启了社区贡献，**后续每次会话结束（`Stop`）时都不需要你多说一句话**，插件就会在后台默认自动提取公开对话，使用确定性隐私规则与 Gitleaks `8.30.1` 在本地完成脱敏，生成分块导航摘要并自动提交知识 PR。
+> **会发生什么**：社区贡献**默认关闭**。一旦你在首次配置时开启了社区贡献，后续每次会话结束（`Stop`）时，插件都会在后台静默提取公开对话，使用确定性隐私规则与 Gitleaks `8.30.1` 在本地完成脱敏，生成分块导航摘要并自动提交知识 PR，全程无需额外操作。
 > - 关于公开消息筛选范围、确定性脱敏边界与公开 Git 历史说明，请参阅 **[用户须知 / Contribution Notice](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md)**。
 > - 如需在本地搭建 `vllm` + `vllm-ascend` 多任务 Git Worktree 协同工作区，可按需参考 **[工作区配置指南](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md)** 与 [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace)。
 
@@ -81,8 +81,8 @@ MindIE Agent 采用**「知识与 Skill 手动按需触发 + 远端执行工具�
 帮我安装一下这个 https://github.com/mindie-agent/mindie-agent-codex
 ```
 
-<details open>
-<summary>🤖 <b>AI Agent 自动安装执行协议（Instructions for AI Agents）</b></summary>
+<details>
+<summary>🤖 <b>AI Agent 自动安装执行协议（点击展开 / Agent 读取本页时会自动解析执行）</b></summary>
 
 如果你是收到用户安装请求的 AI Agent，请直接按顺序在终端执行以下步骤完成安装与核验，**无需让用户手动翻阅文档**：
 
