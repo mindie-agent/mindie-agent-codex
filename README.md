@@ -29,25 +29,42 @@
 
 **MindIE Agent for OpenAI Codex CLI**（`mindie-agent-codex`）是 [MindIE Agent](https://github.com/mindie-agent/mindie-agent) 面向 OpenAI Codex CLI 打造的原厂插件。它直接在你的业务仓库和原生 Codex 会话中提供 **`vLLM-Ascend` 领域知识检索**、**SSH 远端昇腾 NPU 执行**以及**隐私受控的经验闭环**。
 
-项目设计遵循 [MindIE Agent 工程设计原则](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md)：平时在业务仓库里启动 Codex 写代码、查问题、跑测试**不需要任何前置激活或收尾命令**，所有工具按需介入；报错真实可定位，不做静默降级或黑盒重试。
+项目设计遵循 [MindIE Agent 工程设计原则](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md)：**领域知识与 Skill 体系通过 `/mindie-agent`（或 `$mindie-agent`）手动按需唤醒**，不干扰非昇腾常规任务；**`mindie-remote-dev` 远端昇腾开发工具默认常驻自动触发**；所有报错真实可定位，不做静默降级或黑盒重试。
 
 ---
 
-## 装上之后能做什么？
+## 装上之后能做什么？（触发方式与使用示例）
 
-在昇腾推理与 `vLLM-Ascend` 日常开发中，你可以直接用自然语言让 Codex 配合本插件完成以下工作：
+MindIE Agent 采用**「知识与 Skill 手动按需触发 + 远端执行工具默认常驻触发」**的双模式设计：
 
-### 场景 1：排障时按需检索 `vLLM-Ascend` 实战案例（`mindie-knowledge`）
+| 能力模块 | 触发方式 | 什么时候用？ | 怎么触发？ |
+| :--- | :--- | :--- | :--- |
+| **经验、知识库与 Skill 系统**<br/>（`mindie-knowledge` + `mindie-agent` Skill） | **🎯 手动触发** | 遇到昇腾 / `vLLM-Ascend` 报错排障、算子适配、图模式编译异常、精度/性能调优，需要调取历史踩坑经验、领域知识库与专业 Skill 引导时 | 在输入框中显式输入 **`/mindie-agent`（或 `$mindie-agent`）+ 你的问题描述** |
+| **远端昇腾 NPU 开发与执行**<br/>（`mindie-remote-dev` MCP 工具集） | **⚡ 默认自动触发** | 日常需要将本地改动同步到远端昇腾服务器/容器、在 NPU 上跑编译/测试、查看 `npu-smi` 或实时轮询长日志时 | **无需输入任何前置命令**，直接用自然语言描述远端操作即可 |
+
+### 场景 1：输入 `/mindie-agent`（或 `$mindie-agent`）唤醒经验、知识库与 Skill 排障（手动触发）
 > **痛点**：遇到 `HCCL` 通信超时、`ACL` 算子报错、图模式（Graph Mode）编译异常或精度问题时，在海量 Issue 和文档里翻找适用条件非常耗时。  
-> **怎么做**：直接把报错信息发给 Codex。插件会通过本地 BM25 与分块引用检索自动同步的 [`knowledge-vllm-ascend`](https://github.com/mindie-agent/knowledge-vllm-ascend) 知识包，返回带有**适用版本、验证证据和已知限制**的实战排障参考。
+> **用法示例（直接复制发给 Codex）**：
+> ```text
+> /mindie-agent 我在 8 卡 910B 上用 vllm-ascend 跑 DeepSeek-R1 推理时遇到 HCCL AllReduce timeout (hcclRet=4)，CANN 是 8.0.RC3，请结合历史经验帮我排查根因。
+> ```
+> **会发生什么**：输入 `/mindie-agent`（或 `$mindie-agent`）后，插件会唤醒 `mindie-agent` Skill，并通过本地 BM25 与分块引用检索自动同步的 [`knowledge-vllm-ascend`](https://github.com/mindie-agent/knowledge-vllm-ascend) 知识包，返回带有**适用版本、验证证据和已知限制**的实战排障参考。
 
-### 场景 2：本地写代码，一键在远端昇腾 NPU 服务器上编译与跑测（`mindie-remote-dev`）
-> **痛点**：本地是 Mac 或 Windows 笔记本，而昇腾 NPU 卡在远端服务器上，频繁手动拷贝代码、同步补丁、盯长耗时测试日志极其繁琐。  
-> **怎么做**：直接对 Codex 说 *“把当前补丁同步到远端昇腾服务器，跑一下对应的单元测试并实时看日志”*。内置的 `mindie-remote-dev` 工具集提供编辑器语义的远端文件读写、补丁应用、受管后台作业、实时日志追踪与产物同步。即使不开启知识贡献，`remote-dev` 也能完全独立运行。
+### 场景 2：日常对话直接操作远端昇腾 NPU 服务器与容器（`mindie-remote-dev` 默认自动触发）
+> **痛点**：本地是 Mac 或 Windows 笔记本，而昇腾 NPU 卡在远端服务器或容器上，频繁手动拷贝代码、同步补丁、盯长耗时测试日志极其繁琐。  
+> **用法示例（无需激活命令，直接用自然语言发给 Codex）**：
+> ```text
+> 帮我连上远端 910B 服务器的 vllm_dev 容器，看看当前 NPU 显存占用，然后把我本地改好的 rotary_embedding.py 同步过去跑一下对应的 pytest 单测。
+> ```
+> **会发生什么**：内置的 `mindie-remote-dev` 工具集作为常驻 MCP 服务，会在识别到远端开发意图时**默认自动触发**，提供编辑器语义的远端文件读写、补丁应用、受管后台作业、实时日志追踪与产物同步。即使不开启知识贡献，`remote-dev` 也能完全独立运行。
 
-### 场景 3：将踩坑经验安全脱敏后沉淀为开源社区知识（可选 Opt-in）
+### 场景 3：唤醒 `/mindie-agent` 攻坚并沉淀脱敏经验为开源社区知识（可选 Opt-in）
 > **痛点**：花半天定位完一个棘手的算子或推理 Bug，关掉终端后排障思路就丢了；想分享给社区又担心泄露内部 IP、密钥或私有路径。  
-> **怎么做**：社区贡献**默认关闭**。仅在你显式对指定公开仓库开启共享后，插件会在会话结束（`Stop`）或显式导入历史会话（`history-import`）时提取公开对话，使用确定性隐私规则与 Gitleaks `8.30.1` 在本地完成脱敏，生成分块导航摘要并自动提交知识 PR。
+> **用法示例（直接复制发给 Codex）**：
+> ```text
+> /mindie-agent 帮我结合知识库和远端 NPU 容器定位一下当前 vllm-ascend 自定义算子编译失败的问题，修好跑通单测后我们把这次排障经验沉淀下来。
+> ```
+> **会发生什么**：社区贡献**默认关闭**。仅在你显式对指定公开仓库开启共享后，插件会在会话结束（`Stop`）或显式导入历史会话（`history-import`）时提取公开对话，使用确定性隐私规则与 Gitleaks `8.30.1` 在本地完成脱敏，生成分块导航摘要并自动提交知识 PR。
 > - 关于公开消息筛选范围、确定性脱敏边界与公开 Git 历史说明，请参阅 **[用户须知 / Contribution Notice](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md)**。
 > - 如需在本地搭建 `vllm` + `vllm-ascend` 多任务 Git Worktree 协同工作区，可按需参考 **[工作区配置指南](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md)** 与 [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace)。
 
@@ -113,7 +130,7 @@ codex plugin list --json
 
 ## 日常使用与管理命令
 
-安装完成后，**日常研发任务无需执行任何额外命令**（也可在会话中通过 `$mindie-agent` 唤起配置向导）。当你需要查看运行状态、修改贡献范围、导入历史会话或管理故障上报时，可通过持久化入口 `entry.py` 调用 `bridge` 子命令：
+安装完成后，**`mindie-remote-dev` 远端工具集在日常对话中默认自动触发**；而当你需要调取昇腾历史经验、领域知识库与 Skill 系统时，只需在会话中手动输入 **`/mindie-agent <问题描述>`**（或 **`$mindie-agent <问题描述>`**）即可按需唤醒。当你需要查看运行状态、修改贡献范围、导入历史会话或管理故障上报时，可通过持久化入口 `entry.py` 调用 `bridge` 子命令：
 
 | 操作场景 | 命令示例 | 用途说明 |
 |---|---|---|
