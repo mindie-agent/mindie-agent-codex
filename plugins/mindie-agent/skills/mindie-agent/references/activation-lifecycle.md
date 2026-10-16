@@ -41,6 +41,14 @@ For explicitly requested configuration or diagnosis, use the installed
 `CODEX_THREAD_ID`; never fabricate it. Existing optional operator commands remain
 available internally, but users only need `/mindie-agent` (or `$mindie-agent`).
 
+- **On-Demand Target Knowledge Repo Star & Fork When Enabling Community Contribution**:
+  - Installation only Stars and Forks `mindie-agent/mindie-agent`. When the user explicitly enables community contribution for a target public knowledge repository `owner/repo` (such as `mindie-agent/knowledge-vllm-ascend`) under account `USER`, first Star and Fork that target knowledge repository on demand via the authenticated `gh` channel:
+    ```sh
+    gh api -X PUT /user/starred/owner/repo
+    gh repo fork owner/repo --clone=false --remote=false
+    ```
+  - Then include `--community-fork USER/repo` along with `--community-repository owner/repo --community-account USER --community-project-root /absolute/path --community-visibility public` when running `entry.py bridge config` so contribution branches push to the user's personal Fork.
+
 ### Historical Experience Import (On Explicit User Request Only)
 
 Use historical import **only** when the user explicitly asks to contribute or import
