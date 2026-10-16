@@ -37,10 +37,11 @@
 
 MindIE Agent 采用**「知识与 Skill 手动按需触发 + 远端执行工具默认常驻触发」**的双模式设计：
 
-| 能力模块 | 触发方式 | 什么时候用？ | 怎么触发？ |
+| 能力模块 | 触发方式 | 什么时候用？ | 怎么用？ |
 | :--- | :--- | :--- | :--- |
-| **经验、知识库与 Skill 系统**<br/>（`mindie-knowledge` + `mindie-agent` Skill） | **🎯 手动触发** | 遇到昇腾 / `vLLM-Ascend` 报错排障、算子适配、图模式编译异常、精度/性能调优，需要调取历史踩坑经验、领域知识库与专业 Skill 引导时 | 在输入框中显式输入 **`/mindie-agent`（或 `$mindie-agent`）+ 你的问题描述** |
+| **经验、知识库与 Skill 系统**<br/>（`mindie-knowledge` + `mindie-agent` Skill） | **🎯 手动触发** | 遇到昇腾 / `vLLM-Ascend` 报错排障、算子适配、图模式编译异常、精度/性能调优，需要调取历史踩坑经验、领域知识库与专业 Skill 引导时 | 在输入框中显式输入 **`/mindie-agent`（或 `$mindie-agent`）+ 你的问题描述**（所有配置与状态管理也统一包在 `/mindie-agent` 内） |
 | **远端昇腾 NPU 开发与执行**<br/>（`mindie-remote-dev` MCP 工具集） | **⚡ 默认自动触发** | 日常需要将本地改动同步到远端昇腾服务器/容器、在 NPU 上跑编译/测试、查看 `npu-smi` 或实时轮询长日志时 | **无需输入任何前置命令**，直接用自然语言描述远端操作即可 |
+| **社区经验脱敏沉淀闭环**<br/>（`Stop` 后台采集 + Gitleaks 脱敏） | **🔄 开启后每次默认自动触发** | 安装或首次配置时选择开启社区贡献后 | **无需在对话中特意提及**——每次排障对话结束时后台全自动完成脱敏与知识 PR 沉淀 |
 
 ### 场景 1：输入 `/mindie-agent`（或 `$mindie-agent`）唤醒经验、知识库与 Skill 排障（手动触发）
 > **痛点**：遇到 `HCCL` 通信超时、`ACL` 算子报错、图模式（Graph Mode）编译异常或精度问题时，在海量 Issue 和文档里翻找适用条件非常耗时。  
@@ -58,13 +59,13 @@ MindIE Agent 采用**「知识与 Skill 手动按需触发 + 远端执行工具�
 > ```
 > **会发生什么**：内置的 `mindie-remote-dev` 工具集作为常驻 MCP 服务，会在识别到远端开发意图时**默认自动触发**，提供编辑器语义的远端文件读写、补丁应用、受管后台作业、实时日志追踪与产物同步。即使不开启知识贡献，`remote-dev` 也能完全独立运行。
 
-### 场景 3：唤醒 `/mindie-agent` 攻坚并沉淀脱敏经验为开源社区知识（可选 Opt-in）
+### 场景 3：开启一次社区贡献，后续每次排障经验后台全自动脱敏沉淀（无需每次说明）
 > **痛点**：花半天定位完一个棘手的算子或推理 Bug，关掉终端后排障思路就丢了；想分享给社区又担心泄露内部 IP、密钥或私有路径。  
-> **用法示例（直接复制发给 Codex）**：
+> **用法示例（平时正常提问排障即可，无需在对话里叮嘱“帮我把经验沉淀下来”）**：
 > ```text
-> /mindie-agent 帮我结合知识库和远端 NPU 容器定位一下当前 vllm-ascend 自定义算子编译失败的问题，修好跑通单测后我们把这次排障经验沉淀下来。
+> /mindie-agent 帮我结合知识库和远端 NPU 容器定位一下当前 vllm-ascend 自定义算子编译失败的问题，并跑通对应的单测。
 > ```
-> **会发生什么**：社区贡献**默认关闭**。仅在你显式对指定公开仓库开启共享后，插件会在会话结束（`Stop`）或显式导入历史会话（`history-import`）时提取公开对话，使用确定性隐私规则与 Gitleaks `8.30.1` 在本地完成脱敏，生成分块导航摘要并自动提交知识 PR。
+> **会发生什么**：社区贡献**默认关闭**。只要你在安装后首次配置时选择开启了社区贡献，**后续每次会话结束（`Stop`）时都不需要你多说一句话**，插件就会在后台默认自动提取公开对话，使用确定性隐私规则与 Gitleaks `8.30.1` 在本地完成脱敏，生成分块导航摘要并自动提交知识 PR。
 > - 关于公开消息筛选范围、确定性脱敏边界与公开 Git 历史说明，请参阅 **[用户须知 / Contribution Notice](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md)**。
 > - 如需在本地搭建 `vllm` + `vllm-ascend` 多任务 Git Worktree 协同工作区，可按需参考 **[工作区配置指南](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md)** 与 [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace)。
 
@@ -128,18 +129,15 @@ codex plugin list --json
 
 ---
 
-## 日常使用与管理命令
+## 日常使用与管理命令（极简单一入口 `/mindie-agent`）
 
-安装完成后，**`mindie-remote-dev` 远端工具集在日常对话中默认自动触发**；而当你需要调取昇腾历史经验、领域知识库与 Skill 系统时，只需在会话中手动输入 **`/mindie-agent <问题描述>`**（或 **`$mindie-agent <问题描述>`**）即可按需唤醒。当你需要查看运行状态、修改贡献范围、导入历史会话或管理故障上报时，可通过持久化入口 `entry.py` 调用 `bridge` 子命令：
+为了将易用性做到极致，MindIE Agent 将所有交互能力全部收敛到了 **`/mindie-agent`（或 `$mindie-agent`）这一个统一入口**中。你**不需要记忆任何复杂的子命令或脚本参数**，底层操作上下文只在 Agent 需要时通过**渐进式披露（Progressive Disclosure）**按需向 Agent 展开：
 
-| 操作场景 | 命令示例 | 用途说明 |
+| 使用场景 | 你只需要输入 | 背后自动完成的事 |
 |---|---|---|
-| **查看运行状态** | `python3 <PLUGIN_DATA>/releases/0.0.1/entry.py bridge status` | **纯只读查询**：查看插件绑定、后台知识服务健康度、采集游标与同步状态 |
-| **配置/修改共享范围** | `python3 <PLUGIN_DATA>/releases/0.0.1/entry.py bridge configure` | 配置或更新公开社区贡献的目标仓库、账号与本地项目根目录范围 |
-| **开启/关闭社区贡献** | `python3 <PLUGIN_DATA>/releases/0.0.1/entry.py bridge sharing-disable` | 立即停止（或通过 `sharing-enable` 开启）已配置项目范围的对话采集与贡献 |
-| **手动同步公共知识包** | `python3 <PLUGIN_DATA>/releases/0.0.1/entry.py bridge sync` | 立即执行一次无模型的公共知识源增量同步 |
-| **显式导入历史会话** | `python3 <PLUGIN_DATA>/releases/0.0.1/entry.py bridge history-import --source /path/to/rollout.jsonl` | 将用户显式指定的历史 Codex JSONL 会话脱敏并导入经验闭环（详见 [历史会话导入](docs/history-import.zh.md)） |
-| **管理产品故障上报** | `python3 <PLUGIN_DATA>/releases/0.0.1/entry.py bridge reporting-status` | 查询或切换（`reporting-enable` / `reporting-disable`）独立的产品故障上报开关 |
+| **日常昇腾排障、算子适配与调优** | `/mindie-agent <直接描述你的问题>`（或 `$mindie-agent`） | 自动唤醒昇腾 Skill 引导与本地 `mindie-knowledge` 领域知识检索，配合 `mindie-remote-dev` 完成实机定位与验证 |
+| **首次配置、查看状态、调整共享偏好或导入历史会话** | `/mindie-agent` 加自然语言（例如 `/mindie-agent 看下当前状态`、`/mindie-agent 开启/关闭社区经验共享`、`/mindie-agent 把之前的历史经验导入知识库`） | Agent 按需读取二级参考上下文并在内部调用管理入口完成操作，保存的选择跨会话与插件升级持久生效 |
+| **日常远端昇腾服务器/容器开发** | **无需任何前置命令**，直接用自然语言对话 | 常驻的 `mindie-remote-dev` MCP 工具集默认自动触发，完成远端文件读写、打补丁与后台作业轮询 |
 
 ### 静默更新、安全卸载与已知限制
 
