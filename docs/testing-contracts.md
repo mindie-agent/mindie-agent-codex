@@ -1,5 +1,7 @@
 # Test boundaries and cost
 
+[中文](testing-contracts.zh.md) | English · [Documentation Index](README.en.md)
+
 Run `tests/preflight.py` with the exact checkout paths documented in the README,
 then use the standard unittest runner. CI compiles every Python file first,
 checks the installed Git pins, runs the unmodified setup/update probe, and

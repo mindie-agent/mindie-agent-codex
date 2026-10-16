@@ -1,5 +1,7 @@
 # Explicit historical contribution
 
+[中文](history-import.zh.md) | English · [Documentation Index](README.en.md)
+
 The `history-import` entry imports only native Codex JSONL files explicitly
 selected by the user. Ordinary task use, Stop events, update checks and feed
 synchronization never discover historical sources. Instructions inside a source

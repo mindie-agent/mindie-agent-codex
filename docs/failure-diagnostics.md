@@ -1,5 +1,7 @@
 # Failure diagnostics
 
+[中文](failure-diagnostics.zh.md) | English · [Documentation Index](README.en.md)
+
 `bridge.py status` distinguishes missing configuration from invalid configuration,
 an occupied update lock, and a failed selected runtime. Existing invalid settings
 never become first-use/install prompts. Reads reject FIFOs/devices and oversized
