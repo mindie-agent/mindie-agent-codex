@@ -37,10 +37,11 @@ Designed around the [MindIE Agent Engineering Design Principles](https://github.
 
 MindIE Agent uses a two-mode trigger model—**manual on-demand activation for domain knowledge & skills** plus **default automatic triggering for remote NPU execution**:
 
-| Capability | Trigger Mode | When to Use | How to Trigger |
+| Capability | Trigger Mode | When to Use | How to Use |
 | :--- | :--- | :--- | :--- |
-| **Experience, Knowledge & Skill System**<br/>(`mindie-knowledge` + `mindie-agent` Skill) | **🎯 Manual Trigger** | When troubleshooting Ascend / `vLLM-Ascend` errors, adapting operators, debugging Graph Mode failures, or tuning performance/accuracy and you want historical experience, domain knowledge, and Skill guidance | Explicitly type **`/mindie-agent` (or `$mindie-agent`) + your problem description** |
+| **Experience, Knowledge & Skill System**<br/>(`mindie-knowledge` + `mindie-agent` Skill) | **🎯 Manual Trigger** | When troubleshooting Ascend / `vLLM-Ascend` errors, adapting operators, debugging Graph Mode failures, or tuning performance/accuracy and you want historical experience, domain knowledge, and Skill guidance | Explicitly type **`/mindie-agent` (or `$mindie-agent`) + your problem description** (all setup and status actions are also wrapped inside `/mindie-agent`) |
 | **Remote Ascend NPU Execution**<br/>(`mindie-remote-dev` MCP toolset) | **⚡ Default Auto-Trigger** | When syncing local edits to a remote Ascend server/container, running NPU builds/tests, checking `npu-smi`, or streaming long job logs | **No prefix command needed**—just describe the remote task in natural language |
+| **Community Experience Contribution Loop**<br/>(`Stop` Auto-Capture + Gitleaks Redaction) | **🔄 Default Auto-Trigger After Opt-In** | Once you enable community contribution during installation or initial setup | **No need to mention in prompts**—every session is automatically redacted and packaged into a knowledge PR in the background when the task ends |
 
 ### Scenario 1: Type `/mindie-agent` (or `$mindie-agent`) to Invoke Experience, Knowledge & Skills (Manual Trigger)
 > **The Problem**: Tracking down the exact root cause and environment conditions for an `HCCL` timeout, an `ACL` operator error, a Graph Mode compilation failure, or precision drift across scattered Issues takes hours.  
@@ -58,13 +59,13 @@ MindIE Agent uses a two-mode trigger model—**manual on-demand activation for d
 > ```
 > **What Happens**: The `mindie-remote-dev` MCP server is always on and **triggers automatically by default** whenever your prompt involves remote servers, containers, or NPU commands—providing editor-grade remote file operations, patching, managed background jobs, live log streaming, and artifact sync over SSH, completely independent of knowledge capture consent.
 
-### Scenario 3: Invoke `/mindie-agent` & Turn Debugging Sessions into Sanitized Community Knowledge (Opt-In)
+### Scenario 3: Opt In Once, and Every Debugging Session Is Automatically Sanitized & Contributed in the Background
 > **The Problem**: Hard-won debugging insights usually vanish when a terminal session ends, yet sharing raw transcripts risks exposing internal IPs, keys, or private paths.  
-> **Copy-Paste Example**:
+> **Copy-Paste Example (just ask your technical question normally—no need to ask the Agent to "save the experience")**:
 > ```text
-> /mindie-agent Help me diagnose this custom Ascend operator build failure using the knowledge base and our remote NPU container, and let's capture the sanitized takeaways once the test passes.
+> /mindie-agent Help me diagnose this custom Ascend operator build failure using the knowledge base and our remote NPU container, and verify the fix with unit tests.
 > ```
-> **What Happens**: Community sharing is **off by default**. Only when you explicitly opt in for an approved public repository does the plugin extract public conversation messages on `Stop` (or via explicit `history-import`), redact secrets locally with deterministic rules and Gitleaks `8.30.1`, generate block navigation summaries, and open a sanitized GitHub PR.
+> **What Happens**: Community sharing is **off by default**. Once you opt in during setup, **you never need to ask the Agent to capture your experience in each prompt**—every time a session finishes (`Stop`), the plugin automatically extracts public conversation messages in the background, redacts secrets locally with deterministic rules and Gitleaks `8.30.1`, generates block navigation summaries, and opens a sanitized GitHub PR.
 > - Read the **[Contribution Notice / 用户须知](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md)** for full details on visible-message filtering, redaction limits, and public Git history.
 > - For an optional multi-task Git worktree layout for `vllm` and `vllm-ascend`, see **[Workspace Setup](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md)** and [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace).
 
@@ -128,18 +129,15 @@ codex plugin list --json
 
 ---
 
-## Everyday Usage & Operator Commands
+## Everyday Usage & Operator Commands (One Unified `/mindie-agent` Entry)
 
-Once installed, **`mindie-remote-dev` remote NPU tools trigger automatically by default** in everyday conversation; whenever you want to invoke historical Ascend experience, domain knowledge, and the Skill system, manually type **`/mindie-agent <problem description>`** (or **`$mindie-agent <problem description>`**) inside your session. To inspect status, update sharing consent, import historical sessions, or manage fault reporting, run `bridge` through the persistent release `entry.py`:
+To keep daily engineering effortless, MindIE Agent wraps all interactions into **a single unified entrypoint: `/mindie-agent` (or `$mindie-agent`)**. You **never need to memorize internal subcommands or CLI flags**—operational context is progressively disclosed only to the Agent when needed:
 
-| Action | Command Example | Description |
+| Scenario | What You Type | What Happens Behind the Scenes |
 |---|---|---|
-| **Inspect Status** | `python3 <PLUGIN_DATA>/releases/0.0.1/entry.py bridge status` | **Read-only check** of active binding, knowledge service health, capture cursor, and sync state |
-| **Configure Sharing Scope** | `python3 <PLUGIN_DATA>/releases/0.0.1/entry.py bridge configure` | Configure or update opt-in community contribution repository, account, and project scope |
-| **Enable / Disable Sharing** | `python3 <PLUGIN_DATA>/releases/0.0.1/entry.py bridge sharing-disable` | Immediately stop (or enable via `sharing-enable`) capture and contribution for the configured scope |
-| **Refresh Public Feed** | `python3 <PLUGIN_DATA>/releases/0.0.1/entry.py bridge sync` | Trigger an immediate model-free public knowledge feed refresh |
-| **Import Historical Session** | `python3 <PLUGIN_DATA>/releases/0.0.1/entry.py bridge history-import --source /path/to/rollout.jsonl` | Redact and import an explicitly selected native JSONL session (see [Historical Contribution](docs/history-import.md)) |
-| **Manage Fault Reporting** | `python3 <PLUGIN_DATA>/releases/0.0.1/entry.py bridge reporting-status` | Query or toggle (`reporting-enable` / `reporting-disable`) independent product fault reporting |
+| **Ascend Troubleshooting, Operator Adaptation & Tuning** | `/mindie-agent <your problem description>` (or `$mindie-agent`) | Activates Ascend Skill guidance and local `mindie-knowledge` search, working alongside `mindie-remote-dev` to diagnose and verify fixes |
+| **First-Time Setup, Checking Status, Changing Sharing Settings, or Importing History** | `/mindie-agent` with natural language (e.g., `/mindie-agent check status`, `/mindie-agent enable/disable community sharing`, `/mindie-agent import past sessions`) | Your Agent loads the relevant secondary reference context on demand and runs the internal bridge command for you; saved preferences persist across sessions and updates |
+| **Everyday Remote Ascend Server / Container Work** | **No prefix command needed**—just use natural language | Always-on `mindie-remote-dev` MCP tools trigger automatically to read/edit remote files, apply patches, and stream background job logs |
 
 ### Silent Updates, Uninstall & Known Limitations
 
