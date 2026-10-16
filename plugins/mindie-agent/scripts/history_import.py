@@ -1,6 +1,6 @@
 """Manual historical contribution. Never imported by Stop or maintenance.
 
-Runs in the committed interpreter under the bridge's generation lock. The
+Runs in the installed release interpreter. The
 current native task is associated internally. Saved contribution
 consent is reused without changing any choice, scope, or other task's lease.
 """
@@ -52,13 +52,21 @@ def run_imports(sources, *, emit, retry_summary=False):
         raise ValueError('current native task association is revoked or unavailable')
     if not sharing.capture_allowed(lease, None):
         raise ValueError('history import requires enabled contribution in this task scope')
-    from mindie_knowledge.loop.cli import config_at, ensure_service, load_transcript_adapter
+    from mindie_knowledge.loop.cli import config_at, load_transcript_adapter
     from mindie_knowledge.loop.engine import Engine
     from mindie_knowledge.loop.history_import import HistoryImportError, import_transcript
     from mindie_knowledge.loop.store import Store
     from mindie_knowledge.loop import settings as settings_mod
 
-    engine_config = config_at(config['engine_config'])
+    from product_contract import read_json
+    from service_client import connect
+    # Give this known configuration error before loading the source parser.
+    declared = read_json(config['engine_config'])[0].get('summary_command')
+    if (not isinstance(declared, list) or not declared
+            or not all(isinstance(part, str) and part for part in declared)):
+        raise ConfigurationError('history import requires the configured summary worker; source excerpts are not a substitute')
+    engine_path = config['engine_config']
+    engine_config = config_at(engine_path)
     if engine_config.get('admission_path') != config['admission_path']:
         raise ValueError('history import requires the configured admission store')
     if engine_config.get('capture_mode') != 'public-transcript':
@@ -117,7 +125,7 @@ def run_imports(sources, *, emit, retry_summary=False):
             current = authority.check(session, lease['token'])
             if not sharing.capture_allowed(current, None):
                 raise ValueError('contribution permission changed')
-            ensure_service(config['engine_config'])
+            connect(engine_path)
             emit(dict(publication='pending', service='ready', changed=changed))
         except Exception as exc:
             receipt = dict(publication='pending', service='unavailable', changed=changed,

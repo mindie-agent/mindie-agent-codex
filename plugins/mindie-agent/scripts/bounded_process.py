@@ -4,6 +4,7 @@ POSIX reads pipes with a selector and kills the owned process group. Windows
 uses a suspended spawn and owned Job before child code can create descendants.
 """
 
+import codecs
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,8 +49,12 @@ class ProcessResult:
 class ProcessCleanupError(RuntimeError):
     def __init__(self, result):
         self.process_result = result
+        stages = ", ".join(
+            f"{item['stage']}: {item['error_type']}" for item in result.cleanup
+        )
         super().__init__("Process execution " + result.execution +
-                         "; owned-process cleanup failed; do not repeat the operation")
+                         "; owned-process cleanup failed (" + stages +
+                         "); do not repeat the operation")
 
 
 def _cleanup(process, result, *, selector=None, threads=()):
@@ -77,7 +82,6 @@ def _cleanup(process, result, *, selector=None, threads=()):
 
 def _spawn(command, stdin, env, *, allow_service=False):
     if POSIX:
-        from update_lock import generation_descriptors
         started, notify = os.pipe()
         owner_read, owner_write = os.pipe()
         try:
@@ -86,7 +90,7 @@ def _spawn(command, stdin, env, *, allow_service=False):
                  str(os.getpid()), str(notify), str(owner_read), *command],
                 stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 start_new_session=True, env=env,
-                pass_fds=(*generation_descriptors(), notify, owner_read),
+                pass_fds=(notify, owner_read),
             )
             process._mindie_owner_fd = owner_write
         except BaseException:
@@ -118,10 +122,16 @@ def _spawn(command, stdin, env, *, allow_service=False):
 
 def _kill_tree(process):
     if POSIX:
+        if getattr(process, "_mindie_tree_terminated", False):
+            return
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        # Repeated signals can hit a reaped/reused group or macOS zombies
+        # after the first successful kill. Other failures remain retryable
+        # cleanup failures and must not set this receipt.
+        process._mindie_tree_terminated = True
         return
     windows_process.close_tree(process)
 
@@ -278,7 +288,7 @@ def _attach_transport(exc, stdout, stderr, *, timed_out):
         exc.category = "temporary_network"
 
 
-def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), transport=False, on_failure=None):
+def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), transport=False, on_failure=None, output_encoding="utf-8"):
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ, "out")
     selector.register(process.stderr, selectors.EVENT_READ, "err")
@@ -324,8 +334,8 @@ def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), t
         process.wait()
         result.execution = "completed"
         result.returncode = process.returncode
-        result.stdout = output.decode()
-        result.stderr = errors.decode(errors="replace")
+        result.stdout = output.decode(output_encoding)
+        result.stderr = errors.decode(output_encoding, errors="replace")
         if allowed_returncodes is not None and process.returncode not in allowed_returncodes:
             # A protocol owner may map bounded stdout to a safe error. Raw
             # stderr never leaves this runner, and a nonzero exit still raises.
@@ -340,14 +350,14 @@ def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), t
     except BaseException as exc:
         result.returncode = process.poll()
         if not result.stdout:
-            result.stdout = output.decode(errors="replace")
+            result.stdout = output.decode(output_encoding, errors="replace")
         exc.process_result = result
         raise
     finally:
         _cleanup(process, result, selector=selector)
 
 
-def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,), transport=False, on_failure=None):
+def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,), transport=False, on_failure=None, output_encoding="utf-8"):
     # Windows (unverified on real hardware): reader threads replace selectors.
     deadline = None if timeout is None else time.monotonic() + timeout
     output = bytearray()
@@ -399,8 +409,8 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
         process.wait()
         result.execution = "completed"
         result.returncode = process.returncode
-        result.stdout = bytes(output).decode()
-        result.stderr = bytes(errors).decode(errors="replace")
+        result.stdout = bytes(output).decode(output_encoding)
+        result.stderr = bytes(errors).decode(output_encoding, errors="replace")
         if allowed_returncodes is not None and process.returncode not in allowed_returncodes:
             # A protocol owner may map bounded stdout to a safe error. Raw
             # stderr never leaves this runner, and a nonzero exit still raises.
@@ -415,14 +425,15 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
     except BaseException as exc:
         result.returncode = process.poll()
         if not result.stdout:
-            result.stdout = bytes(output).decode(errors="replace")
+            result.stdout = bytes(output).decode(output_encoding, errors="replace")
         exc.process_result = result
         raise
     finally:
         _cleanup(process, result, threads=threads)
 
 
-def run(command, data, *, timeout=None, max_output=1024 * 1024, cancel=None, env=None, allowed_returncodes=(0,), transport=False, allow_service=False, on_failure=None):
+def run(command, data, *, timeout=None, max_output=1024 * 1024, cancel=None, env=None, allowed_returncodes=(0,), transport=False, allow_service=False, on_failure=None, output_encoding="utf-8"):
+    codecs.lookup(output_encoding)
     if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
                                 or not math.isfinite(timeout) or timeout <= 0):
         raise ValueError("an explicit execution timeout must be a positive finite number")
@@ -439,8 +450,8 @@ def run(command, data, *, timeout=None, max_output=1024 * 1024, cancel=None, env
             raise
         if POSIX:
             return _run_posix(
-                process, timeout, max_output, cancel, allowed_returncodes, transport, on_failure
+                process, timeout, max_output, cancel, allowed_returncodes, transport, on_failure, output_encoding
             )
         return _run_windows(
-            process, timeout, max_output, cancel, allowed_returncodes, transport, on_failure
+            process, timeout, max_output, cancel, allowed_returncodes, transport, on_failure, output_encoding
         )

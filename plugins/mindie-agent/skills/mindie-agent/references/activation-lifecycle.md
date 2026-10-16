@@ -20,13 +20,16 @@ enforced by the actual executor. Known terminal results survive cleanup faults.
 Unknown external writes or model outcomes retain their receipts and are never
 blindly replayed. Saved model output resumes local processing without a new call.
 
-Normal and failed Hooks return a neutral response and no user instructions.
+Normal and failed Hooks return a neutral response and no continuation decision.
+Failures emit a fixed native warning and preserve local diagnostic evidence.
 Existing local diagnostic records preserve faults. A later natural capability
 call carries bounded machine diagnostic references for the Agent; delivery is
 acknowledged only after writing that response. No later call means no delivery,
 not successful repair. These internal faults do not create a user maintenance
 step or change an unrelated business result.
 
-Updates wait for actual in-flight calls and maintenance, then switch the selected
-generation. Active execution retains its generation until ownership is released.
-Remote durable jobs keep their existing identity and independent lifecycle.
+Native Codex owns plugin distribution and update selection. This installed entry
+uses its fixed runtime and checks the profile's exact installation identity.
+A replaced binding requires native reload before another operation; it does not
+change saved consent or route an old session to a different runtime. Remote
+durable jobs retain their existing identity and independent lifecycle.

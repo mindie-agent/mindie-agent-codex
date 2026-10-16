@@ -14,6 +14,20 @@ from session_gate import Sessions, Inactive
 
 
 class FailureVisibilityTests(unittest.TestCase):
+    def test_helper_failure_projection_accepts_only_static_codes(self):
+        for failure in ({"stage": "transcript", "code": "private/path"},
+                        {"stage": "transcript", "code": []},
+                        {"stage": "private/path", "code": "transcript_outside_profile"},
+                        {"stage": "transcript", "code": "transcript_outside_profile",
+                         "detail": "private task content"}):
+            with self.subTest(failure=failure):
+                self.assertIsNone(Inactive("private detail", failure=failure).failure)
+        self.assertEqual(
+            Inactive("private detail", failure={"stage": "transcript",
+                "code": "transcript_outside_profile"}).failure,
+            {"stage": "transcript", "code": "transcript_outside_profile"},
+        )
+
     def test_stop_result_failures_remain_visible_when_diagnostics_fail(self):
         with patch('diagnostic_support.failure', side_effect=OSError('fixture logging unavailable')):
             for result in (None, {}, {'stage': 'failed'}, {'stage': 'unsupported'}):
@@ -54,22 +68,6 @@ class FailureVisibilityTests(unittest.TestCase):
                 bridge.main()
         self.assertEqual(error.exception.code, 1)
 
-    def test_updater_returns_nonzero_for_independent_maintenance_failure(self):
-        import auto_update
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            settings = root / 'updater.json'
-            settings.write_text(json.dumps({'root': str(root / 'updates'),
-                                             'adapter_config': str(root / 'adapter.json')}),
-                                encoding='utf-8')
-            for result in ({'status': 'up_to_date', 'knowledge_status': 'sync_failed'},
-                           {'status': 'up_to_date', 'knowledge_status': 'degraded'},
-                           {'status': 'up_to_date', 'diagnostics': {'status': 'unavailable'}},
-                           {'status': 'action_required'}):
-                with self.subTest(result=result), patch.object(sys, 'argv', ['auto_update.py', '--settings', str(settings), 'check']), patch.object(auto_update.Updater, 'check', return_value=result):
-                    with self.assertRaises(SystemExit) as error:
-                        auto_update.main()
-                    self.assertEqual(error.exception.code, 1)
 
     def test_corrupt_adapter_cannot_become_fresh_consent(self):
         import consent
@@ -109,7 +107,7 @@ class FailureVisibilityTests(unittest.TestCase):
             with patch.object(runtime_call, 'config_path', return_value=path), \
                  patch.object(runtime_call, 'resolve_lease', return_value={'session': 'fixture-task'}), \
                  patch.object(runtime_call, 'finish_outcome', side_effect=OSError('fixture accounting failure')), \
-                 patch('mindie_knowledge.loop.cli.ensure_service', return_value={}), \
+                 patch('service_client.connect', return_value={}), \
                  patch('mindie_knowledge.loop.transport.rpc', return_value={'status': 'recorded'}) as rpc:
                 result = runtime_call.call(payload)
                 self.assertFalse(result['isError'])

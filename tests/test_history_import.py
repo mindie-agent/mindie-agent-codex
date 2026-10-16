@@ -32,7 +32,6 @@ class HistoryImportTests(SharingFixture):
         engine = json.loads(self.engine.read_text())
         engine.update(capture_mode='public-transcript',
                       transcript_adapter=str(SCRIPTS / 'codex_transcript.py'),
-                      summary_command=[sys.executable, '-c', 'print(\'{"title":"Synthetic case","summary":"Synthetic reported result."}\')'],
                       redactor_executable=installed_scanner())
         self.engine.write_text(json.dumps(engine))
 
@@ -77,19 +76,23 @@ class HistoryImportTests(SharingFixture):
     def test_missing_summary_configuration_errors_before_source_or_store(self):
         self.activate()
         engine = json.loads(self.engine.read_text())
+        saved = self.engine.read_bytes()
         del engine['summary_command']
         self.engine.write_text(json.dumps(engine))
-        with patch('mindie_knowledge.loop.cli.load_transcript_adapter', side_effect=AssertionError('no parser')):
-            with self.assertRaisesRegex(history_import.ConfigurationError, 'summary worker'):
-                self.run_import()
-        self.assertFalse((self.root / 'data').exists())
-        result = subprocess.run(
-            [sys.executable, str(SCRIPTS / 'bridge.py'), '--config', str(self.config),
-             'history-import', '--source', str(self.source)],
-            capture_output=True, text=True, timeout=10,
-        )
-        self.assertEqual(result.returncode, 1)
-        self.assertIn('summary worker', json.loads(result.stdout)['detail'])
+        try:
+            with patch('mindie_knowledge.loop.cli.load_transcript_adapter', side_effect=AssertionError('no parser')):
+                with self.assertRaisesRegex(history_import.ConfigurationError, 'summary worker'):
+                    self.run_import()
+            self.assertFalse((self.root / 'data').exists())
+            result = subprocess.run(
+                [sys.executable, str(SCRIPTS / 'bridge.py'), '--config', str(self.config),
+                 'history-import', '--source', str(self.source)],
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn('summary worker', json.loads(result.stdout)['detail'])
+        finally:
+            self.engine.write_bytes(saved)
 
     def test_source_scope_is_checked_before_public_messages(self):
         self.activate()
@@ -109,10 +112,11 @@ class HistoryImportTests(SharingFixture):
         saved = consent.consent_path().read_bytes()
         engine = json.loads(self.engine.read_text())
         engine['redactor_executable'] = installed_scanner()
-        engine['summary_command'] = [sys.executable, '-c', 'raise AssertionError("scheduled, not inline")']
+        # The explicit file entry satisfies the current client protocol and
+        # fails if this component test accidentally invokes a summary model.
         self.engine.write_text(json.dumps(engine))
         self.make_source('Synthetic historical experiment produced eight output tokens.')
-        with patch('mindie_knowledge.loop.cli.ensure_service', return_value={'ready': True}) as service:
+        with patch('service_client.connect', return_value={'ready': True}) as service:
             first = self.run_import()
             second = self.run_import()
         self.assertEqual(first[0], 0, first)
@@ -173,7 +177,7 @@ class HistoryImportTests(SharingFixture):
         self.make_source('Synthetic import remains saved when service startup fails.')
         error = PermissionError(13, 'private service path must not be reported')
         error.winerror = 5
-        with patch('mindie_knowledge.loop.cli.ensure_service', side_effect=error) as service:
+        with patch('service_client.connect', side_effect=error) as service:
             code, rows = self.run_import()
         self.assertEqual(code, 1)
         self.assertEqual(rows[0]['status'], 'imported')

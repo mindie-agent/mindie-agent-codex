@@ -28,16 +28,17 @@ Migration stamps use the authoritative core normalizer only when a write is need
 The baseline integrated suite passed all 231 tests, including 30 independent contracts and a real peer-adapter consent check. These are local component baseline results before the Windows read follow-up. The PR
 checks are the source of online CI status; local counts are not CI claims.
 
-From the repository root, use a Python interpreter satisfying the README's
-SQLite requirement. Install `pip install -e '.[test]'` for core, or
-`pip install -r runtime-requirements.txt` for an adapter, then run:
+The results above describe their recorded baseline revisions. For current
+adapter component checks, use the plugin's complete lock and noneditable
+installation from the repository root:
 
 ```sh
 export MINDIE_CORE_REPO=/path/to/knowledge
 export MINDIE_KIMI_REPO=/path/to/mindie-agent-kimi
-# Required revisions: core 0df968a03008a170bb52d4acade7c7226eb0d39b;
-# Kimi 90f73e76c6087ce091570f2d151b709145c913bc.
-python -m unittest discover -s tests
+# Core must contain the official commit in the plugin pyproject.toml/uv.lock.
+# Kimi must contain 90f73e76c6087ce091570f2d151b709145c913bc.
+uv sync --project plugins/mindie-agent --locked --no-editable
+uv run --project plugins/mindie-agent --no-sync python tests/run_ci.py
 ```
 
 Tests use committed real parser/peer fixtures or exact Git revisions declared

@@ -9,7 +9,7 @@ FIRST = (
     "test_public_projection",
     "test_runtime_compatibility", "test_windows_process_tree",
     "test_windows_consent_lock", "test_unicode_install", "test_protocol_encoding",
-    "test_service_handoff", "test_service_entry_lifetime",
+    "test_service_client", "test_service_entry_lifetime",
     "test_product_flow", "test_organizer_model", "test_stop_hook",
 )
 

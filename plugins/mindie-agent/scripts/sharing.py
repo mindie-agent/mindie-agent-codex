@@ -11,10 +11,8 @@ pass through every adapter mutation byte-identical; the framework-owned
 ``consent_config`` extension points the core gate at the profile consent
 authority and is wired at install/upgrade/entry boundaries.
 
-Reads follow the adapter-config pointer exactly — no implicit multi-file
-rewrite and no fallback to a second authority. Convergence on the
-profile-shared path and one-time legacy adoption happen only at explicit
-boundaries (``migrate_community_path`` from setup/upgrade/entry attach).
+The designated profile community file is the only authority. Unsupported
+development layouts are rejected without adoption, copying or path selection.
 
 Writes go through the core ``normalize`` via the configured interpreter so
 this adapter does not keep a second copy of the idle/root ranges. The Stop
@@ -23,6 +21,7 @@ hook uses a cheap structural precheck only.
 
 import json
 import math
+import ntpath
 import os
 from pathlib import Path
 import re
@@ -31,7 +30,7 @@ import tempfile
 import time
 
 from bounded_process import run
-from session_gate import config_path, generation_env
+from session_gate import config_path, runtime_env
 from update_lock import update_lock
 
 SCHEMA = "mindie-community-config/1"
@@ -76,7 +75,7 @@ class SharingError(ValueError):
 def community_write_lock(config_file=None):
     """The one cross-process write lock for the profile community authority.
 
-    Every enable/disable/configure/migration write to this profile's
+    Every enable/disable/configure write to this profile's
     community settings serializes here, with the complete
     read-merge-replace inside. The lock key is the authority's sibling
     ``mindie-community.json.lock`` — the same key all adapters and the core
@@ -87,173 +86,29 @@ def community_write_lock(config_file=None):
     when kimi-core publishes it (same key, same mechanism).
     """
     import consent
-    import consent_store
+    from mindie_knowledge import consent_store
 
     shared = consent.shared_community_path_for(config_file or config_path())
     return consent_store._UpdateLock(shared.with_name(shared.name + ".lock"))
 
 
-def configured_path(config_file=None):
-    """The designated community settings path.
-
-    The profile-shared conventional path is the live authority whenever it
-    exists — a legacy adapter-config pointer only locates a not-yet-migrated
-    file. Pure read: no adoption copy, no config rewrite, and never a
-    fallback to a second file when the authority is unreadable or damaged.
-    Convergence of the pointer itself happens only at the explicit
-    install/upgrade/entry boundaries (``migrate_community_path``).
-    """
+def configured_path(config_file=None, *, adapter=None):
+    """The explicit profile authority; no legacy pointer fallback."""
     import consent
 
     config_file = Path(config_file or config_path())
     shared = consent.shared_community_path_for(config_file)
-    if shared.exists():
-        return shared
-    config = json.loads(config_file.read_text(encoding='utf-8'))
+    config = adapter if adapter is not None else json.loads(config_file.read_text(encoding='utf-8'))
     value = config.get("community_config")
-    if not isinstance(value, str) or not os.path.isabs(value):
+    if not isinstance(value, str) or not os.path.isabs(value) or Path(value) != shared:
         raise SharingError(
-            "adapter configuration lacks an absolute community_config pointer"
+            "unsupported community configuration; finish installation with an explicit profile"
         )
-    return Path(value)
+    return shared
 
 
-def _migrate_community_locked(config_file):
-    """The resolve → adopt → repoint → wire sequence; the caller MUST hold
-    ``community_write_lock(config_file)`` — one context for the whole
-    boundary, so a toggle or configure can never interleave mid-sequence."""
-    import consent
-
-    shared = consent.shared_community_path_for(config_file)
-    authority = str(consent.consent_path_for(config_file))
-    result = dict(status="current", path=str(shared), detail=None)
-    adapter = json.loads(config_file.read_text(encoding='utf-8'))
-    pointer = adapter.get("community_config")
-    pointer = (
-        Path(pointer)
-        if isinstance(pointer, str) and os.path.isabs(pointer)
-        else None
-    )
-    if pointer != shared:
-        if (
-            pointer is not None
-            and pointer.exists()
-            and not shared.exists()
-        ):
-            shared.parent.mkdir(parents=True, exist_ok=True)
-            fd, name = tempfile.mkstemp(
-                dir=shared.parent, prefix=".community-"
-            )
-            try:
-                with os.fdopen(fd, "wb") as stream:
-                    stream.write(pointer.read_bytes())
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                os.chmod(name, 0o600)
-                os.replace(name, shared)
-            finally:
-                Path(name).unlink(missing_ok=True)
-            result.update(status="adopted", adopted_from=str(pointer))
-        elif pointer is not None and pointer.exists():
-            if pointer.read_bytes() != shared.read_bytes():
-                result["detail"] = (
-                    "legacy community settings differ from the shared "
-                    "authority; the shared file wins unchanged and the "
-                    f"legacy file is kept as evidence: {pointer}"
-                )
-        if result["status"] == "current":
-            result["status"] = "repointed"
-        adapter["community_config"] = str(shared)
-        write(config_file, adapter)
-        engine_value = adapter.get("engine_config")
-        if isinstance(engine_value, str) and os.path.isabs(engine_value):
-            engine_path = Path(engine_value)
-            try:
-                engine = json.loads(engine_path.read_text(encoding='utf-8'))
-            except (OSError, ValueError):
-                engine = None
-            if (
-                isinstance(engine, dict)
-                and engine.get("community_config") != str(shared)
-            ):
-                engine["community_config"] = str(shared)
-                write(engine_path, engine)
-    if shared.exists():
-        # The consent wiring stamp may only touch a document that passes the
-        # core's authoritative normalize() — the same conformance bar core's
-        # update_extensions enforces. The runtime normalize runs only here,
-        # at a required write boundary, and only when the stamp is actually
-        # missing or wrong; reads and the steady-state fast path never spawn
-        # it. A damaged, foreign-schema or otherwise non-conforming document
-        # (including managed values core rejects) keeps its bytes and the
-        # failure is reported; a missing runtime fails the same honest way —
-        # never a fallback to a weaker adapter-side validation.
-        try:
-            parsed = json.loads(shared.read_text(encoding='utf-8'))
-        except ValueError:
-            parsed = None
-        if not isinstance(parsed, dict):
-            if result["detail"] is None:
-                result["detail"] = (
-                    "shared community settings are damaged or non-conforming; "
-                    "bytes preserved and the consent wiring stamp skipped — "
-                    "the fault surfaces via status; repair is an explicit "
-                    "managed configure or manual removal"
-                )
-        elif (
-            not isinstance(parsed.get("consent_config"), str)
-            or not os.path.isabs(parsed["consent_config"])
-            or parsed["consent_config"] != authority
-        ):
-            try:
-                normalize_with_runtime(parsed, adapter.get("python"), config_file)
-            except SharingError as exc:
-                result["detail"] = (
-                    "consent wiring stamp skipped; bytes preserved: "
-                    + str(exc)[:220]
-                )
-            else:
-                parsed["consent_config"] = authority
-                write(shared, parsed)
-    return result
 
 
-def migrate_community_path(config_file=None):
-    """Explicit boundary convergence on the profile-shared community path.
-
-    Called at install/upgrade/entry-attach boundaries only, never from
-    status/load. A legacy adapter-specific file is adopted exactly once
-    (atomic copy; the legacy file is kept as evidence) and the adapter and
-    engine configurations are repointed so adapter, engine and worker read
-    the same designated authority. When both files exist, the shared
-    authority always wins as-is — scopes are never merged into a larger
-    public range — and a content difference is reported. The consent
-    authority pointer (``consent_config`` extension) is wired into the
-    settings here so the core gate reads the same profile document.
-    """
-    import consent
-
-    config_file = Path(config_file or config_path())
-    shared = consent.shared_community_path_for(config_file)
-    authority = str(consent.consent_path_for(config_file))
-    # Steady-state fast path without the lock: pointer already converged and
-    # the consent wiring already present.
-    try:
-        current = json.loads(config_file.read_text(encoding='utf-8'))
-        if current.get("community_config") == str(shared):
-            try:
-                present = json.loads(shared.read_text(encoding='utf-8'))
-            except (OSError, ValueError):
-                present = None
-            if present is None or (
-                isinstance(present, dict)
-                and present.get("consent_config") == authority
-            ):
-                return dict(status="current", path=str(shared), detail=None)
-    except (OSError, ValueError):
-        pass
-    with community_write_lock(config_file):
-        return _migrate_community_locked(config_file)
 
 
 def canonical_root(value):
@@ -261,7 +116,19 @@ def canonical_root(value):
         raise SharingError("community project roots must be path strings")
     if not os.path.isabs(value):
         raise SharingError("community project roots must be absolute: " + value[:80])
-    return Path(value).resolve().as_posix()
+    if os.name == 'nt':
+        value = ntpath.abspath(value)
+        if not value.startswith('\\\\?\\'):
+            value = '\\\\?\\UNC\\' + value[2:] if value.startswith('\\\\') else '\\\\?\\' + value
+    root = str(Path(value).resolve())
+    if os.name == 'nt':
+        # Comparison only: preserve extended paths at the actual I/O boundary.
+        if root[:8].casefold() == '\\\\?\\unc\\':
+            root = '\\\\' + root[8:]
+        elif root.startswith('\\\\?\\'):
+            root = root[4:]
+        root = ntpath.normcase(root)
+    return Path(root).as_posix()
 
 
 def validate(settings):
@@ -351,7 +218,7 @@ def normalize_with_runtime(settings, python, config_file=None, *, previous=None)
             request,
             timeout=None,
             max_output=max(65536, len(request.encode('utf-8')) * 2),
-            env=generation_env(config_file) if config_file is not None else {
+            env=runtime_env(config_file) if config_file is not None else {
                 key: value for key, value in os.environ.items() if key != "PYTHONPATH"
             },
         ).checked_stdout()
@@ -372,10 +239,10 @@ def normalize_with_runtime(settings, python, config_file=None, *, previous=None)
     return value["ok"]
 
 
-def read(config_file=None):
+def read(config_file=None, *, adapter=None):
     """Cheap fail-closed view for capture precheck; no interpreter spawn."""
     try:
-        raw = json.loads(configured_path(config_file).read_text(encoding='utf-8'))
+        raw = json.loads(configured_path(config_file, adapter=adapter).read_text(encoding='utf-8'))
         settings = validate(raw)
     except FileNotFoundError:
         return None
@@ -397,22 +264,11 @@ def write(path, value):
 
 
 def consent_allows(settings, config_file=None):
-    """The consent_config extension gate on the adapter's own write path.
-
-    ``None`` — the legacy format without the field keeps its previous read
-    compatibility (the community enabled flag alone decides). When the field
-    is present, the named profile consent authority must hold a saved
-    ``contribute`` choice: missing, unreadable, corrupt, or any other saved
-    choice stops the capture write path — the same rule the core gate
-    applies at the engine/model/outbound boundaries. The field grants no
-    permission by itself; explicit enabled=false still wins first.
-    """
+    """Require the explicit consent authority before capture or publication."""
     ref = settings.get("consent_config")
-    if ref is None:
-        return None
     if not isinstance(ref, str) or not os.path.isabs(ref):
-        raise SharingError("invalid consent authority path")
-    import consent_store
+        raise SharingError("unsupported capture configuration: explicit consent authority is required")
+    from mindie_knowledge import consent_store
 
     view = consent_store.read(ref)
     if view["state"] != "ok":
@@ -420,7 +276,7 @@ def consent_allows(settings, config_file=None):
     return view["choice"] == "contribute"
 
 
-def capture_allowed(lease, cwd, config_file=None):
+def capture_allowed(lease, cwd, config_file=None, *, adapter=None):
     """active lease AND community enabled AND lease project root in scope,
     plus the consent gate when the settings carry the consent authority.
 
@@ -428,7 +284,7 @@ def capture_allowed(lease, cwd, config_file=None):
     caller-supplied cwd pointing into an allowed directory. Anything
     unreadable or incomplete fails closed for capture only.
     """
-    settings = read(config_file)
+    settings = read(config_file, adapter=adapter)
     if settings is None or not settings["enabled"]:
         return False
     if consent_allows(settings, config_file) is False:
@@ -439,11 +295,11 @@ def capture_allowed(lease, cwd, config_file=None):
     ):
         raise SharingError("capture lease metadata is incomplete")
     try:
-        root = Path(lease["project_root"]).resolve().as_posix()
+        root = Path(canonical_root(lease["project_root"]))
     except (OSError, ValueError) as exc:
         raise SharingError("capture lease scope is unreadable") from exc
     return any(
-        root == allowed or root.startswith(allowed + "/")
+        root.is_relative_to(Path(allowed))
         for allowed in settings["project_roots"]
     )
 
@@ -471,11 +327,7 @@ def record_choice(choice, config_file=None):
 
 
 def first_use(config_file=None, saved=None):
-    """None once a choice exists, saved state is damaged, or any install
-    trace shows this is an existing installation pending its one-time
-    boundary migration; otherwise the three first-use options. Installer
-    default-off is unchosen: the one-time setup is presented exactly until
-    a choice is recorded."""
+    """Offer missing setup only when no configuration or explicit choice exists."""
     import consent
 
     saved = saved if saved is not None else consent.load(config_file)
@@ -484,7 +336,7 @@ def first_use(config_file=None, saved=None):
     if saved["state"] in {"corrupt", "unreadable"}:
         return None  # a fault reported by status, never a fresh onboarding
     if consent.install_traces(config_file):
-        return None  # existing installation; the entry boundary migrates it
+        return None
     try:
         json.loads(configured_path(config_file).read_text(encoding='utf-8'))
     except json.JSONDecodeError:
@@ -503,7 +355,7 @@ def set_enabled(enable, config_file=None):
     """Flip the sharing switch atomically; keep the recorded scope/settings.
 
     The complete read-merge-replace runs inside the profile's community
-    write lock: a concurrent toggle, configure or migration can never
+    write lock: a concurrent toggle or configure can never
     overwrite this user's committed choice with a stale read. The current
     authority is resolved and re-read inside the lock. Enabling refreshes
     enabled_at only on an off->on edge (the shared core write semantics):
@@ -547,8 +399,7 @@ def set_enabled(enable, config_file=None):
             return settings  # Already in the requested state: do not mutate.
         settings["enabled"] = bool(enable)
         # Keep the consent-authority pointer wired on this user-intent
-        # boundary; an explicit value pointing elsewhere is left for the
-        # migration boundary to correct.
+        # boundary; the core validates this explicit authority.
         settings.setdefault(
             "consent_config", str(consent.consent_path_for(config_file))
         )
@@ -561,7 +412,7 @@ def set_enabled(enable, config_file=None):
     return normalized
 
 
-def status(config_file=None, saved=None):
+def status(config_file=None, saved=None, *, adapter=None):
     """Read-only sharing status; initializes no service, model or database.
 
     One consent authority read per call (``saved`` may carry a caller's
@@ -577,7 +428,7 @@ def status(config_file=None, saved=None):
         return dict(state="malformed", detail="saved setup state is damaged",
                     sharing_choice=choice, first_use=None)
     try:
-        path = configured_path(config_file)
+        path = configured_path(config_file, adapter=adapter)
     except (OSError, ValueError) as exc:
         return dict(
             state="unconfigured",

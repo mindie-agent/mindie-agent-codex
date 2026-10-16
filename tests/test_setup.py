@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from tests.process_fixtures import run_owned_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/mindie-agent/scripts"
@@ -15,27 +16,172 @@ sys.path.insert(0, str(SCRIPTS))
 import setup as setup_script
 
 
-def run_setup(python, *args, real_probe=False, env=None):
+def run_setup(python, *args, real_probe=False, real_store=False, env=None):
     # Config-write cases isolate the product verification boundary. Candidate
     # ownership, real subprocess failures and receipt identities have their
     # own tests; no config unit case downloads publication history.
-    command = [sys.executable, str(SCRIPTS / "setup.py")]
-    if not real_probe:
-        helper = ("import sys; sys.path.insert(0, sys.argv.pop(1)); "
-                  "import setup,product_contract; "
-                  "setup.probe_runtime=lambda python: dict(product_contract.identity(product_contract.source_root(setup.SCRIPTS)),status=\"validated\"); "
-                  "setup.main()")
-        command = [sys.executable, "-c", helper, str(SCRIPTS)]
-    return subprocess.run(
-        [*command, "--knowledge-python", str(python), *map(str, args)],
-        text=True,
-        capture_output=True,
-        timeout=30,
-        env=env,
-    )
+    with tempfile.TemporaryDirectory() as watch:
+        stage = Path(watch) / "stage"
+        helper = (
+            "import sys\nfrom pathlib import Path\n"
+            "sys.path.insert(0,sys.argv.pop(1))\n"
+            "stage=Path(sys.argv.pop(1));stage.write_text('import_setup')\n"
+            "import setup,product_contract,release_metadata,capture_config\n"
+            "def observed(name,operation):\n"
+            " def invoke(*args,**kwargs):\n"
+            "  stage.write_text(name)\n"
+            "  return operation(*args,**kwargs)\n"
+            " return invoke\n")
+        if not real_probe:
+            helper += (
+                "release_metadata.require_harness=lambda source:'0.153.4'\n"
+                "setup.probe_runtime=lambda python:dict(product_contract.identity("
+                "product_contract.source_root(setup.SCRIPTS)),status='validated')\n")
+        if not real_store:
+            # Config/consent tests exercise real schema checks, but storage
+            # initialization belongs to the two explicit integration cases.
+            helper += (
+                "def validate_store_config(python,scripts,config):\n"
+                " from mindie_knowledge.loop.service_context import validate\n"
+                " from mindie_knowledge.git_layout import validate_config_feed_layout\n"
+                " validate(config);validate_config_feed_layout(config)\n"
+                "capture_config.prepare_store=validate_store_config\n")
+        helper += (
+            "capture_config.prepare=observed('prepare_capture',capture_config.prepare)\n"
+            "capture_config.prepare_store=observed('prepare_store',capture_config.prepare_store)\n"
+            "setup.probe_runtime=observed('probe_runtime',setup.probe_runtime)\n"
+            "setup.write_private=observed('publish_config',setup.write_private)\n"
+            "stage.write_text('setup_main');setup.main()\n"
+            "stage.write_text('completed')\n")
+        return run_owned_fixture(
+            [sys.executable, "-c", helper, str(SCRIPTS), str(stage),
+             "--knowledge-python", str(python), *map(str, args)],
+            timeout=30, env=env,
+            diagnose=lambda: dict(stage=stage.read_text() if stage.exists() else "python_startup",
+                                  real_probe=real_probe, real_store=real_store),
+        )
 
 
 class SetupTests(unittest.TestCase):
+    def test_first_codex_install_reuses_unconfigured_disabled_shared_document(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            config = base / "codex.json"
+            consent = base / "mindie-consent.json"
+            community = base / "mindie-community.json"
+            community.write_text(json.dumps(dict(
+                schema="mindie-community-config/1", enabled=False,
+                generation=None, enabled_at=None, repository=None,
+                branch="main", project_roots=[], idle_seconds=300,
+                consent_config=str(consent),
+            )))
+            before = community.read_bytes()
+            result = run_setup(sys.executable, "--config", config, "--root", base / "data")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(community.read_bytes(), before)
+            self.assertFalse(consent.exists())
+            receipt = json.loads(result.stdout)
+            self.assertIsNone(receipt["reused_choice"])
+            self.assertEqual(receipt["sharing"], "off")
+            self.assertIn("off/unconfigured", receipt["next"])
+
+    def test_first_codex_install_reuses_other_adapter_scope_and_consent_unchanged(self):
+        from mindie_knowledge import consent_store
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                config = base / "codex.json"
+                consent = base / "mindie-consent.json"
+                community = base / "mindie-community.json"
+                consent_store.record_choice(consent, "contribute" if enabled else "disabled")
+                consent_store.record_reporting(consent, "disabled")
+                community.write_text(json.dumps(dict(
+                    schema="mindie-community-config/1", enabled=enabled,
+                    generation="other-adapter", enabled_at=1.0, repository="owner/shared",
+                    branch="main", project_roots=[str(base)], idle_seconds=300,
+                    consent_config=str(consent), visibility="public",
+                    sibling_extension={"preserve": True},
+                )))
+                before = consent.read_bytes(), community.read_bytes()
+                result = run_setup(sys.executable, "--config", config, "--root", base / "data")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((consent.read_bytes(), community.read_bytes()), before)
+                receipt = json.loads(result.stdout)
+                self.assertEqual(receipt["reused_choice"], "contribute" if enabled else "disabled")
+                self.assertEqual(receipt["sharing"], "enabled" if enabled else "off")
+                self.assertIsNone(receipt["next"])
+                self.assertEqual(json.loads(config.read_text())["community_config"], str(community))
+
+    def test_first_install_preserves_invalid_shared_authority_before_store_or_config(self):
+        from mindie_knowledge import consent_store
+        for contents in ("{broken", json.dumps(dict(
+            schema="mindie-community-config/1", enabled=False,
+            project_roots=[], idle_seconds=300,
+        ))):
+            with self.subTest(contents=contents), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                config = base / "codex.json"
+                consent = base / "mindie-consent.json"
+                community = base / "mindie-community.json"
+                consent_store.record_choice(consent, "disabled")
+                community.write_text(contents)
+                before = consent.read_bytes(), community.read_bytes()
+                result = run_setup(sys.executable, "--config", config, "--root", base / "data")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("existing shared community configuration", result.stderr)
+                self.assertEqual((consent.read_bytes(), community.read_bytes()), before)
+                self.assertFalse(config.exists())
+                self.assertFalse((base / "data").exists())
+
+    def test_invalid_service_environment_binding_fails_before_config_publication(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            home = base / "native-home"
+            home.mkdir()
+            (home / "config.toml").write_text(
+                'model_provider="fixture"\n[model_providers.fixture]\n'
+                'env_key="PYTHONPATH"\n', encoding="utf-8")
+            config = base / "adapter.json"
+            result = run_setup(
+                sys.executable, "--config", config, "--root", base / "data",
+                env=dict(os.environ, CODEX_HOME=str(home)),
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("service_launch_context_invalid", result.stderr + result.stdout)
+            self.assertFalse(config.exists())
+            self.assertFalse((base / "adapter.engine.json").exists())
+
+    def test_setup_saves_only_explicit_diagnostic_path_overrides(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            context = {
+                "MINDIE_DIAGNOSTICS_CONFIG": str(base / "policy.json"),
+                "MINDIE_DIAGNOSTICS_ROOT": str(base / "diagnostic-events"),
+            }
+            clean = {key: value for key, value in os.environ.items() if key not in context}
+            clean["CODEX_HOME"] = str(base / "native-home")
+            for explicit in (False, True):
+                folder = base / str(explicit)
+                config = folder / "codex.json"
+                env = dict(clean, **context) if explicit else clean
+                result = run_setup(sys.executable, "--config", config,
+                                   "--root", folder / "data", env=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                adapter = json.loads(config.read_text())
+                engine = json.loads(Path(adapter["engine_config"]).read_text())
+                self.assertEqual(engine["service_launch_context"]["paths"]["MINDIE_AGENT_CONFIG"],
+                                 str(config))
+                self.assertEqual(engine["service_launch_context"]["paths"]["CODEX_HOME"],
+                                 clean["CODEX_HOME"])
+                self.assertEqual(adapter["native_context"]["CODEX_HOME"],
+                                 str(Path(env.get("CODEX_HOME") or Path.home() / ".codex").absolute()))
+                if explicit:
+                    self.assertEqual(adapter["diagnostics_context"], context)
+                else:
+                    self.assertNotIn("diagnostics_context", adapter)
+            self.assertFalse((base / "policy.json").exists())
+            self.assertFalse((base / "diagnostic-events").exists())
+
     def test_missing_dependencies_fail_clearly_before_any_write(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -84,7 +230,7 @@ class SetupTests(unittest.TestCase):
             before = {str(path.relative_to(base)): path.read_bytes()
                       for path in base.rglob('*') if path.is_file() and path.suffix != '.lock'}
             config = base / 'codex.json'
-            result = run_setup(sys.executable, '--config', config, '--root', base / 'data')
+            result = run_setup(sys.executable, '--config', config, '--root', base / 'data', real_store=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('knowledge store preparation failed', result.stdout + result.stderr)
             self.assertIn('database', result.stdout + result.stderr)
@@ -103,7 +249,7 @@ class SetupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             config = base / "codex.json"
-            result = run_setup(sys.executable, "--config", config, "--root", base / "data")
+            result = run_setup(sys.executable, "--config", config, "--root", base / "data", real_store=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             engine = config.with_name("codex.engine.json")
             if os.name == "posix":
@@ -148,11 +294,8 @@ class SetupTests(unittest.TestCase):
             again = run_setup(sys.executable, "--config", config, "--root", base / "data")
             self.assertNotEqual(again.returncode, 0)
             self.assertIn("configuration already exists", again.stderr)
-            # Post-install configure must work even though engine config exists
-            # and must drop the retired session_activation alias.
-            engine_value = json.loads(engine.read_text())
-            engine_value["session_activation"] = str(config)
-            engine.write_text(json.dumps(engine_value))
+            # Sharing changes do not rewrite either installation binding.
+            installed_bytes = config.read_bytes(), engine.read_bytes()
             scope = base / "scope"
             scope.mkdir()
             configured = subprocess.run(
@@ -188,7 +331,31 @@ class SetupTests(unittest.TestCase):
                 settings["consent_config"],
                 str(config.with_name("mindie-consent.json")),
             )
-            self.assertNotIn("session_activation", json.loads(engine.read_text()))
+            self.assertEqual((config.read_bytes(), engine.read_bytes()), installed_bytes)
+
+    def test_configure_rejects_corrupt_or_development_engine_before_writes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            config = base / "codex.json"
+            installed = run_setup(sys.executable, "--config", config, "--root", base / "data")
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            engine = config.with_name("codex.engine.json")
+            original = json.loads(engine.read_text())
+            scope = base / "scope"
+            scope.mkdir()
+            for invalid in (b"{broken", json.dumps(dict(original, session_activation=str(config))).encode()):
+                with self.subTest(invalid=invalid[:20]):
+                    engine.write_bytes(invalid)
+                    before = {path.name: path.read_bytes() for path in base.iterdir() if path.is_file()}
+                    result = subprocess.run([
+                        sys.executable, str(SCRIPTS / "setup.py"), "configure",
+                        "--config", str(config), "--community-repository", "owner/explicit",
+                        "--community-project-root", str(scope), "--community-visibility", "public",
+                    ], text=True, capture_output=True, timeout=30)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("engine configuration is unavailable or unsupported", result.stderr)
+                    self.assertEqual(
+                        {path.name: path.read_bytes() for path in base.iterdir() if path.is_file()}, before)
 
     def test_configure_preserves_a_damaged_community_document(self):
         for module in setup_script.PROBE_MODULES:

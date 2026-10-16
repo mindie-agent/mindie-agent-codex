@@ -40,7 +40,7 @@ class WindowsConsentLockTests(unittest.TestCase):
             contender_script.write_text(
                 "import sys\n"
                 f"sys.path.insert(0, {str(SCRIPTS)!r})\n"
-                "import consent_store\n"
+                "from mindie_knowledge import consent_store\n"
                 "consent_store.LOCK_POLL_SECONDS = 0.02\n"
                 "try:\n"
                 " with consent_store._UpdateLock(sys.argv[1], wait=0.4):\n"

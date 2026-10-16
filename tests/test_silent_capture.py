@@ -12,6 +12,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from tests.process_fixtures import cleanup_temporary_directory, public_engine_config
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
 sys.path.insert(0, str(SCRIPTS))
@@ -19,6 +20,7 @@ import admission_ops
 import agent_diagnostics
 import codex_transcript
 import diagnostic_support
+import bridge
 import sharing
 from mindie_knowledge.loop.activation import Admission
 from mindie_knowledge.loop.store import Store
@@ -28,30 +30,34 @@ class SilentCaptureTests(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
-        self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
+        temporary = tempfile.TemporaryDirectory()
+        self.stack.callback(cleanup_temporary_directory, temporary)
+        self.root = Path(temporary.name)
         self.profile = self.root / 'profile'
         self.config = self.root / 'adapter.json'
         self.engine = self.root / 'engine.json'
-        self.community = self.root / 'community.json'
+        self.community = self.root / 'mindie-community.json'
         self.admission = self.root / 'admission.sqlite3'
         self.scope = self.root / 'project'
         self.scope.mkdir()
         self.enabled = time.time() - 20
         self.settings = dict(schema='mindie-community-config/1', enabled=True,
             generation='g1', enabled_at=self.enabled, repository='mindie-agent/knowledge',
-            branch='main', project_roots=[str(self.scope)], idle_seconds=300, visibility='public')
+            branch='main', project_roots=[str(self.scope)], idle_seconds=300, visibility='public',
+            consent_config=str(self.root / 'mindie-consent.json'))
         self.community.write_text(json.dumps(self.settings))
-        self.engine.write_text(json.dumps(dict(root=str(self.root / 'data'), domain='test',
+        self.engine.write_text(json.dumps(public_engine_config(self.root / 'data', adapter_profile=self.config,
             admission_path=str(self.admission), community_config=str(self.community),
-            redactor_executable=str(self.root / 'scanner'), transcript_adapter=str(SCRIPTS / 'codex_transcript.py'))))
+            )))
         self.config.write_text(json.dumps(dict(admission_path=str(self.admission),
             engine_config=str(self.engine), community_config=str(self.community))))
+        import consent
+        consent.record_choice("contribute", self.config)
         store = Store(self.root / 'data', 'test')
         store.db.commit()
         store.close()
         self.stack.enter_context(patch.dict(os.environ, MINDIE_AGENT_CONFIG=str(self.config),
             CODEX_HOME=str(self.profile), MINDIE_DIAGNOSTICS_ROOT=str(self.root / 'diagnostics')))
-        self.stack.enter_context(patch.object(sharing, 'consent_allows', return_value=True))
         self.stack.enter_context(patch('mindie_knowledge.loop.handoff._probe', return_value='absent'))
         self.wake = self.stack.enter_context(patch('mindie_knowledge.loop.handoff.request_wake',
             return_value=dict(wake='requested', runtime='unavailable', reason='requested')))
@@ -91,6 +97,26 @@ class SilentCaptureTests(unittest.TestCase):
         self.assertNotIn('OLD_OFF_WINDOW', captured['text'])
         self.assertEqual(self.accept(event)['capture_id'], result['capture_id'])
 
+    def test_stop_snapshot_queues_after_canonical_replacement_and_reads_live_consent(self):
+        event = self.event()
+        adapter = json.loads(self.config.read_text())
+        self.config.write_text("replaced canonical is not this invocation's binding")
+        with patch.object(admission_ops, "read_config", side_effect=AssertionError("reread")):
+            result = admission_ops.operation("stop_capture", dict(event=event, _adapter=adapter))
+        self.assertEqual(result["stage"], "accepted-local")
+        with closing(sqlite3.connect(self.root / "data/test/state-v1/state-v4.sqlite3")) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM captures").fetchone()[0], 1)
+        import consent
+        consent.record_choice("disabled", self.config)
+        self.wake.reset_mock()
+        with patch.object(codex_transcript, "capture_source", side_effect=AssertionError("disabled read")):
+            result = admission_ops.operation("stop_capture", dict(
+                event=dict(event, turn_id="later"), _adapter=adapter))
+        self.assertEqual(result["reason"], "sharing-disabled")
+        self.wake.assert_not_called()
+        with closing(sqlite3.connect(self.root / "data/test/state-v1/state-v4.sqlite3")) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM captures").fetchone()[0], 1)
+
     def test_scope_and_sibling_artifact_cannot_create_a_binding(self):
         result = self.accept(self.event(scope=self.root / 'other'))
         self.assertEqual(result['reason'], 'out-of-scope')
@@ -99,6 +125,25 @@ class SilentCaptureTests(unittest.TestCase):
             self.accept(self.event(owner='sibling'))
         self.assertFalse(self.admission.exists())
         self.wake.assert_not_called()
+
+    def test_source_failure_crosses_real_helper_and_remains_pending(self):
+        event = self.event()
+        foreign = self.root / "other-profile/sessions/task.jsonl"
+        foreign.parent.mkdir(parents=True)
+        foreign.write_bytes(Path(event["transcript_path"]).read_bytes())
+        event["transcript_path"] = str(foreign)
+        config = json.loads(self.config.read_text())
+        config.update(python=sys.executable, runtime_scripts=str(SCRIPTS))
+        self.config.write_text(json.dumps(config))
+        with patch.dict(os.environ, CODEX_THREAD_ID="current"), \
+                patch.object(bridge, "_read_hook_stdin", return_value=json.dumps(event).encode()):
+            self.assertEqual(bridge.stop(), 1)
+        projection = agent_diagnostics.pending()
+        item = projection["items"][0]
+        self.assertEqual(item["code"], "transcript_outside_profile")
+        self.assertEqual(item["stage"], "transcript")
+        self.assertNotIn(str(foreign), json.dumps(projection))
+        self.assertFalse(self.admission.exists())
 
     def test_fork_boundary_and_explicit_task_revocation_are_preserved(self):
         event = self.event(fork=True)
@@ -132,6 +177,10 @@ class SilentCaptureTests(unittest.TestCase):
             input=''.join(json.dumps(frame)+'\n' for frame in frames), text=True,
             capture_output=True, timeout=8)
         self.assertEqual(result.returncode, 0, result.stderr)
+        from importlib.metadata import version
+        initialized = next(json.loads(line)['result'] for line in result.stdout.splitlines()
+                           if json.loads(line).get('id') == 1)
+        self.assertEqual(initialized['serverInfo']['version'], version("mindie-agent-codex"))
         response = next(json.loads(line)['result'] for line in result.stdout.splitlines()
                         if json.loads(line).get('id') == 2)
         projection = response['structuredContent']['agent_diagnostics']
@@ -207,7 +256,8 @@ class SilentCaptureTests(unittest.TestCase):
         self.assertEqual(len(projected['items']), 65)
         self.assertEqual(next(item for item in projected['items'] if item['code']=='projection_overflow')['count'], 6)
         from mindie_knowledge.loop import agent_diagnostics as core
-        self.assertEqual(Path(core.__file__).read_bytes(), Path(agent_diagnostics.__file__).read_bytes())
+        self.assertEqual(Path(core.__file__).read_text(encoding='utf-8'),
+                         Path(agent_diagnostics.__file__).read_text(encoding='utf-8'))
 
     def test_failed_diagnostic_recorder_remains_pending_without_masking_results(self):
         with patch.object(diagnostic_support, '_record', side_effect=OSError('synthetic recorder fault')):
@@ -223,22 +273,3 @@ class SilentCaptureTests(unittest.TestCase):
         result = diagnostic_support.attach(source, dict(incident_id='a'*32, logging_failed=False))
         self.assertEqual(result['content'], source['content'])
         self.assertEqual(result['diagnostic']['incident_id'], 'a'*32)
-
-    def test_stable_stop_failure_before_bridge_stays_silent_and_pending(self):
-        stable = self.root / 'installation'
-        stable.mkdir()
-        for name in ('runtime_launcher.py', 'update_lock.py', 'diagnostic_support.py',
-                     'diagnostic_fallback.py', 'agent_diagnostics.py'):
-            shutil.copy2(SCRIPTS / name, stable / name)
-        for broken, expected in ((self.root / 'missing.json', 'generation_unavailable'),
-                                 (self.config, 'generation_busy')):
-            from update_lock import update_lock
-            with ExitStack() as held:
-                if broken == self.config:
-                    held.enter_context(update_lock(self.config, exclusive=True))
-                result = subprocess.run([sys.executable, str(stable / 'runtime_launcher.py'),
-                    '--config', str(broken), 'stop'], capture_output=True, text=True, timeout=5)
-            self.assertEqual((result.returncode, result.stdout.strip(), result.stderr), (1, '{}', ''))
-            projection = agent_diagnostics.pending()
-            self.assertIn(expected, [item['code'] for item in projection['items']])
-            agent_diagnostics.acknowledge(projection)

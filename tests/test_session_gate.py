@@ -15,6 +15,7 @@ import time
 import unittest
 from unittest.mock import patch
 from tests.process_fixtures import cleanup_temporary_directory, stop_owned_knowledge_service, copy_runtime_scripts
+from tests.process_fixtures import recorded_wake_runtime, wake_requests
 
 from tests.process_fixtures import public_engine_config
 
@@ -47,7 +48,8 @@ class SessionGateTests(unittest.TestCase):
         self.admission = self.root / "codex.admission.sqlite3"
         self.engine.write_text(
             json.dumps(
-                public_engine_config(self.root / "data", admission_path=str(self.admission))
+                public_engine_config(self.root / "data", adapter_profile=self.config,
+                                     admission_path=str(self.admission))
             )
         )
         self.write_config()
@@ -70,7 +72,7 @@ class SessionGateTests(unittest.TestCase):
             engine_config=str(self.engine),
             admission_path=str(self.admission),
             runtime_scripts=str(SCRIPTS),
-            community_config=str(self.root / "codex.community.json"),
+            community_config=str(self.root / "mindie-community.json"),
         )
         value.update(extra)
         self.config.write_text(json.dumps(value))
@@ -107,14 +109,15 @@ class SessionGateTests(unittest.TestCase):
         )
 
     def enable_sharing(self, *, enabled=True, roots=None):
-        community = self.root / "codex.community.json"
+        import consent
+        community = self.root / "mindie-community.json"
         current = json.loads(self.config.read_text())
         self.write_config(
             python=current["python"],
             runtime_scripts=current["runtime_scripts"],
             community_config=str(community),
-            sharing_choice="contribute",
         )
+        consent.record_choice("contribute" if enabled else "disabled", self.config)
         engine = json.loads(self.engine.read_text())
         engine["community_config"] = str(community)
         self.engine.write_text(json.dumps(engine))
@@ -130,6 +133,7 @@ class SessionGateTests(unittest.TestCase):
                     project_roots=[str(root) for root in (roots or [self.root])],
                     idle_seconds=300,
                     visibility="public",
+                    consent_config=str(consent.consent_path_for(self.config)),
                 )
             )
         )
@@ -178,13 +182,13 @@ class SessionGateTests(unittest.TestCase):
         return dict(hook_event_name="Stop", transcript_path=str(path), session_id=session,
                     turn_id=turn, cwd=str(cwd or self.root), last_assistant_message="A verified result")
 
-    def test_manual_policy_and_no_registered_session_start(self):
+    def test_informational_skill_and_native_session_preparation(self):
         skill = SCRIPTS.parent / "skills/mindie-agent"
         self.assertIn(
             "allow_implicit_invocation: true",
             (skill / "agents/openai.yaml").read_text(encoding="utf-8"),
         )
-        self.assertNotIn(
+        self.assertIn(
             "SessionStart",
             json.loads((SCRIPTS.parent / "hooks/hooks.json").read_text())["hooks"],
         )
@@ -519,7 +523,8 @@ class SessionGateTests(unittest.TestCase):
         lease = self.activate()
         self.engine.write_text(
             json.dumps(
-                public_engine_config(self.root / "data", domain="changed", admission_path=str(self.admission))
+                public_engine_config(self.root / "data", domain="changed", adapter_profile=self.config,
+                                     admission_path=str(self.admission))
             )
         )
         self.assertEqual(
@@ -553,6 +558,7 @@ class SessionGateTests(unittest.TestCase):
     def test_hook_delivery_is_once_and_not_for_other_sessions(self):
         from mindie_knowledge.loop.store import Store
 
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.enable_sharing()
         self.activate()
         store = Store(self.root / "data", "test")
@@ -572,10 +578,12 @@ class SessionGateTests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(other, 0)
         self.assertEqual(self.attempts(), 0)
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"manual-A"})
 
     def test_repeated_stop_keeps_one_capture_without_burning_a_claim(self):
         from mindie_knowledge.loop.store import Store
 
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.enable_sharing()
         self.activate()
         Store(self.root / "data", "test").close()
@@ -590,6 +598,7 @@ class SessionGateTests(unittest.TestCase):
             db.close()
         self.assertEqual(count, 1)
         self.assertEqual(self.attempts(), 0)
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"manual-A"})
 
     def test_slow_capture_helper_continues_past_the_old_hook_budget(self):
         marker = self.runtime_fixture(delay=2.1)
@@ -742,9 +751,7 @@ class SessionGateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["service"]["state"], "not-running")
-        self.assertEqual(
-            payload["first_use"]["choices"], []
-        )
+        self.assertIsNone(payload["first_use"])
         self.assertFalse((self.root / "data").exists())
         init = self.bridge("init")
         self.assertEqual(init.returncode, 0, init.stderr)
@@ -756,83 +763,7 @@ class SessionGateTests(unittest.TestCase):
         self.assertIsNone(again["first_use"])
         self.assertFalse((self.root / "data").exists())
 
-    def test_entry_activation_migrates_legacy_state_once(self):
-        # Legacy install shape: adapter-config choice key plus a legacy
-        # per-adapter community file as the configured pointer.
-        community = self.root / "codex.community.json"
-        current = json.loads(self.config.read_text())
-        self.write_config(python=current["python"], sharing_choice="read-only")
-        community.write_text(
-            json.dumps(
-                dict(
-                    schema="mindie-community-config/1",
-                    enabled=False,
-                    repository="owner/repo",
-                    project_roots=[],
-                    idle_seconds=300,
-                )
-            )
-        )
-        consent_file = self.root / "mindie-consent.json"
-        shared = self.root / "mindie-community.json"
-        self.assertFalse(consent_file.exists())
-        self.assertFalse(shared.exists())
-        result = self.bridge("activate")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        payload = json.loads(result.stdout)
-        # The entry boundary migrated once and reports it verifiably.
-        self.assertEqual(payload["migration"]["consent"]["status"], "migrated")
-        self.assertEqual(payload["migration"]["consent"]["choice"], "read-only")
-        self.assertEqual(payload["migration"]["community"]["status"], "adopted")
-        self.assertEqual(payload["scripts"], str(SCRIPTS))
-        saved = json.loads(consent_file.read_text())
-        self.assertEqual(saved["choice"], "read-only")
-        adapter = json.loads(self.config.read_text())
-        self.assertEqual(adapter["community_config"], str(shared))
-        engine = json.loads(self.engine.read_text())
-        self.assertEqual(engine["community_config"], str(shared))
-        settings = json.loads(shared.read_text())
-        self.assertEqual(settings["consent_config"], str(consent_file))
-        self.assertTrue(community.exists())  # legacy kept as evidence
-        # One authority for every consumer: the adapter's read path and the
-        # worker-facing engine config resolve to the same file.
-        import sharing as sharing_mod
 
-        self.assertEqual(sharing_mod.configured_path(), shared)
-        self.assertEqual(engine["community_config"], str(shared))
-        # Second entry: nothing migrated, no re-ask, same binding.
-        again = json.loads(self.bridge("activate").stdout)
-        self.assertNotIn("migration", again)
-        self.assertEqual(again["mindie_session_id"], payload["mindie_session_id"])
-        self.assertEqual(again["mindie_activation"], payload["mindie_activation"])
-
-    def test_entry_activation_reports_legacy_choice_conflict(self):
-        community = self.root / "codex.community.json"
-        current = json.loads(self.config.read_text())
-        self.write_config(python=current["python"], sharing_choice="read-only")
-        community.write_text(
-            json.dumps(
-                dict(
-                    schema="mindie-community-config/1",
-                    enabled=True,
-                    generation="g1",
-                    enabled_at=1.0,
-                    repository="owner/repo",
-                    project_roots=[str(self.root)],
-                    idle_seconds=300,
-                )
-            )
-        )
-        result = self.bridge("activate")
-        self.assertEqual(result.returncode, 1, result.stderr)
-        payload = json.loads(result.stdout)
-        # Conflicting legacy evidence is diagnosed, never guessed; the
-        # binding receipt survives, capture fails and no consent is written.
-        self.assertEqual(payload['status'], 'degraded')
-        self.assertEqual(payload['capture'], 'unavailable')
-        self.assertEqual(payload["migration"]["consent"]["status"], "conflict")
-        self.assertFalse((self.root / "mindie-consent.json").exists())
-        self.assertEqual(payload["migration"]["community"]["status"], "adopted")
 
     def test_init_without_config_returns_first_use_choices(self):
         absent = self.root / "missing-codex.json"
@@ -852,9 +783,7 @@ class SessionGateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertFalse(payload["configured"])
-        self.assertEqual(
-            payload["first_use"]["choices"], []
-        )
+        self.assertEqual(payload["first_use"]["choices"], [])
         self.assertIn("setup.py", payload["next"])
         self.assertEqual(payload["service"]["state"], "not-running")
         self.assertFalse(absent.exists())

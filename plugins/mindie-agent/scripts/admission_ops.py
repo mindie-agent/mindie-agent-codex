@@ -1,10 +1,8 @@
-"""Admission operations inside the committed runtime generation.
+"""Admission operations inside the fixed installed runtime.
 
-Wrapper entrypoints (Stop hook, MCP gate, updater) run under a plain
-interpreter and never import the knowledge core; every admission read or
-write is dispatched here, spawned with the committed generation's
-interpreter. This is the adapter's only caller of the shared core Admission
-store, so one committed generation (interpreter + scripts + core) handles
+Wrapper entrypoints (Stop hook and MCP gate) dispatch admission reads or writes
+here with the fixed release interpreter. This is the adapter's only caller of
+the shared core Admission store, so one release (interpreter + scripts + core) handles
 each operation coherently. The model never reaches this helper: the native
 session identity comes only from this process's own environment, and every
 payload is shape-checked.
@@ -19,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import sys
+from capture_errors import TranscriptSourceError
 
 IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
 
@@ -82,7 +81,10 @@ def checked_token(payload):
 
 
 def operation(name, payload):
-    config = read_config()
+    config = payload.get("_adapter") if name == "stop_capture" else None
+    config = read_config() if config is None else config
+    if not isinstance(config, dict):
+        raise ValueError("invalid internal Stop binding")
     store = admission(config)
     if name == "activate":
         root = payload.get("project_root")
@@ -154,9 +156,9 @@ def operation(name, payload):
         if not isinstance(session, str) or not IDENTITY.fullmatch(session):
             raise ValueError("Valid MindIE session identity required")
         import sharing
-        settings = sharing.read()
+        settings = sharing.read(adapter=config)
         if settings is None:
-            if sharing.status().get("state") == "disabled":
+            if sharing.status(adapter=config).get("state") == "disabled":
                 return dict(stage="inert", reason="sharing-disabled")
             return dict(stage="unavailable", reason="missing-configuration")
         if not settings['enabled'] or sharing.consent_allows(settings) is False:
@@ -165,7 +167,7 @@ def operation(name, payload):
         source = codex_transcript.capture_source(event.get('transcript_path'), session)
         candidate = dict(project_root=source['project_root'], root_session=session,
                          activated_at=max(settings['enabled_at'], source['created_at']))
-        if not sharing.capture_allowed(candidate, None):
+        if not sharing.capture_allowed(candidate, None, adapter=config):
             return dict(stage="inert", reason="out-of-scope")
         inspected = store.inspect(session)
         if inspected.get("status") == "unavailable":
@@ -202,9 +204,12 @@ def main():
         result = operation(sys.argv[1], payload)
         print(json.dumps(dict(ok=True, result=result), ensure_ascii=False))
     except Exception as exc:
+        result = dict(ok=False, error=f"{type(exc).__name__}: {str(exc)[:240]}")
+        if isinstance(exc, TranscriptSourceError):
+            result["failure"] = exc.failure
         print(
             json.dumps(
-                dict(ok=False, error=f"{type(exc).__name__}: {str(exc)[:240]}"),
+                result,
                 ensure_ascii=False,
             )
         )

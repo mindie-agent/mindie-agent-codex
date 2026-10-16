@@ -6,6 +6,20 @@ resumed precision debugging. The text below is reconstructed, not a quotation.
 """
 from mindie_knowledge.materials import summarizer
 
+
+def isolate_native_profile(case):
+    """Worker fixtures must never inspect the developer's real provider/auth."""
+    import os
+    import tempfile
+    from unittest.mock import patch
+
+    home = tempfile.TemporaryDirectory(prefix="mindie-summary-fixture-")
+    case.addCleanup(home.cleanup)
+    environment = patch.dict(os.environ, CODEX_HOME=home.name)
+    environment.start()
+    case.addCleanup(environment.stop)
+
+
 FACTS = {
     "K3-01": "Initial model adaptation hypothesis; no independent confirmation.",
     "K3-02": "A middle checkpoint correction changes the earlier benchmark interpretation.",

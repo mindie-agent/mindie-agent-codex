@@ -15,6 +15,54 @@ HOST = "codex"
 REPOSITORY = "mindie-agent/mindie-agent"
 _STORAGE = "MindIE diagnostic storage unavailable; original outcome unchanged."
 _warned = False
+CONTEXT_ENV = ("MINDIE_DIAGNOSTICS_CONFIG", "MINDIE_DIAGNOSTICS_ROOT")
+
+
+def environment_context(adapter):
+    """Only explicit diagnostic paths belong to an installation, never credentials."""
+    if not isinstance(adapter, dict):
+        raise ValueError("invalid installation diagnostics configuration")
+    context = adapter.get("diagnostics_context", {})
+    if not isinstance(context, dict) or set(context) - set(CONTEXT_ENV):
+        raise ValueError("invalid installation diagnostics context")
+    for value in context.values():
+        if not isinstance(value, str) or not value or not Path(value).is_absolute():
+            raise ValueError("installation diagnostic paths must be absolute")
+    return dict(context)
+
+
+def capture_environment_context(environ=None):
+    """Capture supported overrides only at explicit setup/enable boundaries."""
+    environ = os.environ if environ is None else environ
+    return {
+        name: str(Path(environ[name]).expanduser().absolute())
+        for name in CONTEXT_ENV
+        if environ.get(name)
+    }
+
+
+def apply_environment_context(adapter, environ=None):
+    environ = os.environ if environ is None else environ
+    environ.update(environment_context(adapter))
+    return environ
+
+
+def read_environment_context(config):
+    """Read only the existing bounded adapter document; absence adds no default."""
+    try:
+        fd = os.open(config, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    except FileNotFoundError:
+        return {}
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 65536:
+            raise ValueError("invalid installation diagnostics configuration")
+        raw = os.read(fd, 65537)
+        if len(raw) > 65536:
+            raise ValueError("invalid installation diagnostics configuration")
+        return environment_context(json.loads(raw.decode("utf-8")))
+    finally:
+        os.close(fd)
 
 
 def _hex(value, length):
@@ -244,6 +292,12 @@ def ensure_argv(python):
             "--config", str(reporting_config_path())]
 
 
+def ensure_command_line(command):
+    if os.name == "nt":
+        return "& " + " ".join("'" + part.replace("'", "''") + "'" for part in command)
+    return shlex.join(command)
+
+
 def configure_reporting(enabled, python):
     if type(enabled) is not bool:
         return _unavailable("reporting_configure", "TypeError")
@@ -257,7 +311,8 @@ def configure_reporting(enabled, python):
         if enabled:
             result.update(
                 run_outside_hook=True, command=command,
-                command_line=shlex.join(command),
+                command_line=ensure_command_line(command),
+                command_shell="powershell" if os.name == "nt" else "posix",
                 note=("Reporting settings are enabled. Execute this command once outside "
                       "the Hook and inspect its result before claiming reporter readiness. "
                       "Report any failure; do not automatically retry."),

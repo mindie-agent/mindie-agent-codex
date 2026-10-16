@@ -23,13 +23,15 @@ import sys
 import threading
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from bounded_process import run
 from session_gate import (
     Inactive,
     Sessions,
     bind_explicit_config,
     config_path,
-    generation_env,
+    runtime_env,
     runtime_scripts,
 )
 import sharing
@@ -81,8 +83,9 @@ def _bounded_path(value, name):
 _HOOK_TOKEN = re.compile(rb'["{}\[\]]')
 
 
-def _read_hook_stdin():
+def _read_hook_stdin(*, max_bytes=None):
     """Frame one byte-bounded event; wait for the caller while it owns us."""
+    max_bytes = MAX_HOOK_BYTES if max_bytes is None else max_bytes
     buf = bytearray()
     finished = threading.Event()
     errors = []
@@ -98,7 +101,7 @@ def _read_hook_stdin():
                 if not chunk:
                     return
                 buf.extend(chunk)
-                if len(buf) > MAX_HOOK_BYTES:
+                if len(buf) > max_bytes:
                     raise ValueError('hook event exceeds its byte bound')
                 pos = int(escaped)
                 escaped = False
@@ -200,7 +203,7 @@ def bind(lease):
                 ],
                 json.dumps(payload),
                 timeout=None,
-                env=generation_env(config_file),
+                env=runtime_env(config_file),
                 allow_service=True,
             ).checked_stdout()
         result = json.loads(output)
@@ -211,37 +214,13 @@ def bind(lease):
         return f"unbound:{type(exc).__name__}"
 
 
-def _entry_migration(config_file):
-    """One-time convergence at the explicit entry-attach boundary.
-
-    Imports validated legacy consent evidence into the profile authority and
-    converges the community settings path; both are idempotent. A failure is
-    reported in the activation result (capture stays fail-closed), never
-    hidden and never blocking the read-only binding itself.
-    """
-    import consent
-
-    notes = {}
-    try:
-        migrated = consent.migrate_legacy(config_file)
-        if migrated.get("status") not in {"kept", "absent"}:
-            notes["consent"] = migrated
-    except Exception as exc:
-        notes["consent"] = dict(status="failed", error=type(exc).__name__)
-    try:
-        moved = sharing.migrate_community_path(config_file)
-        if moved.get("status") != "current" or moved.get("detail"):
-            notes["community"] = moved
-    except Exception as exc:
-        notes["community"] = dict(status="failed", error=type(exc).__name__)
-    return notes or None
 
 
-def _generation_identity():
-    """The actually running plugin generation, for verifiable binding proof.
+def _runtime_identity():
+    """The actually running plugin runtime, for verifiable binding proof.
 
     ``scripts`` is the resolved directory of this running bridge.py; ``build``
-    carries the packaged generation's revision/version stamp when present.
+    carries the installed runtime's revision/version stamp when present.
     A test profile can check these against the selected candidate instead of
     trusting whichever stale cache copy a host or model happened to open.
     """
@@ -262,18 +241,13 @@ def _generation_identity():
 
 
 def activate(operation):
-    migration = None
-    if operation == "activate":
-        migration = _entry_migration(config_path())
     result = getattr(Sessions(), operation)()
     if operation != "activate":
         return result
-    scripts, build = _generation_identity()
+    scripts, build = _runtime_identity()
     result["scripts"] = str(scripts)
     if build:
         result["build"] = build
-    if migration:
-        result["migration"] = migration
     return _prepare_capture(result)
 
 
@@ -296,7 +270,7 @@ def _prepare_capture(result):
             # only. No cold start, no bind, no collection preparation.
             result["capture"] = "disabled"
     except (OSError, ValueError) as exc:
-        # Binding may already exist. Preserve its receipt and migration details
+        # Binding may already exist. Preserve its receipt
         # while reporting that required capture preparation did not complete.
         return dict(result, status="degraded", capture="unavailable", experience="unavailable",
                     error=dict(stage="capture-configuration", type=type(exc).__name__),
@@ -370,7 +344,7 @@ def _status_failure(state, stage, exc, config_file, selected=None):
     }
     recovery = {
         "invalid_config": "Inspect the named config and correct its JSON or required absolute runtime paths, then run status. Existing state has not been reinitialized.",
-        "update_busy": "An update holds the generation lock. Let that operation finish, then explicitly run status; installation is not missing.",
+        "update_busy": "An update holds the profile lock. Let that operation finish, then explicitly run status; installation is not missing.",
         "helper_failed": "Inspect the selected runtime and the reported helper stage, then explicitly run status. No recovery action was started.",
     }
     if selected:
@@ -440,12 +414,24 @@ def offline_status():
             stage = "helper_run"
             output = run(
                 [config["python"], str(Path(runtime_scripts(config)) / "service_control.py"), "status"],
-                "", timeout=None, max_output=32768, env=generation_env(config_file),
+                "", timeout=None, max_output=32768, env=runtime_env(config_file),
             ).checked_stdout()
             stage = "helper_response"
             payload = json.loads(output)
             if not isinstance(payload, dict):
                 raise ValueError("status response must be an object")
+            stage = "update_status"
+            from update_trigger import directory, read_optional
+            updates = directory(config_file)
+            try:
+                payload["updates"] = dict(
+                    check=read_optional(updates / "status.json"),
+                    trigger_failure=read_optional(updates / "trigger-failure.json"),
+                )
+            except (OSError, ValueError) as exc:
+                payload["updates"] = dict(status="unavailable", stage=stage,
+                                          error_type=type(exc).__name__)
+                return payload, 1
             return payload, 0
     except Exception as exc:
         if stage == "update_lock" and isinstance(exc, BlockingIOError):
@@ -475,6 +461,10 @@ def _observe_stop(result):
         _record_stop("handoff", "internal")
         return False
     stage = result.get("stage")
+    if stage == "accepted-local" and (result.get("wake") == "failed"
+                                      or result.get("reason") == "worker-dead"):
+        _record_stop("handoff", "consumer_unavailable")
+        return False
     if stage in {"inert", "organized", "no-new-material", "no-shareable-material",
                  "cancelled", "discarded", "processing", "accepted-runtime",
                  "apply-pending", "accepted-local"}:
@@ -491,13 +481,18 @@ def _observe_stop(result):
     return False
 
 
-def stop():
+def stop(*, adapter=None, hook_input=None):
     try:
-        settings = sharing.read()
+        if adapter is None:
+            from product_contract import read_json
+            adapter = read_json(config_path())[0]
+        if not isinstance(adapter, dict):
+            raise ValueError("invalid Stop binding")
+        settings = sharing.read(adapter=adapter)
         # Missing setup is an Agent diagnostic; an explicit disable is inert.
         # Neither branch reads stdin, starts a helper or creates a capture row.
         if settings is None:
-            disabled = sharing.status().get("state") == "disabled"
+            disabled = sharing.status(adapter=adapter).get("state") == "disabled"
             if not disabled:
                 _record_stop("configuration", "missing_configuration")
             print("{}")
@@ -510,7 +505,7 @@ def stop():
         print("{}")
         return 1
     try:
-        event = hook_event(_read_hook_stdin())
+        event = hook_event(_read_hook_stdin() if hook_input is None else hook_input)
         # This host delivers no native thread identity to the hook process
         # (verified on codex-cli 0.153.4: the hook env carries CODEX_HOME
         # only). When a host does supply CODEX_THREAD_ID, a disagreement with
@@ -539,12 +534,13 @@ def stop():
         return 1
     failed = False
     try:
-        result = Sessions()._op(
+        result = Sessions(stop_adapter=adapter)._op(
             "stop_capture", {"event": event, "session": event["session_id"]}
         )
         failed = not _observe_stop(result)
     except Inactive as exc:
-        _record_stop("helper", "unavailable", exc)
+        detail = exc.failure or {"stage": "helper", "code": "unavailable"}
+        _record_stop(detail["stage"], detail["code"], exc)
         failed = True
     except Exception as exc:
         # The hook never propagates a failure into the original task.
@@ -563,7 +559,7 @@ def sharing_operation(operation, extra=None):
         raise ValueError(
             "read-only/later product modes were removed. Configure the "
             "destination and scope with bridge.py config, or explicitly "
-            "disable capture with sharing-disable. Saved legacy settings are preserved."
+            "disable capture with sharing-disable. Saved settings are preserved."
         )
     if operation == "sharing-enable":
         settings = sharing.set_enabled(True)
@@ -611,7 +607,7 @@ def contribution(operation, batch_id):
             "",
             timeout=None,
             max_output=65536,
-            env=generation_env(config_file),
+            env=runtime_env(config_file),
         ).checked_stdout()
     result = json.loads(output)
     if not isinstance(result, dict):
@@ -624,7 +620,7 @@ def history_import(argv):
 
     Stream per-file receipts rather than buffering a whole library or imposing
     a Hook deadline on a user-requested bulk operation. Ctrl-C stops the import.
-    The generation lock keeps scripts and interpreter coherent until it exits.
+    The profile lock keeps scripts and interpreter coherent until it exits.
     """
     import subprocess
 
@@ -632,7 +628,7 @@ def history_import(argv):
     with update_lock(config_file):
         config = json.loads(config_file.read_text(encoding='utf-8'))
         command = [config['python'], str(Path(runtime_scripts(config)) / 'history_import.py'), *argv]
-        options = dict(stdin=subprocess.DEVNULL, env=generation_env(config_file))
+        options = dict(stdin=subprocess.DEVNULL, env=runtime_env(config_file))
         if os.name != 'nt':
             return subprocess.call(command, **options)
         # The explicit import may prepare the domain service. Give its helper
@@ -680,7 +676,7 @@ def configure(argv):
             "",
             timeout=None,
             max_output=65536,
-            env=generation_env(config_file),
+            env=runtime_env(config_file),
         ).checked_stdout()
     result = json.loads(output)
     if not isinstance(result, dict):
@@ -744,7 +740,7 @@ def _reporting_unavailable(stage, exc):
 
 
 def _adapter_python(config_file):
-    """Read the selected interpreter under the generation lock, then release it."""
+    """Read the selected interpreter under the profile lock, then release it."""
     with update_lock(config_file):
         fd = os.open(config_file, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
         try:
@@ -803,7 +799,7 @@ def reporting_operation(operation):
                 timeout=None,
                 max_output=65536,
                 allowed_returncodes=(0, 1),
-                env=generation_env(config_file),
+                env=runtime_env(config_file),
             ).checked_stdout()
             _print_reporting_json(output, "helper_response")
         except SystemExit:
@@ -840,7 +836,7 @@ def reporting_operation(operation):
                 timeout=None,
                 max_output=65536,
                 allowed_returncodes=(0, 1),
-                env=generation_env(config_file),
+                env=runtime_env(config_file),
             ).checked_stdout()
             _print_reporting_json(output, "helper_response")
         except SystemExit:
@@ -876,7 +872,7 @@ def reporting_operation(operation):
             timeout=None,
             max_output=65536,
             allowed_returncodes=(0, 1),
-            env=generation_env(config_file),
+            env=runtime_env(config_file),
         ).checked_stdout()
         _print_reporting_json(output, "helper_response")
     except SystemExit:
@@ -904,6 +900,19 @@ def _optional_config_prefix(argv):
 
 def main():
     argv = _optional_config_prefix(sys.argv[1:])
+    if argv == ["stop", "--snapshot"]:
+        try:
+            # The raw event and 64 KiB adapter are already bounded. Re-encoding
+            # adds escaping/spacing plus the fixed envelope keys.
+            envelope = json.loads(_read_hook_stdin(max_bytes=2 * (MAX_HOOK_BYTES + 65536) + 64))
+            if (not isinstance(envelope, dict) or set(envelope) != {"adapter", "hook_input"}
+                    or not isinstance(envelope["hook_input"], str)):
+                raise ValueError("invalid internal Stop envelope")
+            raise SystemExit(stop(adapter=envelope["adapter"], hook_input=envelope["hook_input"]))
+        except (OSError, ValueError, TypeError) as exc:
+            _record_stop("envelope", "invalid_snapshot", exc)
+            print("{}")
+            raise SystemExit(1)
     if not argv or argv[0] not in OPERATIONS | CONTRIBUTION_OPERATIONS:
         print("Unsupported MindIE entry operation", file=sys.stderr)
         raise SystemExit(1)
@@ -1013,7 +1022,7 @@ def main():
                     "",
                     timeout=None,
                     max_output=32768,
-                    env=generation_env(config_file),
+                    env=runtime_env(config_file),
                 ).checked_stdout(),
                 end="",
             )

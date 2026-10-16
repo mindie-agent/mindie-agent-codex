@@ -16,7 +16,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
 sys.path.insert(0, str(SCRIPTS))
 import agent_worker as worker
 import process_guard as guard
-from k3_material_fixture import request, result
+from k3_material_fixture import request, result, isolate_native_profile
 from mindie_knowledge.loop.process import bounded_run
 from mindie_knowledge.materials import summarizer
 
@@ -37,6 +37,9 @@ def program(rows, tail=''):
 
 
 class NativeSummaryResultTests(unittest.TestCase):
+    def setUp(self):
+        isolate_native_profile(self)
+
     def execute(self, payload, rows, tail=''):
         # Large output must exercise the result stream, not Windows' much
         # smaller command-line limit before the fake native process starts.
@@ -182,29 +185,52 @@ class NativeSummaryResultTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             fake = root / 'fake-codex'
-            marker = root / 'descendant-survived'
+            profile_record = root / 'profile'
+            handshake = root / 'result-saved'
             with patch.dict(os.environ, MINDIE_CODEX_BIN=str(fake)):
                 payload = request(worker)
                 metadata = result(payload)
-                tail = ('import subprocess\n' +
-                    f'subprocess.Popen([sys.executable,"-c",{("import time;from pathlib import Path;time.sleep(3);Path(" + repr(str(marker)) + ").touch()")!r}])\n' +
-                    'time.sleep(30)\n')
-                fake.write_text('#!' + sys.executable + '\n' + program(events(metadata), tail))
+                writer = (
+                    "import time;from pathlib import Path\n"
+                    f"ready=Path({str(handshake)!r})\n"
+                    "Path('writer-ready').touch()\n"
+                    "while not ready.exists(): time.sleep(.01)\n"
+                    "Path('writer-after-result').touch()\n"
+                    "time.sleep(30)\n"
+                )
+                setup = (
+                    "import os,sys,subprocess,time;from pathlib import Path\n"
+                    "assert 'MINDIE_SUMMARY_SCRATCH' not in os.environ\n"
+                    "profile=Path(sys.argv[sys.argv.index('-C')+1]);os.chdir(profile)\n"
+                    f"Path({str(profile_record)!r}).write_text(str(profile))\n"
+                    f"subprocess.Popen([sys.executable,'-c',{writer!r}])\n"
+                    "while not Path('writer-ready').exists(): time.sleep(.01)\n"
+                )
+                fake.write_text('#!' + sys.executable + '\n' + setup
+                                + program(events(metadata), 'time.sleep(30)\n'), encoding='utf-8')
                 fake.chmod(0o700)
                 saved = []
                 cleanup = {}
+                def record(raw):
+                    profile = Path(profile_record.read_text())
+                    self.assertTrue((profile / 'schema.json').is_file())
+                    saved.append(json.loads(raw))
+                    handshake.touch()
+                    deadline = time.monotonic() + 2
+                    while not (profile / 'writer-after-result').exists() and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertTrue((profile / 'writer-after-result').exists())
                 started = time.monotonic()
                 raw = bounded_run([sys.executable, str(SCRIPTS / 'agent_worker.py')], json.dumps(payload),
                                   timeout=10, max_output=summarizer.MAX_RESPONSE_BYTES * 3,
-                                  on_result=lambda raw: saved.append(json.loads(raw)), cleanup_receipt=cleanup)
+                                  on_result=record, cleanup_receipt=cleanup)
                 value = json.loads(raw)
             self.assertLess(time.monotonic() - started, 3)
             self.assertEqual(saved[0]['result'], metadata)
             self.assertEqual(value['status'], 'returned')
             self.assertFalse(value['cleanup_failed'])
             self.assertFalse(cleanup.get('cleanup_failed', False))
-            time.sleep(3.1)
-            self.assertFalse(marker.exists())
+            self.assertFalse(Path(profile_record.read_text()).parent.exists())
             summarizer.validate_outcome(value, payload)
 
 

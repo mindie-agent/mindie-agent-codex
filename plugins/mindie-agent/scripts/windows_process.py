@@ -8,12 +8,36 @@ already exited and a descendant still holds an inherited pipe.
 import ctypes
 import os
 import subprocess
+import sys
 from ctypes import wintypes
 
 
 _CREATE_SUSPENDED = 0x00000004
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+
+
+def exec_or_wait(command, env):
+    """Preserve the native entry lifetime where CRT exec cannot replace a PID."""
+    if os.name != "nt":
+        os.execve(command[0], command, env)
+    process = spawn(command, env=env, allow_service=True,
+                    stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr)
+    returncode = None
+    try:
+        returncode = process.wait()
+    finally:
+        primary = sys.exc_info()[1]
+        try:
+            close_tree(process)
+        except Exception as cleanup_error:
+            if primary is not None:
+                primary.add_note("Native entry cleanup also failed: " + type(cleanup_error).__name__)
+            else:
+                cleanup_error.returncode = returncode
+                cleanup_error.add_note("Native entry completed with exit code " + str(returncode))
+                raise
+    raise SystemExit(returncode)
 
 
 def spawn(command, *, allow_service=False, **kwargs):

@@ -29,6 +29,7 @@ import json, os, sys
 sys.path.insert(0, os.environ["SCRIPTS"])
 os.environ["MINDIE_AGENT_CONFIG"] = os.environ["CONFIG"]
 import runtime_call
+import service_client
 import mindie_knowledge.loop.cli as cli
 import mindie_knowledge.loop.transport as transport
 
@@ -53,7 +54,7 @@ def rpc(connection, method, args, timeout=5):
         raise AssertionError("session was not the gate-bound id")
     return page
 
-cli.ensure_service = ensure_service
+service_client.connect = ensure_service
 transport.rpc = rpc
 if mode == "page":
     runtime_call.resolve_lease = lambda config, token: {"session": os.environ["SESSION"]}

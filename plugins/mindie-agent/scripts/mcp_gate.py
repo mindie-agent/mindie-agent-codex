@@ -25,7 +25,10 @@ import weakref
 from bounded_process import run, ProcessResult
 from diagnostic_support import attach as attach_diagnostic
 from diagnostic_support import failure as diagnostic_failure
-from session_gate import IDENTITY, Sessions, config_path, generation_env, runtime_scripts
+from session_gate import (
+    IDENTITY, Sessions, config_path,
+    runtime_env, runtime_scripts,
+)
 from update_lock import update_lock, file_lock
 from receipt_layout import prepare_layout
 import receipt_layout
@@ -33,6 +36,7 @@ import receipt_layout
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
 KNOWLEDGE_MAX_OUTPUT = 1024 * 1024
 CATALOG = Path(__file__).with_name("mcp_catalog.json")
+INTERRUPT_TOOL = "mindie_interrupt"
 RECEIPT_SCHEMA = {
     "authority": ("table", "authority", "CREATE TABLE authority(identity TEXT PRIMARY KEY, schema TEXT NOT NULL)"),
     "attempts": ("table", "attempts", "CREATE TABLE attempts (identity TEXT PRIMARY KEY, started REAL NOT NULL, status TEXT NOT NULL, owner TEXT NOT NULL)"),
@@ -48,7 +52,15 @@ class InvalidToolArguments(ValueError):
     """Rejected by the declared tool schema before any runtime dispatch."""
 
 
+class SwitchingRuntime(RuntimeError):
+    """The operation lock was unavailable before any request admission."""
+
+
 def call_failure(exc):
+    if isinstance(exc, SwitchingRuntime):
+        return dict(failure("MindIE is switching its idle runtime; this call has not started."),
+                    structuredContent=dict(code="temporary_unavailable",
+                                           execution="not_started", automatic_retry=False))
     if isinstance(exc, InvalidToolArguments):
         message = (f"Request rejected before execution: {str(exc)[:240]}. "
                    "Correct the arguments once using the tool schema; "
@@ -152,6 +164,34 @@ def native_identity(request):
                 "Contradictory native task identity metadata; call rejected"
             )
     return thread
+
+
+def native_turn_identity(request):
+    thread = native_identity(request)
+    turn = request["params"]["_meta"]["x-codex-turn-metadata"].get("turn_id")
+    if not isinstance(turn, str) or not IDENTITY.fullmatch(turn):
+        raise ValueError("Invalid native turn identity metadata")
+    return thread, turn
+
+
+def interrupt_turn(request, pending):
+    """Signal existing calls only; the native Hook does not assert completion."""
+    params = request.get("params")
+    arguments = params.get("arguments") if isinstance(params, dict) else None
+    meta = params.get("_meta") if isinstance(params, dict) else None
+    if not isinstance(arguments, dict) or set(arguments) != {"thread_id", "turn_id"}:
+        raise ValueError("Invalid native interrupt identity")
+    scope = arguments["thread_id"], arguments["turn_id"]
+    if not all(isinstance(value, str) and IDENTITY.fullmatch(value) for value in scope):
+        raise ValueError("Invalid native interrupt identity")
+    if not isinstance(meta, dict) or meta.get("threadId") != scope[0]:
+        raise ValueError("Contradictory native interrupt identity")
+    if "x-codex-turn-metadata" in meta and native_turn_identity(request) != scope:
+        raise ValueError("Contradictory native interrupt identity")
+    for event, identity in pending.values():
+        if identity == scope:
+            event.set()
+    return dict(content=[dict(type="text", text="{}")], isError=False)
 
 
 class RemoteReceipts:
@@ -298,12 +338,8 @@ class RemoteReceipts:
 
 def _adapter_config():
     path = config_path()
-    if not path.is_file():
-        raise ValueError(
-            "MindIE adapter configuration is required to locate the runtime "
-            "interpreter; remote execution fails closed"
-        )
-    return json.loads(path.read_text(encoding='utf-8'))
+    from product_contract import read_json
+    return read_json(path)[0]
 
 
 class Gate:
@@ -313,28 +349,22 @@ class Gate:
         self.tools = json.loads(CATALOG.read_text(encoding='utf-8'))[surface]
         self.connection_id = uuid.uuid4().hex
         self._remote_receipts = {}
+        self.config = config_path()
 
     def call(self, request, cancel=None, *, timeout=None, cli_identity=None):
-        if self.surface == "remote":
-            # General remote path: no MindIE activation, lease, knowledge
-            # service or capture state is consulted or created.
-            return self._remote_call(request, cancel, timeout, cli_identity)
-        # Discovery does not create capture state. The native or trusted CLI
-        # boundary verifies task identity; ordinary reads need no capture lease.
-        # Runtime failures remain visible without an implicit execution TTL.
         try:
-            if not config_path().is_file():
-                raise ValueError(
-                    "MindIE adapter configuration is required; remote execution fails closed"
-                )
-            if cli_identity is None:
-                session = native_identity(request)
-                # Identity never comes from arguments or another task's lease.
-            else:
-                # Domain CLI path: no host metadata exists outside MCP, so the
-                # explicit environment-supplied identity is checked directly.
-                session, token = cli_identity
-            with update_lock(self.sessions.config):
+            with ExitStack() as lock:
+                try:
+                    lock.enter_context(update_lock(self.config))
+                except BlockingIOError:
+                    raise SwitchingRuntime() from None
+                if self.config != config_path():
+                    raise ValueError("this MCP process is bound to another installation profile")
+                if self.surface == "remote":
+                    return self._remote_call(request, cancel, timeout, cli_identity)
+                # Discovery creates no capture state. Task identity comes from
+                # the native metadata or the trusted CLI, never tool arguments.
+                session = native_identity(request) if cli_identity is None else cli_identity[0]
                 return self._call(request, session, cancel, timeout=timeout)
         except Exception as exc:
             return call_failure(exc)
@@ -423,7 +453,7 @@ class Gate:
                     json.dumps(payload),
                     timeout=bound,
                     cancel=cancel,
-                    env=generation_env(config_path()),
+                    env=runtime_env(config_path()),
                 )
             stage = "helper_response"
             result = runtime_result(output)
@@ -484,7 +514,7 @@ class Gate:
             )
             bound = timeout
             try:
-                # Exactly one committed generation: the recorded interpreter
+                # Exactly one installed runtime: the recorded interpreter
                 # plus the recorded scripts directory, read in one config load
                 # while the operation lock is held by Gate.call.
                 stage = "helper_run"
@@ -496,7 +526,7 @@ class Gate:
                     json.dumps(payload),
                     timeout=bound,
                     cancel=cancel,
-                    env=generation_env(self.sessions.config),
+                    env=runtime_env(self.sessions.config),
                     max_output=KNOWLEDGE_MAX_OUTPUT,
                     allow_service=True,
                 )
@@ -539,11 +569,16 @@ class Gate:
 
 
 def serve(surface):
+    from importlib.metadata import version
+    adapter_version = version("mindie-agent-codex")
     gate = Gate(surface)
     output_lock, pending_lock = threading.Lock(), threading.Lock()
     pending = {}
     capacity = threading.BoundedSemaphore(4)
     executor = ThreadPoolExecutor(max_workers=4)
+    from update_trigger import Maintenance
+    maintenance = Maintenance(gate.config)
+    maintenance.trigger()
 
     def send(value):
         with output_lock:
@@ -576,11 +611,11 @@ def serve(surface):
                 method, identifier = message.get("method"), message.get("id")
                 if method == "notifications/cancelled":
                     with pending_lock:
-                        event = pending.get(
+                        call = pending.get(
                             (message.get("params") or {}).get("requestId")
                         )
-                        if event:
-                            event.set()
+                        if call:
+                            call[0].set()
                     continue
                 if identifier is None:
                     continue
@@ -594,7 +629,7 @@ def serve(surface):
                         dict(
                             protocolVersion="2025-11-25",
                             capabilities={"tools": {}},
-                            serverInfo=dict(name="mindie-" + surface, version="0.2.0"),
+                            serverInfo=dict(name="mindie-" + surface, version=adapter_version),
                         ),
                     )
                 elif method == "ping":
@@ -602,6 +637,22 @@ def serve(surface):
                 elif method == "tools/list":
                     respond(identifier, dict(tools=gate.tools))
                 elif method == "tools/call":
+                    if (message.get("params") or {}).get("name") == INTERRUPT_TOOL:
+                        try:
+                            with pending_lock:
+                                if identifier in pending:
+                                    raise ValueError("Duplicate native interrupt request identity")
+                                result = interrupt_turn(message, pending)
+                        except ValueError as exc:
+                            result = call_failure(exc)
+                        respond(identifier, result)
+                        continue
+                    try:
+                        identity = native_turn_identity(message)
+                    except ValueError as exc:
+                        respond(identifier, call_failure(exc))
+                        continue
+                    maintenance.trigger()
                     with pending_lock:
                         if (
                             identifier in pending
@@ -615,7 +666,7 @@ def serve(surface):
                             )
                             continue
                         event = threading.Event()
-                        pending[identifier] = event
+                        pending[identifier] = event, identity
                     executor.submit(execute, message, event)
                 else:
                     send(
@@ -634,7 +685,8 @@ def serve(surface):
                     )
                 )
     finally:
+        maintenance.close()
         with pending_lock:
-            for event in pending.values():
+            for event, _ in pending.values():
                 event.set()
         executor.shutdown(wait=True)

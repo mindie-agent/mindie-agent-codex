@@ -26,6 +26,30 @@ material is not resurrected from a stale PR.
 
 Setup and updates install the LangMem summary worker. Its explicit policy is
 `gpt-5.6-luna` / `low`, using the native account without a second provider setup.
+Setup and updates retain the selected native home and executable as installation
+paths. The MCP, Stop, service and worker entries inherit these paths even when
+the native host filters its environment. The ordinary default is `~/.codex`.
+When that native home selects a custom provider, the worker projects only
+that provider's routing and authentication fields into a private temporary
+native home. It does not copy native login files, tools, skills, hooks or rules.
+A supplied model catalog must contain exactly one matching fixed-model name or
+qualified alias. Without a catalog the provider must accept the exact fixed
+name; no prefix is inferred from the business model. A provider rejection is a
+visible failed attempt, with its actual usage retained and no automatic retry.
+The policy identity records the effective model and non-secret route identity.
+Rotating a declared bearer/environment credential or a recognized credential
+query/header value does not trigger reindexing. Other query/header values
+contribute only to the route hash; an unknown credential parameter may therefore
+change policy when rotated. Provider query parameters and headers are passed
+through unchanged.
+Unsupported provider fields, missing referenced authentication environment
+variables and top-level native `profile` selection fail before spawning.
+The selected provider must be declared directly in that installation's
+`config.toml`; the worker does not merge native profiles.
+Custom providers requiring native OpenAI account authentication are rejected
+before a model starts: that login state is not copied into the temporary home.
+Built-in OpenAI authentication
+retains its existing native home.
 Each invocation reads complete new blocks and short prior task navigation, then
 returns one index per block and updated navigation. Blocks are at most 16 KiB;
 the serialized user prompt is at most 64 KiB with at most eight blocks. Native

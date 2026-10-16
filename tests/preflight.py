@@ -59,8 +59,8 @@ def installed_commit(dist_name: str) -> str:
     return commit
 
 
-def require_requirement_pins(path: Path) -> None:
-    for name, commit in requirements(path.parent)[0].items():
+def require_requirement_pins(source: Path) -> None:
+    for name, commit in requirements(source)[0].items():
         actual = installed_commit(name)
         if actual != commit:
             fail(f"installed {name} commit {actual} != required {commit}")
@@ -71,7 +71,7 @@ def main() -> None:
     for env_name, commit in CHECKOUTS:
         require_commit(env_name, commit)
         print(f"{env_name} contains {commit}")
-    require_requirement_pins(REPO / "runtime-requirements.txt")
+    require_requirement_pins(REPO)
     receipt = probe(sys.executable, REPO / "plugins/mindie-agent/scripts",
                     lambda argv, **kwargs: run(argv, "", **kwargs).checked_stdout())
     print("validated product " + receipt["product_sha256"])

@@ -17,10 +17,11 @@ modules in a second discovery pass. A failed boundary stops the run early.
 | --- | --- |
 | Setup | Failed config writes do not save completion; existing task binding gains capture after successful config |
 | Body and metadata | Public body survives without any model; required indexes use an independent model/effort and cannot change content |
-| Windows shell | Both CMD and PowerShell deliver the original Stop stdin once; no adapter execution deadline or user-facing failure prompt is added. Internal failure remains in Agent diagnostics, with input bytes bounded separately |
+| Windows shell | Both CMD and PowerShell deliver the original Stop stdin once; no adapter execution deadline or continuation prompt is added. Failure remains in Agent diagnostics and a static native warning, with input bytes bounded separately |
 | Process lifetime | Entry helper has exited before service readiness is checked; cold Stop is consumed after its helper exits |
 | Process ownership | Ordinary descendants stay owned until completion, cancellation or a caller-requested deadline; service-capable launchers explicitly transfer only service lifetime |
 | Update | Actual native inventory shape is accepted only for the owned marketplace; changed hook dependencies invalidate reuse |
+| Stop during update | One atomic binding snapshot selects the complete helper/runtime/engine; Stop can commit the existing queue while the update lock is held, with live consent and no second spool |
 | Core loop | Persistent attempt/region/apply/outbox receipts distinguish success, coverage gaps, temporary environment failure and uncertain write |
 
 These checks use real files, processes, locks and database transitions at the

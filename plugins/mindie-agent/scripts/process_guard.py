@@ -70,7 +70,7 @@ def _native_error_reason(event):
     return 'native_turn_failed' if event['type'] == 'turn.failed' else 'native_event_error'
 
 
-def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=False):
+def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=False, env=None):
     # The knowledge service owns one group for worker + Codex + descendants.
     started = time.monotonic()
     receipt = {} if receipt is None else receipt
@@ -88,6 +88,9 @@ def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=Fals
     deferred_to_core = defer_cleanup and (inherited or (
         not POSIX and os.environ.get('MINDIE_MAINTENANCE_GROUP') == '1'
         and os.environ.get('MINDIE_MAINTENANCE_OWNER', '').isdecimal()))
+    env = {key: value for key, value in (os.environ if env is None else env).items()
+           if key not in {"MINDIE_MAINTENANCE_GROUP", "MINDIE_MAINTENANCE_OWNER",
+                          "MINDIE_SUMMARY_SCRATCH"}}
     with tempfile.TemporaryFile() as input_file:
         input_file.write(prompt.encode())
         input_file.seek(0)
@@ -95,16 +98,17 @@ def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=Fals
             if POSIX:
                 if inherited:
                     process = subprocess.Popen(command, stdin=input_file,
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
                 else:
                     from bounded_process import _spawn
-                    process = _spawn(command, input_file, None)
+                    process = _spawn(command, input_file, env)
             else:
                 process = windows_process.spawn(
                     command,
                     stdin=input_file,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
+                    env=env,
                 )
         except OSError as exc:
             receipt['elapsed_ms'] = round((time.monotonic() - started) * 1000)

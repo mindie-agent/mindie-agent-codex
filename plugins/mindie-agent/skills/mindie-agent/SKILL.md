@@ -29,7 +29,7 @@ bounded incident, code and record references for the Agent. Preserve the actual
 business result and report only limitations relevant to the user's goal.
 
 For explicitly requested configuration or diagnosis, use the installed
-`scripts/bridge.py` in the active profile. The native shell supplies
+`PLUGIN_DATA/releases/0.0.1/entry.py bridge` in the active profile. The native shell supplies
 `CODEX_THREAD_ID`; never fabricate it. Existing optional operator commands remain
 available, but they are not prerequisites for normal use. Operational details:
 [capture and operation lifecycle](references/activation-lifecycle.md).
@@ -51,7 +51,7 @@ which sessions/project they mean before reading it. Only after that request may
 native file tools locate the selected Codex JSONL files, including archived files
 when requested. Do not broaden the selection to unrelated sessions or projects.
 
-Run `<python> "<bridge.py>" history-import --source "ABSOLUTE_TRANSCRIPT.jsonl"`.
+Run `<python> "<release-entry.py>" bridge history-import --source "ABSOLUTE_TRANSCRIPT.jsonl"`.
 Repeat `--source` for multiple selected files. It reads public messages, redacts,
 imports, and prepares the existing contribution worker. It never changes consent
 or activates the historical sessions. Report the returned per-file results;

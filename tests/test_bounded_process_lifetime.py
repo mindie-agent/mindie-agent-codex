@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
 sys.path.insert(0, str(SCRIPTS))
@@ -86,6 +87,29 @@ class PipeLifetimeTests(unittest.TestCase):
                 self.assertEqual(runner(process, None, 1024, None).checked_stdout(), '')
                 self.assertLess(time.monotonic() - started, 1)
                 self.assertEqual(process.returncode, 0)
+
+    def test_completed_group_cleanup_does_not_signal_a_reaped_group_again(self):
+        process = self.child(
+            "import subprocess,sys;"
+            "subprocess.Popen([sys.executable,'-c','import time;time.sleep(10)']);"
+            "print('completed-effect')"
+        )
+        process.wait(timeout=3)
+        killpg = os.killpg
+        calls = []
+
+        def signal_once(group, sig):
+            calls.append(group)
+            if len(calls) > 1:
+                raise PermissionError("group already terminated")
+            return killpg(group, sig)
+
+        with patch.object(bounded_process.os, "killpg", side_effect=signal_once):
+            result = bounded_process._run_posix(process, None, 1024, None)
+        self.assertEqual(result.checked_stdout(), "completed-effect\n")
+        self.assertEqual(result.execution, "completed")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(calls, [process.pid])
 
     def test_owner_death_after_target_exit_still_cancels_descendants(self):
         import fcntl

@@ -10,17 +10,19 @@ expiry, no failure-count pause and no runtime/config fingerprint.
 
 This wrapper stays free of core imports: it binds the native task identity,
 validates shapes, holds the update lock for every store operation, and
-dispatches into the committed runtime generation (``admission_ops.py`` under
+dispatches into the fixed installed runtime (``admission_ops.py`` under
 the configured interpreter), so an old cached entrypoint never mixes an old
 script with a new interpreter or library.
 """
 
 import json
 import os
+from contextlib import nullcontext
 from pathlib import Path
 import re
 
 from bounded_process import run
+from capture_errors import validated_failure
 from update_lock import update_lock
 
 IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
@@ -41,30 +43,17 @@ def bind_explicit_config(path=None):
         _explicit_config = None
         return None
     resolved = Path(path).expanduser().absolute()
+    if _explicit_config is not None and resolved != _explicit_config:
+        raise ValueError("this process is bound to another installation profile")
     _explicit_config = resolved
     os.environ["MINDIE_AGENT_CONFIG"] = str(resolved)
     return resolved
 
 
-def _installation_binding():
-    """Packaged sidecar next to this script; missing means unbound source."""
-    path = Path(__file__).resolve().parent / "installation.json"
-    if not path.exists():
-        return None
-    if not path.is_file():
-        raise ValueError("installation config binding is not a file")
-    try:
-        data = json.loads(path.read_text(encoding='utf-8'))
-    except (OSError, ValueError) as exc:
-        raise ValueError("installation config binding is unreadable") from exc
-    if not isinstance(data, dict):
-        raise ValueError("installation config binding is invalid")
-    value = data.get("adapter_config")
-    if not isinstance(value, str) or not os.path.isabs(value):
-        raise ValueError(
-            "installation config binding requires an absolute adapter_config"
-        )
-    return Path(value).expanduser().absolute()
+def runtime_binding(config):
+    """Code identity only; contribution and reporting choices remain mutable."""
+    return {key: config.get(key) for key in
+            ("python", "runtime_scripts", "engine_config", "product_validation")}
 
 
 def _dispatch_config():
@@ -82,9 +71,6 @@ def config_path():
     dispatched = _dispatch_config()
     if dispatched is not None:
         return dispatched
-    bound = _installation_binding()
-    if bound is not None:
-        return bound
     return (
         Path(
             os.environ.get(
@@ -97,15 +83,15 @@ def config_path():
 
 
 def runtime_scripts(config):
-    """Committed generation's scripts dir recorded at install; the wrapper's
-    own directory for a pre-update setup layout."""
+    """Installed scripts directory recorded at setup;
+    only explicit installed paths are accepted."""
     value = (config or {}).get("runtime_scripts")
     if isinstance(value, str) and os.path.isabs(value):
         return value
-    return str(Path(__file__).parent)
+    raise ValueError("adapter configuration lacks an absolute runtime_scripts path")
 
 
-def generation_env(config=None):
+def runtime_env(config=None, *, adapter=None):
     """Pin a helper to this adapter config and the committed interpreter.
 
     PYTHONPATH is omitted so a developer checkout cannot mask the runtime
@@ -117,19 +103,26 @@ def generation_env(config=None):
     # user's profile, which disagrees with bounded_process's UTF-8 contract.
     env["PYTHONIOENCODING"] = "utf-8"
     selected = str(Path(config or config_path()).absolute())
+    from diagnostic_support import environment_context, read_environment_context
+    from native_context import environment, read as read_native_context
+    env.update(read_environment_context(selected) if adapter is None else environment_context(adapter))
+    env.update(read_native_context(selected) if adapter is None else environment(adapter))
     env["MINDIE_AGENT_CONFIG"] = selected
     env[_DISPATCH_CONFIG] = selected
     return env
 
 
 class Inactive(ValueError):
-    pass
+    def __init__(self, message, *, failure=None):
+        super().__init__(message)
+        self.failure = validated_failure(failure)
 
 
 class Sessions:
-    def __init__(self, path=None, *, op_timeout=None):
+    def __init__(self, path=None, *, op_timeout=None, stop_adapter=None):
         self.config = Path(path or config_path())
         self.op_timeout = op_timeout
+        self.stop_adapter = stop_adapter
 
     @property
     def path(self):
@@ -156,13 +149,17 @@ class Sessions:
         return config
 
     def _op(self, operation, payload):
-        """One committed generation (config + scripts + interpreter) under the
+        """One installed runtime (config + scripts + interpreter) under the
         operation lock. The helper receives the operation argv and the exact
         config path so a custom Sessions(path=...) never rereads the default
         or MINDIE_AGENT_CONFIG production state.
         """
-        with update_lock(self.config):
-            config = self._config()
+        # Stop only commits the existing capture queue. Holding the code
+        # cutover lock here would lose a once-delivered native Stop event.
+        with nullcontext() if operation == "stop_capture" else update_lock(self.config):
+            config = self.stop_adapter if operation == "stop_capture" and self.stop_adapter is not None else self._config()
+            if operation == "stop_capture":
+                payload = dict(payload, _adapter=config)
             helper = Path(runtime_scripts(config)) / "admission_ops.py"
             try:
                 completed = run(
@@ -170,7 +167,7 @@ class Sessions:
                     json.dumps(payload),
                     timeout=self.op_timeout,
                     max_output=32768,
-                    env=generation_env(self.config),
+                    env=runtime_env(self.config, adapter=config),
                     allow_service=operation == "stop_capture",
                 )
                 envelope = json.loads(completed.stdout)
@@ -180,7 +177,8 @@ class Sessions:
                     detail = str(detail)[:240]
                     if completed.cleanup:
                         detail += "; owned-process cleanup also failed; do not repeat the operation"
-                    raise Inactive(detail)
+                    raise Inactive(detail, failure=envelope.get("failure")
+                                   if isinstance(envelope, dict) else None)
                 completed.checked_stdout()
             except Inactive:
                 raise

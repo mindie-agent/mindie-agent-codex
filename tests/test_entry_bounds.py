@@ -55,7 +55,10 @@ class EntryBoundsTests(unittest.TestCase):
                 f"Path({str(marker)!r}).write_text('called')\n"
                 "print(json.dumps({'ok': True, 'result': {}}))\n"
             )
-            community = root / "community.json"
+            from mindie_knowledge import consent_store
+            consent = root / "mindie-consent.json"
+            consent_store.record_choice(consent, "contribute")
+            community = root / "mindie-community.json"
             community.write_text(json.dumps({
                 "schema": "mindie-community-config/1",
                 "enabled": True,
@@ -66,6 +69,7 @@ class EntryBoundsTests(unittest.TestCase):
                 "project_roots": [str(root)],
                 "idle_seconds": 300,
                 "visibility": "public",
+                "consent_config": str(consent),
             }))
             config = Path(directory) / "config.json"
             config.write_text(
@@ -141,9 +145,10 @@ class EntryBoundsTests(unittest.TestCase):
         self.assertEqual(result.stderr.strip(), "summary protocol failed: invalid_result")
         self.assertNotIn("x" * 32, result.stderr)
 
-    def test_session_start_is_not_registered(self):
+    def test_session_start_prepares_the_fixed_release(self):
         hooks = json.loads((SCRIPTS.parent / "hooks/hooks.json").read_text())
-        self.assertNotIn("SessionStart", hooks["hooks"])
+        self.assertEqual(set(hooks["hooks"]), {"SessionStart", "Stop", "Interrupt"})
+        self.assertEqual(len(hooks["hooks"]["SessionStart"]), 1)
 
 
 if __name__ == "__main__":

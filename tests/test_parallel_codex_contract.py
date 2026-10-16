@@ -32,6 +32,9 @@ from tests.process_fixtures import (
     extract_git_archive,
     stop_owned_knowledge_service,
     installed_scanner,
+    recorded_wake_runtime,
+    wake_requests,
+    public_engine_config,
 )
 
 
@@ -43,7 +46,6 @@ KIMI_COMMIT = "90f73e76c6087ce091570f2d151b709145c913bc"
 sys.path.insert(0, str(SCRIPTS))
 from product_contract import requirements
 CORE_COMMIT = requirements(REPO)[0]["mindie-knowledge"]
-CONSENT_STORE_SHA256 = "679c6483a2edbf2d093de2ca38b00bfb73418b1179bcef9cdf6f34b5f9ed6b4c"
 
 
 def _require_checkout(env_name, purpose):
@@ -177,15 +179,10 @@ class LaneCase(unittest.TestCase):
             "print(json.dumps({'entries': [{'title': 'observed', "
             "'summary': 'observed', 'content': 'observed', 'conditions': {}}]}))\n"
         )
-        self.engine_doc = {
-            "root": str(self.root / "data"),
-            "domain": "test",
-            "admission_path": str(self.admission),
-            "community_config": str(self.community),
-            "transcript_adapter": str(SCRIPTS / "codex_transcript.py"),
-            "capture_mode": "public-transcript",
-            "redactor_executable": installed_scanner(),
-        }
+        self.engine_doc = public_engine_config(
+            self.root / "data", adapter_profile=self.config,
+            admission_path=str(self.admission), community_config=str(self.community),
+        )
         self.engine.write_text(json.dumps(self.engine_doc))
         self.adapter = {
             "python": PY,
@@ -430,6 +427,7 @@ class LaneCase(unittest.TestCase):
 
 class ConsentGateTests(LaneCase):
     def test_corrupt_transcript_fails_without_claiming_complete_capture(self):
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.write_consent("contribute", reporting="disabled")
         self.write_community(enabled=True)
         self.open_store()
@@ -454,8 +452,10 @@ class ConsentGateTests(LaneCase):
             self.assertEqual(discarded[0]['reason'], 'invalid record')
         finally:
             store.close()
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"task-main"})
 
     def test_stop_stores_public_body_and_export_without_tool_or_hidden_material(self):
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.write_consent("contribute", reporting="disabled")
         self.write_community(enabled=True)
         self.open_store()
@@ -491,6 +491,7 @@ class ConsentGateTests(LaneCase):
             self.assertEqual(public["entry"]["title"], "Synthetic summary")
         finally:
             store.close()
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"task-main"})
 
     def test_disallowed_consent_does_not_capture_or_call_the_model(self):
         """community.enabled=true must not collect when consent is not contribute."""
@@ -542,6 +543,7 @@ class ConsentGateTests(LaneCase):
                 )
 
     def test_contribute_stop_is_durable_and_the_worker_runs_once(self):
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.write_consent("contribute", reporting="disabled")
         self.write_community(enabled=True)
         self.open_store()
@@ -571,6 +573,7 @@ class ConsentGateTests(LaneCase):
             row["status"] for row in self.capture_rows()
         ]
         self.assertNotIn("queued", saved, self.capture_rows())
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"task-main"})
 
     def test_stop_uses_the_native_thread_not_a_parent_session_id(self):
         self.write_consent("contribute", reporting="disabled")
@@ -600,6 +603,7 @@ class ConsentGateTests(LaneCase):
         self.assertNotIn(PARENT_SECRET, self.model_text())
 
     def test_fork_worker_does_not_send_inherited_parent_text(self):
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.write_consent("contribute", reporting="disabled")
         self.write_community(enabled=True)
         self.open_store()
@@ -625,9 +629,11 @@ class ConsentGateTests(LaneCase):
         self.assertEqual(self.model_text(), "")
         self.assertIn(CHILD_FACT, observed, observed[:600])
         self.assertNotIn(PARENT_SECRET, observed, observed[:600])
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"child-task"})
 
     def test_material_before_admission_does_not_reach_the_worker(self):
         """Records timestamped before the admission boundary stay unauthorized."""
+        wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.write_consent("contribute", reporting="disabled")
         self.write_community(enabled=True)
         self.open_store()
@@ -644,6 +650,7 @@ class ConsentGateTests(LaneCase):
             self.drain_worker()
         self.assertNotIn(PRE_ADMISSION, self.saved_text())
         self.assertEqual(self.model_text(), "")
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"task-main"})
 
 
 class AuthorityMigrationTests(LaneCase):
@@ -729,7 +736,7 @@ class AuthorityMigrationTests(LaneCase):
             "sys.path.insert(0, sys.argv[1])\n"
             "os.environ['MINDIE_AGENT_CONFIG'] = sys.argv[2]\n"
             "op, value, root = sys.argv[3], sys.argv[4], Path(sys.argv[5])\n"
-            "import consent_store\n"
+            "from mindie_knowledge import consent_store\n"
             "real_lock = consent_store._lock_file_nb\n"
             "def watched(fd):\n"
             "    (root / f'try-{op}').write_text('1')\n"
@@ -791,7 +798,7 @@ class AuthorityMigrationTests(LaneCase):
         disabled; a stale enabled rewrite is a lost update.
         """
         self.write_consent("contribute", reporting="disabled")
-        self.write_community(enabled=True, consent_config=None)
+        self.write_community(enabled=True)
         script = self.root / "settings_race.py"
         script.write_text(
             "import os, sys, time\n"
@@ -813,7 +820,8 @@ class AuthorityMigrationTests(LaneCase):
             "import sharing\n"
             "(root / f'entered-{role}').write_text('1')\n"
             "if role == 'stamp':\n"
-            "    sharing.migrate_community_path()\n"
+            "    with sharing.community_write_lock():\n"
+            "        current=sharing.read();current['fixture_extension']='preserved';sharing.write(sharing.configured_path(),current)\n"
             "else:\n"
             "    sharing.set_enabled(False)\n"
             "(root / f'done-{role}').write_text('1')\n"
@@ -863,126 +871,6 @@ class AuthorityMigrationTests(LaneCase):
             ),
         )
 
-    def test_bootstrap_adoption_and_core_disable_share_one_lock(self):
-        """Codex legacy adoption/stamp and core disable use one profile lock.
-
-        The Codex writer is the candidate's migrate_community_path. The core
-        writer is CommunityWriteContext archived from CORE_COMMIT, not the
-        live core worktree. Disable must not land while adoption holds the
-        lock, and the published file must stay disabled with the stamp kept.
-        """
-        core_repo = _require_checkout(
-            "MINDIE_CORE_REPO",
-            "archiving CommunityWriteContext at " + CORE_COMMIT,
-        )
-        snapshot = self.root / "core-snapshot"
-        snapshot.mkdir()
-        extract_git_archive(core_repo, CORE_COMMIT, snapshot)
-        legacy = self.root / "legacy-enabled.json"
-        legacy.write_text(json.dumps({
-            "schema": "mindie-community-config/1",
-            "enabled": True,
-            "generation": "legacy-gen",
-            "enabled_at": 1.0,
-            "repository": "other/enabled",
-            "branch": "main",
-            "project_roots": [str(self.work)],
-            "idle_seconds": 300,
-        }) + "\n")
-        self.community.unlink(missing_ok=True)
-        self.write_consent("contribute", reporting="disabled")
-        adapter = dict(self.adapter, community_config=str(legacy))
-        self.config.write_text(json.dumps(adapter))
-        engine = dict(self.engine_doc, community_config=str(legacy))
-        self.engine.write_text(json.dumps(engine))
-        adopt = self.root / "adopt.py"
-        adopt.write_text(
-            "import os, sys, time\n"
-            "from pathlib import Path\n"
-            "sys.path.insert(0, sys.argv[1])\n"
-            "os.environ['MINDIE_AGENT_CONFIG'] = sys.argv[2]\n"
-            "root = Path(sys.argv[3])\n"
-            "real = os.replace\n"
-            "state = {'paused': False}\n"
-            "def paused(src, dst):\n"
-            "    if (not state['paused']) and Path(dst).name == 'mindie-community.json':\n"
-            "        state['paused'] = True\n"
-            "        (root / 'at-replace').write_text('1')\n"
-            "        deadline = time.time() + 8\n"
-            "        while not (root / 'release-migrate').exists():\n"
-            "            if time.time() > deadline:\n"
-            "                raise SystemExit('adoption was not released')\n"
-            "            time.sleep(0.01)\n"
-            "    return real(src, dst)\n"
-            "os.replace = paused\n"
-            "import sharing\n"
-            "sharing.migrate_community_path()\n"
-            "(root / 'done-migrate').write_text('1')\n"
-        )
-        disable = self.root / "core_disable.py"
-        disable.write_text(
-            "import sys\n"
-            "from pathlib import Path\n"
-            "sys.path.insert(0, sys.argv[1])\n"
-            "from mindie_knowledge.loop.settings import CommunityWriteContext\n"
-            "canonical, root = Path(sys.argv[2]), Path(sys.argv[3])\n"
-            "(root / 'entered-core').write_text('1')\n"
-            "with CommunityWriteContext(canonical) as ctx:\n"
-            "    state = ctx.read(canonical)\n"
-            "    raw = state.raw or {}\n"
-            "    ctx.write(\n"
-            "        canonical, enabled=False,\n"
-            "        repository=raw.get('repository') or 'other/enabled',\n"
-            "        project_roots=raw.get('project_roots') or [str(root / 'work')],\n"
-            "        branch=raw.get('branch') or 'main',\n"
-            "        idle_seconds=raw.get('idle_seconds') or 300,\n"
-            "    )\n"
-            "(root / 'done-core').write_text('1')\n"
-        )
-        children = []
-        try:
-            migrator = subprocess.Popen(
-                [PY, str(adopt), str(SCRIPTS), str(self.config), str(self.root)],
-                env=self.child_env(),
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            )
-            children.append(migrator)
-            deadline = time.time() + 8
-            while time.time() < deadline and not (self.root / "at-replace").exists():
-                if migrator.poll() is not None:
-                    break
-                time.sleep(0.01)
-            migrate_err = ""
-            if migrator.poll() is not None and migrator.stderr is not None:
-                migrate_err = migrator.stderr.read()
-            self.assertTrue(
-                (self.root / "at-replace").is_file(),
-                "adoption never reached the shared replace: " + migrate_err,
-            )
-            core_env = self.child_env(PYTHONPATH=str(snapshot))
-            core = subprocess.Popen(
-                [PY, str(disable), str(snapshot), str(self.community), str(self.root)],
-                env=core_env,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            )
-            children.append(core)
-            deadline = time.time() + 2
-            while time.time() < deadline and core.poll() is None and not (self.root / "done-core").exists():
-                time.sleep(0.01)
-            overlapped = (self.root / "done-core").exists()
-            (self.root / "release-migrate").write_text("1")
-            finished = [child.communicate(timeout=15) for child in children]
-        finally:
-            self._reap(children)
-        codes = [child.returncode for child in children]
-        saved = json.loads(self.community.read_text())
-        self.assertEqual(
-            (overlapped, codes, saved.get("enabled"), saved.get("consent_config")),
-            (False, [0, 0], False, str(self.root / "mindie-consent.json")),
-            "interop overlapped={0} codes={1} saved={2} output={3}".format(
-                overlapped, codes, saved, finished,
-            ),
-        )
 
     def test_configure_preserves_corrupt_community_bytes(self):
         self.write_consent("read-only", reporting="later")
@@ -1002,46 +890,7 @@ class AuthorityMigrationTests(LaneCase):
         self.assertNotEqual(result.returncode, 0, result.stdout[-400:])
         self.assertEqual(self.community.read_bytes(), before, "configure replaced a damaged community file")
 
-    def _migrate_preserving(self, text):
-        self.community.write_text(text)
-        before = self.community.read_bytes()
-        moved = sharing.migrate_community_path(self.config)
-        return before, moved, self.community.read_bytes()
 
-    def test_migration_preserves_foreign_schema_and_malformed_values(self):
-        """A consent stamp must not rewrite a document core normalize rejects.
-
-        Broken JSON is covered separately. These documents parse. Foreign
-        schema and adapter-rejected managed values must stay byte-identical.
-        A managed value the adapter prefilter accepts and core normalize
-        rejects must stay byte-identical too: the stamp is not a repair.
-        """
-        self.write_consent("read-only", reporting="later")
-        documents = {
-            "foreign-schema": '{"schema":"foreign-format/1","payload":"preserve"}\n',
-            "malformed-managed": json.dumps({
-                "schema": "mindie-community-config/1",
-                "enabled": "yes",
-                "project_roots": "not-a-list",
-                "idle_seconds": 300,
-                "sibling_key": {"owned": "extension"},
-            }) + "\n",
-            "core-rejected-idle": json.dumps({
-                "schema": "mindie-community-config/1",
-                "enabled": False,
-                "repository": "owner/repo",
-                "project_roots": [],
-                "idle_seconds": 1,
-            }) + "\n",
-        }
-        problems = []
-        for name, text in documents.items():
-            before, moved, after = self._migrate_preserving(text)
-            if after != before:
-                problems.append(name + " bytes changed: " + after.decode()[:240])
-            if not isinstance(moved, dict) or not moved.get("detail"):
-                problems.append(name + " did not report the fault: " + repr(moved))
-        self.assertEqual(problems, [], problems)
 
     def test_configure_preserves_foreign_schema_bytes(self):
         self.write_consent("read-only", reporting="later")
@@ -1095,7 +944,7 @@ class AuthorityMigrationTests(LaneCase):
         self.assertEqual(saved["sibling_key"], {"owned": "extension"})
         self.assertEqual(saved["consent_config"], str(self.root / "mindie-consent.json"))
 
-    def test_converged_read_and_migration_do_not_spawn_the_runtime(self):
+    def test_current_authority_read_does_not_spawn_the_runtime(self):
         self.write_consent("contribute", reporting="disabled")
         self.write_community(enabled=True)
         before = self.community.read_bytes()
@@ -1110,16 +959,11 @@ class AuthorityMigrationTests(LaneCase):
         adapter["python"] = str(wrapper)
         self.config.write_text(json.dumps(adapter))
         started = time.monotonic()
-        moved = sharing.migrate_community_path(self.config)
-        migrate_elapsed = time.monotonic() - started
-        started = time.monotonic()
         view = sharing.read(self.config)
         read_elapsed = time.monotonic() - started
-        self.assertEqual(moved.get("status"), "current", moved)
-        self.assertFalse(marker.exists(), "read or migration spawned the runtime")
+        self.assertFalse(marker.exists(), "read spawned the runtime")
         self.assertEqual(self.community.read_bytes(), before)
         self.assertIsNotNone(view)
-        self.assertLess(migrate_elapsed, ENTRY_FAST_PATH_SECONDS, "migration left the entry fast path")
         self.assertLess(read_elapsed, ENTRY_FAST_PATH_SECONDS, "read left the entry fast path")
 
     def test_unreadable_specified_authority_is_not_replaced(self):
@@ -1173,99 +1017,10 @@ class AuthorityMigrationTests(LaneCase):
             "idle_seconds": 300,
         }) + "\n")
 
-    def test_declared_legacy_pointer_is_the_authority_before_migration(self):
-        """A config that still names a real legacy file has not migrated.
 
-        Reading that declared file is compatibility, including when the
-        profile directory cannot create the shared sibling. It is not a
-        fallback onto some third file, and it must not pretend migration ran.
-        """
-        if os.name != "posix":
-            self.skipTest(
-                "POSIX mode-bit write denial; Windows ACL denial is not exercised "
-                "by this fixture (authority and preservation checks run elsewhere)"
-            )
-        if hasattr(os, "geteuid") and os.geteuid() == 0:
-            self.skipTest("root ignores the directory mode used below")
-        legacy = self.root / "legacy-enabled.json"
-        self._legacy_enabled(legacy, [self.work])
-        self.config.write_text(json.dumps(dict(self.adapter, community_config=str(legacy))))
-        before = self.config.read_bytes()
-        self.community.unlink(missing_ok=True)
-        os.chmod(self.root, 0o555)
-        try:
-            resolved = sharing.configured_path(self.config)
-            allowed = sharing.capture_allowed(
-                {"project_root": str(self.work), "root_session": "t", "activated_at": 1.0},
-                str(self.work),
-                self.config,
-            )
-        finally:
-            os.chmod(self.root, 0o755)
-        self.assertEqual(resolved, legacy)
-        self.assertFalse(self.community.exists())
-        self.assertEqual(self.config.read_bytes(), before)
-        self.assertTrue(allowed)
 
-    def test_explicit_migration_failure_does_not_claim_success(self):
-        if os.name != "posix":
-            self.skipTest(
-                "POSIX mode-bit write denial; Windows ACL denial is not exercised "
-                "by this fixture (authority and preservation checks run elsewhere)"
-            )
-        if hasattr(os, "geteuid") and os.geteuid() == 0:
-            self.skipTest("root ignores the directory mode used to fail the copy")
-        legacy = self.root / "outside" / "legacy-enabled.json"
-        legacy.parent.mkdir()
-        self._legacy_enabled(legacy, [self.work])
-        self.config.write_text(json.dumps(dict(self.adapter, community_config=str(legacy))))
-        before = self.config.read_bytes()
-        self.community.unlink(missing_ok=True)
-        os.chmod(self.root, 0o555)
-        try:
-            try:
-                result = sharing.migrate_community_path(self.config)
-            except Exception as exc:
-                result = exc
-        finally:
-            os.chmod(self.root, 0o755)
-        self.assertFalse(self.community.exists())
-        self.assertEqual(self.config.read_bytes(), before)
-        self.assertNotIsInstance(result, dict, result)
-        self.assertEqual(sharing.configured_path(self.config), legacy)
 
-    def test_shared_authority_does_not_fall_back_or_widen(self):
-        wide = self.root / "wide.json"
-        self._legacy_enabled(wide, [self.work, self.root])
-        self.write_community(enabled=True, roots=[self.work])
-        narrow_roots = json.loads(self.community.read_text())["project_roots"]
-        self.config.write_text(json.dumps(dict(self.adapter, community_config=str(wide))))
-        if os.name == "posix":
-            self.community.chmod(0)
-            try:
-                with self.assertRaises(PermissionError):
-                    sharing.read(self.config)
-                with self.assertRaises(PermissionError):
-                    sharing.capture_allowed(
-                        {"project_root": str(self.work), "root_session": "t", "activated_at": 1.0},
-                        str(self.work), self.config,
-                    )
-            finally:
-                self.community.chmod(0o600)
-        # On Windows the following malformed-byte case remains active; chmod
-        # does not provide a file ACL denial test.
-        self.community.write_text("{not-json")
-        with self.assertRaises(ValueError):
-            sharing.read(self.config)
-        self.assertEqual(sharing.configured_path(self.config), self.community)
-        self.write_community(enabled=False, roots=[self.work])
-        moved = sharing.migrate_community_path(self.config)
-        saved = json.loads(self.community.read_text())
-        self.assertEqual(saved["project_roots"], narrow_roots)
-        self.assertNotIn(str(self.root.resolve()), saved["project_roots"])
-        self.assertNotEqual(moved.get("status"), "adopted")
-
-    def test_configure_wires_one_authority_including_consent_config(self):
+    def test_configure_rejects_unsupported_development_layout_without_writes(self):
         wide = self.root / "wide.json"
         narrow = self.root / "narrow.json"
         wide.write_text(json.dumps({
@@ -1303,53 +1058,20 @@ class AuthorityMigrationTests(LaneCase):
             env=self.child_env(),
             cwd=str(self.work),
         )
-        self.assertEqual(result.returncode, 0, result.stderr[-800:])
-        adapter = json.loads(self.config.read_text())
-        engine = json.loads(self.engine.read_text())
-        shared_path = Path(adapter["community_config"])
-        shared = json.loads(shared_path.read_text()) if shared_path.is_file() else {}
-        problems = []
-        if adapter.get("community_config") != engine.get("community_config"):
-            problems.append(
-                "adapter "
-                + str(adapter.get("community_config"))
-                + " != engine "
-                + str(engine.get("community_config"))
-            )
-        roots = shared.get("project_roots")
-        if roots != [str(self.work.resolve())]:
-            problems.append("project_roots=" + repr(roots))
-        if shared.get("consent_config") != str(self.root / "mindie-consent.json"):
-            problems.append("consent_config=" + repr(shared.get("consent_config")))
-        self.assertEqual(problems, [], problems)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsupported community configuration", result.stderr)
+        self.assertEqual(json.loads(self.config.read_text()), adapter)
+        self.assertEqual(json.loads(self.engine.read_text()), engine)
+        self.assertTrue(wide.is_file() and narrow.is_file())
 
 
 class CrossAdapterTests(LaneCase):
-    def test_bootstrap_matches_pinned_core_store(self):
-        core_repo = _require_checkout(
-            "MINDIE_CORE_REPO",
-            "reading mindie_knowledge/consent_store.py at " + CORE_COMMIT,
-        )
-        blob = subprocess.check_output(
-            ["git", "-C", str(core_repo), "show", f"{CORE_COMMIT}:mindie_knowledge/consent_store.py"],
-        )
-        local = (SCRIPTS / "consent_store.py").read_text(encoding="utf-8")
-        self.assertEqual(hashlib.sha256(blob).hexdigest(), CONSENT_STORE_SHA256)
-        # Git checkout/wheel line endings may be CRLF on Windows. Keep the
-        # canonical Git blob hash exact, and compare source text without only
-        # that checkout transformation; no whitespace/content is stripped.
-        self.assertEqual(local, blob.decode("utf-8").replace("\r\n", "\n"))
-
     def test_running_runtime_matches_the_declared_core(self):
         import mindie_knowledge
         from importlib.metadata import distribution
 
-        declared = (REPO / "runtime-requirements.txt").read_text()
-        pin = (
-            "mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@"
-            + CORE_COMMIT
-        )
-        self.assertIn(pin, declared)
+        declared = (REPO / "plugins/mindie-agent/pyproject.toml").read_text()
+        self.assertEqual(requirements(REPO)[0]["mindie-knowledge"], CORE_COMMIT)
         direct = json.loads(distribution("mindie-knowledge").read_text("direct_url.json"))
         self.assertEqual((direct.get("vcs_info") or {}).get("commit_id"), CORE_COMMIT)
         module = Path(mindie_knowledge.__file__).resolve()
@@ -1562,139 +1284,6 @@ class RemoteIsolationTests(LaneCase):
         self.assertTrue(child_ids)
         self.assertEqual(set(parent_ids) & set(child_ids), set())
         self.assertFalse((self.root / "mindie-consent.json").exists())
-
-
-class CandidateResolutionTests(LaneCase):
-    def _plant(self, directory, marker):
-        scripts = directory / "scripts"
-        skills = directory / "skills/mindie-agent"
-        hooks = directory / "hooks"
-        for path in (scripts, skills, hooks):
-            path.mkdir(parents=True)
-        (scripts / "bridge.py").write_text("print(" + repr(marker) + ")\n")
-        (skills / "SKILL.md").write_text("skill " + marker + "\n")
-        (hooks / "hooks.json").write_text(json.dumps({"marker": marker}) + "\n")
-        return {
-            "bridge": _sha256(scripts / "bridge.py"),
-            "skill": _sha256(skills / "SKILL.md"),
-            "hooks": _sha256(hooks / "hooks.json"),
-        }
-
-    def _hashes(self, directory):
-        return {
-            "bridge": _sha256(directory / "scripts/bridge.py"),
-            "skill": _sha256(directory / "skills/mindie-agent/SKILL.md"),
-            "hooks": _sha256(directory / "hooks/hooks.json"),
-        }
-
-    def test_same_version_old_bytes_fail_acceptance(self):
-        from auto_update import Updater, atomic, stop_hook_commands
-
-        candidate = self.root / "candidate-plugin"
-        cache_version = self.codex_home / "plugins/cache/mindie-agent/mindie-agent/1.4.0"
-        expected = self._plant(candidate, "candidate-bytes")
-        self._plant(cache_version, "old-global-cache")
-        _refuse_user_config(cache_version)
-        settings = self.root / "updater.json"
-        atomic(settings, {
-            "root": str(self.root / "updates"),
-            "adapter_config": str(self.config),
-            "codex_home": str(self.codex_home),
-            "codex": "fixture-codex",
-            "python": PY,
-            "repository": str(self.root),
-            "channel": "main",
-        })
-        (self.root / "updates").mkdir()
-
-        class ListOnly(Updater):
-            def command(self, args, **kwargs):
-                if [str(part) for part in args][1:3] == ["plugin", "list"]:
-                    return json.dumps({"installed": [{
-                        "pluginId": "mindie-agent@mindie-agent",
-                        "name": "mindie-agent",
-                        "version": "1.4.0",
-                        "installed": True,
-                        "enabled": True,
-                    }]})
-                raise AssertionError("unexpected host command " + " ".join(map(str, args)))
-
-        updater = ListOnly(settings)
-        try:
-            accepted = updater.verify_native("1.4.0", plugin=str(candidate))
-            refusal = None
-        except Exception as exc:
-            accepted = None
-            refusal = f"{type(exc).__name__}: {exc}"
-        resolved = self._hashes(cache_version)
-        hook = stop_hook_commands(
-            [PY, str(cache_version / "scripts/bridge.py"), "stop"]
-        )
-        ran = subprocess.run(
-            hook["commandWindows" if os.name == "nt" else "command"],
-            input="{}",
-            text=True,
-            capture_output=True,
-            timeout=5,
-            shell=True,
-            env=self.child_env(PLUGIN_ROOT=str(cache_version)),
-        )
-        self.assertEqual(ran.returncode, 0, ran.stderr)
-        executed = cache_version / "scripts/bridge.py"
-        self.assertNotEqual(
-            resolved,
-            expected,
-            "fixture did not plant differing bytes",
-        )
-        self.assertIsNone(accepted)
-        self.assertIsNotNone(refusal)
-        self.assertNotIn("warning", refusal.lower())
-        self.assertTrue(
-            "byte" in refusal.lower() or "differ" in refusal.lower(),
-            "acceptance refusal did not name the byte mismatch: " + refusal,
-        )
-        self.assertNotEqual(resolved, expected)
-        self.assertNotEqual(_sha256(executed), expected["bridge"])
-
-    def test_higher_cache_version_is_a_hard_failure(self):
-        from auto_update import Updater, atomic
-
-        cache_version = self.codex_home / "plugins/cache/mindie-agent/mindie-agent/9.9.9"
-        self._plant(cache_version, "higher-old-cache")
-        settings = self.root / "updater.json"
-        atomic(settings, {
-            "root": str(self.root / "updates"),
-            "adapter_config": str(self.config),
-            "codex_home": str(self.codex_home),
-            "codex": "fixture-codex",
-            "python": PY,
-            "repository": str(self.root),
-            "channel": "main",
-        })
-        (self.root / "updates").mkdir()
-
-        class Highest(Updater):
-            def command(self, args, **kwargs):
-                if [str(part) for part in args][1:3] == ["plugin", "list"]:
-                    versions = [
-                        path.name for path in cache_version.parent.iterdir() if path.is_dir()
-                    ]
-                    selected = max(versions)
-                    return json.dumps({"installed": [{
-                        "pluginId": "mindie-agent@mindie-agent",
-                        "name": "mindie-agent",
-                        "version": selected,
-                        "installed": True,
-                        "enabled": True,
-                    }]})
-                raise AssertionError(args)
-
-        updater = Highest(settings)
-        with self.assertRaises(RuntimeError) as caught:
-            updater.verify_native("1.4.0")
-        message = str(caught.exception).lower()
-        self.assertNotIn("warning", message)
-        self.assertIn("9.9.9", str(caught.exception))
 
 
 if __name__ == "__main__":

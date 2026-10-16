@@ -97,7 +97,8 @@ class ReceiptLifetimeTests(unittest.TestCase):
 
     def test_known_business_success_stays_succeeded_when_helper_cleanup_fails(self):
         config = self.root / "cleanup-config.json"
-        config.write_text(json.dumps({"python": sys.executable, "engine_config": "/absent"}))
+        config.write_text(json.dumps({"python": sys.executable, "runtime_scripts": str(SCRIPTS),
+                                      "engine_config": "/absent"}))
         request = {"id": 7, "params": {"name": "remote_bash",
             "arguments": {"command": "true", "host": "example.invalid"},
             "_meta": {"threadId": "cleanup", "x-codex-turn-metadata": {
@@ -155,7 +156,8 @@ class ReceiptLifetimeTests(unittest.TestCase):
 
     def test_gate_constructs_one_receipt_owner_per_seen_task(self):
         config = self.root / 'config.json'
-        config.write_text(json.dumps({'python': sys.executable, 'engine_config': '/absent/not-used'}))
+        config.write_text(json.dumps({'python': sys.executable, 'runtime_scripts': str(SCRIPTS),
+                                     'engine_config': '/absent/not-used'}))
         factory = mcp_gate.RemoteReceipts
         def request(identity):
             return {'id': identity, 'params': {'name': 'remote_bash',

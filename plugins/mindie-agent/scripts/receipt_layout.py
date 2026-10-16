@@ -11,9 +11,8 @@ from agent_diagnostics import _present
 from update_lock import file_lock
 
 FORMAT = 1
-# The release commit sets the normal product version. Git/date build versions
-# and an internal package version do not turn development state into a release.
-RELEASE_VERSION = None
+# The first product release protects remote effects, including uncertain writes.
+RELEASE_VERSION = '0.0.1'
 
 
 def _version(value):

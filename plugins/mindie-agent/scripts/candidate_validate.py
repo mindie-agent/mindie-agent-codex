@@ -19,15 +19,17 @@ import tempfile
 
 # -I intentionally discards ambient imports; helpers belong to this candidate.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from product_contract import identity, read_json, validate_receipt
+from product_contract import identity, native_version, read_json, validate_receipt
 from runtime_probe import build_probe_script
 
 
 class CheckFailure(ValueError):
-    def __init__(self, stage, code, component=None):
+    def __init__(self, stage, code, component=None, *, process=None):
         self.failure = dict(stage=stage, code=code)
         if component is not None:
             self.failure["component"] = component
+        if process is not None:
+            self.failure["process"] = process
         super().__init__(stage + ": " + code)
 
 
@@ -58,11 +60,19 @@ def adapter_check(source):
     ):
         raise ValueError("informational skill must be available on demand")
     hooks = read_json(plugin / "hooks/hooks.json")[0]["hooks"]
-    if set(hooks) != {"Stop"} or len(hooks["Stop"]) != 1:
-        raise ValueError("only one Stop hook is supported")
+    if set(hooks) != {"SessionStart", "Stop", "Interrupt"} or any(len(v) != 1 for v in hooks.values()):
+        raise ValueError("one SessionStart, Stop and Interrupt hook group is required")
     entries = hooks["Stop"][0]["hooks"]
     if len(entries) != 1 or "timeout" in entries[0]:
         raise ValueError("Stop must not impose an execution deadline")
+    expected_interrupt = [
+        dict(type="mcp_tool", server=server, tool="mindie_interrupt",
+             input=dict(thread_id="${session_id}", turn_id="${turn_id}"),
+             timeout=3, statusMessage="MindIE cancellation")
+        for server in ("mindie-knowledge", "mindie-remote-dev")
+    ]
+    if hooks["Interrupt"][0]["hooks"] != expected_interrupt:
+        raise ValueError("Interrupt must target both exact native MCP turn controls")
     for name in (
         "session_gate.py",
         "mcp_gate.py",
@@ -75,16 +85,16 @@ def adapter_check(source):
         "candidate_validate.py",
         "product_contract.py",
         "admission_ops.py",
+        "capture_errors.py",
         "codex_transcript.py",
         "history_import.py",
         "agent_worker.py",
         "capture_config.py",
-        "service_handoff.py",
-        "auto_update.py",
-        "update_launcher.py",
+        "entry.py",
+        "bootstrap.py",
+        "service_client.py",
         "mcp_catalog.json",
         "agent_diagnostics.py",
-        "runtime_launcher.py",
     ):
         if not (plugin / "scripts" / name).is_file():
             raise ValueError("missing bounded runtime entry: " + name)
@@ -98,15 +108,16 @@ def adapter_check(source):
 
 
 def release_check(plugin):
-    """A normal product version must declare both durable state boundaries."""
-    version = read_json(plugin / ".codex-plugin/plugin.json")[0]["version"]
+    """Validate protection declarations; component versions do not imply formats."""
+    version = native_version(plugin)
     if re.fullmatch(r"\d+\.\d+\.\d+", version):
-        from mindie_knowledge.state_layout import RELEASE_VERSION as knowledge_release
-        from receipt_layout import RELEASE_VERSION as receipt_release
-        if knowledge_release is None or receipt_release is None:
-            raise CheckFailure('adapter', 'release_state_undeclared')
-        if knowledge_release != version or receipt_release != version:
-            raise CheckFailure('adapter', 'release_version_mismatch')
+        from mindie_knowledge import state_layout
+        import receipt_layout
+        for layout in (state_layout, receipt_layout):
+            if (type(layout.FORMAT) is not int or layout.FORMAT < 1
+                    or not isinstance(layout.RELEASE_VERSION, str)
+                    or not re.fullmatch(r"\d+\.\d+\.\d+", layout.RELEASE_VERSION)):
+                raise CheckFailure('adapter', 'release_state_undeclared')
 
 
 def installed_revisions(pins):
@@ -135,22 +146,54 @@ def runtime_check(scripts):
         raise ValueError(output.getvalue().strip() or "candidate runtime probe returned no result")
 
 
+def publication_git(args, code, env):
+    """Project only execution facts from one owned Git process."""
+    from bounded_process import run
+
+    try:
+        result = run(args, "", timeout=None, env=env, allowed_returncodes=None)
+    except Exception as exc:
+        result = getattr(exc, "process_result", None)
+        execution = result.execution if result is not None else "unknown"
+        returncode = result.returncode if result is not None else None
+        cleanup_failed = bool(result.cleanup) if result is not None else False
+        reason = "process_failed"
+        if execution == "not_started":
+            reason = "spawn_failed"
+        elif execution == "completed" and returncode != 0:
+            reason = "nonzero_exit"
+        elif execution == "unknown" and isinstance(exc, TimeoutError):
+            reason = "timeout"
+        raise CheckFailure("publication_fetch", code, process=dict(
+            execution=execution, reason=reason, returncode=returncode,
+            cleanup_failed=cleanup_failed,
+        )) from exc
+    if result.execution != "completed" or result.returncode != 0 or result.cleanup:
+        reason = ("process_failed" if result.execution != "completed"
+                  else "nonzero_exit" if result.returncode != 0 else "cleanup_failed")
+        raise CheckFailure("publication_fetch", code, process=dict(
+            execution=result.execution, reason=reason, returncode=result.returncode,
+            cleanup_failed=bool(result.cleanup),
+        ))
+    return result.stdout
+
+
 def publication_contract(publication):
     """One bounded, read-only fetch; no checkout, Git hooks or retries."""
-    from bounded_process import run
     from mindie_knowledge.publication_contract import read_git_contract
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1",
                GIT_CONFIG_GLOBAL=os.devnull)
     with tempfile.TemporaryDirectory(prefix="mindie-publication-contract-") as directory:
         git = ["git", "-c", "core.hooksPath=" + os.devnull, "-C", directory]
-        checked("publication_fetch", "fetch_failed", lambda: run(
-            git + ["init", "--bare", "--quiet"], "", timeout=None, env=env).checked_stdout())
-        checked("publication_fetch", "fetch_failed", lambda: run(
-            git + ["fetch", "--no-auto-maintenance", "--depth=1", "--no-tags",
-                   "https://github.com/" + publication["repository"] + ".git",
-                   publication["verified_commit"]], "", timeout=None, env=env).checked_stdout())
-        observed = checked("publication_fetch", "fetch_failed", lambda: run(
-            git + ["rev-parse", "FETCH_HEAD"], "", timeout=None, env=env).checked_stdout()).strip()
+        publication_git(git + ["init", "--bare", "--quiet"], "init_failed", env)
+        publication_git(git + [
+            "fetch", "--no-auto-maintenance", "--depth=1", "--no-tags",
+            "https://github.com/" + publication["repository"] + ".git",
+            publication["verified_commit"],
+        ], "fetch_failed", env)
+        observed = publication_git(
+            git + ["rev-parse", "FETCH_HEAD"], "revision_read_failed", env,
+        ).strip()
         if observed != publication["verified_commit"]:
             raise CheckFailure("publication_fetch", "revision_mismatch")
         try:
@@ -165,8 +208,9 @@ def validate(source, expected, verified_receipt=None):
     actual = checked("source", "source_invalid", lambda: identity(source, expected.get("candidate_revision")))
     if actual != expected:
         raise CheckFailure("source", "source_changed")
-    checked("adapter", "adapter_incompatible", lambda: adapter_check(Path(source)))
+    # Verify provenance before adapter checks import runtime state declarations.
     installed_revisions(actual["runtime"])
+    checked("adapter", "adapter_incompatible", lambda: adapter_check(Path(source)))
     checked("runtime_api", "api_incompatible", lambda: runtime_check(Path(__file__).resolve().parent))
     if verified_receipt is None:
         # The runtime parser checks material formats and review semantics.
