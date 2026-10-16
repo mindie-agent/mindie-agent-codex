@@ -34,13 +34,36 @@ Use Linux-native Codex, Git and uv inside WSL, with profile, SQLite and runtime
 files on the Linux filesystem. Do not substitute Windows executables through
 `/mnt/c`.
 
+On Linux and WSL, service-backed knowledge reads and automatic capture/indexing
+require a reachable systemd user manager, systemd 254 or newer, and a unified
+cgroup hierarchy. This also applies to knowledge reads with contribution off.
+Independent remote-dev operations do not use that knowledge service. A missing
+user manager, unsupported version or unverified containment is reported as a
+service error; the plugin does not silently start an unprotected replacement.
+Check the user manager with `systemctl --user show --property=Version`.
+
 The first ordinary release is `0.0.1` (`v0.0.1`). It is still being prepared;
 these release commands become usable only after the release catalog exists:
 
+Run these commands in a macOS/WSL shell or native Windows PowerShell, using the
+same Codex profile throughout:
+
 ```sh
+git --version
+uv --version
+codex --version
 codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.0.1
 codex plugin add mindie-agent@mindie-agent --json
+codex plugin list --json
 ```
+
+Check the actual CLI version against the candidate interface declaration below
+and confirm that the native installed record reports `mindie-agent@mindie-agent`,
+version `0.0.1`, enabled in the intended profile. Start a new native Codex session
+to complete preparation, then confirm native tool discovery exposes both
+`mindie-knowledge` and `mindie-remote-dev`. A successful install command or plugin
+listing alone does not prove that the MCP servers are ready. Preserve any
+initialization failure instead of treating missing tools as a completed install.
 
 The initial Git catalog uses the immutable Release tag, so a native refresh
 cannot advance it to an unselected version. Candidate acceptance uses an explicit
@@ -181,9 +204,13 @@ with reporting off; the diagnostics component owns reporter scheduling. See the 
 ## Updates and failures
 
 Each Release includes [Harness compatibility and interface declarations](plugins/mindie-agent/harness-compatibility.json).
-The supported Codex versions are currently exactly `0.153.4` and
-`0.162.0-alpha.17.2`; these two verified points do not imply support for versions
-between them. Initial preparation checks the actual selected executable.
+The candidate registry declares exactly `0.153.4` and `0.162.0-alpha.17.2`;
+these two version points do not imply support for versions between them.
+Initial preparation checks the actual selected executable. The
+[child-agent cancellation gate](docs/harness-interfaces.md#child-agent-cancellation-remains-a-release-gate)
+is still open on those official versions, so the declaration is not a complete
+release acceptance claim. A task-local patched executable does not establish
+support for an unmodified official binary.
 
 After 24 hours since the last successful Release check, the next natural MCP use
 starts one background check. A successful check with no newer Release also advances
