@@ -22,7 +22,7 @@ class ProcessResultTests(unittest.TestCase):
             subprocess.DEVNULL, None)
         original = process.wait
         def wait(*args, **kwargs):
-            if kwargs.get('timeout') == 1:
+            if kwargs.get('timeout') in (1, 2, 2.0):
                 raise subprocess.TimeoutExpired('cleanup fixture', 1)
             return original(*args, **kwargs)
         with patch.object(process, 'wait', side_effect=wait):

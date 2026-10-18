@@ -202,7 +202,7 @@ def bind(lease):
                     str(Path(runtime_scripts(config)) / "runtime_call.py"),
                 ],
                 json.dumps(payload),
-                timeout=None,
+                timeout=30.0,
                 env=runtime_env(config_file),
                 allow_service=True,
             ).checked_stdout()
@@ -274,6 +274,7 @@ def _prepare_capture(result):
         # while reporting that required capture preparation did not complete.
         return dict(result, status="degraded", capture="unavailable", experience="unavailable",
                     error=dict(stage="capture-configuration", type=type(exc).__name__),
+                    warning=f"Capture configuration could not be prepared ({type(exc).__name__}); read-only knowledge lease remains active.",
                     next="Inspect the existing capture configuration; do not activate again to repair it.")
     result["sharing"] = view
     result["experience"] = (
@@ -289,6 +290,22 @@ def _prepare_capture(result):
     elif result["experience"] == "out-of-scope":
         result["next"] = "This task is outside the configured project scope; capture is not active."
     elif result["experience"] == "unavailable":
+        result["status"] = "degraded"
+        reason = (
+            result["capture"].removeprefix("unbound:")
+            if result["capture"].startswith("unbound:")
+            else view["state"]
+        )
+        result["warning"] = (
+            f"Capture binding unavailable ({reason}); read-only knowledge lease remains active."
+        )
+        result.setdefault(
+            "error",
+            dict(
+                stage="capture-bind" if result["capture"].startswith("unbound:") else "capture-configuration",
+                reason=reason,
+            ),
+        )
         result["next"] = "Capture could not be prepared; inspect status. Task binding alone does not establish capture readiness."
     return result
 
@@ -414,7 +431,7 @@ def offline_status():
             stage = "helper_run"
             output = run(
                 [config["python"], str(Path(runtime_scripts(config)) / "service_control.py"), "status"],
-                "", timeout=None, max_output=32768, env=runtime_env(config_file),
+                "", timeout=30.0, max_output=32768, env=runtime_env(config_file),
             ).checked_stdout()
             stage = "helper_response"
             payload = json.loads(output)
@@ -605,7 +622,7 @@ def contribution(operation, batch_id):
                 batch_id,
             ],
             "",
-            timeout=None,
+            timeout=60.0,
             max_output=65536,
             env=runtime_env(config_file),
         ).checked_stdout()
@@ -674,7 +691,7 @@ def configure(argv):
                 *argv,
             ],
             "",
-            timeout=None,
+            timeout=60.0,
             max_output=65536,
             env=runtime_env(config_file),
         ).checked_stdout()
@@ -796,7 +813,7 @@ def reporting_operation(operation):
             output = run(
                 [python, "-m", "mindie_diagnostics.cli", "reporting", "status"],
                 "",
-                timeout=None,
+                timeout=30.0,
                 max_output=65536,
                 allowed_returncodes=(0, 1),
                 env=runtime_env(config_file),
@@ -833,7 +850,7 @@ def reporting_operation(operation):
                     str(Path(scripts)),
                 ],
                 "",
-                timeout=None,
+                timeout=30.0,
                 max_output=65536,
                 allowed_returncodes=(0, 1),
                 env=runtime_env(config_file),
@@ -869,7 +886,7 @@ def reporting_operation(operation):
         output = run(
             [python, "-m", "mindie_diagnostics.cli", "reporting", verb],
             "",
-            timeout=None,
+            timeout=60.0,
             max_output=65536,
             allowed_returncodes=(0, 1),
             env=runtime_env(config_file),
@@ -1020,7 +1037,7 @@ def main():
                 run(
                     control,
                     "",
-                    timeout=None,
+                    timeout=60.0,
                     max_output=32768,
                     env=runtime_env(config_file),
                 ).checked_stdout(),

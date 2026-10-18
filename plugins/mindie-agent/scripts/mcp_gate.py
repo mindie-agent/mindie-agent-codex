@@ -77,6 +77,16 @@ def call_failure(exc):
     return result
 
 
+def _reader_only_cleanup(issues):
+    return bool(issues) and all(
+        isinstance(item, dict) and (
+            item.get("stage") in {"join_reader", "close_pipe", "reader_join_timed_out"}
+            or item.get("error_type") == "ReaderStillRunning"
+        )
+        for item in issues
+    )
+
+
 def runtime_result(completed):
     """A helper's valid business envelope survives its separate cleanup fault."""
     if not isinstance(completed, ProcessResult) or completed.execution != "completed":
@@ -85,6 +95,16 @@ def runtime_result(completed):
     if not isinstance(result, dict) or not isinstance(result.get("content"), list):
         raise ValueError("Invalid MindIE runtime response")
     if completed.cleanup:
+        if completed.returncode == 0 and _reader_only_cleanup(completed.cleanup):
+            result = dict(
+                result,
+                operation_outcome="failed" if result.get("isError") is True else "succeeded",
+                cleanup_warning=dict(
+                    status="warning", issues=completed.cleanup,
+                    operation_outcome="preserved", automatic_retry=False,
+                ),
+            )
+            return result
         result = dict(result, operation_outcome="failed" if result.get("isError") is True else "succeeded", isError=True, cleanup=dict(
             status="failed", issues=completed.cleanup, operation_outcome="preserved",
             automatic_retry=False))
@@ -263,9 +283,10 @@ class RemoteReceipts:
                     json.dump(authority, stream)
                     stream.flush()
                     os.fsync(stream.fileno())
-                db = sqlite3.connect(self.path, timeout=0.2)
+                db = sqlite3.connect(self.path, timeout=5.0)
                 try:
                     os.chmod(self.path, 0o600)
+                    db.execute("PRAGMA busy_timeout=5000")
                     with db:
                         for _, _, definition in RECEIPT_SCHEMA.values():
                             db.execute(definition)
@@ -288,8 +309,9 @@ class RemoteReceipts:
                     or not isinstance(authority.get("identity"), str) or len(authority["identity"]) != 32
                     or any(c not in "0123456789abcdef" for c in authority["identity"])):
                 raise ValueError("remote receipt authority marker is invalid")
-            db = sqlite3.connect(self.path.absolute().as_uri() + "?mode=rw", uri=True, timeout=0.2)
+            db = sqlite3.connect(self.path.absolute().as_uri() + "?mode=rw", uri=True, timeout=5.0)
             try:
+                db.execute("PRAGMA busy_timeout=5000")
                 schema = {name: (kind, table, definition) for kind, name, table, definition in db.execute(
                     "SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")}
                 if schema != RECEIPT_SCHEMA:
@@ -491,9 +513,12 @@ class Gate:
                     receipts.finish(identity, outcome)
                 except Exception as accounting_error:
                     if isinstance(result, dict):
-                        result["accounting"] = dict(status="failed", error_type=type(accounting_error).__name__,
-                                                    operation_outcome="preserved", automatic_retry=False)
-                        result["isError"] = True
+                        warning = dict(status="failed", error_type=type(accounting_error).__name__,
+                                       operation_outcome="preserved", automatic_retry=False)
+                        result["accounting"] = warning
+                        result["local_accounting_warning"] = warning
+                        if not isinstance(result.get("content"), list):
+                            result["content"] = []
                         result["content"].append(dict(type="text", text=
                             "Remote result preserved; local outcome accounting failed. Do not repeat the operation."))
 

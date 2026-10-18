@@ -65,9 +65,10 @@ def _open(create=False):
     if path.is_symlink() or (_present(path) and not path.is_file()):
         raise ValueError('diagnostic projection must be a regular local file')
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    db = sqlite3.connect(path, timeout=0.1)
+    db = sqlite3.connect(path, timeout=3.0)
     try:
         db.row_factory = sqlite3.Row
+        db.execute('PRAGMA busy_timeout=3000')
         db.execute('BEGIN IMMEDIATE')
         columns = {row[1] for row in db.execute('PRAGMA table_info(pending)')}
         if not columns:

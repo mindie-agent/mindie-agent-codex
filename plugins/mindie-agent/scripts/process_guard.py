@@ -70,7 +70,22 @@ def _native_error_reason(event):
     return 'native_turn_failed' if event['type'] == 'turn.failed' else 'native_event_error'
 
 
-def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=False, env=None):
+def _exit_grace_seconds() -> float:
+    raw = os.environ.get("MINDIE_CODEX_EXIT_GRACE_SECONDS")
+    if raw:
+        try:
+            val = float(raw)
+            if val > 0:
+                return val
+        except ValueError:
+            pass
+    return 10.0
+
+
+POST_COMPLETION_EXIT_GRACE_SECONDS = _exit_grace_seconds()
+
+
+def run_codex(command, prompt, *, timeout: float | None = 120.0, receipt=None, defer_cleanup=False, env=None):
     # The knowledge service owns one group for worker + Codex + descendants.
     started = time.monotonic()
     receipt = {} if receipt is None else receipt
@@ -249,7 +264,7 @@ def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=Fals
                     # owned tree. Waiting here couples output to CLI shutdown.
                     code = process.poll()
                 elif receipt['turn_completed']:
-                    code = process.wait(timeout=2)
+                    code = process.wait(timeout=_exit_grace_seconds())
                 else:
                     # The event loop already observed actual process exit;
                     # it kept owner checks and explicit deadlines live after EOF.

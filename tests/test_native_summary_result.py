@@ -55,10 +55,16 @@ class NativeSummaryResultTests(unittest.TestCase):
     def test_completed_result_survives_cli_that_never_writes_its_late_file(self):
         payload = request(worker)
         metadata = result(payload)
+        actual_wait = subprocess.Popen.wait
+        def fast_reap_wait(process, *args, **kwargs):
+            if kwargs.get('timeout') in (2, 2.0, 10, 10.0):
+                kwargs = dict(kwargs, timeout=0.1)
+            return actual_wait(process, *args, **kwargs)
         with tempfile.TemporaryDirectory() as directory:
             late = Path(directory) / 'late-output.json'
-            value = self.execute(payload, events(metadata),
-                f'time.sleep(3)\nfrom pathlib import Path\nPath({str(late)!r}).write_text("too late")\n')
+            with patch.object(subprocess.Popen, 'wait', fast_reap_wait):
+                value = self.execute(payload, events(metadata),
+                    f'time.sleep(0.5)\nfrom pathlib import Path\nPath({str(late)!r}).write_text("too late")\n')
             self.assertFalse(late.exists())
         self.assertEqual(value['status'], 'returned')
         self.assertEqual(value['result'], metadata)

@@ -84,8 +84,9 @@ else:
                 missing.append(name + " must be finite and positive")
         valid_bounds = all(type(value) in (int, float) and math.isfinite(value) and value > 0
                            for _, value in positive_bounds)
-        if inspect.signature(bounded_run).parameters["timeout"].default is not None:
-            missing.append("summary invocation has an implicit execution deadline")
+        default_timeout = inspect.signature(bounded_run).parameters["timeout"].default
+        if default_timeout is not None and (type(default_timeout) not in (int, float) or not math.isfinite(default_timeout) or default_timeout <= 0):
+            missing.append("summary invocation has an invalid execution deadline")
         if not callable(ReMeIndex) or not callable(summarize_messages):
             missing.append("material indexing dependencies are unavailable")
         if importlib.metadata.version("langmem") != LANGMEM_VERSION:

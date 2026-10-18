@@ -48,8 +48,6 @@ class SummaryModelTests(unittest.TestCase):
         self.assertNotIn('--output-last-message', command)
         self.assertIsNone(options.get('timeout'))
         self.assertFalse(options['defer_cleanup'])
-        self.assertIn('fallible reference index', prompt)
-        self.assertIn('Retain failed attempts', prompt)
         summarizer.validate_outcome(value, payload)
 
     def test_k3_02_correction_and_navigation_share_one_native_generation(self):

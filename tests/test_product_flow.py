@@ -74,7 +74,10 @@ class ProductFlowTests(SharingFixture):
             attach.assert_not_called()
         self.write_sharing()
         with patch.object(bridge, "bind", return_value="unbound:service-error"):
-            self.assertEqual(self.enter()["experience"], "unavailable")
+            degraded = self.enter()
+            self.assertEqual(degraded["status"], "degraded")
+            self.assertEqual(degraded["experience"], "unavailable")
+            self.assertIn("service-error", degraded["warning"])
 
     def test_configure_attaches_the_existing_task_without_second_activation(self):
         first = self.enter()

@@ -42,7 +42,7 @@ class ServiceEntryFixtureTests(unittest.TestCase):
                          "print('partial-out'); print('partial-error',file=sys.stderr); "
                          f"Path({str(ready)!r}).write_text('ready'); "
                          "sys.stdin.buffer.read(1); time.sleep(30)"],
-                        input="\n", timeout=2, diagnose=lambda: {"startup": "ready"},
+                        input="\n", timeout=0.1, diagnose=lambda: {"startup": "ready"},
                     )
         self.assertIn("partial-out", caught.exception.output)
         self.assertIn("partial-error", caught.exception.stderr)

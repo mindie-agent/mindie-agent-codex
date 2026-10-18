@@ -119,7 +119,7 @@ class Inactive(ValueError):
 
 
 class Sessions:
-    def __init__(self, path=None, *, op_timeout=None, stop_adapter=None):
+    def __init__(self, path=None, *, op_timeout: float | None = 30.0, stop_adapter=None):
         self.config = Path(path or config_path())
         self.op_timeout = op_timeout
         self.stop_adapter = stop_adapter

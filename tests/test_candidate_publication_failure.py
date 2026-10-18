@@ -55,7 +55,7 @@ class PublicationFailureTests(unittest.TestCase):
 
             def run(args, data, **kwargs):
                 calls.append(args)
-                self.assertIsNone(kwargs["timeout"])
+                self.assertEqual(kwargs["timeout"], 60.0)
                 return self.completed(
                     kwargs, PRIVATE, 17 if len(calls) - 1 == failing_step else 0,
                 )

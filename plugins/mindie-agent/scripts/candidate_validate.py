@@ -146,12 +146,12 @@ def runtime_check(scripts):
         raise ValueError(output.getvalue().strip() or "candidate runtime probe returned no result")
 
 
-def publication_git(args, code, env):
+def publication_git(args, code, env, *, timeout: float | None = 60.0):
     """Project only execution facts from one owned Git process."""
     from bounded_process import run
 
     try:
-        result = run(args, "", timeout=None, env=env, allowed_returncodes=None)
+        result = run(args, "", timeout=timeout, env=env, allowed_returncodes=None)
     except Exception as exc:
         result = getattr(exc, "process_result", None)
         execution = result.execution if result is not None else "unknown"

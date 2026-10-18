@@ -93,11 +93,11 @@ def _feed_error_summary(rows):
 
 
 
-def sync(config):
+def sync(config, *, timeout: float | None = 120.0):
     import sys
     from bounded_process import run
     result = run([sys.executable, '-m', 'mindie_knowledge.loop.cli', 'sync',
-                  '--config', str(config)], '', timeout=None)
+                  '--config', str(config)], '', timeout=timeout)
     status, rows, detail = fold_feed_results(result.stdout)
     if result.cleanup:
         return dict(status='degraded', feeds=rows, detail=detail,

@@ -33,7 +33,7 @@ class GuardLimitTests(unittest.TestCase):
             ready, survived = Path(directory) / 'ready', Path(directory) / 'survived'
             prefix = 'import os; os.close(1); os.close(2); ' if close_pipes else ''
             native = (prefix + f"from pathlib import Path; import time; Path({str(ready)!r}).touch(); "
-                      f"time.sleep(1); Path({str(survived)!r}).touch(); time.sleep(20)")
+                      f"time.sleep(0.25); Path({str(survived)!r}).touch(); time.sleep(20)")
             worker = (f"import sys; sys.path.insert(0,{str(SCRIPTS)!r}); import process_guard; "
                       f"process_guard.run_codex([sys.executable,'-c',{native!r}], '')")
             owner = ("import os,sys,subprocess,time; "
@@ -49,7 +49,7 @@ class GuardLimitTests(unittest.TestCase):
                 self.assertTrue(ready.exists())
                 process.kill()
                 process.wait(timeout=2)
-                time.sleep(1.2)
+                time.sleep(0.35)
                 self.assertFalse(survived.exists(), 'native outlived its owner')
             finally:
                 if process.poll() is None:
@@ -65,14 +65,14 @@ class GuardLimitTests(unittest.TestCase):
             done = Path(directory) / 'done'
             result = guard.run_codex([sys.executable, '-c',
                 'import os,sys,time; from pathlib import Path; os.close(1); os.close(2); '
-                'time.sleep(2.2); Path(sys.argv[1]).write_text("done")', str(done)], '')
+                'time.sleep(0.2); Path(sys.argv[1]).write_text("done")', str(done)], '')
             self.assertIsNone(result)
             self.assertEqual(done.read_text(), 'done')
 
     def test_explicit_deadline_remains_live_after_native_eof(self):
         with self.assertRaises(TimeoutError):
             guard.run_codex([sys.executable, '-c',
-                'import os,time; os.close(1); os.close(2); time.sleep(30)'], '', timeout=.3)
+                'import os,time; os.close(1); os.close(2); time.sleep(30)'], '', timeout=.15)
 
     @unittest.skipUnless(os.name == 'posix', 'POSIX inherited group contract')
     def test_inherited_grandchild_pipe_cannot_hold_worker_deadline(self):
@@ -82,7 +82,7 @@ class GuardLimitTests(unittest.TestCase):
 sys.path.insert(0,{str(SCRIPTS)!r})
 import process_guard
 try:
- process_guard.run_codex([sys.executable,'-c',"import subprocess,sys,time; subprocess.Popen([sys.executable,'-c','import time; time.sleep(20)']); time.sleep(20)"], '', timeout=0.2)
+ process_guard.run_codex([sys.executable,'-c',"import subprocess,sys,time; subprocess.Popen([sys.executable,'-c','import time; time.sleep(20)']); time.sleep(20)"], '', timeout=0.15)
 except TimeoutError:
  print('bounded timeout',flush=True)
 '''
@@ -108,7 +108,7 @@ except TimeoutError:
             child = (
                 "import time\n"
                 "from pathlib import Path\n"
-                "time.sleep(0.8)\n"
+                "time.sleep(0.2)\n"
                 f"Path({str(marker)!r}).write_text('survived')\n"
             )
             parent = (
@@ -118,9 +118,9 @@ except TimeoutError:
             )
             start = time.monotonic()
             with self.assertRaises(TimeoutError):
-                guard.run_codex([sys.executable, "-c", parent], "", timeout=0.2)
+                guard.run_codex([sys.executable, "-c", parent], "", timeout=0.15)
             self.assertLess(time.monotonic() - start, 3)
-            time.sleep(1)
+            time.sleep(0.3)
             self.assertFalse(marker.exists(), "owned grandchild outlived timeout cleanup")
 
     def test_no_newline_output_is_bounded_and_stopped(self):

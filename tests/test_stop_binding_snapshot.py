@@ -114,13 +114,13 @@ class StopBindingTests(unittest.TestCase):
             self.assertEqual(record.call_count, 2)
 
     def test_isolated_native_entry_imports_resolve_installed_siblings(self):
-        for name in ("entry", "harness_update", "release_activation", "session_maintenance",
-                     "bridge", "setup", "feed_sync", "release_metadata", "remote_bridge"):
-            with self.subTest(name=name):
-                result = subprocess.run([sys.executable, "-I", "-c",
-                    "import runpy,sys;runpy.run_path(sys.argv[1],run_name='import_only')",
-                    str(SCRIPTS / (name + ".py"))], capture_output=True, text=True, timeout=20)
-                self.assertEqual(result.returncode, 0, result.stderr)
+        names = ("entry", "harness_update", "release_activation", "session_maintenance",
+                 "bridge", "setup", "feed_sync", "release_metadata", "remote_bridge")
+        result = subprocess.run([sys.executable, "-I", "-c",
+            "import runpy,sys\nfor p in sys.argv[1:]:\n runpy.run_path(p,run_name='import_only')",
+            *(str(SCRIPTS / (name + ".py")) for name in names)],
+            capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":
