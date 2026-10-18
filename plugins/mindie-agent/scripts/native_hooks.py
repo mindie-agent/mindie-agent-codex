@@ -1,4 +1,18 @@
-"""Use Codex's public config API to carry forward only already-trusted own hooks."""
+"""Use Codex's public config API to carry forward only already-trusted own hooks.
+
+[Role]
+Communicates with `codex app-server` (`config/read`, `config/batchWrite`) to inspect user-layer plugin/hook trust and atomically update local marketplace catalog and approved MindIE hook handlers (`SessionStart`, `Stop`, `Interrupt`).
+
+[Invariants]
+- Uses compare-and-swap (`expectedVersion`) on the exact user config layer (`user_config`).
+- Never auto-approves untrusted hooks; only previously approved MindIE hook handlers are carried forward across updates.
+
+[Timeouts & Locks]
+- Bounds each `codex app-server` RPC session (`timeout=15.0s`) and kills the owned process tree on exit.
+
+[Side-Effect Policy]
+- Mutates the user's Codex config layer only through `codex app-server` `config/batchWrite` compare-and-swap.
+"""
 import json
 import os
 from pathlib import Path

@@ -1,4 +1,17 @@
-"""Install-level one-time choices: the profile consent authority, thin wrapper."""
+"""Install-level one-time choices: the profile consent authority, thin wrapper.
+
+[Role]
+Wraps `mindie_knowledge.consent_store` (`load`, `record_choice`, `record_reporting`, `install_traces`) for the active Codex profile (`mindie-consent.json`).
+
+[Invariants]
+- Community contribution and issue reporting choices are independent install-level records (`SCHEMA`, `CHOICES`, `REPORTING`).
+
+[Timeouts & Locks]
+- Delegates atomic consent file locking and writes to `mindie_knowledge.consent_store`.
+
+[Side-Effect Policy]
+- `load()` and `install_traces()` are read-only; `record_choice()` and `record_reporting()` atomically update `mindie-consent.json`.
+"""
 
 from __future__ import annotations
 

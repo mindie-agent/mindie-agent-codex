@@ -1,4 +1,18 @@
-"""Install-time wiring for deterministic public transcript capture."""
+"""Install-time wiring for deterministic public transcript capture.
+
+[Role]
+Validates the secret scanner (`redactor_executable`), wires `summary_command` / `organizer_command` / `worker_policy` into the engine configuration, and initializes the local knowledge store (`prepare-store`).
+
+[Invariants]
+- Refuses unsupported Windows Git root path lengths before opening `Store`.
+- Binds `codex_transcript.py` and `agent_worker.py` to the exact installed runtime interpreter.
+
+[Timeouts & Locks]
+- Enforces `timeout=15.0s` for scanner verification and `timeout=30.0s` for `prepare_store()`.
+
+[Side-Effect Policy]
+- `prepare_store()` initializes the domain `Store` and feed directories under `root`.
+"""
 from bounded_process import run
 import json
 

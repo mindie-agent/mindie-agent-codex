@@ -1,13 +1,20 @@
 """Shared/exclusive file locks with a platform boundary.
 
-The shared core owns POSIX flock and Windows LockFileEx. `update_lock(config)` locks the sidecar next to the adapter
-config; `file_lock(path)` locks the explicit runtime preparation path.
+[Role]
+Provides reentrant same-mode thread-aware file locking (`file_lock` and
+`update_lock`) backed by `mindie_knowledge.loop.locks`.
 
-Same-thread nested acquires of the *same* mode reenter so check/claim/finish
-can hold the profile lock while an outer configuration operation already holds it.
-A nested acquire of the opposite mode fails immediately: never upgrade
-shared to exclusive (or the reverse) in-process, which would deadlock with
-LOCK_NB or with Windows per-handle byte-range locks.
+[Invariants]
+- Same-thread nested acquires of the *same* mode reenter cleanly.
+- Same-thread nested acquires of the *opposite* mode fail immediately (`RuntimeError`)
+  to prevent in-process shared-to-exclusive deadlocks.
+
+[Timeouts & Locks]
+- Supports both non-blocking (`blocking=False`) and blocking acquisition via OS
+  `flock` / `LockFileEx`.
+
+[Side-Effect Policy]
+- Creates/opens only the designated `.lock` sidecar file with `0o600` permissions.
 """
 
 from contextlib import contextmanager

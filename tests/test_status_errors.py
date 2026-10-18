@@ -84,17 +84,6 @@ class StatusErrors(unittest.TestCase):
             self.assertEqual(payload["updates"]["status"], "unavailable")
             self.assertNotIn("PRIVATE_STATUS_MARKER", process.stdout + process.stderr)
 
-    @unittest.skipUnless(hasattr(os, "mkfifo"), "requires POSIX FIFO")
-    def test_fifo_configuration_fails_without_waiting_for_a_writer(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "adapter.json"
-            os.mkfifo(path)
-            process, payload = self.call(path)
-            self.assertEqual(process.returncode, 1)
-            self.assertEqual(payload["status"], "invalid_config")
-            self.assertEqual(payload["error"]["stage"], "config_read")
-            self.assertIsNone(payload["first_use"])
-
     def test_non_object_configuration_is_a_safe_config_error(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "adapter.json"

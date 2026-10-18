@@ -1,4 +1,18 @@
-"""Standalone local diagnostics fallback. Stdlib only."""
+"""Standalone local diagnostics fallback. Stdlib only.
+
+[Role]
+Records sanitized failure incident JSON files under `MINDIE_DIAGNOSTICS_ROOT/events/<component>` when the `mindie_diagnostics` runtime package is not yet installed.
+
+[Invariants]
+- Never records task prompts, transcripts, commands, environment variables, or exception messages.
+- Enforces local retention limits (`MAX_BYTES`, `MAX_FILES`, `RETENTION_SECONDS`) during fallback writes.
+
+[Timeouts & Locks]
+- Uses an in-process `threading.Lock()` and atomic `os.replace()` for local event files; zero subprocesses.
+
+[Side-Effect Policy]
+- Writes mode `0o600` incident records under `events/<component>` only when `record_failure()` is invoked.
+"""
 
 from __future__ import annotations
 

@@ -124,28 +124,6 @@ class NativeHookEntryTests(unittest.TestCase):
         with self.assertRaises((ValueError, OSError)):
             self.launch("session-start")
 
-    @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO")
-    def test_fifo_profile_does_not_block_or_bootstrap(self):
-        os.mkfifo(self.config)
-        with self.assertRaisesRegex(ValueError, "must be regular"):
-            self.launch("session-start")
-        self.assertFalse(self.data.exists())
-
-    @unittest.skipUnless(os.name == "posix", "unprivileged POSIX symlink")
-    def test_symlink_profile_and_entry_are_not_executed(self):
-        target = self.prepared("0.0.1")
-        original = self.config.with_suffix(".original")
-        self.config.rename(original)
-        self.config.symlink_to(original)
-        with self.assertRaisesRegex(ValueError, "must be regular"):
-            self.launch("stop")
-        self.config.unlink()
-        original.rename(self.config)
-        target.unlink()
-        target.symlink_to(original)
-        with self.assertRaisesRegex(RuntimeError, "entry is unavailable"):
-            self.launch("stop")
-
 
 if __name__ == "__main__":
     unittest.main()

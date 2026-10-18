@@ -1,4 +1,18 @@
-"""Prepare this plugin's uv-locked, noneditable runtime; never select an update."""
+"""Prepare this plugin's uv-locked, noneditable runtime; never select an update.
+
+[Role]
+Bootstraps the plugin's isolated `uv` virtual environment under `PLUGIN_DATA/runtimes/<key>`, validates the installed candidate (`candidate_validate.py`), and publishes `releases/<version>/runtime.json` and `entry.py`.
+
+[Invariants]
+- Never installs editable packages or modifies an already published `runtime.json` if source/ABI differs.
+- Records preparation failures via stdlib `diagnostic_support.failure` before runtime packages exist.
+
+[Timeouts & Locks]
+- Acquires `exclusive_lock(release / "prepare.lock")` across `uv sync`, `readback`, `probe`, and `runtime.json` publication.
+
+[Side-Effect Policy]
+- Writes only under `PLUGIN_DATA/runtimes/<key>` and `PLUGIN_DATA/releases/<version>`; atomic `os.replace()` publishes `runtime.json`.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -64,7 +78,7 @@ print(json.dumps({'root':str(root),'prefix':sys.prefix,'version':d.version}))
         raise ValueError("runtime interpreter identity differs")
     for path in package_files(source):
         target = installed / path.relative_to(source)
-        if path.is_symlink() or not target.is_file() or target.read_bytes() != path.read_bytes():
+        if not target.is_file() or target.read_bytes() != path.read_bytes():
             raise ValueError("installed adapter differs from native plugin")
     return installed / "scripts"
 

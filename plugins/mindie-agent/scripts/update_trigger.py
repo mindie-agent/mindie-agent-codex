@@ -1,4 +1,21 @@
-"""Coalesce background update checks into the lifetime of the native MCP process."""
+"""Coalesce background update checks into the lifetime of the native MCP process.
+
+[Role]
+Schedules and rate-limits background candidate update checks inside the MCP
+server process without blocking tool calls.
+
+[Invariants]
+- Enforces `CHECK_INTERVAL = 86400`, `FAILURE_BACKOFF = 60`, and
+  `ACTIVATION_BACKOFF = 5`.
+- Never blocks foreground MCP tool execution.
+
+[Timeouts & Locks]
+- Uses non-blocking `update_lock` and bounded subprocess execution for background
+  update probes.
+
+[Side-Effect Policy]
+- Writes update check timestamps and status under `<config>.updates/`.
+"""
 import json
 import math
 import os

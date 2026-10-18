@@ -1,4 +1,19 @@
-"""Thin stdlib adapter to shared diagnostics. Import performs no I/O."""
+"""Thin stdlib adapter to shared diagnostics. Import performs no I/O.
+
+[Role]
+Bridges plugin fault recording (`failure`), build metadata inspection (`build_metadata`), pending incident projection (`attach_pending`, `acknowledge_pending`), and issue reporting configuration (`reporting_status`, `configure_reporting`).
+
+[Invariants]
+- Falls back to stdlib `diagnostic_fallback.record_failure` when `mindie_diagnostics` is not installed.
+- Never includes prompts, transcripts, commands, environment variables, or credentials in diagnostic records.
+- Saved consent choice in `consent.py` takes precedence over stale reporter policy (`effective_reporting`).
+
+[Timeouts & Locks]
+- Performs only bounded local file reads (`<= 64 KiB`) and delegates SQLite projection locking to `agent_diagnostics.py`.
+
+[Side-Effect Policy]
+- Importing this module performs no I/O; `failure()` writes local diagnostic events and enqueues a bounded projection reference.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +21,6 @@ import json
 import os
 import re
 import shlex
-import stat
 import sys
 from pathlib import Path
 
@@ -49,20 +63,16 @@ def apply_environment_context(adapter, environ=None):
 
 def read_environment_context(config):
     """Read only the existing bounded adapter document; absence adds no default."""
-    try:
-        fd = os.open(config, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
-    except FileNotFoundError:
+    path = Path(config)
+    if not path.exists():
         return {}
-    try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_size > 65536:
-            raise ValueError("invalid installation diagnostics configuration")
-        raw = os.read(fd, 65537)
-        if len(raw) > 65536:
-            raise ValueError("invalid installation diagnostics configuration")
-        return environment_context(json.loads(raw.decode("utf-8")))
-    finally:
-        os.close(fd)
+    if not path.is_file():
+        raise ValueError("invalid installation diagnostics configuration")
+    with path.open("rb") as stream:
+        raw = stream.read(65537)
+    if len(raw) > 65536:
+        raise ValueError("invalid installation diagnostics configuration")
+    return environment_context(json.loads(raw.decode("utf-8")))
 
 
 def _hex(value, length):
@@ -73,29 +83,19 @@ def _hex(value, length):
 
 
 def _read_build_json(path):
-    """Optional bounded regular-file metadata; no pipe reads."""
-    fd = None
+    """Optional bounded regular-file metadata."""
     try:
-        if path.is_symlink():
+        path = Path(path)
+        if not path.is_file():
             return {}
-        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(path, flags)
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_size > 2048:
-            return {}
-        raw = os.read(fd, 2049)
+        with path.open("rb") as stream:
+            raw = stream.read(2049)
         if len(raw) > 2048:
             return {}
-        data = json.loads(raw.decode())
+        data = json.loads(raw.decode("utf-8"))
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
-    finally:
-        if fd is not None:
-            try:
-                os.close(fd)
-            except Exception:
-                pass
 
 
 def _project_build(data):

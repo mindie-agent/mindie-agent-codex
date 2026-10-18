@@ -1,4 +1,17 @@
-"""Exclusive uv-publication lock before the shared runtime is installed."""
+"""Exclusive uv-publication lock before the shared runtime is installed.
+
+[Role]
+Provides a stdlib-only blocking exclusive file lock (`exclusive_lock(path)`) used by `bootstrap.py` before `mindie_knowledge` is installed.
+
+[Invariants]
+- Uses POSIX `fcntl.flock(LOCK_EX)` and Windows `msvcrt.locking` on byte 0.
+
+[Timeouts & Locks]
+- Blocking exclusive lock held for the duration of `ensure_runtime` preparation.
+
+[Side-Effect Policy]
+- Opens/creates the lock file with mode `0o600` and releases the lock on context exit.
+"""
 from contextlib import contextmanager
 import os
 

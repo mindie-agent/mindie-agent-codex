@@ -1,9 +1,17 @@
 """Bound a single required Codex execution; abort at the first error/tool event.
 
-One daemon reader thread feeds stdout lines through a queue; a second thread
-only counts stderr bytes. This works on POSIX (process groups) and Windows
-(suspended spawn assigned to a kill-on-close Job before user code runs).
-POSIX additionally supports the service-owned maintenance group contract.
+[Role]
+Executes `codex exec --json` (`run_codex`) for background summarization/organization with strict event-stream validation, output byte caps (`MAX_OUTPUT=128 KiB`), and process-tree cleanup.
+
+[Invariants]
+- Aborts immediately if the child emits any disallowed item type (anything outside `{"agent_message", "reasoning"}`, such as tool calls or commands).
+- Preserves a completed turn result from the JSONL stream even if the CLI fails to write its late `--output-last-message` file.
+
+[Timeouts & Locks]
+- Enforces caller `timeout` (`default 90.0s`) and a 2.0s post-completion exit grace before killing the process group/Job object.
+
+[Side-Effect Policy]
+- Spawns and terminates one `codex exec` child process tree; populates the caller's `receipt` dict in-place.
 """
 
 import json

@@ -1,7 +1,17 @@
 """One owned attempt with bounded output and an optional caller deadline.
 
-POSIX reads pipes with a selector and kills the owned process group. Windows
-uses a suspended spawn and owned Job before child code can create descendants.
+[Role]
+Runs a child subprocess (`run(command, payload, timeout=..., max_output=..., cancel=...)`) with process-group/Job-object lifetime ownership and bounded stdout/stderr collection.
+
+[Invariants]
+- Distinguishes `execution="not_started"`, `"completed"`, and `"unknown"` on `ProcessResult` so callers never confuse pre-spawn errors with timed-out or crashed processes.
+- Kills the entire owned process tree (`owned_process.py` process group on POSIX; suspended Job object on Windows) upon timeout, output overflow, or cancellation.
+
+[Timeouts & Locks]
+- Enforces caller-supplied `timeout` (monotonic deadline) and `max_output` (`default 65536` bytes), plus a 2.0s reader-join grace on Windows.
+
+[Side-Effect Policy]
+- Spawns and reaps the requested child process tree; attaches structured `ProcessResult` metadata to raised exceptions.
 """
 
 import codecs

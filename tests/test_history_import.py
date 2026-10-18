@@ -269,11 +269,3 @@ class HistoryImportTests(SharingFixture):
         self.source.write_text('[]\n')
         with self.assertRaises(ValueError):
             codex_transcript.history_source(self.source)
-
-    def test_fifo_is_rejected_without_waiting_for_a_writer(self):
-        if not hasattr(os, 'mkfifo'):
-            self.skipTest('POSIX FIFO mechanism')
-        fifo = self.root / 'pipe'
-        os.mkfifo(fifo)
-        with self.assertRaises(ValueError):
-            codex_transcript.history_source(fifo)

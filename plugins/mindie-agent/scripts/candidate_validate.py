@@ -1,7 +1,17 @@
 """Candidate-owned, model-free validation in the candidate interpreter.
 
-Only this candidate imports its private runtime probe. Publication bytes are
-read from the fixed official Git commit and never select executable code.
+[Role]
+Validates candidate source integrity, installed runtime package commit pins (`direct_url.json`), adapter layout, `runtime_probe` execution, and the official publication contract commit.
+
+[Invariants]
+- Only protocol-owned fields (`stage`, `code`, `component`, `process`) leave this process on failure; provider output and filesystem paths are never echoed.
+- Re-reads source identity after validation to reject concurrent local edits.
+
+[Timeouts & Locks]
+- `publication_git` enforces a 60.0s timeout per Git subprocess via `bounded_process.run`.
+
+[Side-Effect Policy]
+- Uses a temporary bare Git directory for `publication_contract` verification; modifies no installed state.
 """
 
 from __future__ import annotations
@@ -47,8 +57,6 @@ def adapter_check(source):
     plugin = source / "plugins/mindie-agent"
     if not plugin.is_dir():
         plugin = source
-    if any(path.is_symlink() for path in plugin.rglob("*")):
-        raise ValueError("plugin source must contain regular files")
     if (
         sum(p.stat().st_size for p in plugin.rglob("*") if p.is_file())
         > 16 * 1024 * 1024

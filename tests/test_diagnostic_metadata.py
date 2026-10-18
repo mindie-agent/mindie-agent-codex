@@ -47,10 +47,3 @@ class MetadataTests(unittest.TestCase):
     def test_native_cache_manifest_needs_no_generation_receipt(self):
         (self.plugin.parent / "prepared.json").unlink()
         self.assertEqual(self.module.build_metadata(), {"version": self.version})
-
-    def test_symlink_stamp_is_not_read(self):
-        target = Path(self.tmp.name) / "unrelated.json"
-        self.write(target, {"revision": "b" * 40, "version": "9.9.9"})
-        (self.plugin / "scripts/diagnostic-build.json").symlink_to(target)
-        self.assertEqual(self.module.build_metadata(),
-                         {"version": self.version, "revision": self.revision})

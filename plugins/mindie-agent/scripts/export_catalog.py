@@ -1,15 +1,17 @@
 """Build-time schema snapshot; discovery must not import the business runtime.
 
-Gate rejects undeclared argument keys, so the snapshot must advertise exactly
-that strict contract. Upstream remote-dev permits additional properties for
-consumer-registered endpoint resolvers; this plugin never registers one, so
-the generator drops the resolver boilerplate and pins additionalProperties to
-false instead of asking Gate to ignore unknown keys.
+[Role]
+Generates `mcp_catalog.json` containing the static `knowledge` (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`) and `remote` tool schemas for `mcp_gate.py`.
 
-The knowledge surface is the adapter-owned contract (query/explain/optional
-feedback); it is defined here, not imported from the knowledge package, so
-static discovery never depends on the installed runtime version. Internal
-attach/status/capture are not front-stage tools and are never advertised.
+[Invariants]
+- Enforces `additionalProperties: false` on all exported tool input schemas so `mcp_gate.py` can reject undeclared arguments before runtime dispatch.
+- Never advertises internal operations (`knowledge_attach`) or retired tools (`knowledge_use`, `knowledge_judge`).
+
+[Timeouts & Locks]
+- Build-time helper; no runtime locks or timeouts.
+
+[Side-Effect Policy]
+- Importing is side-effect free; `__main__` writes `mcp_catalog.json`.
 """
 
 import copy

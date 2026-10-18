@@ -1,4 +1,18 @@
-"""Execute this installed release; no native mutation or current-generation selector."""
+"""Execute this installed release; no native mutation or current-generation selector.
+
+[Role]
+Fixed release entrypoint (`releases/<version>/entry.py`) that validates `runtime.json` and `codex.json`, initializes the default profile on first `session-start`/MCP launch, and dispatches `session-start`, `stop`, `knowledge-mcp`, `remote-mcp`, `sync`, `configure`, `status`, or `bridge`.
+
+[Invariants]
+- `stop` never prepares an unconfigured installation and snapshots the active `adapter` binding before reading stdin.
+- Verifies `receipt["python"] == sys.executable` and `product_validation` consistency before dispatching.
+
+[Timeouts & Locks]
+- Acquires `update_lock(config)` (`blocking=True` except on `stop`) around profile validation and initialization.
+
+[Side-Effect Policy]
+- First-use `profile(..., prepare=True)` runs headless `setup.install` under `exclusive=True` `update_lock`; subsequent calls validate and dispatch without mutating config.
+"""
 from __future__ import annotations
 import argparse
 from contextlib import redirect_stdout

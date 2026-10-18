@@ -1,9 +1,17 @@
 """POSIX execution owner for one local process group.
 
-The direct caller is the owner. Its death cancels this operation, even if it
-was SIGKILLed and could not run a finally block. Explicitly detached services
-own separate sessions; they are outside this group and keep their lifetimes.
-There is no elapsed-time or silence deadline.
+[Role]
+Helper wrapper launched in its own POSIX session (`os.setsid()`) by `bounded_process.py` to monitor parent lifetime (`owner_pipe` EOF / `os.getppid()`) and terminate the entire child process group (`os.killpg`) if the parent dies.
+
+[Invariants]
+- Even if the caller is `SIGKILL`ed, `owner_pipe` EOF triggers `SIGTERM` followed by `SIGKILL` to the owned process group.
+- Explicitly detached services (`allow_service=True`) run in separate sessions outside this group.
+
+[Timeouts & Locks]
+- Sends `SIGTERM` on owner death and escalates to `SIGKILL` after 0.2s (8 x 25ms polls).
+
+[Side-Effect Policy]
+- Spawns and reaps one child process group; writes child PID/PGID metadata to `notify` fd.
 """
 import os
 import errno

@@ -1,4 +1,17 @@
-"""Validate the release's declared Harness interfaces without running a model."""
+"""Validate the release's declared Harness interfaces without running a model.
+
+[Role]
+Validates `harness-compatibility.json` (`validate_compatibility`), verifies that all registered `code_paths` and `test_ids` exist in the repository via AST inspection, checks `require_harness(version)`, and builds `release-manifest.json`.
+
+[Invariants]
+- Every `used_interfaces` entry in `harness-compatibility.json` must cover the overall `supported` version ranges and reference existing AST symbols and test methods.
+
+[Timeouts & Locks]
+- Purely synchronous AST and JSON validation; no locks or subprocesses.
+
+[Side-Effect Policy]
+- Read-only validation except when `--output` is passed to write `release-manifest.json`.
+"""
 import argparse
 import ast
 import json

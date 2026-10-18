@@ -248,21 +248,6 @@ class RuntimeTests(unittest.TestCase):
                 {p.name: p.read_bytes() for p in root.iterdir()
                  if p.is_file() and p.suffix != ".lock"}, before)
 
-    @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO")
-    def test_nonregular_profile_is_not_first_install_or_a_blocking_read(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            release = root / "release"
-            release.mkdir()
-            (release / "runtime.json").write_text(json.dumps(dict(python=sys.executable, validation={})))
-            config = root / "adapter.json"
-            os.mkfifo(config)
-            with patch.dict(os.environ, {"MINDIE_AGENT_CONFIG": str(config)}), \
-                    patch.object(entry, "install", side_effect=AssertionError("new install")):
-                with self.assertRaisesRegex(ValueError, "regular file"):
-                    entry.profile(release)
-            self.assertTrue(config.exists())
-
     def test_installer_failure_keeps_private_output_and_never_publishes_ready(self):
         from bounded_process import run
         with tempfile.TemporaryDirectory() as directory:

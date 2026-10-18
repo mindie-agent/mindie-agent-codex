@@ -1,4 +1,21 @@
-"""Run session maintenance in the complete runtime selected by the profile."""
+"""Run session maintenance in the complete runtime selected by the profile.
+
+[Role]
+Coordinates post-activation session maintenance: service connection, feed
+refresh, and diagnostic maintenance.
+
+[Invariants]
+- Binds explicit config before invoking runtime services.
+- Wraps each stage (`service-start`, `feed-refresh`, `diagnostic-maintenance`)
+  with `bootstrap.preparing` stage markers.
+
+[Timeouts & Locks]
+- Executed within the caller's bounded subprocess budget.
+
+[Side-Effect Policy]
+- Starts/connects to the knowledge service, refreshes feed state, and runs
+  diagnostic maintenance under the profile directory.
+"""
 import json
 from pathlib import Path
 import sys

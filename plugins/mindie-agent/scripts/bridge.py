@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
 """Codex plugin boundary.
 
-The Stop hook path is a no-op unless every capture precondition holds:
-an active lease and community sharing enabled. Scope is the lease's project
-root, not the event cwd. Sharing off means no capture row and no wake.
-A passing Stop commits through the shared handoff; it does not claim an
-attempt or report forwarded. The hook never parses transcripts, never
-blocks the original task and never uses exit-2 continuation.
+[Role]
+Unified operator and Hook CLI boundary (`stop`, `mcp`, `status`, `init`, `shutdown`, `activate`, `deactivate`, `config`, `sharing-*`, `reporting-*`, `history-import`, `contribution-*`).
 
-Explicit operator entries also cover unified offline status, service
-shutdown and the deterministic core contribution-recovery operations
-(contribution-inspect/-reconcile/-retry/-compact); none of them starts a
-service, a model or an uncertain write.
+[Invariants]
+- `stop` is a no-op returning `{}` unless community sharing is enabled and consent allows; it never parses transcripts directly or blocks the user task.
+- When `activate` or `sharing-enable` succeeds in creating/retaining a read-only knowledge lease but capture binding (`knowledge_attach`) fails, it honestly returns `status="degraded"` rather than masking the failure as `"active"`.
+- `offline_status()` and `init` never cold-start a service or modify state.
+
+[Timeouts & Locks]
+- Acquires shared `update_lock(config_file)` around helper invocations (`30.0s` for `bind` and `service_control.py status`, `60.0s` for `setup.py configure` and `contribution-*`).
+
+[Side-Effect Policy]
+- Read-only for `status`/`init`/`sharing-status`/`reporting-status`; explicit state mutations occur only on `activate`/`deactivate`/`config`/`sharing-enable`/`sharing-disable`/`reporting-enable`/`reporting-disable`/`history-import`.
 """
 
 import json
 import os
 from pathlib import Path
 import re
-import stat
 import sys
 import threading
 import time
@@ -409,17 +410,9 @@ def offline_status():
         stage = "update_lock"
         with update_lock(config_file):
             stage = "config_read"
-            # A corrupt config path may be a FIFO/device. Do not wait for a
-            # writer before the bounded helper is even started.
-            fd = os.open(config_file, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
-            try:
-                if not stat.S_ISREG(os.fstat(fd).st_mode):
-                    raise ValueError("adapter config must be a regular file")
-                with os.fdopen(fd, "rb", closefd=False) as stream:
-                    raw = stream.read()
-                config = json.loads(raw)
-            finally:
-                os.close(fd)
+            if not config_file.is_file():
+                raise ValueError("adapter config must be a regular file")
+            config = json.loads(config_file.read_text(encoding="utf-8"))
             stage = "config_validate"
             if not isinstance(config, dict):
                 raise ValueError("adapter config must be an object")
@@ -759,15 +752,9 @@ def _reporting_unavailable(stage, exc):
 def _adapter_python(config_file):
     """Read the selected interpreter under the profile lock, then release it."""
     with update_lock(config_file):
-        fd = os.open(config_file, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
-        try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
-                raise ValueError("adapter config must be a regular file")
-            with os.fdopen(fd, "rb", closefd=False) as stream:
-                raw = stream.read()
-        finally:
-            os.close(fd)
-        config = json.loads(raw)
+        if not config_file.is_file():
+            raise ValueError("adapter config must be a regular file")
+        config = json.loads(config_file.read_text(encoding="utf-8"))
         if not isinstance(config, dict):
             raise ValueError("adapter config must be an object")
         python = _bounded_path(config.get("python"), "python")

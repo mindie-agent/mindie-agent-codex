@@ -1,7 +1,21 @@
 """One authorized call in this fixed release runtime; no request replay.
 
-Admission belongs to the shared core. Each request uses the exact installed
-configuration; no script/runtime reselection.
+[Role]
+Executes a single authorized knowledge or remote-dev tool invocation inside the
+fixed installed runtime environment.
+
+[Invariants]
+- Admission belongs to the shared core; each request uses the exact installed
+  configuration without script or runtime reselection.
+- Connection and deadline failures are classified as transient unavailability,
+  never as authorization pauses.
+
+[Timeouts & Locks]
+- Subprocess and RPC invocations obey explicit caller-supplied deadlines.
+
+[Side-Effect Policy]
+- Attaches structured diagnostic references on failure; never silently replays
+  failed tool calls.
 """
 
 import json

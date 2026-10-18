@@ -1,4 +1,18 @@
-"""Project one eligible Release into Codex's native installer, then activate it."""
+"""Project one eligible Release into Codex's native installer, then activate it.
+
+[Role]
+Validates compatibility with the installed `codex --version` (`harness_version`), projects a single-candidate local marketplace catalog (`catalog`), runs `codex plugin install` (`_native_install`), preserves approved hook trust (`NativeHooks`), and activates the new release (`release_activation.activate`).
+
+[Invariants]
+- Never installs a release whose `harness-compatibility.json` does not cover the actual host `codex --version`.
+- Carries forward only previously user-approved hook trust entries via compare-and-swap (`NativeHooks`).
+
+[Timeouts & Locks]
+- Enforces `timeout=15.0s` for `codex --version` and `timeout=300.0s` for `codex plugin install`.
+
+[Side-Effect Policy]
+- Updates the local marketplace catalog, native Codex plugin cache/config, and MindIE release binding only after candidate validation succeeds.
+"""
 from __future__ import annotations
 
 import argparse

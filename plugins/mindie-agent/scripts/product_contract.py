@@ -1,8 +1,17 @@
 """Small, stdlib-only candidate envelope; requirements own all runtime pins.
 
-The running installer never imports the candidate's private runtime probe.
-Its responsibility is source identity, bounded execution and exact receipt
-matching. The candidate validates its own runtime and publication contract.
+[Role]
+Computes candidate source/product/dependency digests (`mindie-product/1`, `mindie-candidate-check/1`) and invokes `candidate_validate.py` in the candidate interpreter.
+
+[Invariants]
+- The running installer never imports the candidate's private runtime probe; the candidate validates its own runtime and publication contract.
+- `uv.lock` revisions must match `pyproject.toml` exact official commit pins for `mindie-knowledge` and `remote-dev`.
+
+[Timeouts & Locks]
+- Delegates execution timeout and output bounds (`max_output=65536`) to the caller-supplied `command` runner in `probe()`.
+
+[Side-Effect Policy]
+- Purely read-only over the candidate source tree except when `probe()` spawns `candidate_validate.py -I -B`.
 """
 
 from __future__ import annotations
@@ -123,7 +132,7 @@ def _object(pairs):
 
 def read_json(path):
     path = Path(path)
-    if path.is_symlink() or not path.is_file():
+    if not path.is_file():
         raise ValueError("required contract is not a regular file: " + str(path))
     with path.open("rb") as stream:
         raw = stream.read(65537)
@@ -211,7 +220,7 @@ def source_identity(source):
     digest = hashlib.sha256()
     size = 0
     for path in sorted(files, key=lambda item: item.relative_to(source).as_posix()):
-        if path.is_symlink() or not path.is_file():
+        if not path.is_file():
             raise ValueError("candidate source must contain regular files")
         with path.open("rb") as stream:
             raw = stream.read(16 * 1024 * 1024 - size + 1)
@@ -231,7 +240,7 @@ def package_files(source):
     return [path for path in source.rglob("*")
             if not any(part in excluded or part.endswith(".egg-info")
                        for part in path.relative_to(source).parts)
-            and path.suffix != ".pyc" and (path.is_file() or path.is_symlink())]
+            and path.suffix != ".pyc" and path.is_file()]
 
 
 def identity(source, revision=None):

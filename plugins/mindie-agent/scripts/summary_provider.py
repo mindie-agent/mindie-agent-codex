@@ -1,4 +1,18 @@
-"""Project only the selected native provider into a private summary home."""
+"""Project only the selected native provider into a private summary home.
+
+[Role]
+Reads the active native Codex `config.toml` model provider configuration, resolves model catalog aliases (`model_catalog_json`), and projects a temporary private `CODEX_HOME` for the background summary worker.
+
+[Invariants]
+- Never snapshots credential values into receipts or policy hashes (`<credential>` placeholder is used in `route_sha256`).
+- Rejects `profile` overrides or custom providers requiring native OpenAI auth before spawning any summary process.
+
+[Timeouts & Locks]
+- Synchronous bounded file reads (`config.toml <= 256 KiB`, `model_catalog_json <= 4 MiB`); no subprocesses or locks.
+
+[Side-Effect Policy]
+- Purely read-only except `environment(route, directory)`, which writes a mode `0o600` `config.toml` inside the caller's temporary `native-home` directory.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -6,7 +20,6 @@ import json
 import os
 from pathlib import Path
 import re
-import stat
 import tomllib
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
@@ -32,17 +45,14 @@ class ProviderConfigurationError(ValueError):
 
 def _read(path, limit):
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
-        try:
-            info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
-                raise ProviderConfigurationError("summary_provider_document_invalid")
-            raw = os.read(fd, limit + 1)
-            if len(raw) > limit:
-                raise ProviderConfigurationError("summary_provider_document_invalid")
-            return raw.decode("utf-8")
-        finally:
-            os.close(fd)
+        p = Path(path)
+        if not p.is_file():
+            raise ProviderConfigurationError("summary_provider_document_invalid")
+        with p.open("rb") as stream:
+            raw = stream.read(limit + 1)
+        if len(raw) > limit:
+            raise ProviderConfigurationError("summary_provider_document_invalid")
+        return raw.decode("utf-8")
     except (OSError, UnicodeError):
         raise ProviderConfigurationError("summary_provider_document_unavailable") from None
 
@@ -91,12 +101,8 @@ def _selected_provider(home=None, *, project=True):
     """Read the selected provider without requiring its current credentials."""
     home = home or os.environ.get("CODEX_HOME") or Path.home() / ".codex"
     path = Path(home).expanduser() / "config.toml"
-    try:
-        path.lstat()
-    except FileNotFoundError:
+    if not path.exists():
         return {}, "openai", None
-    except OSError:
-        raise ProviderConfigurationError("summary_provider_document_unavailable") from None
     raw = _read(path, 256 * 1024)
     try:
         config = tomllib.loads(raw)

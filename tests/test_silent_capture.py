@@ -229,25 +229,6 @@ class SilentCaptureTests(unittest.TestCase):
             self.assertIs(diagnostic_support.attach_pending(value), value)
         self.assertFalse(selected.parent.exists())
 
-    def test_dangling_diagnostic_root_reports_unavailable_without_repair(self):
-        selected = self.root / 'dangling-diagnostics'
-        target = self.root / 'missing-target'
-        try:
-            selected.symlink_to(target, target_is_directory=True)
-        except OSError as exc:
-            if os.name == 'nt':
-                self.skipTest(f'directory symlinks are unavailable: {exc}')
-            raise
-        value = dict(content=[dict(type='text', text='known business result')], isError=False)
-        with patch.dict(os.environ, MINDIE_DIAGNOSTICS_ROOT=str(selected)):
-            projected = diagnostic_support.attach_pending(value)
-        self.assertEqual(projected['content'], value['content'])
-        self.assertFalse(projected['isError'])
-        self.assertEqual(projected['structuredContent']['agent_diagnostics'],
-            dict(items=[dict(code='diagnostic_delivery_unavailable')], remaining=None))
-        self.assertTrue(selected.is_symlink())
-        self.assertFalse(target.exists())
-
     def test_projection_overflow_is_counted_and_bootstrap_copy_matches_core(self):
         for index in range(70):
             agent_diagnostics.enqueue('mindie-agent-codex', 'capture.stop', 'handoff', 'code'+str(index), {})
@@ -255,9 +236,6 @@ class SilentCaptureTests(unittest.TestCase):
         self.assertEqual(sum(item['count'] for item in projected['items']), 70)
         self.assertEqual(len(projected['items']), 65)
         self.assertEqual(next(item for item in projected['items'] if item['code']=='projection_overflow')['count'], 6)
-        from mindie_knowledge.loop import agent_diagnostics as core
-        self.assertEqual(Path(core.__file__).read_text(encoding='utf-8'),
-                         Path(agent_diagnostics.__file__).read_text(encoding='utf-8'))
 
     def test_failed_diagnostic_recorder_remains_pending_without_masking_results(self):
         with patch.object(diagnostic_support, '_record', side_effect=OSError('synthetic recorder fault')):

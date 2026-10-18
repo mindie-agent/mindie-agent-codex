@@ -1,13 +1,25 @@
-"""Remote receipt formats may reset in development, never after release."""
+"""Remote receipt directory layout and format migration guard.
+
+[Role]
+Manages versioned directory layout (`gate-v<FORMAT>`) and `gate-layout.json` metadata for remote MCP request receipts.
+
+[Invariants]
+- Remote receipt formats may reset during development (`RELEASE_VERSION=None`), never silently after a product release (`RELEASE_VERSION` set).
+- Missing `gate-layout.json` when `gate-v*/*.sqlite3` already exists fails closed to preserve existing receipts.
+
+[Timeouts & Locks]
+- Uses blocking `file_lock` on `gate-layout.lock` during `prepare_layout()`.
+
+[Side-Effect Policy]
+- `receipt_root()` is read-only; `prepare_layout()` atomically writes `gate-layout.json` via `os.replace()` only after the caller's block succeeds.
+"""
 from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 import re
-import stat
 import tempfile
 
-from agent_diagnostics import _present
 from update_lock import file_lock
 
 FORMAT = 1
@@ -23,9 +35,9 @@ def _version(value):
 
 def _read(base):
     path = base / 'gate-layout.json'
-    if not _present(path):
+    if not path.exists():
         return None
-    if not stat.S_ISREG(path.lstat().st_mode):
+    if not path.is_file():
         raise ValueError('remote receipt layout must be a regular file')
     with path.open('rb') as stream:
         raw = stream.read(4097)
@@ -46,8 +58,7 @@ def receipt_root(base):
     previous = _read(base)
     _version(RELEASE_VERSION)
     if previous is None and any(path for directory in base.glob('gate-v[0-9]*')
-                                for pattern in ('*.sqlite3', '*.authority.json')
-                                for path in directory.glob(pattern)):
+                                for path in directory.glob('*.sqlite3')):
         raise ValueError('remote receipt layout is missing; existing receipts were preserved')
     if previous is not None:
         if not (base / ('gate-v' + str(previous['format']))).is_dir():
