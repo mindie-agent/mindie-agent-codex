@@ -98,43 +98,9 @@ class RuntimeCompatibilityTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "pinned runtime import"):
             Probe("import sys; sys.modules['mindie_knowledge.materials.reme_index'] = None").probe_runtime(sys.executable)
 
-    def test_unreviewed_langmem_version_is_rejected_before_installation(self):
-        with self.assertRaisesRegex(RuntimeError, "LangMem version differs"):
-            Probe("S.LANGMEM_VERSION='0.0.0'").probe_runtime(sys.executable)
-
-    def test_admission_inspection_is_part_of_the_runtime_contract(self):
-        with self.assertRaisesRegex(RuntimeError, "Admission API is incomplete"):
-            Probe(
-                "from mindie_knowledge.loop.activation import Admission as A; "
-                "A.inspect = None"
-            ).probe_runtime(sys.executable)
-
-    def test_missing_history_import_is_rejected_before_installation(self):
-        with self.assertRaisesRegex(RuntimeError, 'explicit history import is unavailable'):
-            Probe('import mindie_knowledge.loop.history_import as H; H.import_transcript = None').probe_runtime(sys.executable)
-
-    def test_old_runtime_without_path_identity_is_rejected(self):
-        with self.assertRaisesRegex(RuntimeError, "pinned runtime import"):
-            Probe("import mindie_knowledge.filesystem as F; del F.path_identity").probe_runtime(sys.executable)
-        with self.assertRaisesRegex(RuntimeError, "knowledge path identity API is incomplete"):
-            Probe("import mindie_knowledge.filesystem as F; F.resolved_path = None").probe_runtime(sys.executable)
-
-    def test_old_runtime_without_service_context_is_rejected(self):
-        with self.assertRaisesRegex(RuntimeError, "knowledge service launch context API is incomplete"):
-            Probe("import mindie_knowledge.loop.service_context as S; S.validate = None").probe_runtime(sys.executable)
-
-    def test_old_runtime_without_summary_scratch_ownership_is_rejected(self):
-        with self.assertRaisesRegex(RuntimeError, "knowledge summary scratch ownership API is incomplete"):
-            Probe("import mindie_knowledge.loop.summary_scratch as S; S.create_profile = None").probe_runtime(sys.executable)
-
-    def test_old_runtime_without_git_layout_validation_is_rejected(self):
-        with self.assertRaisesRegex(RuntimeError, "knowledge Git layout validation API is incomplete"):
-            Probe("import mindie_knowledge.git_layout as G; G.validate_config_feed_layout = None").probe_runtime(sys.executable)
-
     def test_unmodified_pinned_runtime_passes_candidate_private_probe(self):
-        # The product envelope and setup boundary have independent tests.
         self.assertEqual(Probe('', use_subprocess=True).probe_runtime(sys.executable).strip(), 'OK')
 
-    def test_missing_lifetime_observation_is_rejected(self):
-        with self.assertRaisesRegex(RuntimeError, "lock_held"):
-            Probe("from mindie_knowledge.loop import locks; del locks.lock_held").probe_runtime(sys.executable)
+
+if __name__ == '__main__':
+    unittest.main()

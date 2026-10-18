@@ -26,8 +26,12 @@ class ServiceEntryLifetimeTests(SharingFixture):
     def tearDown(self):
         # Preserve the first failure and its stage snapshot if cleanup also
         # finds incomplete state. Do not erase an unconfirmed owned service.
-        failed = any(test is self for test, _ in
-                     self._outcome.result.failures + self._outcome.result.errors)
+        result = getattr(self._outcome, "result", None)
+        failed = (
+            any(test is self for test, _ in result.failures + result.errors)
+            if hasattr(result, "failures") and hasattr(result, "errors")
+            else bool(getattr(self._outcome, "errors", None))
+        )
         try:
             stop_owned_knowledge_service(self.engine)
             cleanup_temporary_directory(self.temp)

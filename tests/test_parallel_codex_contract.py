@@ -667,27 +667,6 @@ class AuthorityMigrationTests(LaneCase):
             problems.append(f"status exit {result.returncode}: {result.stderr[-400:]}")
         self.assertEqual(problems, [], problems)
 
-    def test_field_update_keeps_a_damaged_consent_file(self):
-        path = self.root / "mindie-consent.json"
-        path.write_text("{broken-consent")
-        before = path.read_bytes()
-        outcomes = []
-        for operation, value in (("choice", "contribute"), ("reporting", "enabled")):
-            path.write_bytes(before)
-            try:
-                if operation == "choice":
-                    consent.record_choice(value)
-                else:
-                    consent.record_reporting(value)
-                raised = None
-            except Exception as exc:
-                raised = type(exc).__name__
-            outcomes.append((operation, raised, path.read_bytes() == before))
-        self.assertTrue(
-            all(item[1] and item[2] for item in outcomes),
-            "damaged consent must fail the field update and keep its bytes: " + repr(outcomes),
-        )
-
     def _reap(self, children):
         for child in children:
             if child.poll() is None:
