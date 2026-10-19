@@ -112,6 +112,29 @@ class RuntimeTests(unittest.TestCase):
                     bootstrap.ensure_runtime(source,data)
                 install.assert_not_called()
 
+    def test_existing_runtime_keeps_its_full_digest_path_and_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory)
+            source = SCRIPTS.parent
+            release = data / "releases" / product_contract.native_version(source)
+            release.mkdir(parents=True)
+            key = bootstrap.runtime_key(source)
+            python = data / "runtimes" / key / (
+                "Scripts/python.exe" if os.name == "nt" else "bin/python")
+            validation = dict(product_contract.identity(source), status="validated")
+            receipt = release / "runtime.json"
+            receipt.write_text(json.dumps(
+                dict(key=key, python=str(python), validation=validation)))
+            fixed_entry = bootstrap.publish_entry(python, SCRIPTS, release)
+            original = receipt.read_bytes(), fixed_entry.read_bytes()
+            with patch.object(bootstrap, "readback", return_value=SCRIPTS) as readback, \
+                    patch.object(bootstrap, "run") as install:
+                self.assertEqual(bootstrap.ensure_runtime(source, data),
+                                 (python, SCRIPTS, release))
+                readback.assert_called_once_with(python, source)
+                install.assert_not_called()
+            self.assertEqual((receipt.read_bytes(), fixed_entry.read_bytes()), original)
+
     def test_source_files_exclude_build_caches_but_include_lock_and_resources(self):
         names={p.relative_to(SCRIPTS.parent).as_posix() for p in product_contract.package_files(SCRIPTS.parent)}
         self.assertTrue({'uv.lock','pyproject.toml','product-contract.json','scripts/entry.py','skills/mindie-agent/references/user-notice.md'}<=names)
@@ -257,6 +280,9 @@ class RuntimeTests(unittest.TestCase):
             def synthetic_installer(command, payload, **kwargs):
                 calls.append(command)
                 self.assertEqual(command[1:3], ["-I", "-c"])
+                key = bootstrap.runtime_key(SCRIPTS.parent)
+                runtime = data / "runtimes" / (key[:24] if os.name == "nt" else key)
+                self.assertEqual(kwargs["env"]["UV_PROJECT_ENVIRONMENT"], str(runtime))
                 log = command[4]
                 # Exercise the actual descriptor redirection and owned runner;
                 # replace only uv's executable/args with a no-network process.

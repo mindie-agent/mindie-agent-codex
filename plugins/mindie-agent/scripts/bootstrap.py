@@ -90,14 +90,22 @@ def ensure_runtime(source, data):
         key = runtime_key(source)
         release = data / "releases" / version
         _private_mkdir(release, parents=True, exist_ok=True)
-    runtime = data / "runtimes" / key
-    python = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    # Windows dependency files must fit beneath Codex's default plugin-data path.
+    # The receipt keeps the full source/ABI digest; only the directory is shorter.
+    runtime = data / "runtimes" / (key[:24] if os.name == "nt" else key)
+    executable = "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    python = runtime / executable
     receipt = release / "runtime.json"
     with exclusive_lock(release / "prepare.lock"):
         if receipt.exists():
             existing = json.loads(receipt.read_text(encoding="utf-8"))
-            if existing.get("key") != key or existing.get("python") != str(python):
+            bound_python = Path(existing["python"])
+            if existing.get("key") != key or bound_python not in (
+                python, data / "runtimes" / key / executable
+            ):
                 raise ValueError("immutable plugin version has different source or Python ABI")
+            # An existing release remains bound to its published runtime path.
+            python = bound_python
             with preparing("completed-runtime"):
                 scripts = readback(python, source)
                 validate_receipt(json.dumps(existing["validation"]), identity(scripts.parent))

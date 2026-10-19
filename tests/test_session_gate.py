@@ -138,7 +138,11 @@ class SessionGateTests(unittest.TestCase):
             )
         )
 
-    def bridge(self, operation, event=None, timeout=5, extra=()):
+    def bridge(self, operation, event=None, timeout=None, extra=()):
+        if timeout is None:
+            # Activation admits the lease (30s), then optionally binds capture
+            # (30s); each owned child can need 6s cleanup plus outer exit grace.
+            timeout = 75 if operation == "activate" else 5
         return subprocess.run(
             [sys.executable, str(SCRIPTS / "bridge.py"), operation, *extra],
             input=json.dumps(event or {}),
