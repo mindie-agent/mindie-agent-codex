@@ -1,4 +1,6 @@
 """Startup activates from saved consent; retention remains independently visible."""
+from contextlib import redirect_stdout
+import io
 import json
 import os
 import sys
@@ -12,6 +14,22 @@ import diagnostic_maintenance
 
 
 class DiagnosticMaintenanceTests(unittest.TestCase):
+    def test_session_receipt_does_not_claim_ready_when_reporter_is_degraded(self):
+        import session_maintenance
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "codex.json"
+            config.write_text(json.dumps({"engine_config": str(config.with_suffix(".engine.json"))}))
+            output = io.StringIO()
+            with patch.object(session_maintenance, "bind_explicit_config"), \
+                    patch.object(diagnostic_maintenance, "maintain",
+                                 return_value={"status": "degraded", "reporting": {"status": "degraded"}}), \
+                    patch("service_client.connect"), patch("feed_sync.sync", return_value={"status": "ok"}), \
+                    redirect_stdout(output), self.assertRaisesRegex(RuntimeError, "incomplete"):
+                session_maintenance.maintain(config)
+            result = json.loads(output.getvalue())
+            self.assertEqual(result["status"], "incomplete")
+            self.assertEqual(result["diagnostics"]["reporting"]["status"], "degraded")
+
     def test_knowledge_startup_failure_does_not_skip_authorized_reporter(self):
         import session_maintenance
         with tempfile.TemporaryDirectory() as directory:

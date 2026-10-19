@@ -41,10 +41,11 @@ def maintain(config):
     from feed_sync import sync
     with preparing("feed-refresh"):
         feed = sync(adapter["engine_config"])
-    value = dict(status="ready", feed=feed, diagnostics=diagnostics)
+    ready = (feed.get("status") == "ok"
+             and diagnostics.get("status") in {"ok", "complete", "unchanged"})
+    value = dict(status="ready" if ready else "incomplete", feed=feed, diagnostics=diagnostics)
     print(json.dumps(value))
-    if (feed.get("status") != "ok"
-            or diagnostics.get("status") not in {"ok", "complete", "unchanged"}):
+    if not ready:
         raise RuntimeError("MindIE session preparation is incomplete; inspect local status")
 
 
