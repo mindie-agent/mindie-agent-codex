@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -32,7 +33,10 @@ class SummaryModelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, CODEX_HOME=tmp):
             Path(tmp, 'config.toml').write_text('model="business-model"\nmodel_reasoning_effort="max"\n', encoding='utf-8')
             payload = request(agent_worker)
-            value, calls = self.invoke(payload, result(payload))
+            with patch.dict(os.environ, {
+                "MINDIE_SUMMARY_WORKER_DEADLINE": str(time.monotonic() + 35),
+            }):
+                value, calls = self.invoke(payload, result(payload))
         command, prompt, options = calls[0]
         self.assertEqual(value['status'], 'returned')
         self.assertEqual(value['model_calls'], 1)
@@ -46,9 +50,22 @@ class SummaryModelTests(unittest.TestCase):
         self.assertIn('features.hooks=false', command)
         self.assertIn('features.shell_tool=false', command)
         self.assertNotIn('--output-last-message', command)
-        self.assertIsNone(options.get('timeout'))
+        self.assertGreater(options['timeout'], 25)
+        self.assertLessEqual(options['timeout'], 30)
         self.assertFalse(options['defer_cleanup'])
         summarizer.validate_outcome(value, payload)
+
+    def test_expired_parent_budget_stops_before_native_submission(self):
+        payload = request(agent_worker)
+        with patch.dict(os.environ, {
+            "MINDIE_SUMMARY_WORKER_DEADLINE": str(time.monotonic() - 1),
+        }):
+            value, calls = self.invoke(payload, result(payload))
+        self.assertEqual(calls, [])
+        self.assertEqual(value['status'], 'failed')
+        self.assertEqual(value['model_calls'], 0)
+        self.assertEqual(value['billing_status'], 'not_called')
+        self.assertEqual(value['error'], 'deadline')
 
     def test_k3_02_correction_and_navigation_share_one_native_generation(self):
         previous = dict(title='Earlier benchmark', summary='The initial checkpoint interpretation remains a hypothesis.')
