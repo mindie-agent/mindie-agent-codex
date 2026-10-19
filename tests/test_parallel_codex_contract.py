@@ -771,7 +771,7 @@ class AuthorityMigrationTests(LaneCase):
         before = self.community.read_bytes()
         result = subprocess.run(
             [
-                PY, str(SCRIPTS / "setup.py"), "configure",
+                PY, str(REPO / "tests/fixtures/sharing_commands.py"), str(SCRIPTS), "configure",
                 "--config", str(self.config),
                 "--community-repository", "owner/explicit",
                 "--community-project-root", str(self.work),
@@ -791,7 +791,7 @@ class AuthorityMigrationTests(LaneCase):
         self.community.write_bytes(foreign)
         result = subprocess.run(
             [
-                PY, str(SCRIPTS / "setup.py"), "configure",
+                PY, str(REPO / "tests/fixtures/sharing_commands.py"), str(SCRIPTS), "configure",
                 "--config", str(self.config),
                 "--community-repository", "owner/explicit",
                 "--community-project-root", str(self.work),
@@ -819,7 +819,7 @@ class AuthorityMigrationTests(LaneCase):
         }) + "\n")
         result = subprocess.run(
             [
-                PY, str(SCRIPTS / "setup.py"), "configure",
+                PY, str(REPO / "tests/fixtures/sharing_commands.py"), str(SCRIPTS), "configure",
                 "--config", str(self.config),
                 "--community-repository", "owner/explicit",
                 "--community-project-root", str(self.work),
@@ -939,7 +939,7 @@ class AuthorityMigrationTests(LaneCase):
         self.config.write_text(json.dumps(adapter))
         result = subprocess.run(
             [
-                PY, str(SCRIPTS / "setup.py"), "configure",
+                PY, str(REPO / "tests/fixtures/sharing_commands.py"), str(SCRIPTS), "configure",
                 "--config", str(self.config),
                 "--community-repository", "owner/explicit",
                 "--community-project-root", str(self.work),
