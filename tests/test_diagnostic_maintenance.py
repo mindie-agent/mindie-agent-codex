@@ -24,6 +24,7 @@ class DiagnosticMaintenanceTests(unittest.TestCase):
                 raise RuntimeError("knowledge startup failed")
 
             with patch.dict(os.environ, MINDIE_AGENT_CONFIG=str(config)), \
+                    patch.object(session_maintenance, "bind_explicit_config"), \
                     patch.object(diagnostic_maintenance, "maintain",
                                  side_effect=lambda _config: stages.append("reporter") or {"status": "ok"}), \
                     patch("service_client.connect", side_effect=connect), \

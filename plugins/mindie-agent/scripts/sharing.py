@@ -52,6 +52,7 @@ CHOICES = (
     "project/repository/account — scripts/setup.py configure "
     "--community-repository OWNER/REPO --community-project-root PATH "
     "--community-visibility public [--community-account NAME]. "
+    "Contribution authorizes scoped knowledge PRs and sanitized product fault Issues together. "
     "Reuse existing user-approved values. Installation or task binding alone "
     "does not complete configuration."
 )

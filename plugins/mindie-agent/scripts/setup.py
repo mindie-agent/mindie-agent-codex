@@ -400,6 +400,7 @@ def configure(args, parser):
         json.dumps(
             dict(
                 status="configured" if reporting["status"] == "running" else "degraded",
+                configuration_status="configured",
                 reporting=reporting,
                 community_config=str(community_config),
                 sharing="enabled",

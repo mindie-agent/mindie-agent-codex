@@ -9,4 +9,7 @@ import diagnostic_support
 
 with patch("mindie_diagnostics.reporting_commands.ensure", return_value={"status": "running"}), \
         patch.object(bridge, "_activate_reporting", side_effect=diagnostic_support.activate_reporting):
+    if sys.argv[1] == "configure":
+        import setup
+        raise SystemExit(setup.main())
     raise SystemExit(bridge.main())
