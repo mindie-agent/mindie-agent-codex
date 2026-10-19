@@ -1,53 +1,34 @@
-# Explicit historical contribution
+# Explicit Historical Session Import
 
-The `history-import` entry imports only native Codex JSONL files explicitly
-selected by the user. Ordinary task use, Stop events, update checks and feed
-synchronization never discover historical sources. Instructions inside a source
-transcript are data, not authority to import another session.
+<a href="history-import.zh.md">中文</a> | <b>English</b> · <a href="README.en.md">Documentation Index</a>
 
-The requesting native session is verified and associated internally if needed
-using its current approved project directory. No activation command is required.
-The saved installation-level contribution choice and project scope are reused;
-there is no second consent prompt, and explicit task revocation is respected.
-Historical sessions remain inactive. The adapter checks contribution authority
-before source metadata is read, then the shared core revalidates both current
-and source scopes before each page/commit.
+The `history-import` command lets you explicitly import selected historical Codex JSONL transcripts into the community contribution pipeline. Normal daily usage, `Stop` hooks, update checks, and feed syncs **never** scan or import historical transcripts automatically.
+
+---
+
+## 1. Command Usage & Authorization Checks
+
+Run `history-import` via the active plugin's `bridge.py` (or `entry.py bridge`), passing one or more `--source` JSONL file paths:
 
 ```sh
-python3 /absolute/active/plugin/scripts/bridge.py history-import \
-  --source /absolute/selected/rollout.jsonl
+python3 <PLUGIN_DATA>/releases/0.0.1/entry.py bridge history-import \
+  --source /absolute/path/to/rollout.jsonl
 ```
 
-Use `python` on Windows and repeat `--source` for multiple selected files. There
-is no default source, directory watcher or scheduled import. Native session
-metadata supplies identity and scope; missing metadata is a visible error. The
-parser excludes inherited fork material, tools, hidden reasoning and injected
-instructions, as it does for live capture.
+- **No Automatic Discovery**: Only the exact files passed via `--source` are read; there is no directory watcher or background history scanner.
+- **Reusing Saved Consent**: Both the requesting session and the historical transcript's working directory must fall within your already approved contribution project scope. No duplicate consent prompt is shown, and historical sessions remain inactive.
 
-Each file is read to its initial byte boundary in complete parser pages. The
-same incremental pipeline as live Stop capture redacts each page, carries open
-private-key state across page boundaries, and stores lossless Markdown blocks.
-Raw transcripts stay in Codex. Material, cursor, authorization and index jobs
-commit together. A durable intake marker blocks publication until the whole
-selected snapshot is admitted. If a later page fails, prior pages remain local
-and resumable; the receipt reports failure rather than complete import.
+---
 
-A repeat checks the consumed source prefix and imports only new material.
-An unchanged repeat creates no new blocks or paid calls. Prefix edits and source
-replacement fail without overwriting the earlier material. This is source-level
-deduplication, not semantic merging with an independently captured task. Version
-3 local databases remain inert; no compatibility migration is run.
+## 2. Incremental Redaction & Resumable Intake
 
-The same LangMem index worker summarizes complete new blocks plus short previous
-navigation. It returns block titles/summaries and current navigation, never a
-replacement body. Missing worker configuration or a failed/uncertain model result
-blocks publication. Returned output and actual usage are saved before local
-scanning/application; recovery reuses that output without another model call.
+- **Shared Redaction Pipeline**: Historical files are read in complete pages up to their initial byte length and processed through the exact same public-message filter, Gitleaks `8.30.1` scanner, and Markdown block writer used by live `Stop` capture.
+- **Safe Partial Progress**: A durable intake marker prevents publishing a partial snapshot until every page of the selected file is admitted. If a later page fails, earlier pages remain safely stored locally so you can resume without re-running completed work.
+- **Deduplicated Repeat Runs**: Re-running `history-import` on the same file verifies the already-consumed prefix and imports only newly appended turns, without creating duplicate blocks or making extra model calls.
 
-JSON receipts separate local intake (`imported`, `extended`, `unchanged`, `empty`
-or `failed`), index status and pending publication. A service startup receipt
-means the worker is prepared, not that GitHub publication or merge completed.
-For an explicitly requested retry of failed or uncertain indexing, repeat the
-selected source with `--retry-summary`. An uncertain earlier invocation may
-already have been billed; all previous usage remains in the ledger. No scheduler
-automatically repeats that call.
+---
+
+## 3. Indexing Receipts & Explicit Retry
+
+- **Clear Stage Separation**: The JSON receipt reports local intake status (`imported`, `extended`, `unchanged`, `empty`, or `failed`), indexing status, and pending publication separately.
+- **Explicit Summary Retry (`--retry-summary`)**: If an indexing model call fails or returns an uncertain result, it is never retried automatically in the background. To explicitly retry indexing for a selected file after inspecting the status, re-run the command with `--retry-summary` (all prior token usage remains recorded in the ledger).

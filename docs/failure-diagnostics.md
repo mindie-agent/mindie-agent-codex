@@ -1,28 +1,21 @@
-# Failure diagnostics
+# Failure Diagnostics & Cancellation Boundaries
 
-`bridge.py status` distinguishes missing configuration from invalid configuration,
-an occupied update lock, and a failed selected runtime. Existing invalid settings
-never become first-use/install prompts. Reads reject FIFOs/devices and oversized
-adapter metadata; runtime execution stays under the existing five-second budget.
+<a href="failure-diagnostics.zh.md">中文</a> | <b>English</b> · <a href="README.en.md">Documentation Index</a>
 
-The selected runtime reads the shared diagnostic snapshot using only native
-`CODEX_THREAD_ID`. It returns safe startup stage, configuration/storage/service
-state, task binding (including its diagnostic failure counter), and the latest
-five captures/contribution batches associated with the task. Without native task
-identity it returns no task records. Recover commands use the selected interpreter
-and scripts. Unknown publication writes require inspection/reconciliation before
-an explicit retry; status does not bind, reset, start or replay work.
+Following Principle 9 of the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md) (*observable, diagnosable tools; never hide errors*), `mindie-agent-codex` provides read-only status inspection, deterministic local process cleanup on cancellation, and clear separation from remote Ascend background jobs.
 
-Remote exception responses preserve fixed safe categories, submission certainty
-and an existing job reference. They omit arbitrary error text and provider stderr.
-Local cancellation does not prove a remote job stopped. Knowledge failure does not
-prevent native shell/SSH or independently configured remote-dev work.
+---
 
-Actual macOS validation covered malformed/oversized/FIFO configuration, an external
-update lock, failing/malformed/slow helpers, task-isolated SQLite state, failed
-parser startup and a delayed loopback service. All owned processes were cleaned
-up. A real Luna/max task used one status call to identify broken JSON and propose a
-concrete syntax check and native-tool bypass, without retrying or reinstalling.
-These claims do not establish new native Hook delivery, full contribution
-publication or Windows hardware acceptance. SQLite may create normal WAL-reader
-sidecars while leaving business data unchanged.
+## 1. Read-Only Status Inspection (`bridge status`)
+
+- **Clear State Distinction**: `bridge.py status` distinguishes between a missing configuration, a corrupted/invalid configuration file, an occupied update lock, and a failed runtime. Corrupted settings are reported directly as a diagnostic error and never trigger a fresh install/onboarding prompt.
+- **Task-Scoped Snapshot**: Using the native `CODEX_THREAD_ID`, `status` returns the startup stage, configuration/storage/service health, active task binding, diagnostic failure counter, and the latest 5 captures and contribution batches for that task (returning no task records when called outside a task identity).
+- **Strictly Read-Only**: Running `status` (within its 5-second execution budget) never binds a task, resets failure counters, starts background services, or replays failed work. Uncertain external PR publications must be reconciled before any explicit `recover` retry.
+
+---
+
+## 2. Local Cancellation vs. Durable Remote Jobs
+
+- **Sanitized Remote Exceptions**: Remote error responses return fixed safe error categories, submission certainty, and the existing remote job reference—omitting raw provider stderr or arbitrary untrusted text.
+- **Local Process Cleanup vs. Remote Lifecycle**: Cancelling a local tool call or closing stdin (`EOF`) cleans up the local helper and SSH subprocess tree owned by that invocation. However, cancelling a local observation call does **not** prove a durable remote compilation or test job on the Ascend server has stopped; use `remote-dev` job controls to inspect or terminate the remote workload explicitly.
+- **Independent Remote Execution**: Even if the local knowledge service fails, native shell/SSH and `mindie-remote-dev` remain available.
