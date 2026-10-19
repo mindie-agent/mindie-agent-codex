@@ -120,8 +120,7 @@ class Maintenance:
             from release_activation import _atomic
             try:
                 root = directory(self.config)
-                from diagnostic_fallback import _private_mkdir
-                _private_mkdir(root, parents=True, exist_ok=True)
+                root.mkdir(mode=0o700, parents=True, exist_ok=True)
                 self.last_failure = dict(stage="maintenance-process", status="failed",
                                          checked_at=time.time(), error_type=type(exc).__name__)
                 if isinstance(outcome, dict):

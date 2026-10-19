@@ -3,6 +3,7 @@ import json
 import io
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import time
@@ -55,6 +56,26 @@ class RuntimeTests(unittest.TestCase):
         self.assertNotIn(private, output.getvalue())
         self.assertNotIn('at bootstrap', output.getvalue())
         record.assert_called_once()
+
+    def test_missing_runtime_reports_storage_failure_without_shadow_incident(self):
+        with tempfile.TemporaryDirectory() as directory:
+            code = (
+                "import json,sys; sys.path.insert(0,sys.argv[1]); "
+                "import diagnostic_support; "
+                "print(json.dumps(diagnostic_support.failure("
+                "'runtime.prepare','bootstrap','prerequisite',"
+                "exception=ValueError('PRIVATE_PROVIDER_CREDENTIAL'))))"
+            )
+            result = subprocess.run(
+                [sys.executable, "-I", "-S", "-c", code, str(SCRIPTS)],
+                capture_output=True, text=True, timeout=10,
+                env=dict(os.environ, MINDIE_DIAGNOSTICS_ROOT=directory),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(json.loads(result.stdout)["logging_failed"])
+            self.assertIn("diagnostic storage unavailable", result.stderr)
+            self.assertNotIn("PRIVATE_PROVIDER_CREDENTIAL", result.stdout + result.stderr)
+            self.assertFalse((Path(directory) / "events").exists())
 
     def test_session_hook_keeps_diagnostics_while_stop_stays_neutral(self):
         commands = native_entry.hook_commands('session-start')

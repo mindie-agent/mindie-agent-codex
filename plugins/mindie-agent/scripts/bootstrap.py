@@ -27,7 +27,6 @@ import tempfile
 
 from product_contract import package_files, source_identity, probe, identity, validate_receipt, native_version
 from bootstrap_lock import exclusive_lock
-from diagnostic_fallback import _private_mkdir
 from bounded_process import run
 from windows_process import exec_or_wait
 
@@ -89,7 +88,7 @@ def ensure_runtime(source, data):
         version = native_version(source)
         key = runtime_key(source)
         release = data / "releases" / version
-        _private_mkdir(release, parents=True, exist_ok=True)
+        release.mkdir(mode=0o700, parents=True, exist_ok=True)
     # Windows dependency files must fit beneath Codex's default plugin-data path.
     # The receipt keeps the full source/ABI digest; only the directory is shorter.
     runtime = data / "runtimes" / (key[:24] if os.name == "nt" else key)

@@ -26,7 +26,6 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bounded_process import ProcessResult, run
-from diagnostic_fallback import _private_mkdir
 from native_context import capture, environment
 from product_contract import native_version, read_json
 from release_activation import _atomic
@@ -153,7 +152,7 @@ def _native_install(native, env, root, metadata, before):
     pending_path = root / "native.json"
     catalog_root = root / "catalog"
     target = catalog_root / ".agents/plugins/marketplace.json"
-    _private_mkdir(target.parent, parents=True, exist_ok=True)
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if before is not None:
         source = before.get("marketplaceSource")
         if source not in (
@@ -302,7 +301,7 @@ def check(config, *, first_install=False):
 
     config = Path(config).expanduser().absolute()
     root = directory(config)
-    _private_mkdir(root, parents=True, exist_ok=True)
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
         with file_lock(root / "check.lock", exclusive=True):
             if not first_install and not due(config):

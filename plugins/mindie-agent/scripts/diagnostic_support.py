@@ -4,7 +4,7 @@
 Bridges plugin fault recording (`failure`), build metadata inspection (`build_metadata`), pending incident projection (`attach_pending`, `acknowledge_pending`), and issue reporting configuration (`reporting_status`, `configure_reporting`).
 
 [Invariants]
-- Falls back to stdlib `diagnostic_fallback.record_failure` when `mindie_diagnostics` is not installed.
+- The shared runtime owns incident storage; unavailable storage is reported without a second recorder.
 - Never includes prompts, transcripts, commands, environment variables, or credentials in diagnostic records.
 - Saved consent choice in `consent.py` takes precedence over stale reporter policy (`effective_reporting`).
 
@@ -28,7 +28,6 @@ COMPONENT = "mindie-agent-codex"
 HOST = "codex"
 REPOSITORY = "mindie-agent/mindie-agent"
 _STORAGE = "MindIE diagnostic storage unavailable; original outcome unchanged."
-_warned = False
 CONTEXT_ENV = ("MINDIE_DIAGNOSTICS_CONFIG", "MINDIE_DIAGNOSTICS_ROOT")
 
 
@@ -135,16 +134,8 @@ def build_metadata():
     return result
 
 
-def _warn():
-    # Background observability never writes instructions into the user task.
-    pass
-
-
 def _record():
-    try:
-        from mindie_diagnostics.integration import record_failure
-    except ImportError:
-        from diagnostic_fallback import record_failure
+    from mindie_diagnostics.integration import record_failure
     return record_failure
 
 
@@ -182,6 +173,7 @@ def failure(operation, stage, category, *, exception=None, revision=None,
             result['delivery_failed'] = True
         return result
     except Exception:
+        print(_STORAGE, file=sys.stderr)
         result = {"logging_failed": True}
         try:
             from agent_diagnostics import enqueue

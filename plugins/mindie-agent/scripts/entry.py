@@ -25,7 +25,6 @@ import sys
 # All native entries use -I and this exact installed package.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import product_contract
-from diagnostic_fallback import _private_mkdir
 from session_gate import bind_explicit_config, runtime_scripts, runtime_env
 from setup import install
 from update_lock import update_lock
@@ -67,7 +66,7 @@ def profile(release, source=None, *, prepare=True):
         raise RuntimeError("MindIE release profile is not prepared; start a new native session")
     if source is not None and source.is_dir():
         product_contract.validate_receipt(json.dumps(receipt["validation"]), product_contract.identity(source))
-    _private_mkdir(config.parent, parents=True, exist_ok=True)
+    config.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with update_lock(config, exclusive=True, blocking=True):
         if not os.path.lexists(config):
             args = argparse.Namespace(knowledge_python=sys.executable, config=config,
