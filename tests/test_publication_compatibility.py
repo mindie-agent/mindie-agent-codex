@@ -1,7 +1,8 @@
 """Actual producer packages against the independently pinned trusted validator.
 
-The second interpreter installs the official Git pin normally, with its own
-dependencies and VCS receipt. It never imports code from a publication tree.
+The selected interpreter carries the official Git pin and its real VCS receipt.
+A separately pinned validator must be installed before this suite and passed as
+MINDIE_VALIDATOR_PYTHON. It never imports code from a publication tree.
 """
 from contextlib import closing
 import hashlib
@@ -65,17 +66,10 @@ class PublicationCompatibilityTests(unittest.TestCase):
         if cls.python:
             verify_validator(cls.python, cls.validator_revision)
         else:
-            try:
-                import mindie_knowledge.publication_check  # noqa: F401
-                cls.python = sys.executable
-                verify_validator(cls.python, installed_commit)
-            except ImportError:
-                env = cls.root / 'validator-env'
-                command([sys.executable, '-m', 'venv', str(env)])
-                cls.python = str(env / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python'))
-                command([cls.python, '-m', 'pip', 'install', '--disable-pip-version-check',
-                         'mindie-knowledge @ git+https://github.com/' + validator['repository'] + '@' + cls.validator_revision])
-                verify_validator(cls.python, cls.validator_revision)
+            if installed_commit != cls.validator_revision:
+                raise ValueError('install the exact publication validator and set MINDIE_VALIDATOR_PYTHON')
+            cls.python = sys.executable
+            verify_validator(cls.python, cls.validator_revision)
         cls.template_repo = cls.root / 'template-publication'
         cls.template_repo.mkdir()
         command(['git', '-c', 'core.hooksPath=' + os.devnull, '-C', str(cls.template_repo), 'init', '--quiet', '-b', 'main'])
@@ -106,16 +100,55 @@ class PublicationCompatibilityTests(unittest.TestCase):
 
     def produce(self, *, content=None):
         from mindie_knowledge.loop.store import Store
+        from mindie_knowledge.publication_contract import GRADED_SCHEMA
+        content = content or 'Synthetic evidence: an existing empty file returns zero bytes.\n'
         with closing(Store(self.directory / 'producer', self.publication['domain'])) as store:
-            doc = store.create_draft(kind='experience', title='Synthetic boundary example',
-                summary='An empty file differs from a missing file; example evidence only.',
-                content=content or 'Synthetic evidence: an existing empty file returns zero bytes.\n')
-            package = store.materials.export_task(doc['entry_id'])
-        for path, content in package['files'].items():
-            target = self.repo / 'tasks' / doc['entry_id'] / path
+            if self.contract['schema'] == GRADED_SCHEMA:
+                files = self.produce_graded(store, content)
+            else:
+                doc = store.create_draft(kind='experience', title='Synthetic boundary example',
+                    summary='An empty file differs from a missing file; example evidence only.',
+                    content=content)
+                package = store.materials.export_task(doc['entry_id'])
+                files = {'tasks/' + doc['entry_id'] + '/' + path: raw
+                         for path, raw in package['files'].items()}
+                self.body_path = next(path for path in files if '/blocks/' in path)
+        for path, raw in files.items():
+            target = self.repo / path
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(content.encode('utf-8'))
+            target.write_bytes(raw.encode('utf-8'))
         return self.commit()
+
+    def produce_graded(self, store, content):
+        from mindie_knowledge.graded.distill import prepare_request, apply_decision
+        from tests.process_fixtures import installed_scanner
+        request = prepare_request([dict(kind='run_manifest', outcome='observed',
+            source_locator='fixture://empty-file', content=content,
+            evidence_refs=['fixture-empty-file'])],
+            session_digest=hashlib.sha256(content.encode()).hexdigest(),
+            task_state='completed', redactor_executable=installed_scanner(),
+            redaction_key=b'publication-compatibility-synthetic-evidence')
+        selected = request['sanitized_inputs'][0]
+        metadata = dict(schema='mindie-graded-unit/1', id='unit-empty-file-example',
+            tier='L2', category='sop', evidence_strength='single_observation',
+            domain_path='examples/files', inherits_from=[], title='Synthetic boundary example',
+            conditions={'scenario': 'synthetic-empty-file'},
+            triggers={'error_signatures': [], 'keywords': ['empty-file']},
+            provenance=dict(source_type=selected['kind'], source_locator=selected['source_locator'],
+                source_digest=selected['source_digest'], evidence_refs=selected['evidence_refs'],
+                supersedes=[]))
+        decision = dict(schema_version='mindie-distill-decision/1',
+            session_digest=request['session_digest'], evidence_inputs=request['evidence_inputs'],
+            action='propose_graded_units', drop_reason=None, units=[dict(
+                target_unit_id=metadata['id'], target_tier=metadata['tier'],
+                category=metadata['category'], evidence_strength=metadata['evidence_strength'],
+                domain_path=metadata['domain_path'], operation='create',
+                frontmatter=metadata, markdown_body=selected['content'])])
+        applied = apply_decision(store, request, decision)
+        self.assertEqual(applied['status'], 'applied')
+        unit = store.graded._load().units[metadata['id']]
+        self.body_path = unit.path
+        return {unit.path: unit.render()}
 
     def trusted_check(self, revision, *, digest=None, use_subprocess=False):
         args = [
@@ -153,7 +186,9 @@ class PublicationCompatibilityTests(unittest.TestCase):
         result = self.trusted_check(revision, digest='0' * 64)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('publication contract', result.stderr)
-        future = dict(self.contract, formats=dict(self.contract['formats'], block='mindie-material-block/999'))
+        field = 'unit' if 'unit' in self.contract['formats'] else 'block'
+        future_format = self.contract['formats'][field].rsplit('/', 1)[0] + '/999'
+        future = dict(self.contract, formats={**self.contract['formats'], field: future_format})
         raw = (json.dumps(future) + '\n').encode('utf-8')
         (self.repo / 'publication-contract.json').write_bytes(raw)
         result = self.trusted_check(self.commit(), digest=hashlib.sha256(raw).hexdigest())
@@ -169,7 +204,7 @@ class PublicationCompatibilityTests(unittest.TestCase):
         result = self.trusted_check(revision)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(json.loads(result.stdout)['content_only'])
-        body = next((self.repo / 'tasks').glob('*/blocks/*.md')).read_text('utf-8')
+        body = (self.repo / self.body_path).read_text('utf-8')
         self.assertIn(content, body)
 
     def test_validator_reuse_rejects_a_wrong_actual_installed_pin(self):
@@ -179,7 +214,7 @@ class PublicationCompatibilityTests(unittest.TestCase):
     def test_changed_body_is_rejected_by_trusted_validator(self):
         revision = self.produce()
         self.base = revision
-        body = next((self.repo / 'tasks').glob('*/blocks/*.md'))
+        body = self.repo / self.body_path
         body.write_bytes(body.read_bytes().replace(b'zero bytes', b'invented result'))
         result = self.trusted_check(self.commit())
         self.assertNotEqual(result.returncode, 0)
