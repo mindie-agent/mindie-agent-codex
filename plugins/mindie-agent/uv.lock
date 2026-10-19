@@ -1938,7 +1938,7 @@ wheels = [
 
 [[package]]
 name = "mindie-agent-codex"
-version = "0.0.1"
+version = "0.0.2"
 source = { editable = "." }
 dependencies = [
     { name = "mindie-knowledge" },
@@ -1947,19 +1947,19 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=81fb4e222f0cba5cffe50824ffd55b33d312283d" },
-    { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=46a91a5b409506760ea530f7037a3f9f04d9a2d7" },
+    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=4fc5ef92782227e866693c898115c43459441429" },
+    { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=e864da0585782705975552f227afe8a3bfd9411e" },
 ]
 
 [[package]]
 name = "mindie-diagnostics"
-version = "0.4.1"
-source = { git = "https://github.com/mindie-agent/diagnostics?rev=10cc3391ed358d7b7e0e1acb99ca5be4d1934b47#10cc3391ed358d7b7e0e1acb99ca5be4d1934b47" }
+version = "0.4.2"
+source = { git = "https://github.com/mindie-agent/diagnostics?rev=7da7f66d119098e0515f8f37bfd5e7cf8cc32fee#7da7f66d119098e0515f8f37bfd5e7cf8cc32fee" }
 
 [[package]]
 name = "mindie-knowledge"
-version = "0.11.0"
-source = { git = "https://github.com/mindie-agent/knowledge?rev=81fb4e222f0cba5cffe50824ffd55b33d312283d#81fb4e222f0cba5cffe50824ffd55b33d312283d" }
+version = "0.12.0"
+source = { git = "https://github.com/mindie-agent/knowledge?rev=4fc5ef92782227e866693c898115c43459441429#4fc5ef92782227e866693c898115c43459441429" }
 dependencies = [
     { name = "langmem" },
     { name = "mindie-diagnostics" },
@@ -3375,8 +3375,8 @@ as = [
 
 [[package]]
 name = "remote-dev"
-version = "0.9.5"
-source = { git = "https://github.com/mindie-agent/remote-dev?rev=46a91a5b409506760ea530f7037a3f9f04d9a2d7#46a91a5b409506760ea530f7037a3f9f04d9a2d7" }
+version = "0.10.0"
+source = { git = "https://github.com/mindie-agent/remote-dev?rev=e864da0585782705975552f227afe8a3bfd9411e#e864da0585782705975552f227afe8a3bfd9411e" }
 dependencies = [
     { name = "mindie-diagnostics" },
 ]
