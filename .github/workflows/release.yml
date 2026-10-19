@@ -16,16 +16,12 @@ jobs:
         plugins/mindie-agent/.codex-plugin/plugin.json
       setup-command: |
         uv sync --project plugins/mindie-agent --locked --no-editable && uv pip install --python plugins/mindie-agent/.venv/bin/python pytest
-      python: |
-        plugins/mindie-agent/.venv/bin/python
+      python: plugins/mindie-agent/.venv/bin/python
       test-command: |
         export MINDIE_CORE_REPO="$RUNNER_TEMP/release-knowledge"
-        export MINDIE_KIMI_REPO="$RUNNER_TEMP/release-kimi"
         knowledge_sha=$(plugins/mindie-agent/.venv/bin/python -c 'import importlib.metadata as m,json; print(json.loads(m.distribution("mindie-knowledge").read_text("direct_url.json"))["vcs_info"]["commit_id"])')
         git clone --no-checkout --filter=blob:none https://github.com/mindie-agent/knowledge "$MINDIE_CORE_REPO"
         git -C "$MINDIE_CORE_REPO" checkout --detach "$knowledge_sha"
-        git clone --no-checkout --filter=blob:none https://github.com/mindie-agent/mindie-agent-kimi "$MINDIE_KIMI_REPO"
-        git -C "$MINDIE_KIMI_REPO" checkout --detach 90f73e76c6087ce091570f2d151b709145c913bc
         plugins/mindie-agent/.venv/bin/python tests/preflight.py
         plugins/mindie-agent/.venv/bin/python -m pytest tests -q -m "not live_npu"
       build-command: |
