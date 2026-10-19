@@ -247,6 +247,11 @@ def install(args, parser, *, validation=None):
     # with the pinned core here, without starting a service or calling a model.
     # A damaged existing authority fails before installation config is written.
     prepare_store(python, SCRIPTS, value)
+    from capture_config import prepare_domains
+    adapter['domain_configs'] = prepare_domains(
+        python, adapter, value, config_directory=str(config.with_name(config.stem + '.domains')),
+        authority_directory=str(config.parent / 'knowledge-domains'),
+        consent_config=str(consent.consent_path_for(config)), public_feeds=not args.no_public_feed)
     write_private(engine_config, value)
     write_private(config, adapter)
     if sharing_choice:

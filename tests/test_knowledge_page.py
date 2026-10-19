@@ -217,7 +217,12 @@ class KnowledgePageTests(unittest.TestCase):
             "mindie_activation": "component-token",
         }
         env = os.environ.copy()
-        env.pop("PYTHONPATH", None)
+        # The joint source supplies explicit domain routing in this checkout;
+        # the helper still runs the exact configured interpreter and scripts.
+        if os.environ.get("PYTHONPATH"):
+            env["PYTHONPATH"] = os.environ["PYTHONPATH"]
+        else:
+            env.pop("PYTHONPATH", None)
         env.update({
             "SCRIPTS": str(SCRIPTS),
             "CONFIG": str(self.config),

@@ -1,4 +1,5 @@
 """Real process output and failure survive independently injected cleanup faults."""
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -15,6 +16,22 @@ import runtime_call
 
 
 class ProcessResultTests(unittest.TestCase):
+    def test_paid_distill_result_remains_completed_despite_outer_cleanup_failure(self):
+        result = dict(content=[], isError=False, structuredContent={
+            "status": "local_receipt_failed", "operation_status": "local_receipt_failed",
+            "model_execution": "completed", "model_status": "returned",
+            "result": {"schema_version": "mindie-distill-decision/1", "session_digest": "a" * 64,
+                       "evidence_inputs": [], "action": "noop", "drop_reason": "already_covered", "units": []},
+            "local_error": {"stage": "receipt", "message": "controlled storage failure"},
+        })
+        completed = bounded_process.ProcessResult(execution="completed", stdout=json.dumps(result), returncode=0,
+            cleanup=[{"stage": "reap_process", "error_type": "TimeoutExpired"}])
+        shaped = mcp_gate.runtime_result(completed)
+        self.assertFalse(shaped["isError"])
+        self.assertEqual(shaped["structuredContent"], result["structuredContent"])
+        self.assertEqual(shaped["cleanup"]["status"], "failed")
+        self.assertIn("Do not repeat", shaped["content"][-1]["text"])
+
     @unittest.skipUnless(os.name == 'posix', 'actual POSIX subprocess evidence')
     def test_confirmed_output_survives_cleanup_failure(self):
         process = bounded_process._spawn(

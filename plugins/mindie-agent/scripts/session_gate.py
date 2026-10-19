@@ -58,8 +58,11 @@ def bind_explicit_config(path=None):
 
 def runtime_binding(config):
     """Code identity only; contribution and reporting choices remain mutable."""
-    return {key: config.get(key) for key in
-            ("python", "runtime_scripts", "engine_config", "product_validation")}
+    binding = {key: config.get(key) for key in
+               ("python", "runtime_scripts", "engine_config", "product_validation")}
+    if "domain_configs" in config:
+        binding["domain_configs"] = config["domain_configs"]
+    return binding
 
 
 def _dispatch_config():
@@ -194,17 +197,20 @@ class Sessions:
                 )
             return envelope["result"]
 
-    def activate(self):
+    def activate(self, *, domain=None):
         """Bind this native task internally; persistent until revoked.
 
         A healthy repeated binding keeps the same token and original capture
         boundary. Failure counts never pause it — no deactivate/reactivate
         cycle is ever required. Native identity comes only from
-        CODEX_THREAD_ID inside the helper.
+        CODEX_THREAD_ID inside the helper. An explicit domain is selected by
+        the shared core helper inside that same fixed runtime; this method
+        never accepts a token or engine path.
         """
-        return self._op(
-            "activate", {"project_root": Path.cwd().resolve().as_posix()}
-        )
+        payload = {"project_root": Path.cwd().resolve().as_posix()}
+        if domain is not None:
+            payload["domain"] = domain
+        return self._op("activate", payload)
 
     def check(self, session, token=None):
         """Active-task check with optional activation token; no state created."""

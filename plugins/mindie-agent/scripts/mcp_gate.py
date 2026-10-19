@@ -5,7 +5,7 @@ Implements the JSON-RPC MCP server gate (`Gate`, `serve`) for both `knowledge` a
 
 [Invariants]
 - Remote tools are available to any native Codex task without a knowledge lease, scoped by `REMOTE_DEV_SESSION_ID`.
-- Knowledge mutation tools (`knowledge_feedback`) require an active task lease; read tools (`knowledge_query`, `knowledge_explain`) work without capture binding.
+- Knowledge mutation tools (`knowledge_feedback`) require an active task lease; `knowledge_distill` additionally requires the active capture lease and uses the shared summary budget. Read tools (`knowledge_query`, `knowledge_explain`) work without capture binding.
 - When a remote operation has already succeeded (`outcome == "succeeded"`), a local receipt-accounting failure NEVER overwrites the business result with `isError=True` (`receipt_unconfirmed=True` is attached instead).
 
 [Timeouts & Locks]
@@ -62,6 +62,17 @@ class SwitchingRuntime(RuntimeError):
     """The operation lock was unavailable before any request admission."""
 
 
+def knowledge_timeout(name, timeout):
+    """Bind helper and inner RPC budgets; never hand C6 an unbounded deadline."""
+    if name != "knowledge_distill":
+        return timeout
+    import runtime_call
+    minimum = runtime_call.distill_helper_timeout()
+    if timeout is not None and timeout < minimum:
+        raise InvalidToolArguments("knowledge_distill timeout cannot be shorter than its inner RPC and cleanup budget")
+    return minimum if timeout is None else timeout
+
+
 def call_failure(exc):
     if isinstance(exc, SwitchingRuntime):
         return dict(failure("MindIE is switching its idle runtime; this call has not started."),
@@ -111,7 +122,13 @@ def runtime_result(completed):
                 ),
             )
             return result
-        result = dict(result, operation_outcome="failed" if result.get("isError") is True else "succeeded", isError=True, cleanup=dict(
+        detail = result.get("structuredContent")
+        preserved_paid = (isinstance(detail, dict)
+                          and detail.get("status") in {"local_receipt_failed", "local_application_failed"}
+                          and detail.get("model_execution") == "completed"
+                          and detail.get("model_status") == "returned")
+        result = dict(result, operation_outcome="failed" if result.get("isError") is True else "succeeded",
+                      isError=result.get("isError", False) if preserved_paid else True, cleanup=dict(
             status="failed", issues=completed.cleanup, operation_outcome="preserved",
             automatic_retry=False))
         result["content"].append(dict(type="text", text=
@@ -379,6 +396,17 @@ class Gate:
                 "missing keys: " + ", ".join(sorted(missing)) if missing else "",
             ] if part)
             raise InvalidToolArguments("Invalid MindIE tool arguments (" + detail + ")")
+        if name == "knowledge_distill":
+            items = args.get("inputs")
+            item_schema = schema["properties"]["inputs"]["items"]
+            if isinstance(items, list):
+                for item in items:
+                    if isinstance(item, dict):
+                        undeclared = set(item) - set(item_schema["properties"])
+                        if undeclared:
+                            raise InvalidToolArguments(
+                                "Invalid MindIE tool arguments (unknown input keys: "
+                                + ", ".join(sorted(undeclared)) + ")")
         return name, args
 
     def _request_identity(self, request):
@@ -509,7 +537,7 @@ class Gate:
                 mindie_session_id=session,
                 native_session_verified=True,
             )
-            bound = timeout
+            bound = knowledge_timeout(name, timeout)
             try:
                 # Exactly one installed runtime: the recorded interpreter
                 # plus the recorded scripts directory, read in one config load

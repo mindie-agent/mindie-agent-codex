@@ -64,6 +64,26 @@ class ActivationTests(unittest.TestCase):
         self.assertEqual(self.config.read_bytes(), self.original)
         self.prepare_service.assert_not_called()
 
+    def test_busy_secondary_domain_prevents_publication_until_its_owner_retires(self):
+        self.old['domain_configs'] = {'operators': str(self.root / 'old-operators.json')}
+        self.new['domain_configs'] = {'operators': str(self.root / 'new-operators.json')}
+        self.config.write_text(json.dumps(self.old))
+        self.original = self.config.read_bytes()
+        self.prepared['expected_binding'] = runtime_binding(self.old)
+        self.retire_service.side_effect = [{'idle': True}, {'idle': False}]
+        result = self.run_activation(['absent', 'ready'])
+        self.assertEqual(result['status'], 'incomplete')
+        self.assertEqual(result['stage'], 'domain_retirement')
+        self.assertEqual(result['domains']['status'], 'deferred')
+        self.assertEqual(self.config.read_bytes(), self.original)
+
+        self.inspect_retirement.return_value = {'status': 'retired'}
+        self.retire_service.side_effect = [{'idle': True}]
+        result = self.run_activation(['ready'])
+        self.assertEqual(result['status'], 'active')
+        self.assertEqual(json.loads(self.config.read_text()), self.new)
+        self.assertEqual(self.retire_service.call_args.args[0], self.old['domain_configs']['operators'])
+
     def test_retired_cleanup_failure_remains_incomplete_without_start(self):
         self.inspect_retirement.return_value = {"status": "retired"}
         self.retire_service.return_value = {"idle": True, "cleanup_failed": True}

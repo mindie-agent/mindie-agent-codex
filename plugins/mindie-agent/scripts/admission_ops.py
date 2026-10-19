@@ -15,6 +15,7 @@ Executes core `Admission` lease operations (`activate`, `deactivate`, `check`, `
 """
 
 import json
+from collections.abc import Mapping
 import os
 from pathlib import Path
 import re
@@ -87,18 +88,46 @@ def operation(name, payload):
     config = read_config() if config is None else config
     if not isinstance(config, dict):
         raise ValueError("invalid internal Stop binding")
-    store = admission(config)
     if name == "activate":
         root = payload.get("project_root")
         if not isinstance(root, str) or not os.path.isabs(root):
             raise ValueError("project_root must be an absolute path")
+        project_root = str(Path(root).resolve())
+        session = native_session()
+        domain = payload.get("domain")
+        if domain is not None:
+            # Selection, target consent/scope validation and target Admission
+            # activation stay in the shared core helper. The default engine's
+            # lease store and token are never touched on this path.
+            from mindie_knowledge.loop.domain_routes import activate_selected_domain
+
+            selected = activate_selected_domain(
+                config["engine_config"],
+                domain=domain,
+                domain_configs=config.get("domain_configs"),
+                session=session,
+                project_root=project_root,
+                root_session=None,
+            )
+            lease = selected["lease"]
+            return dict(
+                status="active",
+                domain=selected["domain"],
+                engine_config=selected["engine_config"],
+                generation=selected["generation"],
+                mindie_session_id=lease["session"],
+                mindie_activation=lease["token"],
+                activated_at=lease["activated_at"],
+                project_root=lease["project_root"],
+            )
+        store = admission(config)
         # Lineage is unknown at binding: the native task itself is the root.
         # Known inherited Fork/subagent histories are not new scopes. This is
         # the internal identity binding for the entry — never a consent step,
         # and never failure-paused.
         lease = store.activate(
-            native_session(),
-            project_root=str(Path(root).resolve()),
+            session,
+            project_root=project_root,
             root_session=None,
         )
         return dict(
@@ -110,8 +139,30 @@ def operation(name, payload):
         )
     if name == "deactivate":
         session = native_session()
+        domain_configs = config.get("domain_configs")
+        if domain_configs is not None and not isinstance(domain_configs, Mapping):
+            raise ValueError("domain_configs must be a mapping")
+        if domain_configs:
+            try:
+                from mindie_knowledge.loop.domain_routes import deactivate_registered_domains
+            except ModuleNotFoundError as exc:
+                if exc.name != "mindie_knowledge.loop.domain_routes":
+                    raise
+                raise ValueError(
+                    "multi-domain deactivation is unavailable in the installed knowledge runtime"
+                ) from exc
+            result = deactivate_registered_domains(
+                config["engine_config"],
+                domain_configs=domain_configs,
+                session=session,
+            )
+            return dict(result, session_id=session)
+        # No configured domains: preserve the installed default-only path and
+        # do not import the newer helper.
+        store = admission(config)
         store.deactivate(session)
         return dict(status="inactive", session_id=session)
+    store = admission(config)
     if name == "check":
         lease = store.check(checked_session(payload), checked_token(payload))
         return dict(lease)

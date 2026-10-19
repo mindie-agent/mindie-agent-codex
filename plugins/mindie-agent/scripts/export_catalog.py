@@ -1,7 +1,7 @@
 """Build-time schema snapshot; discovery must not import the business runtime.
 
 [Role]
-Generates `mcp_catalog.json` containing the static `knowledge` (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`) and `remote` tool schemas for `mcp_gate.py`.
+Generates `mcp_catalog.json` containing the static `knowledge` (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`) and `remote` tool schemas for `mcp_gate.py`.
 
 [Invariants]
 - Enforces `additionalProperties: false` on all exported tool input schemas so `mcp_gate.py` can reject undeclared arguments before runtime dispatch.
@@ -43,13 +43,16 @@ RESOLVER_BOILERPLATE = (
 TRANSFER_TOOLS = {"remote_artifact_pull", "remote_artifact_push"}
 
 # Truthful MCP annotations: query/explain are pure local reads; feedback is
-# an idempotent write and is never labeled read-only. Remote tools mutate a
-# remote environment and are annotated accordingly.
+# an idempotent write and distill invokes one bounded organizer. Neither is
+# labeled read-only. Remote tools mutate a remote environment.
 READ_ONLY = dict(
     readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
 )
 FEEDBACK_WRITE = dict(
     readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False
+)
+DISTILL_WRITE = dict(
+    readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
 )
 REMOTE_MUTATION = dict(
     readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True
@@ -60,6 +63,23 @@ REMOTE_READ = dict(
 REMOTE_READ_TOOLS = {"remote_read", "remote_grep", "remote_job_status", "remote_job_tail"}
 
 STRING = {"type": "string"}
+DOMAIN_PATTERN = "^[a-z][a-z0-9-]{0,63}$"
+
+
+def domain_property():
+    return {"type": "string", "pattern": DOMAIN_PATTERN,
+            "description": "One configured canonical knowledge domain; omit to use the installed default."}
+
+
+DISTILL_KINDS = [
+    "experiment_ledger", "run_manifest", "authorized_transcript",
+    "ecosystem_repo", "hardware_spec", "ablation_receipt",
+]
+DISTILL_OUTCOMES = [
+    "observed", "verified", "compile_failed", "infra_failed",
+    "measurement_invalid", "in_flight",
+]
+DISTILL_TASK_STATES = ["in_flight", "verified_milestone", "completed"]
 
 
 def schema(properties, required):
@@ -78,14 +98,27 @@ KNOWLEDGE_TOOLS = [
     dict(
         name="knowledge_query",
         description=(
-            "Search the selected domain's published knowledge and experience. "
-            "Matches are grouped by a resolvable cited source without treating citation counts as evidence. "
-            "Each match has a directly readable block ref and a separate feedback_ref for the observed task revision. "
-            "To read more related matches, pass related_next as continuation without query; limit controls the next page. "
-            "A changed corpus rejects the continuation explicitly."
+            "Search graded rules and task material in the selected domain. Each match identifies its source, "
+            "has a readable ref, and returns feedback_ref for the exact observed revision. "
+            "Pass known task conditions to filter graded rules; unknown conditions are excluded by default. "
+            "For related task blocks, pass related_next as continuation without query. "
+            "A changed corpus rejects the continuation. Reference material does not establish applicability."
         ),
         inputSchema=schema(
-            dict(query=STRING, limit={"type": "integer", "minimum": 1, "maximum": 20}, continuation=STRING),
+            dict(
+                query=STRING,
+                limit={"type": "integer", "minimum": 1, "maximum": 20},
+                conditions={"type": "object", "description": "Observed task facts used to check rule applicability."},
+                continuation=STRING,
+                domain_path={"type": "string",
+                             "description": "Preferred graded domain_path prefix; cross-directory fallback remains available."},
+                token_budget={"type": "integer", "minimum": 1, "maximum": 16000,
+                              "default": 800,
+                              "description": "Body excerpt and inherited-rule budget in estimated tokens."},
+                include_unknown={"type": "boolean", "default": False,
+                                 "description": "Include units whose declared conditions are unknown; unknown is not evidence of applicability."},
+                domain=domain_property(),
+            ),
             [],
         ),
         annotations=READ_ONLY,
@@ -93,14 +126,14 @@ KNOWLEDGE_TOOLS = [
     dict(
         name="knowledge_explain",
         description=(
-            "Read one exact immutable block by its returned ref, with current task navigation and adjacent block refs. "
-            "A task ref returns current navigation, block count and first block ref without assembling the transcript. "
-            "An appended task keeps unchanged block refs readable. Removed or withdrawn material is unavailable. "
-            "Use feedback_ref only for feedback, never as a reading ref."
+            "Read a returned graded-unit, task or block ref. A graded-unit ref returns its exact current revision "
+            "and conditions; a task ref returns navigation and first_block_ref; a block ref returns its immutable "
+            "body and adjacent block refs. Replaced graded revisions and withdrawn material are unavailable. "
+            "Use the returned ref to read and feedback_ref to vote."
         ),
         inputSchema=schema(
             dict(
-                ref={"type": "string", "description": "Copy a task or block ref returned by query/explain exactly; feedback_ref is not a reading ref."},
+                ref={"type": "string", "description": "Copy the graded-unit, task or block ref returned by query/explain exactly."},
             ),
             ["ref"],
         ),
@@ -121,6 +154,40 @@ KNOWLEDGE_TOOLS = [
             ["ref", "rating"],
         ),
         annotations=FEEDBACK_WRITE,
+    ),
+    dict(
+        name="knowledge_distill",
+        description=(
+            "Explicitly distill caller-selected, already-authorized evidence into graded knowledge. "
+            "task_state is supplied by the caller; ordinary Stop never selects completion. "
+            "The host binds native task identity and the active lease. "
+            "May invoke the configured native organizer once and apply a returned C6 decision locally; "
+            "no GitHub write."
+        ),
+        inputSchema=schema(
+            dict(
+                inputs={
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "kind": {"type": "string", "enum": DISTILL_KINDS},
+                            "outcome": {"type": "string", "enum": DISTILL_OUTCOMES},
+                            "source_locator": STRING,
+                            "content": STRING,
+                            "evidence_refs": {"type": "array", "items": STRING},
+                            "repetitions": {"type": "integer", "minimum": 1},
+                        },
+                        "required": ["kind", "outcome", "source_locator", "content", "evidence_refs"],
+                    },
+                },
+                task_state={"type": "string", "enum": DISTILL_TASK_STATES},
+                domain=domain_property(),
+            ),
+            ["inputs", "task_state"],
+        ),
+        annotations=DISTILL_WRITE,
     ),
 ]
 

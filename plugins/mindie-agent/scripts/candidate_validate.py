@@ -96,6 +96,7 @@ def adapter_check(source):
         "codex_transcript.py",
         "history_import.py",
         "agent_worker.py",
+        "organizer_distill.py",
         "capture_config.py",
         "entry.py",
         "bootstrap.py",
@@ -107,7 +108,7 @@ def adapter_check(source):
             raise ValueError("missing bounded runtime entry: " + name)
     catalog = read_json(plugin / "scripts" / "mcp_catalog.json")[0]
     names = {tool.get("name") for tool in catalog.get("knowledge") or []}
-    if not {"knowledge_query", "knowledge_explain", "knowledge_feedback"} <= names:
+    if not {"knowledge_query", "knowledge_explain", "knowledge_feedback", "knowledge_distill"} <= names:
         raise ValueError("adapter knowledge catalogue is incomplete")
     if "knowledge_use" in names or "knowledge_judge" in names:
         raise ValueError("retired knowledge tools are advertised")

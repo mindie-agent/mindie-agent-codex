@@ -7,11 +7,18 @@ fixed installed runtime environment.
 [Invariants]
 - Admission belongs to the shared core; each request uses the exact installed
   configuration without script or runtime reselection.
+- An explicit public domain or canonical `mindie://DOMAIN/...` reference routes
+  to one existing configured engine. A missing/failed target route never falls
+  back to the default; a no-domain call keeps the exact default path.
+- The target engine's own admission store owns capture/distill leases and its
+  own sharing configuration owns publishability. No authority is copied across
+  domains.
 - Connection and deadline failures are classified as transient unavailability,
   never as authorization pauses.
 
 [Timeouts & Locks]
-- Subprocess and RPC invocations obey explicit caller-supplied deadlines.
+- Bounded RPC and helper deadlines; C6 distillation uses the shared summary
+  worker budget plus ledger/cleanup reserve, not the short query deadline.
 
 [Side-Effect Policy]
 - Attaches structured diagnostic references on failure; never silently replays
@@ -40,12 +47,47 @@ def knowledge_names():
     return {tool["name"] for tool in catalog["knowledge"]}
 
 
+def distill_rpc_timeout():
+    """The shared C6 budget: two scanners, identity, worker and SQLite reserve."""
+    try:
+        from mindie_knowledge.loop import summary_budget
+        return summary_budget.distill_rpc_timeout()
+    except (ImportError, AttributeError) as exc:
+        raise ValueError("installed knowledge runtime does not provide C6 distillation") from exc
+
+
+def distill_helper_timeout():
+    """Leave process start, serialization and cleanup outside the inner RPC."""
+    return distill_rpc_timeout() + 30.0
+
+
+class LeaseRequired(ValueError):
+    """The current native session has no active lease in the selected engine."""
+
+
+def _active_lease_token(config, session):
+    """Resolve the existing target-engine lease; never mint a caller token."""
+    lease = _admission(config).active_lease(session)
+    if lease is None:
+        raise LeaseRequired(
+            "knowledge distill requires an active task lease in the selected domain"
+        )
+    return lease["token"]
+
+
 def _admission(config):
     from mindie_knowledge.loop.activation import Admission
 
+    if isinstance(config, (str, os.PathLike)):
+        # Routing already validated this selected JSON object; admission only
+        # needs the target engine's own configured path, not a second config
+        # interpretation. Service selection performs the full validation.
+        config = json.loads(Path(config).read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        raise ValueError("selected engine configuration is not a JSON object")
     path = config.get("admission_path")
     if not isinstance(path, str) or not os.path.isabs(path):
-        raise ValueError("adapter configuration lacks an absolute admission_path")
+        raise ValueError("selected engine configuration lacks an absolute admission_path")
     return Admission(path)
 
 
@@ -65,35 +107,62 @@ def call(payload):
     if payload["surface"] == "remote":
         return remote(payload)
     config = json.loads(config_path().read_text(encoding='utf-8'))
-    # The internal activation token resolves the owning lease again inside the
-    # runtime; it must agree with the gate-bound session, and no
-    # caller-supplied identity is ever trusted on its own.
+    args, name = payload["arguments"], payload["name"]
     token = payload.get("mindie_activation")
-    lease = resolve_lease(config, token) if token else None
     session = payload.get("mindie_session_id")
     if (not isinstance(session, str) or not IDENTITY.fullmatch(session)
-            or lease is not None and lease['session'] != session
-            or lease is None and payload.get('native_session_verified') is not True):
+            or token is None and payload.get('native_session_verified') is not True):
         raise ValueError("MindIE runtime identity mismatch")
-    args, name = payload["arguments"], payload["name"]
     if payload["surface"] != "knowledge":
         raise ValueError("unknown plugin surface")
-    from service_client import connect
-    from mindie_knowledge.loop.transport import RequestRejected, rpc
-
     internal = payload.get("internal") is True
     if name in knowledge_names() and not internal:
         pass
     elif name == "knowledge_attach" and internal:
         # Internal activation-time bind only; never a front-stage tool.
+        pass
+    else:
+        raise ValueError("unknown knowledge tool")
+    from service_client import connect, explicit_route, select_engine
+    from mindie_knowledge.loop.transport import RequestRejected, rpc
+
+    # Select exactly one existing engine before any public data read. A
+    # no-domain call returns the configured default unchanged (old-runtime
+    # compatible); an explicit domain or URI must select its own engine.
+    route_domain, route_ref = args.get("domain"), args.get("ref")
+    routed = explicit_route(route_domain, route_ref)
+    selected = select_engine(
+        config["engine_config"], domain=route_domain, ref=route_ref,
+        domain_configs=config.get("domain_configs"),
+    )
+    # C6 capture admission needs the existing target-engine lease token, not a
+    # fabricated `_session_verified` flag. A target with an independent
+    # admission store must already hold this session's lease; a deliberately
+    # shared admission_path remains supported configuration.
+    lease_config = selected if routed else config
+    if name == "knowledge_distill" and token is None:
+        try:
+            token = _active_lease_token(lease_config, session)
+        except LeaseRequired:
+            if routed:
+                raise
+            # Preserve the installed no-domain call's historical disposition.
+            raise ValueError(
+                "knowledge distill requires an active task lease"
+            ) from None
+    # The internal activation token resolves the owning lease again against
+    # the selected engine; it must agree with the gate-bound session, and no
+    # caller-supplied identity is ever trusted on its own.
+    lease = resolve_lease(lease_config, token) if token else None
+    if lease is not None and lease['session'] != session:
+        raise ValueError("MindIE runtime identity mismatch")
+    if name == "knowledge_attach":
         # Sharing off must not cold-start collection through this path.
         import sharing
 
         if not sharing.capture_allowed(lease, None):
             raise ValueError("knowledge attach requires enabled community sharing")
-    else:
-        raise ValueError("unknown knowledge tool")
-    connection = connect(config["engine_config"])
+    connection = connect(selected)
     if name == "knowledge_attach":
         # Admission is owned by the existing lease; startup needs no
         # second attach protocol or duplicate session registry.
@@ -108,17 +177,30 @@ def call(payload):
     neutral = False
     try:
         try:
+            # With a resolved activation token the service checks the capture
+            # lease; without one the verified host flag is the read/feedback
+            # path. Never send both, because C6 requires exactly inputs/task_state.
+            identity = dict(_session_id=session)
+            if token is None:
+                identity["_session_verified"] = True
+            else:
+                identity["_activation"] = token
             value = rpc(
                 connection,
                 name.removeprefix("knowledge_"),
-                dict(args, _session_id=session, _activation=token, _session_verified=True),
+                dict(args, **identity),
+                timeout=distill_rpc_timeout() if name == "knowledge_distill" else None,
             )
+            is_error = False
+            if name == "knowledge_distill":
+                from mindie_knowledge.graded.distill import result_view
+                value, is_error = result_view(value)
+            succeeded = not is_error
             result = dict(
                 content=[dict(type="text", text=json.dumps(value, ensure_ascii=False))],
                 structuredContent=value,
-                isError=False,
+                isError=is_error,
             )
-            succeeded = True
         except RequestRejected as exc:
             if name not in {"knowledge_query", "knowledge_explain"}:
                 raise
@@ -150,7 +232,7 @@ def call(payload):
             neutral = True
         if token is not None and not neutral:
             try:
-                finish_outcome(config, session, token, succeeded)
+                finish_outcome(lease_config, session, token, succeeded)
             except Exception as exc:
                 # The operation already ran. Expose the bookkeeping fault
                 # without telling the caller to repeat a successful mutation.
@@ -300,12 +382,24 @@ if __name__ == "__main__":
             feed_unavailable = False
         else:
             feed_unavailable = isinstance(exc, FeedUnavailableError)
+        try:
+            from service_client import DomainRouteError
+        except ImportError:
+            domain_route_error = False
+        else:
+            domain_route_error = isinstance(exc, DomainRouteError)
+        lease_required = isinstance(exc, LeaseRequired)
+        routing_error = lease_required or domain_route_error
         if feed_unavailable:
             stage, execution = "query-source", "not_started"
+        elif routing_error:
+            stage, execution = "routing", "not_started"
         message = (
             "Knowledge query unavailable: a configured feed has no verified installed snapshot. "
             "The query did not run; inspect the feed sync result. No automatic retry."
             if feed_unavailable else
+            f"Knowledge request rejected before execution: {str(exc)[:300]}. No automatic retry."
+            if routing_error else
             f"MindIE {stage}: {type(exc).__name__}; execution={execution}; no automatic retry."
         )
         shaped = dict(
@@ -321,6 +415,11 @@ if __name__ == "__main__":
         )
         if feed_unavailable:
             shaped["structuredContent"]["code"] = "feed_unavailable"
+        elif routing_error:
+            shaped["structuredContent"]["code"] = (
+                "lease_required" if lease_required else "domain_routing_rejected"
+            )
+            shaped["structuredContent"]["message"] = str(exc)[:300]
         diagnostic = reference({"diagnostic": getattr(exc, "mindie_diagnostic", None)})
         # RequestRejected derives ValueError. MaintenanceCancelled may derive
         # RuntimeError; match the class name statically so discovery does not

@@ -1,12 +1,14 @@
 """Exact service ownership and cold-start provider context; no version routing."""
+import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
-import service_client
-from mindie_knowledge.loop import cli, handoff, lifecycle
+import service_client  # noqa: E402
+from mindie_knowledge.loop import cli, handoff, lifecycle  # noqa: E402
 
 
 class ClientTests(unittest.TestCase):
@@ -29,6 +31,50 @@ class ClientTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "context unavailable"):
                 service_client.connect("/exact.json")
             start.assert_not_called()
+
+    def test_default_authority_needs_no_helper_but_overrides_and_unknowns_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine = Path(directory) / "engine.json"
+            engine.write_text(json.dumps({"domain": "test"}), encoding="utf-8")
+            with patch.dict(sys.modules, {"mindie_knowledge.loop.domain_routes": None}):
+                self.assertEqual(
+                    service_client.select_engine(str(engine), ref="mindie://test/units/x"),
+                    str(engine))
+                self.assertEqual(
+                    service_client.select_engine(str(engine), domain="test"),
+                    str(engine))
+                with self.assertRaisesRegex(service_client.DomainRouteError, "does not provide"):
+                    service_client.select_engine(
+                        str(engine), ref="mindie://vllm-ascend/units/x")
+                with self.assertRaisesRegex(service_client.DomainRouteError, "does not provide"):
+                    service_client.select_engine(
+                        str(engine), domain="vllm-ascend")
+                with self.assertRaisesRegex(service_client.DomainRouteError, "conflicts"):
+                    service_client.select_engine(
+                        str(engine), domain="vllm-ascend",
+                        ref="mindie://test/units/x")
+                # A trusted mapping override is never silently bypassed.
+                with self.assertRaisesRegex(service_client.DomainRouteError, "does not provide"):
+                    service_client.select_engine(
+                        str(engine), domain="test",
+                        domain_configs={"test": "/mapped/engine.json"})
+
+    def test_internal_helper_import_failure_is_not_misreported_as_old_runtime(self):
+        import builtins
+
+        real_import = builtins.__import__
+
+        def broken(name, *args, **kwargs):
+            if name == "mindie_knowledge.loop.domain_routes":
+                error = ModuleNotFoundError("No module named 'internal_dependency'")
+                error.name = "internal_dependency"
+                raise error
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=broken), \
+                self.assertRaises(ModuleNotFoundError) as caught:
+            service_client.select_engine("/exact.json", domain="vllm-ascend")
+        self.assertEqual(caught.exception.name, "internal_dependency")
 
     def test_retired_configuration_never_starts_an_alternative_owner(self):
         with patch.object(cli, "config_at", return_value={}), \

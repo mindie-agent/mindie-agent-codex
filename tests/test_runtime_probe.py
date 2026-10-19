@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -45,7 +46,8 @@ class RuntimeProbeTests(unittest.TestCase):
         manifest = plugin / '.codex-plugin/plugin.json'
         manifest.write_text(json.dumps(dict(version='0.0.2')))
         project = plugin / 'pyproject.toml'
-        project.write_text(project.read_text().replace('version = "0.0.1"', 'version = "0.0.2"'))
+        current = tomllib.loads(project.read_text())["project"]["version"]
+        project.write_text(project.read_text().replace(f'version = "{current}"', 'version = "0.0.2"'))
         for knowledge, receipt in ((None, None), ('0.0.1', None), (None, '0.0.1'),
                                    ('invalid', '0.0.1')):
             with self.subTest(knowledge=knowledge, receipt=receipt), \
