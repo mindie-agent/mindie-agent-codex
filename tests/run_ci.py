@@ -15,7 +15,8 @@ FIRST = (
 
 
 if __name__ == "__main__":
-    available = {p.stem for p in (ROOT / "tests").glob("test_*.py")}
+    available = {p.stem for p in (ROOT / "tests").glob("test_*.py")
+                 if not p.stem.startswith("test_live_")}
     missing = set(FIRST) - available
     if missing:
         raise SystemExit("Missing required contract module: " + ", ".join(sorted(missing)))

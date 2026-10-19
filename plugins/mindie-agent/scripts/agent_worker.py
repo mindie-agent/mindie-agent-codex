@@ -9,7 +9,7 @@ Implements `NativeSummaryModel` and the CLI worker (`agent_worker.py`) that invo
 - Verifies `worker_policy` (`summary_provider`) before spawning `codex exec` so route changes abort before any model call.
 
 [Timeouts & Locks]
-- Enforces `timeout_seconds` (`<= 600.0s`) via `process_guard.run_codex`.
+- Native execution uses at most 120s and leaves cleanup time inside the parent summary deadline.
 
 [Side-Effect Policy]
 - Creates and cleans up a temporary `mindie-codex-summary-*` directory; never modifies user workspaces or material stores directly.
@@ -26,6 +26,7 @@ import time
 
 from mindie_knowledge.materials import summarizer
 from mindie_knowledge.loop import summary_scratch
+from mindie_knowledge.loop.summary_budget import native_timeout
 import process_guard
 import summary_provider
 from process_guard import InvalidResultError, NativeFailure, NativeStartError, OutputLimitExceeded, run_codex
@@ -90,7 +91,8 @@ class NativeSummaryModel:
                        "--output-schema", str(schema), "--json", "-"]
             if env is None:
                 command.insert(2, "--ignore-user-config")
-            run_codex(command, prompt, receipt=self.receipt, defer_cleanup=managed, env=env)
+            run_codex(command, prompt, timeout=native_timeout(120.0),
+                      receipt=self.receipt, defer_cleanup=managed, env=env)
             if not self.receipt["turn_completed"]:
                 raise NativeFailure("native execution did not report completion")
             try:
