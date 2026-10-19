@@ -24,8 +24,9 @@ authoritative.
 - **Remote Ascend NPU Development (`mindie-remote-dev` MCP)**:
   - Available automatically on demand in every native task for remote files, commands, jobs, and artifacts without activating knowledge capture.
   - A call timeout is not job completion; follow running jobs with status/output tools and never blindly resubmit an uncertain mutation.
-- **Diagnostics & Fault Handling**:
+- **Diagnostics & Unified Contribution Switch**:
   - Natural capability results can include bounded `agent_diagnostics` references for the Agent. Preserve the actual business result and report only limitations relevant to the user's goal. Stop capture must never request another model turn or block task completion.
+  - Community knowledge sharing and automatic tool fault reporting share a single persistent choice in `<profile>/.mindie/mindie-consent.json`. Legacy knowledge-only `contribute` records lacking the unified consent revision (`choice_revision`) surface `needs_choice` until explicitly re-confirmed once. Always keep three states distinct: (1) local consent configuration saved, (2) background reporter worker running, and (3) external GitHub Issue/PR published.
 
 ## Progressive Context Disclosure (Read Only on Demand)
 

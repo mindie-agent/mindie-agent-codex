@@ -2,7 +2,7 @@
 
 <a href="harness-interfaces.zh.md">中文</a> | <b>English</b> · <a href="README.en.md">Documentation Index</a>
 
-[`plugins/mindie-agent/harness-compatibility.json`](../plugins/mindie-agent/harness-compatibility.json) is the machine-checked registry of OpenAI Codex CLI interfaces used by `mindie-agent-codex`. Release `0.0.1` declares support for two exact verified Codex versions:
+[`plugins/mindie-agent/harness-compatibility.json`](../plugins/mindie-agent/harness-compatibility.json) is the machine-checked registry of OpenAI Codex CLI interfaces used by `mindie-agent-codex`. Release `0.0.2` declares support for two exact verified Codex versions:
 - **`0.153.4`** (official upstream commit `3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`)
 - **`0.162.0-alpha.17.2`** (official upstream commit `740e5af33c71225640e0c1c1555c514c2c93ab74`)
 
@@ -15,7 +15,7 @@ In CI, `plugins/mindie-agent/scripts/release_metadata.py` verifies that every re
 Both verified Codex revisions expose `hooks/list`, `config/read`, and `config/value/write` in `codex-rs/app-server-protocol/src/protocol/common.rs`, providing hook identity, content hash, enabled state, trust state (`hooks.state.<key>.trusted_hash`), and optimistic compare-and-swap (`expectedVersion`).
 
 ### How Native Marketplace & Hook Trust Updates Work
-- **Immutable Tag Pinning**: Installing the marketplace with `--ref v0.0.1` pins the catalog to that immutable Release tag so a later `main` branch update never silently upgrades an unverified version.
+- **Immutable Tag Pinning**: Installing the marketplace with `--ref v0.0.2` pins the catalog to that immutable Release tag so a later `main` branch update never silently upgrades an unverified version.
 - **Git Subdirectory Source**: Native catalog entries use `source: "git-subdir"` with `url`, `path`, and `sha` (tested through native `codex plugin list` and `codex plugin add`).
 - **Preserving User Hook Approvals**: During a compatible silent update, `native_hooks.py` updates only this marketplace's source via optimistic CAS (`expectedVersion`), installs the selected subdirectory at its exact commit SHA, and carries forward trust hashes **only** for `SessionStart` / `Stop` hooks that the user had already enabled and trusted. Explicitly disabled or untrusted hooks remain disabled, and unrelated plugins are never touched.
 
@@ -48,7 +48,7 @@ To ensure local helper and SSH subprocesses are cleaned up immediately when a us
 
 ## Known limitation: child-agent cancellation
 
-In release `0.0.1`, Codex's native `Interrupt` event is dispatched only for main-thread turns and explicitly skips subagents spawned via `spawn_agent` (and `SubagentStop` fires only on normal completion, not on `TurnAborted`).
+In release `0.0.2`, Codex's native `Interrupt` event is dispatched only for main-thread turns and explicitly skips subagents spawned via `spawn_agent` (and `SubagentStop` fires only on normal completion, not on `TurnAborted`).
 
 - **Impact**: If a spawned child agent is waiting on an in-flight MCP tool call when interrupted, neither `notifications/cancelled` nor the native `Interrupt` hook is delivered to that child MCP call. Its pending local helper/SSH process—or an already-started remote command—may continue running until the host process exits.
 - **Design Stance**: Following the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md), the plugin documents this upstream host limitation transparently rather than shipping a custom-patched Codex binary, polling process killer, or arbitrary business timeout. Upstream tracking and reproduction evidence are posted in [openai/codex#26956](https://github.com/openai/codex/issues/26956).

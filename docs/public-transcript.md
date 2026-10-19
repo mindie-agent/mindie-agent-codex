@@ -9,7 +9,7 @@ When community sharing is explicitly enabled for an approved project scope, `min
 ## 1. Deterministic Public Message Filtering
 
 - **Included Content**: Only public user prompts, visible assistant progress commentary, and final assistant answers (`response_item` records) from the active task.
-- **Excluded Content**: Tool calls and outputs, hidden reasoning tokens, system/developer instructions, injected catalogs, duplicate wrappers, and inherited fork history.Attachment placeholders never fetch external files or URLs.
+- **Excluded Content**: Tool calls and outputs, hidden reasoning tokens, system/developer instructions, injected catalogs, duplicate wrappers, and inherited fork history. Attachment placeholders never fetch external files or URLs.
 - **Strict Integrity Checks**: Records missing timestamps or containing corrupted JSON fail visibly rather than silently advancing the capture cursor.
 
 ---

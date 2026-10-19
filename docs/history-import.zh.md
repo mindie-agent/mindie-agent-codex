@@ -11,7 +11,7 @@
 通过当前发行版入口调用 `bridge history-import`，并通过 `--source` 指定一个或多个本地 JSONL 会话文件的绝对路径（Windows 下可将 `python3` 替换为 `python`）：
 
 ```sh
-python3 <PLUGIN_DATA>/releases/0.0.1/entry.py bridge history-import \
+python3 <PLUGIN_DATA>/releases/0.0.2/entry.py bridge history-import \
   --source /absolute/path/to/rollout.jsonl
 ```
 
