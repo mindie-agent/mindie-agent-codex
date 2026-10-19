@@ -1,4 +1,18 @@
-"""Prepare this plugin's uv-locked, noneditable runtime; never select an update."""
+"""Prepare this plugin's uv-locked, noneditable runtime; never select an update.
+
+[Role]
+Bootstraps the plugin's isolated `uv` virtual environment under `PLUGIN_DATA/runtimes/<key>`, validates the installed candidate (`candidate_validate.py`), and publishes `releases/<version>/runtime.json` and `entry.py`.
+
+[Invariants]
+- Never installs editable packages or modifies an already published `runtime.json` if source/ABI differs.
+- Records preparation failures via stdlib `diagnostic_support.failure` before runtime packages exist.
+
+[Timeouts & Locks]
+- Acquires `exclusive_lock(release / "prepare.lock")` across `uv sync`, `readback`, `probe`, and `runtime.json` publication.
+
+[Side-Effect Policy]
+- Writes only under `PLUGIN_DATA/runtimes/<key>` and `PLUGIN_DATA/releases/<version>`; atomic `os.replace()` publishes `runtime.json`.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -13,7 +27,6 @@ import tempfile
 
 from product_contract import package_files, source_identity, probe, identity, validate_receipt, native_version
 from bootstrap_lock import exclusive_lock
-from diagnostic_fallback import _private_mkdir
 from bounded_process import run
 from windows_process import exec_or_wait
 
@@ -64,7 +77,7 @@ print(json.dumps({'root':str(root),'prefix':sys.prefix,'version':d.version}))
         raise ValueError("runtime interpreter identity differs")
     for path in package_files(source):
         target = installed / path.relative_to(source)
-        if path.is_symlink() or not target.is_file() or target.read_bytes() != path.read_bytes():
+        if not target.is_file() or target.read_bytes() != path.read_bytes():
             raise ValueError("installed adapter differs from native plugin")
     return installed / "scripts"
 
@@ -75,15 +88,23 @@ def ensure_runtime(source, data):
         version = native_version(source)
         key = runtime_key(source)
         release = data / "releases" / version
-        _private_mkdir(release, parents=True, exist_ok=True)
-    runtime = data / "runtimes" / key
-    python = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        release.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Windows dependency files must fit beneath Codex's default plugin-data path.
+    # The receipt keeps the full source/ABI digest; only the directory is shorter.
+    runtime = data / "runtimes" / (key[:24] if os.name == "nt" else key)
+    executable = "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    python = runtime / executable
     receipt = release / "runtime.json"
     with exclusive_lock(release / "prepare.lock"):
         if receipt.exists():
             existing = json.loads(receipt.read_text(encoding="utf-8"))
-            if existing.get("key") != key or existing.get("python") != str(python):
+            bound_python = Path(existing["python"])
+            if existing.get("key") != key or bound_python not in (
+                python, data / "runtimes" / key / executable
+            ):
                 raise ValueError("immutable plugin version has different source or Python ABI")
+            # An existing release remains bound to its published runtime path.
+            python = bound_python
             with preparing("completed-runtime"):
                 scripts = readback(python, source)
                 validate_receipt(json.dumps(existing["validation"]), identity(scripts.parent))

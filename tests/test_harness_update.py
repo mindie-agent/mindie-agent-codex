@@ -29,7 +29,8 @@ class UpdateTests(unittest.TestCase):
                         MINDIE_CODEX_BIN=str(self.root / "fixture" / "codex"))
         self.config.write_text(json.dumps(dict(native_context=self.env)))
         self.metadata = release_metadata.metadata(SCRIPTS.parent, "a" * 40)
-        self.release = dict(id=1, tag_name="v0.0.1", draft=False, prerelease=False,
+        self.version = self.metadata["version"]
+        self.release = dict(id=1, tag_name=f"v{self.version}", draft=False, prerelease=False,
                             metadata=self.metadata)
         self.state = update_trigger.directory(self.config)
         self.state.mkdir()
@@ -70,13 +71,13 @@ class UpdateTests(unittest.TestCase):
         self.assertNotIn("ref", source)
 
     def test_native_install_once_and_readback(self):
-        source = Path(self.env["CODEX_HOME"]) / "plugins/cache/mindie-agent/mindie-agent/0.0.1"
+        source = Path(self.env["CODEX_HOME"]) / "plugins/cache/mindie-agent/mindie-agent" / self.version
         (source / ".codex-plugin").mkdir(parents=True)
-        (source / ".codex-plugin/plugin.json").write_text(json.dumps(dict(version="0.0.1")))
-        (source / "pyproject.toml").write_text('[project]\nversion="0.0.1"\n')
+        (source / ".codex-plugin/plugin.json").write_text(json.dumps(dict(version=self.version)))
+        (source / "pyproject.toml").write_text(f'[project]\nversion="{self.version}"\n')
         (source / "harness-compatibility.json").write_text(json.dumps(self.metadata["compatibility"]))
-        self.installed.return_value = dict(self.before, version="0.0.1")
-        output = dict(pluginId=update.PLUGIN, version="0.0.1", installedPath=str(source))
+        self.installed.return_value = dict(self.before, version=self.version)
+        output = dict(pluginId=update.PLUGIN, version=self.version, installedPath=str(source))
         with patch.object(update, "run", return_value=ProcessResult(
                 "completed", json.dumps(output), 0)) as native, \
                 patch.object(native_hooks, "snapshot", return_value=[]):
@@ -92,7 +93,7 @@ class UpdateTests(unittest.TestCase):
         pending = dict(metadata=self.metadata, stage="plugin_add",
                        process=dict(execution="unknown", returncode=None, cleanup_failed=False))
         (self.state / "native.json").write_text(json.dumps(pending))
-        self.installed.return_value = dict(self.before, version="0.0.1")
+        self.installed.return_value = dict(self.before, version=self.version)
         with patch.object(update, "_native_install") as install, \
                 patch.object(update, "_prepare_and_activate") as activate:
             result = update.check(self.config)
@@ -105,7 +106,7 @@ class UpdateTests(unittest.TestCase):
         (self.state / "native.json").write_text(json.dumps(dict(
             metadata=self.metadata, stage="plugin_add",
             process=dict(execution="completed", returncode=0, cleanup_failed=True))))
-        self.installed.return_value = dict(self.before, version="0.0.1")
+        self.installed.return_value = dict(self.before, version=self.version)
         with patch.object(update, "_prepare_and_activate") as activate:
             result = update.check(self.config)
         self.assertEqual(result["status"], "unknown")
@@ -167,8 +168,8 @@ class UpdateTests(unittest.TestCase):
     def test_runtime_cleanup_failure_cannot_start_another_preparation_or_native_write(self):
         source = self.root / "source"
         (source / ".codex-plugin").mkdir(parents=True)
-        (source / ".codex-plugin/plugin.json").write_text(json.dumps(dict(version="0.0.1")))
-        (source / "pyproject.toml").write_text('[project]\nversion="0.0.1"\n')
+        (source / ".codex-plugin/plugin.json").write_text(json.dumps(dict(version=self.version)))
+        (source / "pyproject.toml").write_text(f'[project]\nversion="{self.version}"\n')
         (source / "harness-compatibility.json").write_text(json.dumps(self.metadata["compatibility"]))
         pending = dict(metadata=self.metadata, stage="installed", source=str(source),
                        process=dict(execution="completed", returncode=0, cleanup_failed=False))
@@ -189,8 +190,8 @@ class UpdateTests(unittest.TestCase):
     def prepared_candidate(self):
         source = self.root / "source"
         (source / ".codex-plugin").mkdir(parents=True)
-        (source / ".codex-plugin/plugin.json").write_text(json.dumps(dict(version="0.0.1")))
-        (source / "pyproject.toml").write_text('[project]\nversion="0.0.1"\n')
+        (source / ".codex-plugin/plugin.json").write_text(json.dumps(dict(version=self.version)))
+        (source / "pyproject.toml").write_text(f'[project]\nversion="{self.version}"\n')
         (source / "harness-compatibility.json").write_text(json.dumps(self.metadata["compatibility"]))
         return dict(metadata=self.metadata, stage="prepared", source=str(source),
                     runtime=dict(python="/candidate/python", scripts="/candidate/scripts",
@@ -245,7 +246,7 @@ class UpdateTests(unittest.TestCase):
         (self.state / "native.json").write_text(json.dumps(dict(
             metadata=self.metadata, stage="prepared", source="/prepared",
             runtime={"fixture": True})))
-        self.installed.return_value = dict(self.before, version="0.0.1")
+        self.installed.return_value = dict(self.before, version=self.version)
         with patch("mindie_knowledge.releases_io.fetch_releases",
                    side_effect=AssertionError("network")) as fetch, \
                 patch.object(update, "_native_install") as install, \
@@ -267,20 +268,21 @@ class UpdateTests(unittest.TestCase):
         activate.assert_not_called()
 
     def test_harness_change_reselects_after_settled_unstarted_candidate(self):
-        self.installed.return_value = dict(self.before, version="0.0.1")
+        self.installed.return_value = dict(self.before, version=self.version)
         pending = dict(metadata=self.metadata, stage="prepared", source="/prepared",
                        process=dict(execution="completed", returncode=0, cleanup_failed=False),
                        activation=dict(status="not_started"))
         (self.state / "native.json").write_text(json.dumps(pending))
         new = copy.deepcopy(self.metadata)
-        new["version"] = "0.0.2"
+        major, minor, patch_version = self.version.split(".")
+        new["version"] = f"{major}.{minor}.{int(patch_version) + 1}"
         new["source"]["sha"] = "b" * 40
         supported = [dict(minimum="0.154.0", maximum="0.154.0",
                           maximum_inclusive=True, include_prerelease=False)]
         new["compatibility"]["supported"] = supported
         for value in new["compatibility"]["interface_registry"].values():
             value["supported"] = supported
-        release = dict(self.release, tag_name="v0.0.2", metadata=new, id=2)
+        release = dict(self.release, tag_name=f'v{new["version"]}', metadata=new, id=2)
         with patch.object(update, "harness_version", return_value="0.154.0"), \
                 patch("mindie_knowledge.releases_io.fetch_releases", return_value=[release]) as fetch, \
                 patch("mindie_knowledge.releases_io.verify_release_source", return_value=new), \
@@ -290,7 +292,7 @@ class UpdateTests(unittest.TestCase):
             result = update.check(self.config)
         self.assertEqual(result["status"], "deferred")
         fetch.assert_called_once()
-        self.assertEqual(install.call_args.args[3]["version"], "0.0.2")
+        self.assertEqual(install.call_args.args[3]["version"], new["version"])
         archived = list(self.state.glob("superseded-*.json"))
         self.assertEqual(len(archived), 1)
         self.assertEqual(json.loads(archived[0].read_text()), pending)

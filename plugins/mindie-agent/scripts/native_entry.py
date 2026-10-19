@@ -1,10 +1,18 @@
 """Build native launchers for MCP and lifecycle hooks.
 
-Codex 0.153.4's legacy MCP schema preserves env_vars but does not expand
-PLUGIN_DATA. Keep its observed legacy layout dependency here, without a
-directory scan, latest-version selector, or alternate configuration store.
-Hooks use a version-independent facade: a running native app-server can keep
-old plugin declarations when a separate native installer replaces the cache.
+[Role]
+Generates `.mcp.json` and `hooks/hooks.json` manifest definitions for the Codex plugin (`SessionStart`, `Stop`, `Interrupt`, and MCP servers).
+
+[Invariants]
+- Hook commands use a version-independent facade reading `~/.config/mindie-agent/codex.json` so running app-servers remain valid across plugin cache updates.
+- `Stop` never bootstraps an unprepared runtime and always returns neutral `{}` stdout to the host.
+- `Interrupt` dispatches `mindie_interrupt` with exact `thread_id`/`turn_id` to both MCP servers (`timeout=3s`).
+
+[Timeouts & Locks]
+- MCP `startup_timeout_sec=600` covers first-use `uv` sync and shared preparation lock without altering tool-call deadlines.
+
+[Side-Effect Policy]
+- Importing this module is side-effect free; `write_manifests(root)` updates `hooks/hooks.json` and `.mcp.json`.
 """
 import base64
 import json
@@ -38,17 +46,12 @@ def command_args(version, role, **names):
 
 
 def hook_launcher_code(*, name="mindie-agent", marketplace="mindie-agent"):
-    """Select only the prepared entry named by the canonical installed binding.
-
-    Keeping this command independent of plugin version/cache paths preserves
-    native Hook trust for new threads in an already-running app-server.
-    """
+    """Select only the prepared entry named by the canonical installed binding."""
     return (
-        "import os,sys,json,stat,re,runpy\nfrom pathlib import Path\n"
+        "import os,sys,json,re,runpy\nfrom pathlib import Path\n"
         "def read(p):\n"
-        " if p.is_symlink():raise ValueError('MindIE metadata must be regular')\n"
-        " with os.fdopen(os.open(p,os.O_RDONLY|getattr(os,'O_NONBLOCK',0)|getattr(os,'O_NOFOLLOW',0)),'rb') as f:\n"
-        "  if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):raise ValueError('MindIE metadata must be regular')\n"
+        " if not p.is_file():raise ValueError('MindIE metadata must be regular')\n"
+        " with p.open('rb') as f:\n"
         "  raw=f.read(65537)\n"
         " if len(raw)>65536:raise ValueError('MindIE metadata exceeds its byte bound')\n"
         " value=json.loads(raw)\n"
@@ -58,7 +61,7 @@ def hook_launcher_code(*, name="mindie-agent", marketplace="mindie-agent"):
         f"data=Path(os.environ.get('PLUGIN_DATA',str(home/'plugins/data'/{(name + '-' + marketplace)!r})))\n"
         "config=Path(os.environ.get('MINDIE_AGENT_CONFIG',str(Path.home()/'.config/mindie-agent/codex.json'))).expanduser().absolute()\n"
         "args=sys.argv[1:]\n"
-        "if os.path.lexists(config):\n"
+        "if config.exists():\n"
         " adapter=read(config);validation=adapter['product_validation'];version=validation['native_version']\n"
         " if not isinstance(version,str) or not re.fullmatch('[0-9A-Za-z][0-9A-Za-z.+!-]{0,79}',version):raise ValueError('MindIE release identity is invalid')\n"
         " release=data/'releases'/version;receipt=read(release/'runtime.json');entry=release/'entry.py'\n"
@@ -66,7 +69,7 @@ def hook_launcher_code(*, name="mindie-agent", marketplace="mindie-agent"):
         "else:\n"
         " if args[:1]==['stop']:raise RuntimeError('MindIE runtime is not prepared; start a new native session')\n"
         " source=Path(os.environ['PLUGIN_ROOT']);entry=source/'scripts/bootstrap.py';args=[str(data),'--source',str(source),*args]\n"
-        "if entry.is_symlink() or not entry.is_file():raise RuntimeError('MindIE installed entry is unavailable')\n"
+        "if not entry.is_file():raise RuntimeError('MindIE installed entry is unavailable')\n"
         "sys.path.insert(0,str(entry.parent));sys.argv=[str(entry),*args]\n"
         "runpy.run_path(str(entry),run_name='__main__')"
     )

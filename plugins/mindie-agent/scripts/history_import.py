@@ -1,8 +1,17 @@
 """Manual historical contribution. Never imported by Stop or maintenance.
 
-Runs in the installed release interpreter. The
-current native task is associated internally. Saved contribution
-consent is reused without changing any choice, scope, or other task's lease.
+[Role]
+Imports explicitly specified historical Codex transcript files (`--source PATH`) into the domain knowledge store and optionally triggers service publication.
+
+[Invariants]
+- Requires an active lease for the current task (`CODEX_THREAD_ID`), enabled community sharing, and `contribute` consent before opening any source file.
+- Checks each historical transcript's native `cwd` scope before reading public messages, and never activates a lease for the historical session ID.
+
+[Timeouts & Locks]
+- Runs in the foreground under the caller's `update_lock` (`bridge.py history-import`); Ctrl-C interrupts cleanly.
+
+[Side-Effect Policy]
+- Writes imported transcript drafts to `Store` and connects to the knowledge service (`service_client.connect`) when new drafts exist.
 """
 import argparse
 from contextlib import closing

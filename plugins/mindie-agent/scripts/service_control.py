@@ -1,9 +1,19 @@
 """Unified offline status and explicit shutdown; never ensure_service().
 
-``status`` is deterministic and works fully offline: it inspects only local
-files and, when a service happens to run, one short RPC — it never starts a
-service, a model or a database, and it ends with actionable recovery hints.
-``shutdown`` is the explicit operator stop for a running service.
+[Role]
+Implements deterministic offline `status` inspection and explicit operator
+`shutdown` for the local knowledge service.
+
+[Invariants]
+- `status` inspects local files and at most one short RPC if the service is
+  already running; it never starts a service, model, or database.
+- Appends actionable recovery hints for sharing state and recoverable batches.
+
+[Timeouts & Locks]
+- Uses bounded non-starting status probes via `mindie_knowledge.loop.cli`.
+
+[Side-Effect Policy]
+- `status` is strictly read-only; `shutdown` stops a running service explicitly.
 """
 
 import json

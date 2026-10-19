@@ -1,15 +1,17 @@
 """Admission operations inside the fixed installed runtime.
 
-Wrapper entrypoints (Stop hook and MCP gate) dispatch admission reads or writes
-here with the fixed release interpreter. This is the adapter's only caller of
-the shared core Admission store, so one release (interpreter + scripts + core) handles
-each operation coherently. The model never reaches this helper: the native
-session identity comes only from this process's own environment, and every
-payload is shape-checked.
+[Role]
+Executes core `Admission` lease operations (`activate`, `deactivate`, `check`, `active_lease`, `resolve`, `claim`, `finish`, `stop_capture`) inside the configured release interpreter.
 
-Always exits 0 and reports ``{"ok": false, "error": ...}`` for refused
-operations so the wrapper can distinguish a clean refusal from a broken
-helper (no output, timeout, nonzero exit all fail closed).
+[Invariants]
+- Native task identity comes strictly from `CODEX_THREAD_ID` in the environment (`native_session()`), never from model arguments.
+- Always exits 0 and emits `{"ok": true, "result": ...}` or `{"ok": false, "error": ...}` so the caller (`session_gate.py`) can distinguish a clean domain refusal from a crashed helper.
+
+[Timeouts & Locks]
+- Invoked under the caller's `update_lock` (`session_gate.py`) with a 5.0s subprocess timeout (`None` for `stop_capture` handoff).
+
+[Side-Effect Policy]
+- Mutates the SQLite admission store (`admission_path`) and, on `stop_capture`, forwards validated transcript references to `mindie_knowledge.loop.cli.capture_hook`.
 """
 
 import json

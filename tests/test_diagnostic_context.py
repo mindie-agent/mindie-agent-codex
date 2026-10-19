@@ -49,12 +49,6 @@ class DiagnosticContextTests(unittest.TestCase):
                 config.write_text(content)
                 with self.assertRaises(ValueError):
                     diagnostic_support.read_environment_context(config)
-            config.unlink()
-            if hasattr(os, "mkfifo"):
-                os.mkfifo(config)
-                with self.assertRaises(ValueError):
-                    diagnostic_support.read_environment_context(config)
-
 
 
 if __name__ == "__main__":

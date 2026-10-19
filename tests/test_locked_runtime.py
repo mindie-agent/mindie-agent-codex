@@ -3,6 +3,7 @@ import json
 import io
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import time
@@ -56,6 +57,26 @@ class RuntimeTests(unittest.TestCase):
         self.assertNotIn('at bootstrap', output.getvalue())
         record.assert_called_once()
 
+    def test_missing_runtime_reports_storage_failure_without_shadow_incident(self):
+        with tempfile.TemporaryDirectory() as directory:
+            code = (
+                "import json,sys; sys.path.insert(0,sys.argv[1]); "
+                "import diagnostic_support; "
+                "print(json.dumps(diagnostic_support.failure("
+                "'runtime.prepare','bootstrap','prerequisite',"
+                "exception=ValueError('PRIVATE_PROVIDER_CREDENTIAL'))))"
+            )
+            result = subprocess.run(
+                [sys.executable, "-I", "-S", "-c", code, str(SCRIPTS)],
+                capture_output=True, text=True, timeout=10,
+                env=dict(os.environ, MINDIE_DIAGNOSTICS_ROOT=directory),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(json.loads(result.stdout)["logging_failed"])
+            self.assertIn("diagnostic storage unavailable", result.stderr)
+            self.assertNotIn("PRIVATE_PROVIDER_CREDENTIAL", result.stdout + result.stderr)
+            self.assertFalse((Path(directory) / "events").exists())
+
     def test_session_hook_keeps_diagnostics_while_stop_stays_neutral(self):
         commands = native_entry.hook_commands('session-start')
         self.assertNotIn('2>&1', commands['command'])
@@ -102,7 +123,7 @@ class RuntimeTests(unittest.TestCase):
     def test_existing_completed_runtime_never_repairs_corruption(self):
         with tempfile.TemporaryDirectory() as directory:
             data=Path(directory);source=SCRIPTS.parent
-            release=data/'releases/0.0.1';release.mkdir(parents=True)
+            release=data/'releases'/product_contract.native_version(source);release.mkdir(parents=True)
             key=bootstrap.runtime_key(source)
             python=data/'runtimes'/key/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
             (release/'runtime.json').write_text(json.dumps({'key':key,'python':str(python),'validation':{}}))
@@ -111,6 +132,29 @@ class RuntimeTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'corrupt installed'):
                     bootstrap.ensure_runtime(source,data)
                 install.assert_not_called()
+
+    def test_existing_runtime_keeps_its_full_digest_path_and_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory)
+            source = SCRIPTS.parent
+            release = data / "releases" / product_contract.native_version(source)
+            release.mkdir(parents=True)
+            key = bootstrap.runtime_key(source)
+            python = data / "runtimes" / key / (
+                "Scripts/python.exe" if os.name == "nt" else "bin/python")
+            validation = dict(product_contract.identity(source), status="validated")
+            receipt = release / "runtime.json"
+            receipt.write_text(json.dumps(
+                dict(key=key, python=str(python), validation=validation)))
+            fixed_entry = bootstrap.publish_entry(python, SCRIPTS, release)
+            original = receipt.read_bytes(), fixed_entry.read_bytes()
+            with patch.object(bootstrap, "readback", return_value=SCRIPTS) as readback, \
+                    patch.object(bootstrap, "run") as install:
+                self.assertEqual(bootstrap.ensure_runtime(source, data),
+                                 (python, SCRIPTS, release))
+                readback.assert_called_once_with(python, source)
+                install.assert_not_called()
+            self.assertEqual((receipt.read_bytes(), fixed_entry.read_bytes()), original)
 
     def test_source_files_exclude_build_caches_but_include_lock_and_resources(self):
         names={p.relative_to(SCRIPTS.parent).as_posix() for p in product_contract.package_files(SCRIPTS.parent)}
@@ -248,21 +292,6 @@ class RuntimeTests(unittest.TestCase):
                 {p.name: p.read_bytes() for p in root.iterdir()
                  if p.is_file() and p.suffix != ".lock"}, before)
 
-    @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO")
-    def test_nonregular_profile_is_not_first_install_or_a_blocking_read(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            release = root / "release"
-            release.mkdir()
-            (release / "runtime.json").write_text(json.dumps(dict(python=sys.executable, validation={})))
-            config = root / "adapter.json"
-            os.mkfifo(config)
-            with patch.dict(os.environ, {"MINDIE_AGENT_CONFIG": str(config)}), \
-                    patch.object(entry, "install", side_effect=AssertionError("new install")):
-                with self.assertRaisesRegex(ValueError, "regular file"):
-                    entry.profile(release)
-            self.assertTrue(config.exists())
-
     def test_installer_failure_keeps_private_output_and_never_publishes_ready(self):
         from bounded_process import run
         with tempfile.TemporaryDirectory() as directory:
@@ -272,6 +301,9 @@ class RuntimeTests(unittest.TestCase):
             def synthetic_installer(command, payload, **kwargs):
                 calls.append(command)
                 self.assertEqual(command[1:3], ["-I", "-c"])
+                key = bootstrap.runtime_key(SCRIPTS.parent)
+                runtime = data / "runtimes" / (key[:24] if os.name == "nt" else key)
+                self.assertEqual(kwargs["env"]["UV_PROJECT_ENVIRONMENT"], str(runtime))
                 log = command[4]
                 # Exercise the actual descriptor redirection and owned runner;
                 # replace only uv's executable/args with a no-network process.

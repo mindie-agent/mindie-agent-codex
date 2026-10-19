@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
 """Codex plugin boundary.
 
-The Stop hook path is a no-op unless every capture precondition holds:
-an active lease and community sharing enabled. Scope is the lease's project
-root, not the event cwd. Sharing off means no capture row and no wake.
-A passing Stop commits through the shared handoff; it does not claim an
-attempt or report forwarded. The hook never parses transcripts, never
-blocks the original task and never uses exit-2 continuation.
+[Role]
+Unified operator and Hook CLI boundary (`stop`, `mcp`, `status`, `init`, `shutdown`, `activate`, `deactivate`, `config`, `sharing-*`, `reporting-*`, `history-import`, `contribution-*`).
 
-Explicit operator entries also cover unified offline status, service
-shutdown and the deterministic core contribution-recovery operations
-(contribution-inspect/-reconcile/-retry/-compact); none of them starts a
-service, a model or an uncertain write.
+[Invariants]
+- `stop` is a no-op returning `{}` unless community sharing is enabled and consent allows; it never parses transcripts directly or blocks the user task.
+- When `activate` or `sharing-enable` succeeds in creating/retaining a read-only knowledge lease but capture binding (`knowledge_attach`) fails, it honestly returns `status="degraded"` rather than masking the failure as `"active"`.
+- `offline_status()` and `init` never cold-start a service or modify state.
+
+[Timeouts & Locks]
+- Acquires shared `update_lock(config_file)` around helper invocations (`30.0s` for `bind` and `service_control.py status`, `60.0s` for `setup.py configure` and `contribution-*`).
+
+[Side-Effect Policy]
+- Read-only for `status`/`init`/`sharing-status`/`reporting-status`; explicit state mutations occur only on `activate`/`deactivate`/`config`/`sharing-enable`/`sharing-disable`/`reporting-enable`/`reporting-disable`/`history-import`.
 """
 
 import json
 import os
 from pathlib import Path
 import re
-import stat
 import sys
 import threading
 import time
@@ -202,7 +203,7 @@ def bind(lease):
                     str(Path(runtime_scripts(config)) / "runtime_call.py"),
                 ],
                 json.dumps(payload),
-                timeout=None,
+                timeout=30.0,
                 env=runtime_env(config_file),
                 allow_service=True,
             ).checked_stdout()
@@ -274,6 +275,7 @@ def _prepare_capture(result):
         # while reporting that required capture preparation did not complete.
         return dict(result, status="degraded", capture="unavailable", experience="unavailable",
                     error=dict(stage="capture-configuration", type=type(exc).__name__),
+                    warning=f"Capture configuration could not be prepared ({type(exc).__name__}); read-only knowledge lease remains active.",
                     next="Inspect the existing capture configuration; do not activate again to repair it.")
     result["sharing"] = view
     result["experience"] = (
@@ -289,6 +291,22 @@ def _prepare_capture(result):
     elif result["experience"] == "out-of-scope":
         result["next"] = "This task is outside the configured project scope; capture is not active."
     elif result["experience"] == "unavailable":
+        result["status"] = "degraded"
+        reason = (
+            result["capture"].removeprefix("unbound:")
+            if result["capture"].startswith("unbound:")
+            else view["state"]
+        )
+        result["warning"] = (
+            f"Capture binding unavailable ({reason}); read-only knowledge lease remains active."
+        )
+        result.setdefault(
+            "error",
+            dict(
+                stage="capture-bind" if result["capture"].startswith("unbound:") else "capture-configuration",
+                reason=reason,
+            ),
+        )
         result["next"] = "Capture could not be prepared; inspect status. Task binding alone does not establish capture readiness."
     return result
 
@@ -392,17 +410,9 @@ def offline_status():
         stage = "update_lock"
         with update_lock(config_file):
             stage = "config_read"
-            # A corrupt config path may be a FIFO/device. Do not wait for a
-            # writer before the bounded helper is even started.
-            fd = os.open(config_file, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
-            try:
-                if not stat.S_ISREG(os.fstat(fd).st_mode):
-                    raise ValueError("adapter config must be a regular file")
-                with os.fdopen(fd, "rb", closefd=False) as stream:
-                    raw = stream.read()
-                config = json.loads(raw)
-            finally:
-                os.close(fd)
+            if not config_file.is_file():
+                raise ValueError("adapter config must be a regular file")
+            config = json.loads(config_file.read_text(encoding="utf-8"))
             stage = "config_validate"
             if not isinstance(config, dict):
                 raise ValueError("adapter config must be an object")
@@ -414,7 +424,7 @@ def offline_status():
             stage = "helper_run"
             output = run(
                 [config["python"], str(Path(runtime_scripts(config)) / "service_control.py"), "status"],
-                "", timeout=None, max_output=32768, env=runtime_env(config_file),
+                "", timeout=30.0, max_output=32768, env=runtime_env(config_file),
             ).checked_stdout()
             stage = "helper_response"
             payload = json.loads(output)
@@ -605,7 +615,7 @@ def contribution(operation, batch_id):
                 batch_id,
             ],
             "",
-            timeout=None,
+            timeout=60.0,
             max_output=65536,
             env=runtime_env(config_file),
         ).checked_stdout()
@@ -674,7 +684,7 @@ def configure(argv):
                 *argv,
             ],
             "",
-            timeout=None,
+            timeout=60.0,
             max_output=65536,
             env=runtime_env(config_file),
         ).checked_stdout()
@@ -742,15 +752,9 @@ def _reporting_unavailable(stage, exc):
 def _adapter_python(config_file):
     """Read the selected interpreter under the profile lock, then release it."""
     with update_lock(config_file):
-        fd = os.open(config_file, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
-        try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
-                raise ValueError("adapter config must be a regular file")
-            with os.fdopen(fd, "rb", closefd=False) as stream:
-                raw = stream.read()
-        finally:
-            os.close(fd)
-        config = json.loads(raw)
+        if not config_file.is_file():
+            raise ValueError("adapter config must be a regular file")
+        config = json.loads(config_file.read_text(encoding="utf-8"))
         if not isinstance(config, dict):
             raise ValueError("adapter config must be an object")
         python = _bounded_path(config.get("python"), "python")
@@ -796,7 +800,7 @@ def reporting_operation(operation):
             output = run(
                 [python, "-m", "mindie_diagnostics.cli", "reporting", "status"],
                 "",
-                timeout=None,
+                timeout=30.0,
                 max_output=65536,
                 allowed_returncodes=(0, 1),
                 env=runtime_env(config_file),
@@ -833,7 +837,7 @@ def reporting_operation(operation):
                     str(Path(scripts)),
                 ],
                 "",
-                timeout=None,
+                timeout=30.0,
                 max_output=65536,
                 allowed_returncodes=(0, 1),
                 env=runtime_env(config_file),
@@ -869,7 +873,7 @@ def reporting_operation(operation):
         output = run(
             [python, "-m", "mindie_diagnostics.cli", "reporting", verb],
             "",
-            timeout=None,
+            timeout=60.0,
             max_output=65536,
             allowed_returncodes=(0, 1),
             env=runtime_env(config_file),
@@ -1020,7 +1024,7 @@ def main():
                 run(
                     control,
                     "",
-                    timeout=None,
+                    timeout=60.0,
                     max_output=32768,
                     env=runtime_env(config_file),
                 ).checked_stdout(),

@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 """Configure only MindIE-owned files; install/trust the plugin through Codex.
 
-Plugin activation and community sharing are separate: activation/config works
-without any sharing setup, and community settings (repository, scope, account,
-visibility) are recorded only when explicitly selected via --community-*.
-Community sharing defaults OFF; after installation it is configured with the
-supported `configure` operation (which never refuses merely because the
-engine configuration already exists) and toggled with
-bridge.py sharing-enable / sharing-disable / sharing-status.
+[Role]
+Writes and updates MindIE-owned adapter, engine, and community sharing
+configuration files during installation and `configure` operations.
 
-The engine configuration records the explicit neutral admission database
-(`admission_path`) and the adapter-owned transcript parser
-(`transcript_adapter`, the installed codex_transcript.py exporting
-FileIdentity/identify/read_material); the adapter configuration additionally
-records the fixed installed scripts directory (`runtime_scripts`).
+[Invariants]
+- Plugin activation and community sharing are separate; community sharing
+  defaults OFF and is only enabled when explicitly configured.
+- `configure` never refuses merely because the engine configuration already exists.
+- Records neutral `admission_path`, `transcript_adapter` (`codex_transcript.py`),
+  and `runtime_scripts` in the MindIE configuration files.
+
+[Timeouts & Locks]
+- Acquires exclusive `update_lock` when mutating profile configuration files.
+
+[Side-Effect Policy]
+- Modifies only MindIE-owned configuration files; never touches unrelated Codex
+  plugins or global user settings.
 """
 
 import argparse

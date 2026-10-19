@@ -124,6 +124,8 @@ def stop_owned_knowledge_service(engine_config, *, timeout=8):
     # to stop; an absent endpoint while startup is pending is not cleanup.
     config = config_at(engine_config)
     domain = filesystem_path(config["root"]) / config["domain"]
+    if not domain.exists():
+        return
     deadline = time.monotonic() + timeout
     # A service can still be creating its layout. Observe its real startup
     # locks before reading layout; a missing/corrupt layout is never ignored.
@@ -132,7 +134,7 @@ def stop_owned_knowledge_service(engine_config, *, timeout=8):
         while lock.exists() and lock_held(lock) is not False:
             if time.monotonic() >= deadline:
                 raise RuntimeError("owned test startup lock has not been released: " + name)
-            time.sleep(.05)
+            time.sleep(.02)
     wake_path = state_root(config["root"], config["domain"]) / "wake.json"
     try:
         wake_pid = json.loads(wake_path.read_text(encoding="utf-8")).get("wake_pid")
@@ -141,7 +143,7 @@ def stop_owned_knowledge_service(engine_config, *, timeout=8):
     while type(wake_pid) is int and _process_running(wake_pid):
         if time.monotonic() >= deadline:
             raise RuntimeError("owned test startup has not completed")
-        time.sleep(.05)
+        time.sleep(.02)
     consumer = domain / "consumer.lock"
     if not consumer.exists() or lock_held(consumer) is False:
         return
@@ -159,7 +161,7 @@ def stop_owned_knowledge_service(engine_config, *, timeout=8):
         # the RPC acknowledgement alone does not permit deleting SQLite files.
         if lock_held(consumer) is False:
             return
-        time.sleep(min(.05, max(0, deadline - time.monotonic())))
+        time.sleep(min(.02, max(0, deadline - time.monotonic())))
     raise RuntimeError("owned test service exit unconfirmed; cleanup is not complete")
 
 
@@ -241,23 +243,34 @@ def _close_test_diagnostic_writers(temporary):
                 continue
 
 
+_ARCHIVE_CACHE_DIR = tempfile.TemporaryDirectory(prefix="mindie-archive-tests-")
+_ARCHIVE_CACHE = {}
+
+
 def extract_git_archive(repository, revision, destination, *members):
     """Extract an exact committed fixture without requiring a `tar` binary."""
     repository = Path(repository)
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
-    archive = subprocess.run(
-        ["git", "-C", str(repository), "archive", revision, *members],
-        check=True,
-        capture_output=True,
-    ).stdout
-    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as bundle:
-        base = destination.resolve()
-        for member in bundle.getmembers():
-            target = (destination / member.name).resolve()
-            if target != base and base not in target.parents:
-                raise ValueError("fixture archive contains an unsafe path")
-        bundle.extractall(destination)
+    key = (str(repository.resolve()), revision, tuple(members))
+    cached = _ARCHIVE_CACHE.get(key)
+    if cached is None:
+        cached = Path(_ARCHIVE_CACHE_DIR.name) / str(len(_ARCHIVE_CACHE))
+        cached.mkdir(parents=True, exist_ok=True)
+        archive = subprocess.run(
+            ["git", "-C", str(repository), "archive", revision, *members],
+            check=True,
+            capture_output=True,
+        ).stdout
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as bundle:
+            base = cached.resolve()
+            for member in bundle.getmembers():
+                target = (cached / member.name).resolve()
+                if target != base and base not in target.parents:
+                    raise ValueError("fixture archive contains an unsafe path")
+            bundle.extractall(cached)
+        _ARCHIVE_CACHE[key] = cached
+    shutil.copytree(cached, destination, dirs_exist_ok=True)
 
 
 def copy_runtime_scripts(destination):

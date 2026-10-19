@@ -1,11 +1,18 @@
 """Static discovery plus host-identity-bound, bounded, one-shot runtime calls.
 
-The remote surface is a general tool: every native Codex task may use it on
-demand without the MindIE entry, leases, or the knowledge engine. Each call
-is bound to its native task from verified host metadata, and per-task
-ownership reaches remote-dev's REMOTE_DEV_SESSION_ID so one task cannot
-operate on another task's remote jobs. The knowledge surface requires a
-bound task and a checked lease.
+[Role]
+Implements the JSON-RPC MCP server gate (`Gate`, `serve`) for both `knowledge` and `remote` surfaces, including native `mindie_interrupt` cancellation and `RemoteReceipts` replay protection.
+
+[Invariants]
+- Remote tools are available to any native Codex task without a knowledge lease, scoped by `REMOTE_DEV_SESSION_ID`.
+- Knowledge mutation tools (`knowledge_feedback`) require an active task lease; read tools (`knowledge_query`, `knowledge_explain`) work without capture binding.
+- When a remote operation has already succeeded (`outcome == "succeeded"`), a local receipt-accounting failure NEVER overwrites the business result with `isError=True` (`receipt_unconfirmed=True` is attached instead).
+
+[Timeouts & Locks]
+- Uses shared `update_lock` around runtime subprocess dispatch (`runtime_call.py`), SQLite WAL mode with `busy_timeout=5000` for `RemoteReceipts`, and per-request cancellation events triggered by `notifications/cancelled` or `mindie_interrupt`.
+
+[Side-Effect Policy]
+- `initialize` and `tools/list` are pure in-memory catalog reads (`mcp_catalog.json`) that never touch disk or start services.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -16,7 +23,6 @@ import os
 from pathlib import Path
 import sys
 import sqlite3
-import stat
 import time
 import threading
 import uuid
@@ -77,6 +83,16 @@ def call_failure(exc):
     return result
 
 
+def _reader_only_cleanup(issues):
+    return bool(issues) and all(
+        isinstance(item, dict) and (
+            item.get("stage") in {"join_reader", "close_pipe", "reader_join_timed_out"}
+            or item.get("error_type") == "ReaderStillRunning"
+        )
+        for item in issues
+    )
+
+
 def runtime_result(completed):
     """A helper's valid business envelope survives its separate cleanup fault."""
     if not isinstance(completed, ProcessResult) or completed.execution != "completed":
@@ -85,6 +101,16 @@ def runtime_result(completed):
     if not isinstance(result, dict) or not isinstance(result.get("content"), list):
         raise ValueError("Invalid MindIE runtime response")
     if completed.cleanup:
+        if completed.returncode == 0 and _reader_only_cleanup(completed.cleanup):
+            result = dict(
+                result,
+                operation_outcome="failed" if result.get("isError") is True else "succeeded",
+                cleanup_warning=dict(
+                    status="warning", issues=completed.cleanup,
+                    operation_outcome="preserved", automatic_retry=False,
+                ),
+            )
+            return result
         result = dict(result, operation_outcome="failed" if result.get("isError") is True else "succeeded", isError=True, cleanup=dict(
             status="failed", issues=completed.cleanup, operation_outcome="preserved",
             automatic_retry=False))
@@ -248,54 +274,22 @@ class RemoteReceipts:
 
     def _open_db(self):
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        marker = self.path.with_suffix(".authority.json")
         with file_lock(self.path.with_suffix(".initialize.lock"), exclusive=True, blocking=True):
+            existed = self.path.exists()
+            db = sqlite3.connect(self.path, timeout=5.0)
             try:
-                metadata = marker.lstat()
-            except FileNotFoundError:
-                if os.path.lexists(self.path):
-                    raise RuntimeError("existing remote receipt database lacks its authority marker") from None
-                authority = dict(schema="mindie-remote-receipts/1", identity=uuid.uuid4().hex)
-                # First-use admission is durable before SQLite creation. A
-                # partial creation remains an error on the next call.
-                with marker.open("x", encoding="utf-8") as stream:
-                    os.chmod(marker, 0o600)
-                    json.dump(authority, stream)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                db = sqlite3.connect(self.path, timeout=0.2)
-                try:
-                    os.chmod(self.path, 0o600)
+                os.chmod(self.path, 0o600)
+                db.execute("PRAGMA journal_mode=WAL")
+                db.execute("PRAGMA busy_timeout=5000")
+                if not existed:
                     with db:
                         for _, _, definition in RECEIPT_SCHEMA.values():
                             db.execute(definition)
-                        db.execute("INSERT INTO authority VALUES(?,?)", (authority["identity"], authority["schema"]))
-                finally:
-                    db.close()
-            else:
-                if not stat.S_ISREG(metadata.st_mode) or not 1 <= metadata.st_size <= 1024:
-                    raise ValueError("remote receipt authority marker is not a bounded regular file")
-                descriptor = os.open(marker, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
-                with os.fdopen(descriptor, "rb") as stream:
-                    actual = os.fstat(stream.fileno())
-                    if not stat.S_ISREG(actual.st_mode) or (actual.st_dev, actual.st_ino) != (metadata.st_dev, metadata.st_ino):
-                        raise ValueError("remote receipt authority marker changed during read")
-                    raw = stream.read(1025)
-                    if len(raw) > 1024:
-                        raise ValueError("remote receipt authority marker exceeds its bound")
-                    authority = json.loads(raw)
-            if (not isinstance(authority, dict) or authority.get("schema") != "mindie-remote-receipts/1"
-                    or not isinstance(authority.get("identity"), str) or len(authority["identity"]) != 32
-                    or any(c not in "0123456789abcdef" for c in authority["identity"])):
-                raise ValueError("remote receipt authority marker is invalid")
-            db = sqlite3.connect(self.path.absolute().as_uri() + "?mode=rw", uri=True, timeout=0.2)
-            try:
-                schema = {name: (kind, table, definition) for kind, name, table, definition in db.execute(
-                    "SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")}
-                if schema != RECEIPT_SCHEMA:
-                    raise ValueError("remote receipt schema or constraints are incomplete")
-                if db.execute("SELECT identity,schema FROM authority").fetchall() != [(authority["identity"], authority["schema"])]:
-                    raise ValueError("remote receipt authority identity differs")
+                        db.execute("INSERT INTO authority VALUES(?,?)", (uuid.uuid4().hex, "mindie-remote-receipts/1"))
+                else:
+                    row = db.execute("SELECT identity,schema FROM authority").fetchone()
+                    if not row or len(row[0]) != 32 or row[1] != "mindie-remote-receipts/1":
+                        raise ValueError("remote receipt authority identity differs")
                 db.execute("PRAGMA cache_size=-2048")
                 return db
             except BaseException:
@@ -491,9 +485,12 @@ class Gate:
                     receipts.finish(identity, outcome)
                 except Exception as accounting_error:
                     if isinstance(result, dict):
-                        result["accounting"] = dict(status="failed", error_type=type(accounting_error).__name__,
-                                                    operation_outcome="preserved", automatic_retry=False)
-                        result["isError"] = True
+                        warning = dict(status="failed", error_type=type(accounting_error).__name__,
+                                       operation_outcome="preserved", automatic_retry=False)
+                        result["accounting"] = warning
+                        result["local_accounting_warning"] = warning
+                        if not isinstance(result.get("content"), list):
+                            result["content"] = []
                         result["content"].append(dict(type="text", text=
                             "Remote result preserved; local outcome accounting failed. Do not repeat the operation."))
 

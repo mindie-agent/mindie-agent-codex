@@ -1,4 +1,17 @@
-"""Local retention and consent-gated handoff; diagnostics owns its own service."""
+"""Local retention and consent-gated handoff; diagnostics owns its own service.
+
+[Role]
+Runs `python -m mindie_diagnostics.cli reporting maintain` (adding `--update-running` when saved consent is `enabled`) during `SessionStart` maintenance.
+
+[Invariants]
+- Propagates subprocess cleanup issues or non-zero exit status as structured errors rather than masking them.
+
+[Timeouts & Locks]
+- Executes under `bounded_process.run` with clean `runtime_env(config)`.
+
+[Side-Effect Policy]
+- Prunes expired local diagnostic events and, when reporting is enabled, refreshes the reporter daemon.
+"""
 import json
 import sys
 

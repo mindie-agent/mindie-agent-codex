@@ -1,22 +1,23 @@
 """Community sharing settings: separate from plugin activation, default OFF.
 
-One shared local JSON file (schema mindie-community-config/1) is read by both
-the adapter and the knowledge core. Plugin activation never authorizes
-capture by itself; missing, malformed or disabled community state fails
-closed for capture but never blocks retrieval, feedback or updates. Only
-MindIE-owned files are ever written here; no unrelated plugin, scope or
-global configuration is touched. Validated extension keys owned by sibling
-components (publishing/transaction/bot/transport, private config_path, ...)
-pass through every adapter mutation byte-identical; the framework-owned
-``consent_config`` extension points the core gate at the profile consent
-authority and is wired at install/upgrade/entry boundaries.
+[Role]
+Reads, validates, and updates the `mindie-community-config/1` JSON file and
+consent authority shared between the Codex adapter and knowledge core.
 
-The designated profile community file is the only authority. Unsupported
-development layouts are rejected without adoption, copying or path selection.
+[Invariants]
+- Plugin activation never authorizes capture by itself; missing, malformed, or
+  disabled community state fails closed for capture without blocking retrieval,
+  feedback, or updates.
+- Preserves sibling extension keys (`publishing`, `transaction`, `bot`,
+  `transport`, `consent_config`, etc.) byte-identical across mutations.
 
-Writes go through the core ``normalize`` via the configured interpreter so
-this adapter does not keep a second copy of the idle/root ranges. The Stop
-hook uses a cheap structural precheck only.
+[Timeouts & Locks]
+- Uses `bounded_process.run` when delegating normalization to the configured
+  runtime interpreter.
+
+[Side-Effect Policy]
+- Writes only to the designated MindIE community config and consent files via
+  atomic temp-file replacement.
 """
 
 import json

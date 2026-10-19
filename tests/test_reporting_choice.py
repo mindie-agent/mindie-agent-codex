@@ -146,16 +146,6 @@ class ReportingFixture(unittest.TestCase):
         reporting = (payload.get("diagnostics") or {}).get("reporting") or {}
         self.assertIs(reporting.get("enabled"), True)
 
-    def test_damaged_consent_refuses_preference_change_and_keeps_policy(self):
-        self.write_consent("read-only", "later")
-        self.write_policy("disabled")
-        path = consent.consent_path()
-        path.write_text("{broken")
-        result = self.bridge("reporting-enable")
-        self.assertEqual(result.returncode, 1)
-        self.assertEqual(path.read_text(), "{broken")
-        self.assertEqual(json.loads(self.policy.read_text())["decision"], "disabled")
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,7 @@
 """Focused checks for the packaging entry: bounded dependency probe before writes."""
 
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -7,59 +9,106 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from tests.process_fixtures import run_owned_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+import capture_config
+import product_contract
+import release_metadata
 import setup as setup_script
+import sharing
+
+
+def _in_process_normalize(settings, python, config_file=None, *, previous=None):
+    from mindie_knowledge.loop.settings import normalize, transition
+    try:
+        return normalize(settings) if previous is None else transition(previous, settings)
+    except ValueError as exc:
+        raise sharing.SharingError("community settings rejected by core normalize: " + str(exc)[:200])
 
 
 def run_setup(python, *args, real_probe=False, real_store=False, env=None):
     # Config-write cases isolate the product verification boundary. Candidate
     # ownership, real subprocess failures and receipt identities have their
     # own tests; no config unit case downloads publication history.
-    with tempfile.TemporaryDirectory() as watch:
-        stage = Path(watch) / "stage"
-        helper = (
-            "import sys\nfrom pathlib import Path\n"
-            "sys.path.insert(0,sys.argv.pop(1))\n"
-            "stage=Path(sys.argv.pop(1));stage.write_text('import_setup')\n"
-            "import setup,product_contract,release_metadata,capture_config\n"
-            "def observed(name,operation):\n"
-            " def invoke(*args,**kwargs):\n"
-            "  stage.write_text(name)\n"
-            "  return operation(*args,**kwargs)\n"
-            " return invoke\n")
-        if not real_probe:
-            helper += (
-                "release_metadata.require_harness=lambda source:'0.153.4'\n"
-                "setup.probe_runtime=lambda python:dict(product_contract.identity("
-                "product_contract.source_root(setup.SCRIPTS)),status='validated')\n")
+    if real_probe:
+        with tempfile.TemporaryDirectory() as watch:
+            stage = Path(watch) / "stage"
+            helper = (
+                "import sys\nfrom pathlib import Path\n"
+                "sys.path.insert(0,sys.argv.pop(1))\n"
+                "stage=Path(sys.argv.pop(1));stage.write_text('import_setup')\n"
+                "import setup\n"
+                "stage.write_text('setup_main');setup.main()\n"
+                "stage.write_text('completed')\n")
+            return run_owned_fixture(
+                [sys.executable, "-c", helper, str(SCRIPTS), str(stage),
+                 "--knowledge-python", str(python), *map(str, args)],
+                timeout=30, env=env,
+                diagnose=lambda: dict(stage=stage.read_text() if stage.exists() else "python_startup",
+                                      real_probe=real_probe, real_store=real_store),
+            )
+    argv = ["setup.py", "--knowledge-python", str(python), *map(str, args)]
+    out, err = io.StringIO(), io.StringIO()
+    code = 0
+
+    def validate_store_config(_python, _scripts, config):
+        from mindie_knowledge.loop.service_context import validate
+        from mindie_knowledge.git_layout import validate_config_feed_layout
+        validate(config)
+        validate_config_feed_layout(config)
+
+    with contextlib.ExitStack() as stack:
+        if env is not None:
+            stack.enter_context(patch.dict(os.environ, env, clear=True))
+        stack.enter_context(patch.object(sys, "argv", argv))
+        stack.enter_context(patch.object(release_metadata, "require_harness", lambda source: "0.153.4"))
+        stack.enter_context(patch.object(
+            setup_script, "probe_runtime",
+            lambda _py: dict(product_contract.identity(product_contract.source_root(setup_script.SCRIPTS)), status="validated"),
+        ))
         if not real_store:
-            # Config/consent tests exercise real schema checks, but storage
-            # initialization belongs to the two explicit integration cases.
-            helper += (
-                "def validate_store_config(python,scripts,config):\n"
-                " from mindie_knowledge.loop.service_context import validate\n"
-                " from mindie_knowledge.git_layout import validate_config_feed_layout\n"
-                " validate(config);validate_config_feed_layout(config)\n"
-                "capture_config.prepare_store=validate_store_config\n")
-        helper += (
-            "capture_config.prepare=observed('prepare_capture',capture_config.prepare)\n"
-            "capture_config.prepare_store=observed('prepare_store',capture_config.prepare_store)\n"
-            "setup.probe_runtime=observed('probe_runtime',setup.probe_runtime)\n"
-            "setup.write_private=observed('publish_config',setup.write_private)\n"
-            "stage.write_text('setup_main');setup.main()\n"
-            "stage.write_text('completed')\n")
-        return run_owned_fixture(
-            [sys.executable, "-c", helper, str(SCRIPTS), str(stage),
-             "--knowledge-python", str(python), *map(str, args)],
-            timeout=30, env=env,
-            diagnose=lambda: dict(stage=stage.read_text() if stage.exists() else "python_startup",
-                                  real_probe=real_probe, real_store=real_store),
-        )
+            stack.enter_context(patch.object(capture_config, "prepare_store", validate_store_config))
+        stack.enter_context(patch.object(sharing, "normalize_with_runtime", _in_process_normalize))
+        stack.enter_context(contextlib.redirect_stdout(out))
+        stack.enter_context(contextlib.redirect_stderr(err))
+        try:
+            setup_script.main()
+        except SystemExit as exc:
+            if isinstance(exc.code, int):
+                code = exc.code
+            else:
+                if exc.code:
+                    err.write(str(exc.code) + "\n")
+                code = 1
+        except Exception as exc:
+            err.write(f"{type(exc).__name__}: {exc}\n")
+            code = 1
+    return subprocess.CompletedProcess(argv, code, out.getvalue(), err.getvalue())
+
+
+def run_configure(*args):
+    argv = ["setup.py", "configure", *map(str, args)]
+    out, err = io.StringIO(), io.StringIO()
+    code = 0
+    with (patch.object(sys, "argv", argv),
+          patch.object(sharing, "normalize_with_runtime", _in_process_normalize),
+          contextlib.redirect_stdout(out),
+          contextlib.redirect_stderr(err)):
+        try:
+            setup_script.main()
+        except SystemExit as exc:
+            if isinstance(exc.code, int):
+                code = exc.code
+            else:
+                if exc.code:
+                    err.write(str(exc.code) + "\n")
+                code = 1
+    return subprocess.CompletedProcess(argv, code, out.getvalue(), err.getvalue())
 
 
 class SetupTests(unittest.TestCase):
@@ -298,23 +347,11 @@ class SetupTests(unittest.TestCase):
             installed_bytes = config.read_bytes(), engine.read_bytes()
             scope = base / "scope"
             scope.mkdir()
-            configured = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPTS / "setup.py"),
-                    "configure",
-                    "--config",
-                    str(config),
-                    "--community-repository",
-                    "mindie-agent/knowledge",
-                    "--community-project-root",
-                    str(scope),
-                    "--community-visibility",
-                    "public",
-                ],
-                text=True,
-                capture_output=True,
-                timeout=30,
+            configured = run_configure(
+                "--config", str(config),
+                "--community-repository", "mindie-agent/knowledge",
+                "--community-project-root", str(scope),
+                "--community-visibility", "public",
             )
             self.assertEqual(configured.returncode, 0, configured.stderr)
             settings = json.loads(community.read_text())
@@ -347,11 +384,10 @@ class SetupTests(unittest.TestCase):
                 with self.subTest(invalid=invalid[:20]):
                     engine.write_bytes(invalid)
                     before = {path.name: path.read_bytes() for path in base.iterdir() if path.is_file()}
-                    result = subprocess.run([
-                        sys.executable, str(SCRIPTS / "setup.py"), "configure",
+                    result = run_configure(
                         "--config", str(config), "--community-repository", "owner/explicit",
                         "--community-project-root", str(scope), "--community-visibility", "public",
-                    ], text=True, capture_output=True, timeout=30)
+                    )
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("engine configuration is unavailable or unsupported", result.stderr)
                     self.assertEqual(
@@ -373,19 +409,11 @@ class SetupTests(unittest.TestCase):
             community = config.with_name("mindie-community.json")
             community.write_text("{broken-community")
             before = community.read_bytes()
-            configured = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPTS / "setup.py"),
-                    "configure",
-                    "--config", str(config),
-                    "--community-repository", "owner/explicit",
-                    "--community-project-root", str(scope),
-                    "--community-visibility", "public",
-                ],
-                text=True,
-                capture_output=True,
-                timeout=30,
+            configured = run_configure(
+                "--config", str(config),
+                "--community-repository", "owner/explicit",
+                "--community-project-root", str(scope),
+                "--community-visibility", "public",
             )
             self.assertNotEqual(configured.returncode, 0)
             self.assertIn("damaged", configured.stderr)
@@ -397,19 +425,11 @@ class SetupTests(unittest.TestCase):
                      project_roots="not-a-list", idle_seconds=300,
                      sibling_key={"owned": "extension"})
             ))
-            repaired = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPTS / "setup.py"),
-                    "configure",
-                    "--config", str(config),
-                    "--community-repository", "owner/explicit",
-                    "--community-project-root", str(scope),
-                    "--community-visibility", "public",
-                ],
-                text=True,
-                capture_output=True,
-                timeout=30,
+            repaired = run_configure(
+                "--config", str(config),
+                "--community-repository", "owner/explicit",
+                "--community-project-root", str(scope),
+                "--community-visibility", "public",
             )
             self.assertEqual(repaired.returncode, 0, repaired.stderr)
             settings = json.loads(community.read_text())
@@ -482,11 +502,11 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(installed.returncode, 0, installed.stderr)
             declaration, _ = setup_script.product_contract.product(ROOT)
             def configure(repository):
-                result = subprocess.run([sys.executable, str(SCRIPTS / "setup.py"), "configure",
-                                         "--config", str(config), "--community-repository", repository,
-                                         "--community-project-root", str(scope),
-                                         "--community-visibility", "public"],
-                                        text=True, capture_output=True, timeout=30)
+                result = run_configure(
+                    "--config", str(config), "--community-repository", repository,
+                    "--community-project-root", str(scope),
+                    "--community-visibility", "public",
+                )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 return json.loads(config.with_name("mindie-community.json").read_text())
             selected = configure(declaration["publication"]["repository"])

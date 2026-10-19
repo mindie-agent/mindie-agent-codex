@@ -73,7 +73,8 @@ class RuntimeProbeTests(unittest.TestCase):
 
     def test_native_manifest_must_match_packaged_version(self):
         manifest = self.scripts.parent / '.codex-plugin/plugin.json'
-        manifest.write_text(json.dumps(dict(version='0.0.2')))
+        version = product_contract.native_version(self.scripts.parent)
+        manifest.write_text(json.dumps(dict(version=f'{version}.1')))
         with self.assertRaisesRegex(ValueError, 'versions differ'):
             candidate_validate.release_check(self.scripts.parent)
 

@@ -1,4 +1,18 @@
-"""Project one eligible Release into Codex's native installer, then activate it."""
+"""Project one eligible Release into Codex's native installer, then activate it.
+
+[Role]
+Validates compatibility with the installed `codex --version` (`harness_version`), projects a single-candidate local marketplace catalog (`catalog`), runs `codex plugin install` (`_native_install`), preserves approved hook trust (`NativeHooks`), and activates the new release (`release_activation.activate`).
+
+[Invariants]
+- Never installs a release whose `harness-compatibility.json` does not cover the actual host `codex --version`.
+- Carries forward only previously user-approved hook trust entries via compare-and-swap (`NativeHooks`).
+
+[Timeouts & Locks]
+- Enforces `timeout=15.0s` for `codex --version` and `timeout=300.0s` for `codex plugin install`.
+
+[Side-Effect Policy]
+- Updates the local marketplace catalog, native Codex plugin cache/config, and MindIE release binding only after candidate validation succeeds.
+"""
 from __future__ import annotations
 
 import argparse
@@ -12,7 +26,6 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bounded_process import ProcessResult, run
-from diagnostic_fallback import _private_mkdir
 from native_context import capture, environment
 from product_contract import native_version, read_json
 from release_activation import _atomic
@@ -139,7 +152,7 @@ def _native_install(native, env, root, metadata, before):
     pending_path = root / "native.json"
     catalog_root = root / "catalog"
     target = catalog_root / ".agents/plugins/marketplace.json"
-    _private_mkdir(target.parent, parents=True, exist_ok=True)
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if before is not None:
         source = before.get("marketplaceSource")
         if source not in (
@@ -288,7 +301,7 @@ def check(config, *, first_install=False):
 
     config = Path(config).expanduser().absolute()
     root = directory(config)
-    _private_mkdir(root, parents=True, exist_ok=True)
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
         with file_lock(root / "check.lock", exclusive=True):
             if not first_install and not due(config):

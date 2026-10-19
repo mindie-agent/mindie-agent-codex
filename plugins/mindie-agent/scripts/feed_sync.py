@@ -1,4 +1,17 @@
-"""Session-start and explicit feed refresh; shared Feed owns intervals/backoff."""
+"""Session-start and explicit feed refresh; shared Feed owns intervals/backoff.
+
+[Role]
+Runs `mindie_knowledge.loop.cli sync` for the configured engine and folds per-feed statuses into a single receipt (`synced`, `pending`, `partial`, or `failed`).
+
+[Invariants]
+- `busy`/`deferred` feeds fold to `status="pending"` (exit 0); `unavailable`/`invalid`/`exhausted` fold to `status="failed"` or `"partial"` (exit 1) and record a diagnostic incident.
+
+[Timeouts & Locks]
+- Runs inside the caller's session-start/sync flow via `bounded_process.run`.
+
+[Side-Effect Policy]
+- Fetches due knowledge feeds into the local store and records diagnostic incidents on feed sync failures.
+"""
 import json
 from pathlib import Path
 import sys
@@ -93,11 +106,11 @@ def _feed_error_summary(rows):
 
 
 
-def sync(config):
+def sync(config, *, timeout: float | None = 120.0):
     import sys
     from bounded_process import run
     result = run([sys.executable, '-m', 'mindie_knowledge.loop.cli', 'sync',
-                  '--config', str(config)], '', timeout=None)
+                  '--config', str(config)], '', timeout=timeout)
     status, rows, detail = fold_feed_results(result.stdout)
     if result.cleanup:
         return dict(status='degraded', feeds=rows, detail=detail,

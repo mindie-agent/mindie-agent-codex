@@ -1,8 +1,20 @@
 """Stdlib-only Windows process-tree ownership for bounded subprocesses.
 
-The process starts suspended so it cannot create descendants before it joins
-the Job. Closing the Job kills every owned process, even when its leader has
-already exited and a descendant still holds an inherited pipe.
+[Role]
+Provides Windows Job Object process-tree isolation (`spawn`, `terminate`,
+`exec_or_wait`) using only the Python standard library (`ctypes`).
+
+[Invariants]
+- Starts child processes suspended (`CREATE_SUSPENDED`) and attaches them to a
+  kill-on-close Job Object before resuming, preventing orphan descendants from
+  holding inherited pipes.
+
+[Timeouts & Locks]
+- `terminate` closes the Job handle immediately, killing the entire descendant
+  process tree without waiting.
+
+[Side-Effect Policy]
+- OS-level process management only; no filesystem side effects.
 """
 
 import ctypes

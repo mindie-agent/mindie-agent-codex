@@ -1,4 +1,18 @@
-"""Prepare a complete runtime binding, then publish it after exact idle handoff."""
+"""Prepare a complete runtime binding, then publish it after exact idle handoff.
+
+[Role]
+Activates a newly validated plugin release (`activate`) by preparing the target store layout, acquiring an exclusive `update_lock`, stopping any idle knowledge service (`idle_stop`), and atomically updating `engine.json` and `codex.json`.
+
+[Invariants]
+- Never overwrites an active installation if `update_lock` is busy (`status="deferred_busy"`) or if the knowledge service is actively serving a task.
+- Restores the previous `engine.json` if `codex.json` publication fails (`_publish_pair`).
+
+[Timeouts & Locks]
+- Uses non-blocking `update_lock(config, exclusive=True, blocking=False)` for atomic handoff and `timeout=30.0s` for `idle-stop`.
+
+[Side-Effect Policy]
+- Atomically replaces `engine.json` and `codex.json` via `os.replace()` and removes obsolete runtime directories after activation.
+"""
 from __future__ import annotations
 
 import hashlib

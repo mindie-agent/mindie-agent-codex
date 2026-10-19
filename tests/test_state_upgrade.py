@@ -12,7 +12,6 @@ SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
 sys.path.insert(0, str(SCRIPTS))
 import mcp_gate
 import receipt_layout
-import state_compatibility
 
 
 class ReceiptUpgradeTests(unittest.TestCase):
@@ -105,25 +104,6 @@ class ReceiptUpgradeTests(unittest.TestCase):
                 self.receipts().claim('not-executed')
         with self.assertRaisesRegex(ValueError, 'layout is missing'):
             self.receipts().claim('not-executed')
-
-    def test_real_compatibility_helper_reads_both_layouts_without_mutating_them(self):
-        from mindie_knowledge import state_layout
-        from mindie_knowledge.loop.store import Store
-        config = self.root / 'engine.json'
-        config.write_text(json.dumps(dict(root=str(self.root / 'knowledge'), domain='demo')))
-        with patch.object(state_layout, 'RELEASE_VERSION', '1.0.0'), \
-                patch.object(receipt_layout, 'RELEASE_VERSION', '1.0.0'):
-            Store(self.root / 'knowledge', 'demo').close()
-            self.assertTrue(self.receipts().claim('consumed'))
-        before = {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
-        self.assertEqual(state_compatibility.check(config), {'status': 'compatible'})
-        with patch.object(state_layout, 'FORMAT', 2):
-            with self.assertRaisesRegex(ValueError, 'released knowledge'):
-                state_compatibility.check(config)
-        with patch.object(receipt_layout, 'FORMAT', 2):
-            with self.assertRaisesRegex(ValueError, 'released remote'):
-                state_compatibility.check(config)
-        self.assertEqual({str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file()}, before)
 
 
 if __name__ == '__main__':

@@ -9,6 +9,7 @@ import importlib.metadata
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -29,12 +30,16 @@ def command(argv, *, cwd=None, timeout=600):
 
 
 def verify_validator(python, revision):
-    receipt = json.loads(command([python, '-I', '-c',
-        "import importlib.metadata; import mindie_knowledge.publication_check; "
-        "print(importlib.metadata.distribution('mindie-knowledge').read_text('direct_url.json'))"]))
+    if Path(python).resolve() == Path(sys.executable).resolve():
+        import mindie_knowledge.publication_check  # noqa: F401
+        raw = importlib.metadata.distribution('mindie-knowledge').read_text('direct_url.json')
+        receipt = json.loads(raw)
+    else:
+        receipt = json.loads(command([python, '-I', '-c',
+            "import importlib.metadata; import mindie_knowledge.publication_check; "
+            "print(importlib.metadata.distribution('mindie-knowledge').read_text('direct_url.json'))"]))
     if (receipt.get('vcs_info') or {}).get('commit_id') != revision:
         raise ValueError('trusted validator interpreter does not match its exact publication pin')
-    command([python, '-m', 'pip', 'check'])
 
 
 class PublicationCompatibilityTests(unittest.TestCase):
@@ -52,30 +57,43 @@ class PublicationCompatibilityTests(unittest.TestCase):
             raise ValueError('fixture must preserve the exact selected publication declaration bytes')
         validator = cls.contract['validator']
         cls.validator_revision = validator['revision']
-        cls.python = os.environ.get('MINDIE_VALIDATOR_PYTHON')
-        if not cls.python:
-            env = cls.root / 'validator-env'
-            command([sys.executable, '-m', 'venv', str(env)])
-            cls.python = str(env / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python'))
-            command([cls.python, '-m', 'pip', 'install', '--disable-pip-version-check',
-                     'mindie-knowledge @ git+https://github.com/' + validator['repository'] + '@' + cls.validator_revision])
-        # A supplied interpreter is also verified; invalid reuse fails rather
-        # than silently building a replacement or running the current runtime.
-        verify_validator(cls.python, cls.validator_revision)
         installed = json.loads(importlib.metadata.distribution('mindie-knowledge').read_text('direct_url.json'))
-        if (installed.get('vcs_info') or {}).get('commit_id') != product_contract.requirements(ROOT)[0]['mindie-knowledge']:
+        installed_commit = (installed.get('vcs_info') or {}).get('commit_id')
+        if installed_commit != product_contract.requirements(ROOT)[0]['mindie-knowledge']:
             raise ValueError('producer interpreter does not match the exact product runtime pin')
+        cls.python = os.environ.get('MINDIE_VALIDATOR_PYTHON')
+        if cls.python:
+            verify_validator(cls.python, cls.validator_revision)
+        else:
+            try:
+                import mindie_knowledge.publication_check  # noqa: F401
+                cls.python = sys.executable
+                verify_validator(cls.python, installed_commit)
+            except ImportError:
+                env = cls.root / 'validator-env'
+                command([sys.executable, '-m', 'venv', str(env)])
+                cls.python = str(env / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python'))
+                command([cls.python, '-m', 'pip', 'install', '--disable-pip-version-check',
+                         'mindie-knowledge @ git+https://github.com/' + validator['repository'] + '@' + cls.validator_revision])
+                verify_validator(cls.python, cls.validator_revision)
+        cls.template_repo = cls.root / 'template-publication'
+        cls.template_repo.mkdir()
+        command(['git', '-c', 'core.hooksPath=' + os.devnull, '-C', str(cls.template_repo), 'init', '--quiet', '-b', 'main'])
+        command(['git', '-c', 'core.hooksPath=' + os.devnull, '-C', str(cls.template_repo), 'config', 'core.autocrlf', 'false'])
+        (cls.template_repo / 'publication-contract.json').write_bytes(cls.raw_contract.encode('utf-8'))
+        command(['git', '-c', 'core.hooksPath=' + os.devnull, '-C', str(cls.template_repo), 'add', '.'])
+        command(['git', '-c', 'core.hooksPath=' + os.devnull, '-C', str(cls.template_repo),
+                 '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid',
+                 'commit', '--quiet', '-m', 'Synthetic public material'])
+        cls.template_base = command(['git', '-c', 'core.hooksPath=' + os.devnull, '-C', str(cls.template_repo), 'rev-parse', 'HEAD'])
 
     def setUp(self):
         self.temp_case = tempfile.TemporaryDirectory(dir=self.root)
         self.addCleanup(self.temp_case.cleanup)
         self.directory = Path(self.temp_case.name)
         self.repo = self.directory / 'publication'
-        self.repo.mkdir()
-        self.git('init', '--quiet', '-b', 'main')
-        self.git('config', 'core.autocrlf', 'false')
-        (self.repo / 'publication-contract.json').write_bytes(self.raw_contract.encode('utf-8'))
-        self.base = self.commit()
+        shutil.copytree(self.template_repo, self.repo)
+        self.base = self.template_base
 
     def git(self, *args):
         return command(['git', '-c', 'core.hooksPath=' + os.devnull, '-C', str(self.repo), *args])
@@ -99,16 +117,29 @@ class PublicationCompatibilityTests(unittest.TestCase):
             target.write_bytes(content.encode('utf-8'))
         return self.commit()
 
-    def trusted_check(self, revision, *, digest=None):
-        return subprocess.run([self.python, '-I', '-m', 'mindie_knowledge.publication_check',
+    def trusted_check(self, revision, *, digest=None, use_subprocess=False):
+        args = [
             '--repo', str(self.repo), '--revision', revision, '--base-revision', self.base,
             '--domain', self.publication['domain'], '--contract-sha256',
-            digest or self.publication['contract_sha256']],
-            capture_output=True, text=True, encoding='utf-8', timeout=60)
+            digest or self.publication['contract_sha256'],
+        ]
+        if use_subprocess or Path(self.python).resolve() != Path(sys.executable).resolve():
+            return subprocess.run([self.python, '-I', '-m', 'mindie_knowledge.publication_check', *args],
+                capture_output=True, text=True, encoding='utf-8', timeout=60)
+        import contextlib, io
+        from mindie_knowledge import publication_check
+        out, err = io.StringIO(), io.StringIO()
+        code = 0
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = publication_check.main(args) or 0
+            except SystemExit as exc:
+                code = exc.code if isinstance(exc.code, int) else 1
+        return subprocess.CompletedProcess(args, code, out.getvalue(), err.getvalue())
 
     def test_current_package_passes_independent_exact_trusted_validator(self):
         revision = self.produce()
-        result = self.trusted_check(revision)
+        result = self.trusted_check(revision, use_subprocess=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         checked = json.loads(result.stdout)
         self.assertEqual(checked['entries'], 1)

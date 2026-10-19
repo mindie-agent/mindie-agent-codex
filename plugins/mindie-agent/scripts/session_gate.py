@@ -1,18 +1,24 @@
 """Local, entry-bound task identity. Discovery never creates state.
 
-The lease store itself is owned by the shared knowledge core
-(``mindie_knowledge.loop.activation.Admission``) under the explicit neutral
-``admission_path`` recorded at setup. A lease is the internal binding the
-entry establishes automatically; the install-level shared settings file is
-the only persistent user choice. A binding lasts until it is explicitly
-revoked or its project scope actually changes; there is no wall-clock
-expiry, no failure-count pause and no runtime/config fingerprint.
+[Role]
+Manages entry-bound session leases by dispatching to `admission_ops.py` under
+the configured runtime interpreter while holding the profile update lock.
 
-This wrapper stays free of core imports: it binds the native task identity,
-validates shapes, holds the update lock for every store operation, and
-dispatches into the fixed installed runtime (``admission_ops.py`` under
-the configured interpreter), so an old cached entrypoint never mixes an old
-script with a new interpreter or library.
+[Invariants]
+- Lease store is owned by `mindie_knowledge.loop.activation.Admission` at the
+  neutral `admission_path`.
+- A binding lasts until explicitly revoked or its project scope changes; no
+  wall-clock expiry, failure-count pause, or runtime/config fingerprint.
+- Stays free of core imports so cached entrypoints never mix old scripts with
+  new libraries.
+
+[Timeouts & Locks]
+- Acquires `update_lock(config)` around store operations and runs `admission_ops.py`
+  via `bounded_process.run`.
+
+[Side-Effect Policy]
+- Discovery (`status`) never creates state; `claim`/`finish`/`revoke` mutate
+  only the configured admission store.
 """
 
 import json
@@ -119,7 +125,7 @@ class Inactive(ValueError):
 
 
 class Sessions:
-    def __init__(self, path=None, *, op_timeout=None, stop_adapter=None):
+    def __init__(self, path=None, *, op_timeout: float | None = 30.0, stop_adapter=None):
         self.config = Path(path or config_path())
         self.op_timeout = op_timeout
         self.stop_adapter = stop_adapter

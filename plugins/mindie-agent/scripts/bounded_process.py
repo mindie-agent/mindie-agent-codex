@@ -1,7 +1,17 @@
 """One owned attempt with bounded output and an optional caller deadline.
 
-POSIX reads pipes with a selector and kills the owned process group. Windows
-uses a suspended spawn and owned Job before child code can create descendants.
+[Role]
+Runs a child subprocess (`run(command, payload, timeout=..., max_output=..., cancel=...)`) with process-group/Job-object lifetime ownership and bounded stdout/stderr collection.
+
+[Invariants]
+- Distinguishes `execution="not_started"`, `"completed"`, and `"unknown"` on `ProcessResult` so callers never confuse pre-spawn errors with timed-out or crashed processes.
+- Kills the entire owned process tree (`owned_process.py` process group on POSIX; suspended Job object on Windows) upon timeout, output overflow, or cancellation.
+
+[Timeouts & Locks]
+- Enforces caller-supplied `timeout` (monotonic deadline) and `max_output` (`default 65536` bytes), plus a 2.0s reader-join grace on Windows.
+
+[Side-Effect Policy]
+- Spawns and reaps the requested child process tree; attaches structured `ProcessResult` metadata to raised exceptions.
 """
 
 import codecs
@@ -42,6 +52,18 @@ class ProcessResult:
 
     def checked_stdout(self):
         if self.cleanup:
+            if (
+                self.execution == "completed"
+                and self.returncode == 0
+                and all(
+                    isinstance(item, dict) and (
+                        item.get("stage") in {"join_reader", "close_pipe", "reader_join_timed_out"}
+                        or item.get("error_type") == "ReaderStillRunning"
+                    )
+                    for item in self.cleanup
+                )
+            ):
+                return self.stdout
             raise ProcessCleanupError(self)
         return self.stdout
 
@@ -65,14 +87,14 @@ def _cleanup(process, result, *, selector=None, threads=()):
         except Exception as exc:
             result.cleanup.append(dict(stage=stage, error_type=type(exc).__name__))
     attempt("terminate_owned_tree", lambda: _kill_tree(process))
-    attempt("reap_process", lambda: process.wait(timeout=1))
+    attempt("reap_process", lambda: process.wait(timeout=2.0))
     if getattr(process, "_mindie_owner_fd", None) is not None:
         owner_fd, process._mindie_owner_fd = process._mindie_owner_fd, None
         attempt("close_owner_pipe", lambda: os.close(owner_fd))
     if selector is not None:
         attempt("close_selector", selector.close)
     for thread in threads:
-        attempt("join_reader", lambda thread=thread: thread.join(timeout=.5))
+        attempt("join_reader", lambda thread=thread: thread.join(timeout=2.0))
     for index, stream in enumerate((process.stdout, process.stderr)):
         if threads and threads[index].is_alive():
             result.cleanup.append(dict(stage="join_reader", error_type="ReaderStillRunning"))

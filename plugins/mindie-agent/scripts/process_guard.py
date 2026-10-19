@@ -1,9 +1,17 @@
 """Bound a single required Codex execution; abort at the first error/tool event.
 
-One daemon reader thread feeds stdout lines through a queue; a second thread
-only counts stderr bytes. This works on POSIX (process groups) and Windows
-(suspended spawn assigned to a kill-on-close Job before user code runs).
-POSIX additionally supports the service-owned maintenance group contract.
+[Role]
+Executes `codex exec --json` (`run_codex`) for background summarization/organization with strict event-stream validation, output byte caps (`MAX_OUTPUT=128 KiB`), and process-tree cleanup.
+
+[Invariants]
+- Aborts immediately if the child emits any disallowed item type (anything outside `{"agent_message", "reasoning"}`, such as tool calls or commands).
+- Preserves a completed turn result from the JSONL stream even if the CLI fails to write its late `--output-last-message` file.
+
+[Timeouts & Locks]
+- Enforces caller `timeout` (`default 90.0s`) and a 2.0s post-completion exit grace before killing the process group/Job object.
+
+[Side-Effect Policy]
+- Spawns and terminates one `codex exec` child process tree; populates the caller's `receipt` dict in-place.
 """
 
 import json
@@ -70,7 +78,22 @@ def _native_error_reason(event):
     return 'native_turn_failed' if event['type'] == 'turn.failed' else 'native_event_error'
 
 
-def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=False, env=None):
+def _exit_grace_seconds() -> float:
+    raw = os.environ.get("MINDIE_CODEX_EXIT_GRACE_SECONDS")
+    if raw:
+        try:
+            val = float(raw)
+            if val > 0:
+                return val
+        except ValueError:
+            pass
+    return 10.0
+
+
+POST_COMPLETION_EXIT_GRACE_SECONDS = _exit_grace_seconds()
+
+
+def run_codex(command, prompt, *, timeout: float | None = 120.0, receipt=None, defer_cleanup=False, env=None):
     # The knowledge service owns one group for worker + Codex + descendants.
     started = time.monotonic()
     receipt = {} if receipt is None else receipt
@@ -249,7 +272,7 @@ def run_codex(command, prompt, *, timeout=None, receipt=None, defer_cleanup=Fals
                     # owned tree. Waiting here couples output to CLI shutdown.
                     code = process.poll()
                 elif receipt['turn_completed']:
-                    code = process.wait(timeout=2)
+                    code = process.wait(timeout=_exit_grace_seconds())
                 else:
                     # The event loop already observed actual process exit;
                     # it kept owner checks and explicit deadlines live after EOF.

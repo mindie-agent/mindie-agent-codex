@@ -1,4 +1,21 @@
-"""Coalesce background update checks into the lifetime of the native MCP process."""
+"""Coalesce background update checks into the lifetime of the native MCP process.
+
+[Role]
+Schedules and rate-limits background candidate update checks inside the MCP
+server process without blocking tool calls.
+
+[Invariants]
+- Enforces `CHECK_INTERVAL = 86400`, `FAILURE_BACKOFF = 60`, and
+  `ACTIVATION_BACKOFF = 5`.
+- Never blocks foreground MCP tool execution.
+
+[Timeouts & Locks]
+- Uses non-blocking `update_lock` and bounded subprocess execution for background
+  update probes.
+
+[Side-Effect Policy]
+- Writes update check timestamps and status under `<config>.updates/`.
+"""
 import json
 import math
 import os
@@ -103,8 +120,7 @@ class Maintenance:
             from release_activation import _atomic
             try:
                 root = directory(self.config)
-                from diagnostic_fallback import _private_mkdir
-                _private_mkdir(root, parents=True, exist_ok=True)
+                root.mkdir(mode=0o700, parents=True, exist_ok=True)
                 self.last_failure = dict(stage="maintenance-process", status="failed",
                                          checked_at=time.time(), error_type=type(exc).__name__)
                 if isinstance(outcome, dict):

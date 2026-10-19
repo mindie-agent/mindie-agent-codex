@@ -1,4 +1,17 @@
-"""Installation-owned native paths; no credentials or full environment snapshots."""
+"""Installation-owned native paths; no credentials or full environment snapshots.
+
+[Role]
+Captures and validates explicit native Codex paths (`CODEX_HOME`, `MINDIE_CODEX_BIN`), proxy/TLS transport environment variables (`TRANSPORT_ENV`), and resolves the `codex` binary (`codex_executable`).
+
+[Invariants]
+- Never snapshots credentials or full `os.environ`; only `CODEX_HOME` and `MINDIE_CODEX_BIN` are persisted in `native_context`.
+
+[Timeouts & Locks]
+- Synchronous filesystem checks; zero subprocesses or locks.
+
+[Side-Effect Policy]
+- Purely read-only over environment variables and executable paths.
+"""
 import json
 import os
 from pathlib import Path

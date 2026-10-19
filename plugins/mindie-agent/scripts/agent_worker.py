@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
 """Index complete new material through one bounded native small-model call.
 
-The worker emits an explicit outcome envelope, including failures and unknown
-model outcomes. Exit zero means the envelope was delivered, not summary success.
-Only the caller may scan and apply returned metadata to material files.
+[Role]
+Implements `NativeSummaryModel` and the CLI worker (`agent_worker.py`) that invokes `codex exec` (`gpt-5.6-luna`) in a sandboxed temporary workspace to summarize captured task transcripts.
+
+[Invariants]
+- Emits an explicit JSON outcome envelope (`status="returned"` or `"failed"`). Exit 0 means the envelope was delivered, not summary success.
+- Verifies `worker_policy` (`summary_provider`) before spawning `codex exec` so route changes abort before any model call.
+
+[Timeouts & Locks]
+- Native execution uses at most 120s and leaves cleanup time inside the parent summary deadline.
+
+[Side-Effect Policy]
+- Creates and cleans up a temporary `mindie-codex-summary-*` directory; never modifies user workspaces or material stores directly.
 """
 import argparse
 import hashlib
@@ -17,6 +26,7 @@ import time
 
 from mindie_knowledge.materials import summarizer
 from mindie_knowledge.loop import summary_scratch
+from mindie_knowledge.loop.summary_budget import native_timeout
 import process_guard
 import summary_provider
 from process_guard import InvalidResultError, NativeFailure, NativeStartError, OutputLimitExceeded, run_codex
@@ -81,7 +91,8 @@ class NativeSummaryModel:
                        "--output-schema", str(schema), "--json", "-"]
             if env is None:
                 command.insert(2, "--ignore-user-config")
-            run_codex(command, prompt, receipt=self.receipt, defer_cleanup=managed, env=env)
+            run_codex(command, prompt, timeout=native_timeout(120.0),
+                      receipt=self.receipt, defer_cleanup=managed, env=env)
             if not self.receipt["turn_completed"]:
                 raise NativeFailure("native execution did not report completion")
             try:
