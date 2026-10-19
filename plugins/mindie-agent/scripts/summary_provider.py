@@ -6,6 +6,7 @@ Reads the active native Codex `config.toml` model provider configuration, resolv
 [Invariants]
 - Never snapshots credential values into receipts or policy hashes (`<credential>` placeholder is used in `route_sha256`).
 - Rejects `profile` overrides or custom providers requiring native OpenAI auth before spawning any summary process.
+- Projects the selected native model record with its route; metadata changes invalidate prepared work.
 
 [Timeouts & Locks]
 - Synchronous bounded file reads (`config.toml <= 256 KiB`, `model_catalog_json <= 4 MiB`); no subprocesses or locks.
@@ -57,11 +58,11 @@ def _read(path, limit):
         raise ProviderConfigurationError("summary_provider_document_unavailable") from None
 
 
-def _alias(config, model):
+def _catalog(config, model):
     catalog = config.get("model_catalog_json")
     if catalog is None:
         # No implicit prefix is inferred from the business model or hostname.
-        return model
+        return model, None
     if not isinstance(catalog, str) or not Path(catalog).is_absolute():
         raise ProviderConfigurationError("summary_model_catalog_invalid")
     try:
@@ -69,17 +70,21 @@ def _alias(config, model):
         entries = data["models"] if isinstance(data, dict) else data
         if not isinstance(entries, list):
             raise ValueError()
-        names = []
         for item in entries:
             if not isinstance(item, dict) or not isinstance(item.get("slug"), str):
                 raise ValueError()
-            names.append(item["slug"])
     except (ValueError, TypeError, KeyError):
         raise ProviderConfigurationError("summary_model_catalog_invalid") from None
-    candidates = [name for name in names if name == model or name.endswith("/" + model)]
+    candidates = [item for item in entries
+                  if item["slug"] == model or item["slug"].endswith("/" + model)]
     if len(candidates) != 1:
         raise ProviderConfigurationError("summary_model_catalog_ambiguous_or_missing")
-    return candidates[0]
+    selected = candidates[0]
+    # Native capabilities and instructions travel with the alias. Copying only
+    # its name makes Codex select fallback metadata before the model request.
+    projected = json.dumps({"models": [selected]}, sort_keys=True,
+                           ensure_ascii=True, allow_nan=False) + "\n"
+    return selected["slug"], projected
 
 
 def _route_query(pairs):
@@ -198,8 +203,14 @@ def selected(model):
              "base_url_query": _route_query(parse_qsl(parsed.query, keep_blank_values=True)),
              "query_params": _route_query(sorted(provider.get("query_params", {}).items())),
              "headers": _route_headers(provider)}
-    return {"model": _alias(config, model), "provider": provider, "name": name,
-            "route_sha256": hashlib.sha256(json.dumps(route, sort_keys=True).encode()).hexdigest()}
+    selected_model, catalog = _catalog(config, model)
+    if catalog is not None:
+        route["model_catalog_sha256"] = hashlib.sha256(catalog.encode()).hexdigest()
+    selected = {"model": selected_model, "provider": provider, "name": name,
+                "route_sha256": hashlib.sha256(json.dumps(route, sort_keys=True).encode()).hexdigest()}
+    if catalog is not None:
+        selected["model_catalog"] = catalog
+    return selected
 
 
 def _toml(value):
@@ -219,14 +230,20 @@ def environment(route, directory):
     home = Path(directory) / "native-home"
     config = home / "config.toml"
     text = "model_provider = " + _toml(route["name"]) + "\n"
+    documents = []
+    if route.get("model_catalog") is not None:
+        catalog = home / "models.json"
+        text += "model_catalog_json = " + _toml(str(catalog)) + "\n"
+        documents.append((catalog, route["model_catalog"]))
     text += "[model_providers." + _toml(route["name"]) + "]\n"
     text += "".join(_toml(key) + " = " + _toml(value) + "\n"
                     for key, value in sorted(route["provider"].items()))
     try:
         home.mkdir(mode=0o700)
-        fd = os.open(config, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
-            stream.write(text)
+        for path, content in documents + [(config, text)]:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+                stream.write(content)
     except OSError:
         raise ProviderConfigurationError("summary_provider_temporary_config_unavailable") from None
     env = {key: value for key, value in os.environ.items()

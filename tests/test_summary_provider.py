@@ -61,6 +61,8 @@ class ProviderTests(unittest.TestCase):
             child_home = Path(options["env"]["CODEX_HOME"])
             observed["home"] = child_home
             observed["config"] = tomllib.loads((child_home / "config.toml").read_text(encoding="utf-8"))
+            catalog = observed["config"].get("model_catalog_json")
+            observed["catalog"] = json.loads(Path(catalog).read_text()) if catalog else None
             observed["files"] = sorted(path.name for path in child_home.iterdir())
             observed["mode"] = stat.S_IMODE((child_home / "config.toml").stat().st_mode)
             completion(options["receipt"])
@@ -116,9 +118,11 @@ class ProviderTests(unittest.TestCase):
         self.assertIn("features.skip_host_skill_discovery=true", seen["command"])
         self.assertIn("suppress_unstable_features_warning=true", seen["command"])
         self.assertIn("features.skill_search=false", seen["command"])
-        self.assertEqual(set(seen["config"]), {"model_provider", "model_providers"})
+        self.assertEqual(set(seen["config"]),
+                         {"model_provider", "model_providers", "model_catalog_json"})
         self.assertEqual(set(seen["config"]["model_providers"]), {"selected"})
-        self.assertEqual(seen["files"], ["config.toml"])
+        self.assertEqual(seen["files"], ["config.toml", "models.json"])
+        self.assertEqual(seen["catalog"], {"models": [{"slug": "vendor/gpt-5.6-luna"}]})
         if os.name == "posix":
             self.assertEqual(seen["mode"], 0o600)
         self.assertFalse(seen["home"].exists())
@@ -128,6 +132,36 @@ class ProviderTests(unittest.TestCase):
         self.assertNotIn("PRIVATE_MCP", json.dumps(seen["config"]))
         self.assertNotIn("SYNTHETIC_PRIVATE_TOKEN", json.dumps(payload))
         self.assertNotIn("SYNTHETIC_PRIVATE_TOKEN", json.dumps(value))
+
+    def test_selected_native_capabilities_are_projected_and_bound_to_prepared_policy(self):
+        self.config()
+        catalog = self.home / "models.json"
+        selected = {
+            "slug": "vendor/gpt-5.6-luna",
+            "display_name": "Summary model",
+            "supported_reasoning_levels": [{"effort": "low", "description": "Low"}],
+            "context_window": 128000,
+            "model_messages": {"instructions_template": "Preserve supplied facts."},
+            "truncation_policy": {"mode": "tokens", "limit": 10000},
+        }
+        unrelated = {"slug": "business-model", "context_window": 256000}
+        catalog.write_text(json.dumps({"models": [unrelated, selected]}))
+        payload = request(worker)
+        value, seen = self.invoke(payload)
+        self.assertEqual(value["status"], "returned")
+        self.assertEqual(seen["catalog"], {"models": [selected]})
+
+        unrelated["context_window"] = 512000
+        catalog.write_text(json.dumps({"models": [unrelated, selected]}))
+        value, _ = self.invoke(payload)
+        self.assertEqual(value["status"], "returned")
+
+        selected["context_window"] = 64000
+        catalog.write_text(json.dumps({"models": [unrelated, selected]}))
+        with patch.object(worker, "run_codex") as native:
+            value = worker.run(payload)
+        self.assertEqual(value["error_reason"], "worker_policy_changed")
+        native.assert_not_called()
 
     def test_auth_rotation_does_not_invalidate_policy_but_route_change_does(self):
         self.config()
