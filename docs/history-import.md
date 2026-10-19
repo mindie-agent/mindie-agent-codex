@@ -11,7 +11,7 @@ The `history-import` command lets you explicitly import selected historical Code
 Run `history-import` via the active plugin's `bridge.py` (or `entry.py bridge`), passing one or more `--source` JSONL file paths:
 
 ```sh
-python3 <PLUGIN_DATA>/releases/0.0.1/entry.py bridge history-import \
+python3 <PLUGIN_DATA>/releases/0.0.2/entry.py bridge history-import \
   --source /absolute/path/to/rollout.jsonl
 ```
 

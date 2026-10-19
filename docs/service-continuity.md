@@ -24,5 +24,6 @@
 
 ## 3. Decoupled User Authorization
 
-- Community sharing consent, approved project roots, and product fault-reporting preferences are persistent user data decoupled from code versions.
-- Updating or reloading the plugin never re-prompts for consent or modifies saved opt-out choices.
+- Community knowledge sharing and automatic tool fault reporting share a single unified contribution switch in `<profile>/.mindie/mindie-consent.json`, stored alongside approved project roots as persistent user data decoupled from code versions.
+- Explicitly enabling (`contribute` with the current unified consent revision) configures knowledge sharing and starts the background reporter, keeping three states distinct: (1) local consent configuration saved, (2) background reporter worker running, and (3) external GitHub Issue/PR created.
+- Updating or reloading the plugin never re-prompts for consent, modifies saved `disabled` / `later` / `read-only` choices, or silently upgrades legacy knowledge-only `contribute` records lacking the unified consent revision (`needs_choice`).

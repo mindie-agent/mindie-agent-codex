@@ -2,7 +2,7 @@
 
 <b>中文</b> | <a href="harness-interfaces.md">English</a> · <a href="README.md">返回文档索引</a>
 
-[`plugins/mindie-agent/harness-compatibility.json`](../plugins/mindie-agent/harness-compatibility.json) 是 `mindie-agent-codex` 所使用的 OpenAI Codex CLI 宿主接口的机器可读注册表。当前 `v0.0.1` 发行版声明支持两个经实机验证的 Codex 版本：
+[`plugins/mindie-agent/harness-compatibility.json`](../plugins/mindie-agent/harness-compatibility.json) 是 `mindie-agent-codex` 所使用的 OpenAI Codex CLI 宿主接口的机器可读注册表。当前 `v0.0.2` 发行版声明支持两个经实机验证的 Codex 版本：
 - **`0.153.4`**（对应官方上游源码提交 `3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`）
 - **`0.162.0-alpha.17.2`**（对应官方上游源码提交 `740e5af33c71225640e0c1c1555c514c2c93ab74`）
 
@@ -15,7 +15,7 @@
 上述两个 Codex 版本均在 `codex-rs/app-server-protocol/src/protocol/common.rs` 中声明了 `hooks/list`、`config/read` 与 `config/value/write` 接口，支持读取并通过乐观并发控制（CAS `expectedVersion`）更新 Hook 的启用状态与信任哈希（`hooks.state.<key>.trusted_hash`）。
 
 ### 原生插件市场与 Hook 信任继承机制
-- **固定不可变 Release Tag**：通过 `--ref v0.0.1` 注册插件市场可将目录锁定在不可变发行标签上，防止后续 `main` 分支演进时宿主在未经兼容性检查的情况下自动拉取未验证版本。
+- **固定不可变 Release Tag**：通过 `--ref v0.0.2` 注册插件市场可将目录锁定在不可变发行标签上，防止后续 `main` 分支演进时宿主在未经兼容性检查的情况下自动拉取未验证版本。
 - **Git 子目录插件源**：原生目录项采用 `source: "git-subdir"`（指定精确的 `url`、`path` 与 `sha`），已通过原生 `codex plugin list` 与 `codex plugin add` 实机验证。
 - **严格尊重用户 Hook 授权**：在静默兼容更新时，`native_hooks.py` 仅通过原生配置 CAS 更新本插件源至目标 SHA，并**仅对用户此前已启用且信任的本插件 `SessionStart` / `Stop` Hook** 继承信任哈希；用户显式禁用或撤权的 Hook 保持禁用，且绝不触碰其他无关插件。
 
@@ -48,7 +48,7 @@
 
 ## Known limitation: child-agent cancellation {#known-limitation-child-agent-cancellation}
 
-在 `0.0.1` 中，Codex 宿主的原生 `Interrupt` 事件仅针对主线程触发，其上游实现显式跳过了通过 `spawn_agent` 创建的子代理（SubAgent）；同时 `SubagentStop` 仅在正常完成时触发，不会在 `TurnAborted` 路径下分派。
+在 `0.0.2` 中，Codex 宿主的原生 `Interrupt` 事件仅针对主线程触发，其上游实现显式跳过了通过 `spawn_agent` 创建的子代理（SubAgent）；同时 `SubagentStop` 仅在正常完成时触发，不会在 `TurnAborted` 路径下分派。
 
 - **实际影响**：当子代理正处于等待 MCP 工具调用返回状态而被打断时，该在途调用既收不到 `notifications/cancelled`，也收不到 `Interrupt` Hook 信号，导致子代理发起的本地辅助进程/SSH 或已启动的远端命令可能继续运行直至宿主进程退出。
 - **工程处理原则**：遵循 [MindIE Agent 工程设计原则](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md)，插件如实向用户披露这一上游宿主限制，而不私自分发魔改宿主二进制、后台轮询杀进程或设置武断的业务超时。上游问题追踪与实机复现证据已同步至 [openai/codex#26956](https://github.com/openai/codex/issues/26956)。

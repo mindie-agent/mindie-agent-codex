@@ -37,14 +37,18 @@ durable jobs retain their existing identity and independent lifecycle.
 ## Explicit Configuration, Diagnostics & Historical Import (`entry.py bridge`)
 
 For explicitly requested configuration or diagnosis, use the installed
-`PLUGIN_DATA/releases/0.0.1/entry.py bridge` in the active profile. The native shell supplies
+`PLUGIN_DATA/releases/0.0.2/entry.py bridge` in the active profile. The native shell supplies
 `CODEX_THREAD_ID`; never fabricate it. Existing optional operator commands remain
 available internally, but users only need `/mindie-agent` (or `$mindie-agent`).
 
-- **On-Demand Target Knowledge Repo Star & Fork When Enabling Community Contribution**:
-  - Installation only Stars and Forks `mindie-agent/mindie-agent`. When the user explicitly enables community contribution for a target public knowledge repository `owner/repo` (such as `mindie-agent/knowledge-vllm-ascend`) under account `USER`, first Star and Fork that target knowledge repository on demand via the authenticated `gh` channel:
+- **Unified Contribution & Fault-Reporting Switch**:
+  - Resolve the active adapter configuration; `adapter_config.parent / "mindie-consent.json"` is the sole choice authority. Use the installed entry, not direct file edits.
+  - Community knowledge sharing and sanitized product fault reporting share a single persistent choice in `<adapter-config-directory>/mindie-consent.json`.
+  - Explicitly enabling (`contribute`) configures scoped knowledge sharing and starts the native background reporter (`reporting.status == "running"` confirms worker readiness; `degraded` or `needs_choice` indicates setup is incomplete). Reuse a valid saved choice. Only when the entry returns `needs_choice` for a legacy knowledge-only `contribute` choice, resolve it once through `/mindie-agent` using the user's explicit choice. A contribution request already made in the current setup flow is that choice, not a reason to ask again. Saved `disabled`, `read-only` and `later` choices stay unchanged without prompting. Startup never grants missing permission, and ordinary tasks never repeat this choice.
+  - Run `entry.py bridge config` with at least a 180-second outer budget, and keep three states strictly separate when reporting back: (1) local consent configuration written, (2) background reporter worker running, and (3) external GitHub Issue/PR created.
+- **On-Demand Target Knowledge Fork When Enabling Contribution**:
+  - Installation requires no Star or Fork. Starring a project is optional user support. Only after the user explicitly enables contribution for a target public knowledge repository `owner/repo` (such as `mindie-agent/knowledge-vllm-ascend`) under account `USER`, create its fork as needed through the authenticated `gh` channel:
     ```sh
-    gh api -X PUT /user/starred/owner/repo
     gh repo fork owner/repo --clone=false --remote=false
     ```
   - Then include `--community-fork USER/repo` along with `--community-repository owner/repo --community-account USER --community-project-root /absolute/path --community-visibility public` when running `entry.py bridge config` so contribution branches push to the user's personal Fork.
@@ -70,5 +74,3 @@ Never suggest or launch a history scan during onboarding, `Stop`, recovery, or b
    - `unchanged`: duplicate.
    - `empty`: no public messages.
    - `failed`: requires resolving the reported source/runtime problem. Never automatically retry a failed historical import. For an explicitly requested index retry, add `--retry-summary` (noting an earlier uncertain invocation may already have been billed).
-
-Contribution setup also activates sanitized fault reporting from the same saved choice. Run configuration with at least a 180-second outer budget. Inspect `reporting.status`: only `running` confirms worker readiness, while `degraded` and `needs_choice` remain incomplete. Do not re-authorize a legacy choice during startup, claim delivery from configuration alone, or use legacy reporting-enable to bypass contribution setup.
