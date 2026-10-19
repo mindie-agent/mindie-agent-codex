@@ -1,7 +1,8 @@
 """Thin stdlib adapter to shared diagnostics. Import performs no I/O.
 
 [Role]
-Bridges plugin fault recording (`failure`), build metadata inspection (`build_metadata`), pending incident projection (`attach_pending`, `acknowledge_pending`), and issue reporting configuration (`reporting_status`, `configure_reporting`).
+Bridges plugin faults, pending incident projection, and unified contribution
+consent to the shared diagnostics runtime.
 
 [Invariants]
 - The shared runtime owns incident storage; unavailable storage is reported without a second recorder.
@@ -9,7 +10,8 @@ Bridges plugin fault recording (`failure`), build metadata inspection (`build_me
 - Saved consent choice in `consent.py` takes precedence over stale reporter policy (`effective_reporting`).
 
 [Timeouts & Locks]
-- Performs only bounded local file reads (`<= 64 KiB`) and delegates SQLite projection locking to `agent_diagnostics.py`.
+- Fault recording uses bounded local reads and SQLite projection. Explicit
+  reporter activation has a 75-second shared budget within a 90-second caller.
 
 [Side-Effect Policy]
 - Importing this module performs no I/O; `failure()` writes local diagnostic events and enqueues a bounded projection reference.
@@ -31,7 +33,7 @@ _STORAGE = "MindIE diagnostic storage unavailable; original outcome unchanged."
 CONTEXT_ENV = ("MINDIE_DIAGNOSTICS_CONFIG", "MINDIE_DIAGNOSTICS_ROOT")
 
 
-def environment_context(adapter):
+def environment_context(adapter, config_file=None):
     """Only explicit diagnostic paths belong to an installation, never credentials."""
     if not isinstance(adapter, dict):
         raise ValueError("invalid installation diagnostics configuration")
@@ -41,7 +43,13 @@ def environment_context(adapter):
     for value in context.values():
         if not isinstance(value, str) or not value or not Path(value).is_absolute():
             raise ValueError("installation diagnostic paths must be absolute")
-    return dict(context)
+    context = dict(context)
+    if config_file is not None:
+        context.setdefault("MINDIE_DIAGNOSTICS_CONFIG",
+                           str(Path(os.environ.get("MINDIE_DIAGNOSTICS_CONFIG")
+                                    or Path(config_file).expanduser().absolute().parent / "diagnostics.json")
+                               .expanduser().absolute()))
+    return context
 
 
 def capture_environment_context(environ=None):
@@ -71,7 +79,7 @@ def read_environment_context(config):
         raw = stream.read(65537)
     if len(raw) > 65536:
         raise ValueError("invalid installation diagnostics configuration")
-    return environment_context(json.loads(raw.decode("utf-8")))
+    return environment_context(json.loads(raw.decode("utf-8")), path)
 
 
 def _hex(value, length):
@@ -136,6 +144,7 @@ def build_metadata():
 
 def _record():
     from mindie_diagnostics.integration import record_failure
+    os.environ["MINDIE_DIAGNOSTICS_CONFIG"] = str(reporting_config_path())
     return record_failure
 
 
@@ -250,12 +259,14 @@ def acknowledge_pending(result):
         pass
 
 
-def reporting_config_path():
+def reporting_config_path(config_file=None):
     explicit = os.environ.get("MINDIE_DIAGNOSTICS_CONFIG")
     if explicit:
-        return Path(explicit).expanduser().resolve()
-    base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
-    return (base / "mindie-agent" / "diagnostics.json").expanduser().resolve()
+        return Path(explicit).expanduser().absolute()
+    from session_gate import config_path
+    profile = Path(config_file) if config_file is not None else config_path()
+    saved = read_environment_context(profile)
+    return Path(saved.get("MINDIE_DIAGNOSTICS_CONFIG", profile.parent / "diagnostics.json"))
 
 
 def _unavailable(stage, error_type):
@@ -269,19 +280,20 @@ def _unavailable(stage, error_type):
 def reporting_status():
     try:
         from mindie_diagnostics.integration import reporting_status as upstream
+        import consent
         result = upstream(config=reporting_config_path())
-        if not isinstance(result, dict):
-            raise TypeError("invalid reporting status")
-        return result
+        return effective_reporting(result, consent.load())
     except Exception as exc:
         return _unavailable("reporting_status", type(exc).__name__)
 
 
-def ensure_argv(python):
-    if not isinstance(python, str) or not Path(python).is_absolute():
-        raise ValueError("selected runtime requires an absolute interpreter")
-    return [python, "-m", "mindie_diagnostics.cli", "reporting", "ensure",
-            "--config", str(reporting_config_path())]
+def activate_reporting(config_file=None, *, ensure=True):
+    """Derive policy from the existing authority; only long-lived callers ensure."""
+    from mindie_knowledge.consent_store import activate_reporting as activate
+    import consent
+    policy = reporting_config_path(config_file)
+    authority = consent.consent_path_for(config_file) if config_file is not None else consent.consent_path()
+    return activate(authority, config=policy, repository=REPOSITORY, ensure=ensure)
 
 
 def ensure_command_line(command):
@@ -290,79 +302,34 @@ def ensure_command_line(command):
     return shlex.join(command)
 
 
-def configure_reporting(enabled, python):
-    if type(enabled) is not bool:
-        return _unavailable("reporting_configure", "TypeError")
+def effective_reporting(view, saved):
+    """The authority gates status too; a legacy choice cannot widen consent."""
+    if saved.get("state") in {"corrupt", "unreadable"}:
+        return dict(view, enabled=False, status="unavailable", consent=saved)
+    if not saved.get("choice_revision"):
+        return dict(view, enabled=False, status="needs_choice", consent=saved,
+                    detail="Choose contribution again to authorize knowledge sharing and sanitized fault Issues together.")
+    if saved.get("choice") != "contribute":
+        return dict(view, enabled=False, status="disabled", consent=saved)
+    return dict(view, consent=saved)
+
+
+def main(argv=None):
+    import argparse
+    parser = argparse.ArgumentParser(description="Activate fault reporting from the saved contribution choice.")
+    parser.add_argument("operation", choices=["activate", "status"])
+    parser.add_argument("--config", type=Path, required=True)
+    args = parser.parse_args(argv)
+    from session_gate import bind_explicit_config
+    bind_explicit_config(args.config)
     try:
-        command = ensure_argv(python)
-        from mindie_diagnostics.integration import configure_reporting as upstream
-        result = upstream(enabled, repository=REPOSITORY, config=reporting_config_path())
-        if not isinstance(result, dict) or result.get("enabled") is not enabled:
-            return _unavailable("reporting_configure", "ConfigurationUnconfirmed")
-        result = dict(result, run_outside_hook=False)
-        if enabled:
-            result.update(
-                run_outside_hook=True, command=command,
-                command_line=ensure_command_line(command),
-                command_shell="powershell" if os.name == "nt" else "posix",
-                note=("Reporting settings are enabled. Execute this command once outside "
-                      "the Hook and inspect its result before claiming reporter readiness. "
-                      "Report any failure; do not automatically retry."),
-            )
-        return result
+        result = reporting_status() if args.operation == "status" else activate_reporting()
     except Exception as exc:
-        return _unavailable("reporting_configure", type(exc).__name__)
+        result = _unavailable("reporting_activation", type(exc).__name__)
+    print(json.dumps(result))
+    return int(result.get("status") not in {"running", "disabled"}
+               if args.operation == "activate" else result.get("status") == "unavailable")
 
 
-def reporting_hint():
-    return {
-        "optional": True, "recommended": True,
-        "independent_of_knowledge_contribution": True,
-        "enable": "scripts/bridge.py reporting-enable",
-        "status": "scripts/bridge.py reporting-status",
-        "disable": "scripts/bridge.py reporting-disable",
-        "repository": REPOSITORY,
-        "note": ("Optionally report sanitized product fault code metadata to the public "
-                 "repository. Prompts, transcripts, commands, environment and credentials "
-                 "are excluded. This is a separate shared user choice; consult its status."),
-    }
-
-
-def reporting_offer(view, saved, install_traces):
-    """The one-time reporting offer, only inside a genuine first setup.
-
-    ``view`` is the upstream reporting status; ``saved`` the consent read.
-    A saved reporting choice (enabled/disabled/later) or any install trace
-    suppresses the offer forever: reporting unchosen-by-default is never a
-    reason to ask again in a later session.
-    """
-    if not isinstance(view, dict) or view.get("status") != "not_configured":
-        return None
-    if not isinstance(saved, dict) or saved.get("state") != "missing":
-        return None
-    if install_traces:
-        return None
-    return reporting_hint()
-
-
-def effective_reporting(view, saved_reporting):
-    """The effective reporting state for status surfaces.
-
-    A reporter policy that reads enabled only authorizes reporting when the
-    saved consent reporting choice is also ``enabled``. On disagreement the
-    saved choice wins: the view reports enabled=false with an explicit
-    reconcile note — the stale service configuration is surfaced, never
-    hidden, and never silently re-authorized.
-    """
-    if not isinstance(view, dict) or view.get("enabled") is not True:
-        return view
-    if saved_reporting == "enabled":
-        return view
-    adjusted = dict(view, enabled=False)
-    adjusted["detail"] = (
-        "the reporter policy is enabled but the saved reporting choice is "
-        f"{saved_reporting or 'absent'}; the saved choice wins and reporting "
-        "stays unauthorized — run scripts/bridge.py reporting-disable to "
-        "retire the stale reporter, or reporting-enable to choose again"
-    )
-    return adjusted
+if __name__ == "__main__":
+    raise SystemExit(main())

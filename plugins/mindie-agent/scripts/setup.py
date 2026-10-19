@@ -264,10 +264,13 @@ def install(args, parser, *, validation=None):
         # authority pointer wires the core gate to this profile's document.
         community["consent_config"] = str(consent.consent_path_for(config))
         sharing.write(community_config, community)
+    from diagnostic_support import activate_reporting
+    reporting = activate_reporting(config)
     print(
         json.dumps(
             dict(
-                status="configured",
+                status="configured" if reporting["status"] in {"running", "disabled", "needs_choice"} else "degraded",
+                reporting=reporting,
                 config=str(config),
                 engine_config=str(engine_config),
                 community_config=str(community_config),
@@ -290,6 +293,8 @@ def install(args, parser, *, validation=None):
             indent=2,
         )
     )
+    if reporting["status"] not in {"running", "disabled", "needs_choice"}:
+        raise SystemExit(1)
 
 
 
@@ -389,10 +394,13 @@ def configure(args, parser):
         if merged != old:
             sharing.write(community_config, merged)
     consent.record_choice("contribute", config)
+    from diagnostic_support import activate_reporting
+    reporting = activate_reporting(config)
     print(
         json.dumps(
             dict(
-                status="configured",
+                status="configured" if reporting["status"] == "running" else "degraded",
+                reporting=reporting,
                 community_config=str(community_config),
                 sharing="enabled",
                 sharing_choice="contribute",
@@ -406,6 +414,8 @@ def configure(args, parser):
             indent=2,
         )
     )
+    if reporting["status"] != "running":
+        raise SystemExit(1)
 
 
 def main():

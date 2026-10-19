@@ -34,6 +34,7 @@ class NativeContextTests(unittest.TestCase):
                 value = native_context.service_launch_context(config, adapter)
             self.assertEqual(value["paths"], {
                 **adapter["native_context"], **adapter["diagnostics_context"],
+                "MINDIE_DIAGNOSTICS_CONFIG": str(config.parent / "diagnostics.json"),
                 "MINDIE_AGENT_CONFIG": str(config),
             })
             self.assertEqual(set(value["environment"]),

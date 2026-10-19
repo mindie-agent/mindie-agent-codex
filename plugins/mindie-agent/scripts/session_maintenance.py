@@ -6,6 +6,8 @@ refresh, and diagnostic maintenance.
 
 [Invariants]
 - Binds explicit config before invoking runtime services.
+- Reporter activation precedes knowledge readiness so a knowledge startup
+  failure cannot prevent the authorized diagnostic worker from starting.
 - Wraps each stage (`service-start`, `feed-refresh`, `diagnostic-maintenance`)
   with `bootstrap.preparing` stage markers.
 
@@ -30,15 +32,15 @@ from session_gate import bind_explicit_config
 def maintain(config):
     bind_explicit_config(config)
     adapter = read_json(config)[0]
+    from diagnostic_maintenance import maintain as diagnostics_maintain
+    with preparing("diagnostic-maintenance"):
+        diagnostics = diagnostics_maintain(config)
     from service_client import connect
     with preparing("service-start"):
         connect(adapter["engine_config"])
     from feed_sync import sync
     with preparing("feed-refresh"):
         feed = sync(adapter["engine_config"])
-    from diagnostic_maintenance import maintain as diagnostics_maintain
-    with preparing("diagnostic-maintenance"):
-        diagnostics = diagnostics_maintain(config)
     value = dict(status="ready", feed=feed, diagnostics=diagnostics)
     print(json.dumps(value))
     if (feed.get("status") != "ok"

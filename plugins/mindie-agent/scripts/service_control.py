@@ -87,25 +87,11 @@ def status():
     }
     if inspect:
         commands["contribution_inspect"] = inspect
-    # Optional and independent of knowledge consent. Status never ensures.
-    from diagnostic_support import (
-        effective_reporting,
-        reporting_offer,
-        reporting_status,
-    )
+    # Status reads the single contribution choice and never starts a worker.
+    from diagnostic_support import reporting_status
 
     commands["reporting_status"] = bridge + ["reporting-status"]
-    commands["reporting_enable"] = bridge + ["reporting-enable"]
-    commands["reporting_disable"] = bridge + ["reporting-disable"]
-    diagnostic_view = effective_reporting(
-        reporting_status(), saved_consent.get("reporting")
-    )
-    diagnostics = dict(reporting=diagnostic_view)
-    offer = reporting_offer(
-        diagnostic_view, saved_consent, consent.install_traces()
-    )
-    if offer is not None:
-        diagnostics["choice"] = offer
+    diagnostics = dict(reporting=reporting_status())
     first_use = sharing_view.get("first_use")
     result = dict(
         experience=("needs-configuration" if sharing_view.get("state") in {"off", "unconfigured"}

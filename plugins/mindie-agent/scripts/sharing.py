@@ -396,7 +396,8 @@ def set_enabled(enable, config_file=None):
         settings = validate(parsed)
         desired_choice = "contribute" if enable else "disabled"
         saved = consent.load(config_file)
-        if settings['enabled'] == bool(enable) and saved.get('choice') == desired_choice:
+        if (settings['enabled'] == bool(enable) and saved.get('choice') == desired_choice
+                and saved.get("choice_revision")):
             return settings  # Already in the requested state: do not mutate.
         settings["enabled"] = bool(enable)
         # Keep the consent-authority pointer wired on this user-intent

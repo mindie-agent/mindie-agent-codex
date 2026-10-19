@@ -13,7 +13,7 @@ Unified operator and Hook CLI boundary (`stop`, `mcp`, `status`, `init`, `shutdo
 - Acquires shared `update_lock(config_file)` around helper invocations (`30.0s` for `bind` and `service_control.py status`, `60.0s` for `setup.py configure` and `contribution-*`).
 
 [Side-Effect Policy]
-- Read-only for `status`/`init`/`sharing-status`/`reporting-status`; explicit state mutations occur only on `activate`/`deactivate`/`config`/`sharing-enable`/`sharing-disable`/`reporting-enable`/`reporting-disable`/`history-import`.
+- Read-only for `status`/`init`/`sharing-status`/`reporting-status`; contribution changes use `config`/`sharing-enable`/`sharing-disable`, and retired independent reporting mutators only return guidance.
 """
 
 import json
@@ -579,19 +579,19 @@ def sharing_operation(operation, extra=None):
             enabled_at=settings["enabled_at"],
             note="only newly authorized material is captured; no backfill",
         )
-        return _refresh_capture(result)
+        return _refresh_capture(_with_reporting(result))
     if not sharing.configured_path().exists():
         import consent
         consent.record_choice("disabled")
-        return dict(status="disabled", sharing_choice="disabled")
+        return _with_reporting(dict(status="disabled", sharing_choice="disabled"))
     settings = sharing.set_enabled(False)
-    return dict(
+    return _with_reporting(dict(
         status="disabled",
         generation=settings["generation"],
         cancel="the running service rereads this generation on its bounded "
         "idle tick and cancels matching queued capture/organization/outbound "
         "work (core-owned); drafts and published data are kept",
-    )
+    ))
 
 
 def contribution(operation, batch_id):
@@ -684,9 +684,11 @@ def configure(argv):
                 *argv,
             ],
             "",
-            timeout=60.0,
+            timeout=180.0,
             max_output=65536,
             env=runtime_env(config_file),
+            allow_service=True,
+            allowed_returncodes=(0, 1),
         ).checked_stdout()
     result = json.loads(output)
     if not isinstance(result, dict):
@@ -701,7 +703,7 @@ def _refresh_capture(result):
         try:
             lease = Sessions().active_lease(session)
         except (Inactive, ValueError) as exc:
-            result["configuration_status"] = result["status"]
+            result.setdefault("configuration_status", result["status"])
             result["status"] = "degraded"
             result["activation"] = dict(status="unavailable", error=str(exc)[:240])
         else:
@@ -713,32 +715,15 @@ def _refresh_capture(result):
                 project_root=lease["project_root"],
             ))
             if result["activation"].get("status") == "degraded":
-                result["configuration_status"] = result["status"]
+                result.setdefault("configuration_status", result["status"])
                 result["status"] = "degraded"
     return result
 
 
 def _reporting_choice():
-    """Optional, independent reporting recommendation. Never installs.
-
-    Offered once inside the first setup, never repeatedly afterwards. The
-    effective view never reports an enabled reporter when the saved
-    reporting choice disagrees."""
-    from diagnostic_support import (
-        effective_reporting,
-        reporting_offer,
-        reporting_status,
-    )
-
-    import consent
-
-    saved = consent.load()
-    view = effective_reporting(reporting_status(), saved.get("reporting"))
-    result = dict(reporting=view)
-    offer = reporting_offer(view, saved, consent.install_traces())
-    if offer is not None:
-        result["choice"] = offer
-    return result
+    """Read the single contribution authority without configuring a worker."""
+    from diagnostic_support import reporting_status
+    return dict(reporting=reporting_status())
 
 
 def _reporting_unavailable(stage, exc):
@@ -764,125 +749,55 @@ def _adapter_python(config_file):
     return python, scripts
 
 
-def _print_reporting_json(output, stage):
+def _activate_reporting():
+    config_file = config_path()
+    python, scripts = _adapter_python(config_file)
+    output = run(
+        [python, str(Path(scripts) / "diagnostic_support.py"), "activate",
+         "--config", str(config_file)], "", timeout=90.0, max_output=65536,
+        allowed_returncodes=(0, 1), env=runtime_env(config_file), allow_service=True,
+    ).checked_stdout()
+    value = json.loads(output)
+    if not isinstance(value, dict):
+        raise ValueError("reporting activation returned no result object")
+    return value
+
+
+def _with_reporting(result):
     try:
-        payload = json.loads(output)
-    except ValueError as exc:
-        _reporting_unavailable(stage, exc)
-    if not isinstance(payload, dict):
-        _reporting_unavailable(stage, ValueError("reporting response must be an object"))
-    print(json.dumps(payload))
-    if payload.get("status") in {"unavailable", "failed", "degraded", "configuration_unavailable", "error"}:
-        raise SystemExit(1)
+        reporting = _activate_reporting()
+    except Exception as exc:
+        reporting = dict(status="unavailable", error_type=type(exc).__name__)
+    result["reporting"] = reporting
+    if reporting.get("status") not in {"running", "disabled"}:
+        result["configuration_status"] = result["status"]
+        result["status"] = "degraded"
+    return result
 
 
 def reporting_operation(operation):
-    """Explicit reporting ops. Enable does not spawn ensure; Stop never calls this."""
-    config_file = config_path()
+    """Legacy mutators guide to the whole contribution flow; status stays inert."""
     verb = operation.split("-", 1)[1]
-    if verb == "status":
-        stage = "config_read"
-        try:
-            try:
-                config_file.stat()
-            except FileNotFoundError:
-                print(json.dumps(_reporting_choice()["reporting"]))
-                return
-            python, _scripts = _adapter_python(config_file)
-        except BlockingIOError as exc:
-            _reporting_unavailable("update_lock", exc)
-        except Exception:
-            # Unconfigured or malformed adapter: local shim only, no install.
-            print(json.dumps(_reporting_choice()["reporting"]))
-            return
-        stage = "helper_run"
-        try:
-            output = run(
-                [python, "-m", "mindie_diagnostics.cli", "reporting", "status"],
-                "",
-                timeout=30.0,
-                max_output=65536,
-                allowed_returncodes=(0, 1),
-                env=runtime_env(config_file),
-            ).checked_stdout()
-            _print_reporting_json(output, "helper_response")
-        except SystemExit:
-            raise
-        except Exception as exc:
-            _reporting_unavailable(stage, exc)
-        return
     if verb in {"enable", "disable"}:
-        stage = "config_read"
-        try:
-            python, scripts = _adapter_python(config_file)
-            # The saved preference is recorded before the reporter policy is
-            # touched; a refused consent write (damaged authority) leaves the
-            # policy untouched, so the real service choice and the saved
-            # preference never diverge.
-            import consent
-
-            consent.record_reporting(
-                "enabled" if verb == "enable" else "disabled"
-            )
-            stage = "helper_run"
-            output = run(
-                [
-                    python,
-                    "-c",
-                    "import json,sys; sys.path.insert(0, sys.argv[2]); "
-                    "from diagnostic_support import configure_reporting; "
-                    "print(json.dumps(configure_reporting("
-                    "sys.argv[1]=='true', sys.executable)))",
-                    "true" if verb == "enable" else "false",
-                    str(Path(scripts)),
-                ],
-                "",
-                timeout=30.0,
-                max_output=65536,
-                allowed_returncodes=(0, 1),
-                env=runtime_env(config_file),
-            ).checked_stdout()
-            _print_reporting_json(output, "helper_response")
-        except SystemExit:
-            raise
-        except Exception as exc:
-            _reporting_unavailable(stage, exc)
+        print(json.dumps(dict(
+            status="contribution_choice_required", enabled=False,
+            detail="Knowledge sharing and sanitized fault Issues use one contribution switch.",
+            next="bridge.py config --community-repository OWNER/REPO --community-project-root PATH --community-visibility public"
+                 if verb == "enable" else "bridge.py sharing-disable",
+        )))
         return
-    stage = "config_read"
+    if verb == "status":
+        print(json.dumps(_reporting_choice()["reporting"]))
+        return
     try:
-        # Preparing or maintaining the reporter requires the saved reporting
-        # choice to be exactly "enabled" — a saved later/disabled constrains
-        # the real service, not just the prompts.
-        import consent
-
-        saved = consent.load()
-        if saved.get("reporting") != "enabled":
-            print(json.dumps(dict(
-                status="unavailable",
-                error=dict(type="ConsentError", stage="consent"),
-                detail=(
-                    "the saved reporting choice is "
-                    + str(saved.get("reporting") or saved.get("state"))
-                    + "; reporting ensure/maintain runs only after an explicit "
-                    "reporting-enable"
-                ),
-            )))
+        result = _activate_reporting()
+        print(json.dumps(result))
+        if result.get("status") not in {"running", "disabled"}:
             raise SystemExit(1)
-        python, _scripts = _adapter_python(config_file)
-        stage = "helper_run"
-        output = run(
-            [python, "-m", "mindie_diagnostics.cli", "reporting", verb],
-            "",
-            timeout=60.0,
-            max_output=65536,
-            allowed_returncodes=(0, 1),
-            env=runtime_env(config_file),
-        ).checked_stdout()
-        _print_reporting_json(output, "helper_response")
     except SystemExit:
         raise
     except Exception as exc:
-        _reporting_unavailable(stage, exc)
+        _reporting_unavailable("reporting_activation", exc)
 
 
 def _optional_config_prefix(argv):
