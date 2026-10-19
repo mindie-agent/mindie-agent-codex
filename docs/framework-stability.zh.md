@@ -32,6 +32,6 @@ uv sync --project plugins/mindie-agent --locked --no-editable
 uv run --project plugins/mindie-agent --no-sync python tests/run_ci.py
 ```
 
-- **随版 CPU 微基准测试（Release Microbenchmark）**：每个 `0.0.2` 发行版均运行 [`benchmarks/release.json`](../benchmarks/release.json)（[`benchmarks/release.py`](../benchmarks/release.py)）测量 `public-transcript` 公开对话脱敏管线的延迟（`us/op`），并随 GitHub Release 附带 `benchmark-results.json`、`benchmark-results.md`、`benchmark-SHA256SUMS` 与 `SHA256SUMS` 作为可复现的本地 CPU 性能基线。
+- **随版 CPU 微基准测试（Release Microbenchmark）**：每个 `0.0.2` 发行版均运行 [`benchmarks/release.json`](../benchmarks/release.json)（[`benchmarks/release.py`](../benchmarks/release.py)）测量 `public-transcript` 公开消息解析与隐藏推理过滤的延迟（`us/op`），并随 GitHub Release 附带 `benchmark-results.json` 和 `benchmark-results.md` 作为可复现的本地 CPU 性能基线。
 - **配套发布顺序**：在更新共享运行时依赖时，先发布底层组件正式 Release，再执行各宿主插件适配器的验证与发布。
 - **清晰的验收边界**：自动化 CI 与 CPU 微基准负责验证锁定依赖、解析器夹具与跨平台文件系统契约；原生宿主会话闭环与远端昇腾 NPU 硬件执行作为独立验收项管理。

@@ -32,6 +32,6 @@ uv sync --project plugins/mindie-agent --locked --no-editable
 uv run --project plugins/mindie-agent --no-sync python tests/run_ci.py
 ```
 
-- **Per-Release CPU Microbenchmark**: Each `0.0.2` release runs [`benchmarks/release.json`](../benchmarks/release.json) ([`benchmarks/release.py`](../benchmarks/release.py)) to measure `public-transcript` extraction and sanitization latency in `us/op`, publishing `benchmark-results.json`, `benchmark-results.md`, `benchmark-SHA256SUMS`, and `SHA256SUMS` as a reproducible CPU baseline.
+- **Per-Release CPU Microbenchmark**: Each `0.0.2` release runs [`benchmarks/release.json`](../benchmarks/release.json) ([`benchmarks/release.py`](../benchmarks/release.py)) to measure `public-transcript` public-message parsing and hidden-reasoning filtering latency in `us/op`, publishing `benchmark-results.json` and `benchmark-results.md` as a reproducible CPU baseline.
 - **Paired Release Ordering**: Publish exact dependency Releases (`mindie-knowledge`, `remote-dev`, `mindie-diagnostics`) before running adapter release checks.
 - **Explicit Acceptance Boundaries**: Component CI and CPU microbenchmarks verify locked dependencies, parser fixtures, and cross-platform filesystem contracts; live host acceptance and remote Ascend NPU verification are tracked as separate gates.

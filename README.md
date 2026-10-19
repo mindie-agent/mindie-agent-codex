@@ -66,7 +66,7 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 > /mindie-agent 帮我结合知识库和远端 NPU 容器完成当前 vllm-ascend 自定义算子的编译与精度对齐验证，并跑通对应的单测。
 > ```
 > **会发生什么**：社区贡献**默认关闭**。当你显式开启社区贡献后，每次会话结束（`Stop`）时，插件会在后台提取公开对话，使用确定性隐私规则与 Gitleaks `8.30.1` 在本地完成脱敏，生成分块导航摘要并提交知识 PR，日常开发无需额外操作。
-> - **统一贡献开关（`<profile>/.mindie/mindie-consent.json`）**：社区知识贡献与自动工具故障上报共用同一个持久化开关。显式开启（`contribute`）会配置知识共享并启动原生后台 reporter；关闭（`disabled`）会同时停止两条路径的后续外发，且已有的 `disabled` / `later` / `read-only` 状态在升级后保持关闭。对于缺少统一授权版本（`choice_revision`）的旧版仅知识 `contribute` 记录，升级后不会自动获得故障上传权限，状态会显示 `needs_choice` 并等待用户重新确认一次。系统严格区分**本地授权配置已写入**、**后台 reporter 进程运行中**与**外部 GitHub Issue/PR 已实际创建**三种状态。
+> - **统一贡献开关（适配器配置文件同目录的 `mindie-consent.json`）**：社区知识贡献与自动工具故障上报共用同一个持久化开关。显式开启（`contribute`）会配置知识共享并启动原生后台 reporter；关闭（`disabled`）会同时停止两条路径的后续外发，且已有的 `disabled` / `later` / `read-only` 状态在升级后保持关闭。有效的已保存选择直接复用，不重复询问；缺少统一授权版本（`choice_revision`）的旧记录不会自动获得故障上传权限，`needs_choice` 只在 `/mindie-agent` 入口通过一次明确的贡献选择解决，不分开询问知识和故障授权，也不逐次任务确认。系统严格区分**本地授权配置已写入**、**后台 reporter 进程运行中**与**外部 GitHub Issue/PR 已实际创建**三种状态。
 > - 关于公开消息筛选范围、确定性脱敏边界与公开 Git 历史说明，请参阅 **[用户须知 / Contribution Notice](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md)**。
 > - 如需在本地搭建 `vllm` + `vllm-ascend` 多任务 Git Worktree 协同工作区，可按需参考 **[工作区配置指南](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md)** 与 [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace)。
 
@@ -203,7 +203,7 @@ uv run --project plugins/mindie-agent --no-sync python tests/preflight.py
 uv run --project plugins/mindie-agent --no-sync python -m unittest discover -s tests -p 'test_*.py'
 ```
 
-- **发行版微基准测试（Release Microbenchmark）**：每个 `0.0.2` 插件 Release 均随附 `benchmark-results.json`、`benchmark-results.md`、`benchmark-SHA256SUMS` 与 `SHA256SUMS`，按 [`benchmarks/release.json`](benchmarks/release.json) 测量 `public-transcript` 公开对话提取与脱敏管线的耗时（单位 `us/op`）。该指标作为可复现的本地 CPU 微基准基线，与远端 A2/A3 NPU 实机集成验收及端到端 Agent 研发效率评估相互独立。
+- **发行版微基准测试（Release Microbenchmark）**：每个 `0.0.2` 插件 Release 均随附 `benchmark-results.json` 和 `benchmark-results.md`，按 [`benchmarks/release.json`](benchmarks/release.json) 测量 `public-transcript` 公开消息解析与隐藏推理过滤的耗时（单位 `us/op`）。该指标作为可复现的本地 CPU 微基准基线，与远端 A2/A3 NPU 实机集成验收及端到端 Agent 研发效率评估相互独立。
 
 ---
 

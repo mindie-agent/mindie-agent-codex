@@ -26,7 +26,9 @@ authoritative.
   - A call timeout is not job completion; follow running jobs with status/output tools and never blindly resubmit an uncertain mutation.
 - **Diagnostics & Unified Contribution Switch**:
   - Natural capability results can include bounded `agent_diagnostics` references for the Agent. Preserve the actual business result and report only limitations relevant to the user's goal. Stop capture must never request another model turn or block task completion.
-  - Community knowledge sharing and automatic tool fault reporting share a single persistent choice in `<profile>/.mindie/mindie-consent.json`. Legacy knowledge-only `contribute` records lacking the unified consent revision (`choice_revision`) surface `needs_choice` until explicitly re-confirmed once. Always keep three states distinct: (1) local consent configuration saved, (2) background reporter worker running, and (3) external GitHub Issue/PR published.
+  - Community knowledge sharing and automatic tool fault reporting share a single persistent choice in `<adapter-config-directory>/mindie-consent.json`. Reuse a valid saved choice without another prompt. If a legacy record has no `choice_revision`, resolve `needs_choice` once through `/mindie-agent` using the user's explicit contribution choice; do not ask separately for knowledge and fault reporting, or ask again in each task. Always keep three states distinct: (1) local consent configuration saved, (2) background reporter worker running, and (3) external GitHub Issue/PR published.
+
+The consent file is beside the active adapter configuration (`adapter_config.parent / "mindie-consent.json"`); use the installed entry to change the choice, never a guessed profile path.
 
 ## Progressive Context Disclosure (Read Only on Demand)
 
