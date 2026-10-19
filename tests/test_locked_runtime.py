@@ -102,7 +102,7 @@ class RuntimeTests(unittest.TestCase):
     def test_existing_completed_runtime_never_repairs_corruption(self):
         with tempfile.TemporaryDirectory() as directory:
             data=Path(directory);source=SCRIPTS.parent
-            release=data/'releases/0.0.1';release.mkdir(parents=True)
+            release=data/'releases'/product_contract.native_version(source);release.mkdir(parents=True)
             key=bootstrap.runtime_key(source)
             python=data/'runtimes'/key/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
             (release/'runtime.json').write_text(json.dumps({'key':key,'python':str(python),'validation':{}}))

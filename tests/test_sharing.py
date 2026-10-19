@@ -471,12 +471,10 @@ class CommandTests(SharingFixture):
         self.assertEqual(status["state"], "disabled")
         self.assertEqual(status["repository"], "mindie-agent/knowledge")
 
-    def test_enable_preserves_applied_choice_when_binding_authority_is_lost(self):
+    def test_enable_preserves_applied_choice_when_admission_is_unreadable(self):
         self.write_sharing(enabled=False, enabled_at=None)
         self.activate()
-        marker = self.admission.with_name(self.admission.name + '.owner')
-        marker_before = marker.read_bytes()
-        self.admission.unlink()
+        self.admission.write_bytes(b"not a SQLite database")
         outcome = self.bridge('sharing-enable')
         self.assertEqual(outcome.returncode, 1)
         enabled = json.loads(outcome.stdout)
@@ -485,8 +483,7 @@ class CommandTests(SharingFixture):
         self.assertEqual(enabled['activation']['status'], 'unavailable')
         self.assertIn('AdmissionUnavailable', enabled['activation']['error'])
         self.assertTrue(sharing.read()['enabled'])
-        self.assertFalse(self.admission.exists())
-        self.assertEqual(marker.read_bytes(), marker_before)
+        self.assertEqual(self.admission.read_bytes(), b"not a SQLite database")
 
     def test_reenable_uses_fresh_enabled_at_without_backfill(self):
         self.write_sharing(enabled=True, enabled_at=time.time() - 10000)
