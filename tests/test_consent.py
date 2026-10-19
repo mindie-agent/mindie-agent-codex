@@ -47,11 +47,12 @@ class ConsentFixture(unittest.TestCase):
         self.environment.stop()
         cleanup_temporary_directory(self.temp)
 
-    def test_record_choice_self_heals_damaged_consent(self):
+    def test_explicit_choice_preserves_a_damaged_authority(self):
         consent.consent_path().write_text("{broken")
-        consent.record_choice("later")
-        self.assertEqual(consent.load()["state"], "ok")
-        self.assertEqual(consent.load()["choice"], "later")
+        with self.assertRaises(consent.ConsentError):
+            consent.record_choice("later")
+        self.assertEqual(consent.consent_path().read_text(), "{broken")
+        self.assertEqual(consent.load()["state"], "corrupt")
 
     def test_consent_config_gates_the_capture_write_path(self):
         authority = consent.consent_path()
@@ -79,40 +80,6 @@ class ConsentFixture(unittest.TestCase):
         shared.write_text(json.dumps(settings))
         self.assertFalse(sharing.capture_allowed(lease, str(self.root)))
 
-    def test_concurrent_field_updates_both_survive(self):
-        consent.record_choice("later")
-        consent.record_reporting("disabled")
-        script = self.root / "race_update.py"
-        script.write_text(
-            "import os, sys, time\n"
-            "sys.path.insert(0, sys.argv[1])\n"
-            "os.environ['MINDIE_AGENT_CONFIG'] = sys.argv[2]\n"
-            "from mindie_knowledge import consent_store\n"
-            "real = consent_store._read_raw\n"
-            "def slow(path):\n"
-            "    found = real(path)\n"
-            "    time.sleep(0.15)\n"
-            "    return found\n"
-            "consent_store._read_raw = slow\n"
-            "import consent\n"
-            "if sys.argv[3] == 'choice':\n"
-            "    consent.record_choice('contribute')\n"
-            "else:\n"
-            "    consent.record_reporting('enabled')\n"
-        )
-        children = [
-            subprocess.Popen(
-                [sys.executable, str(script), str(SCRIPTS), str(self.config), op],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            )
-            for op in ("choice", "reporting")
-        ]
-        finished = [child.communicate(timeout=15) for child in children]
-        codes = [child.returncode for child in children]
-        self.assertEqual(codes, [0, 0], finished)
-        saved = json.loads(consent.consent_path().read_text())
-        self.assertEqual(saved["choice"], "contribute")
-        self.assertEqual(saved["reporting"], "enabled")
 
     def test_read_creates_nothing(self):
         saved = consent.load()

@@ -111,7 +111,7 @@ def runtime_env(config=None, *, adapter=None):
     selected = str(Path(config or config_path()).absolute())
     from diagnostic_support import environment_context, read_environment_context
     from native_context import environment, read as read_native_context
-    env.update(read_environment_context(selected) if adapter is None else environment_context(adapter))
+    env.update(read_environment_context(selected) if adapter is None else environment_context(adapter, selected))
     env.update(read_native_context(selected) if adapter is None else environment(adapter))
     env["MINDIE_AGENT_CONFIG"] = selected
     env[_DISPATCH_CONFIG] = selected

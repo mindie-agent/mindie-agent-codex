@@ -140,8 +140,12 @@ class SharingFixture(unittest.TestCase):
         return event
 
     def bridge(self, operation, event=None, timeout=5):
+        command = [sys.executable, str(SCRIPTS / "bridge.py"), operation]
+        if operation in {"sharing-enable", "sharing-disable"}:
+            command = [sys.executable, str(ROOT / "tests/fixtures/sharing_commands.py"),
+                       str(SCRIPTS), operation]
         return subprocess.run(
-            [sys.executable, str(SCRIPTS / "bridge.py"), operation],
+            command,
             input=json.dumps(event) if event is not None else "",
             text=True,
             capture_output=True,

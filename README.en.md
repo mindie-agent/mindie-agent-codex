@@ -222,3 +222,5 @@ Detailed engineering and verification guides are available in [`docs/`](docs/REA
 ## License
 
 Released under the [MIT License](LICENSE).
+
+Contribution uses one switch for scoped knowledge PRs and sanitized product fault Issues. Setup starts and verifies the reporter; configuration alone does not prove readiness or delivery. Disabling contribution stops pending fault uploads. Legacy choices without a unified-consent revision remain unchanged and show `needs_choice` until explicitly chosen again.

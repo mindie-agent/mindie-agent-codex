@@ -57,7 +57,7 @@ def service_launch_context(config, adapter):
     from summary_provider import environment_keys
 
     native = environment(adapter)
-    paths = dict(native, **environment_context(adapter))
+    paths = dict(native, **environment_context(adapter, config))
     paths["MINDIE_AGENT_CONFIG"] = str(Path(config).expanduser().absolute())
     names = sorted(set((*TRANSPORT_ENV, *environment_keys(native.get("CODEX_HOME")))))
     # The selected runtime validates this declaration during prepare-store,

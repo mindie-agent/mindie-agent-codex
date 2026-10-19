@@ -1,16 +1,17 @@
 """Install-level one-time choices: the profile consent authority, thin wrapper.
 
 [Role]
-Wraps `mindie_knowledge.consent_store` (`load`, `record_choice`, `record_reporting`, `install_traces`) for the active Codex profile (`mindie-consent.json`).
+Wraps the shared contribution authority for the active Codex profile.
 
 [Invariants]
-- Community contribution and issue reporting choices are independent install-level records (`SCHEMA`, `CHOICES`, `REPORTING`).
+- One explicit contribution choice authorizes knowledge sharing and fault reporting.
+- Legacy choices gain a revision only when the user explicitly chooses again.
 
 [Timeouts & Locks]
 - Delegates atomic consent file locking and writes to `mindie_knowledge.consent_store`.
 
 [Side-Effect Policy]
-- `load()` and `install_traces()` are read-only; `record_choice()` and `record_reporting()` atomically update `mindie-consent.json`.
+- Reads are inert; explicit choices delegate atomic writes to the shared store.
 """
 
 from __future__ import annotations
@@ -23,7 +24,6 @@ from session_gate import config_path
 
 SCHEMA = consent_store.SCHEMA
 CHOICES = consent_store.CHOICES
-REPORTING = consent_store.REPORTING
 ConsentError = consent_store.ConsentError
 
 
@@ -50,28 +50,8 @@ def load(config_file=None) -> dict:
 
 def record_choice(choice: str, config_file=None) -> str:
     path = consent_path_for(config_file) if config_file is not None else consent_path()
-    try:
-        consent_store.record_choice(path, choice)
-    except consent_store.ConsentError as exc:
-        if exc.state == "corrupt":
-            path.unlink(missing_ok=True)
-            consent_store.record_choice(path, choice)
-        else:
-            raise
+    consent_store.record_choice(path, choice)
     return choice
-
-
-def record_reporting(value: str, config_file=None) -> str:
-    path = consent_path_for(config_file) if config_file is not None else consent_path()
-    try:
-        consent_store.record_reporting(path, value)
-    except consent_store.ConsentError as exc:
-        if exc.state == "corrupt":
-            path.unlink(missing_ok=True)
-            consent_store.record_reporting(path, value)
-        else:
-            raise
-    return value
 
 
 def _read_adapter_config(config_file: Path) -> dict:

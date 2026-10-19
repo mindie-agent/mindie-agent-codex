@@ -52,6 +52,7 @@ CHOICES = (
     "project/repository/account — scripts/setup.py configure "
     "--community-repository OWNER/REPO --community-project-root PATH "
     "--community-visibility public [--community-account NAME]. "
+    "Contribution authorizes scoped knowledge PRs and sanitized product fault Issues together. "
     "Reuse existing user-approved values. Installation or task binding alone "
     "does not complete configuration."
 )
@@ -396,7 +397,8 @@ def set_enabled(enable, config_file=None):
         settings = validate(parsed)
         desired_choice = "contribute" if enable else "disabled"
         saved = consent.load(config_file)
-        if settings['enabled'] == bool(enable) and saved.get('choice') == desired_choice:
+        if (settings['enabled'] == bool(enable) and saved.get('choice') == desired_choice
+                and saved.get("choice_revision")):
             return settings  # Already in the requested state: do not mutate.
         settings["enabled"] = bool(enable)
         # Keep the consent-authority pointer wired on this user-intent

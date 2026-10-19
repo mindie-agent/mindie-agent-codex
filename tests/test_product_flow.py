@@ -17,6 +17,20 @@ import sharing
 
 
 class ProductFlowTests(SharingFixture):
+    def setUp(self):
+        super().setUp()
+        run = bridge.run
+
+        def isolated_reporter(command, *args, **kwargs):
+            if command[1:2] == [str(SCRIPTS / "setup.py")]:
+                command = [command[0], str(SCRIPTS.parents[2] / "tests/fixtures/sharing_commands.py"),
+                           str(SCRIPTS), *command[2:]]
+            return run(command, *args, **kwargs)
+
+        boundary = patch.object(bridge, "run", side_effect=isolated_reporter)
+        boundary.start()
+        self.addCleanup(boundary.stop)
+
     def test_removed_modes_cannot_complete_new_setup(self):
         for word in ('read-only', 'later'):
             with self.assertRaises(ValueError):

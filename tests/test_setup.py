@@ -74,6 +74,8 @@ def run_setup(python, *args, real_probe=False, real_store=False, env=None):
         if not real_store:
             stack.enter_context(patch.object(capture_config, "prepare_store", validate_store_config))
         stack.enter_context(patch.object(sharing, "normalize_with_runtime", _in_process_normalize))
+        stack.enter_context(patch("mindie_diagnostics.reporting_commands.ensure",
+                                  return_value={"status": "running"}))
         stack.enter_context(contextlib.redirect_stdout(out))
         stack.enter_context(contextlib.redirect_stderr(err))
         try:
@@ -91,12 +93,13 @@ def run_setup(python, *args, real_probe=False, real_store=False, env=None):
     return subprocess.CompletedProcess(argv, code, out.getvalue(), err.getvalue())
 
 
-def run_configure(*args):
+def run_configure(*args, reporter_status="running"):
     argv = ["setup.py", "configure", *map(str, args)]
     out, err = io.StringIO(), io.StringIO()
     code = 0
     with (patch.object(sys, "argv", argv),
           patch.object(sharing, "normalize_with_runtime", _in_process_normalize),
+          patch("mindie_diagnostics.reporting_commands.ensure", return_value={"status": reporter_status}),
           contextlib.redirect_stdout(out),
           contextlib.redirect_stderr(err)):
         try:
@@ -143,7 +146,6 @@ class SetupTests(unittest.TestCase):
                 consent = base / "mindie-consent.json"
                 community = base / "mindie-community.json"
                 consent_store.record_choice(consent, "contribute" if enabled else "disabled")
-                consent_store.record_reporting(consent, "disabled")
                 community.write_text(json.dumps(dict(
                     schema="mindie-community-config/1", enabled=enabled,
                     generation="other-adapter", enabled_at=1.0, repository="owner/shared",
@@ -369,6 +371,18 @@ class SetupTests(unittest.TestCase):
                 str(config.with_name("mindie-consent.json")),
             )
             self.assertEqual((config.read_bytes(), engine.read_bytes()), installed_bytes)
+            consent_before = config.with_name("mindie-consent.json").read_bytes()
+            failed_reporter = run_configure(
+                "--config", str(config),
+                "--community-repository", "mindie-agent/knowledge",
+                "--community-project-root", str(scope),
+                "--community-visibility", "public", reporter_status="degraded",
+            )
+            self.assertEqual(failed_reporter.returncode, 1)
+            result = json.loads(failed_reporter.stdout)
+            self.assertEqual(result["status"], "degraded")
+            self.assertEqual(result["reporting"]["worker"]["status"], "degraded")
+            self.assertEqual(config.with_name("mindie-consent.json").read_bytes(), consent_before)
 
     def test_configure_rejects_corrupt_or_development_engine_before_writes(self):
         with tempfile.TemporaryDirectory() as temporary:

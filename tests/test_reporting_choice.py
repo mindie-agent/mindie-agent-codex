@@ -63,89 +63,51 @@ class ReportingFixture(unittest.TestCase):
         self.environment.stop()
         cleanup_temporary_directory(self.temp)
 
-    def write_consent(self, choice="read-only", reporting="later"):
-        consent.record_choice(choice)
-        consent.record_reporting(reporting)
+    def test_legacy_reporting_enable_guides_to_contribution_without_writing(self):
+        consent.record_choice("disabled")
+        before = consent.consent_path().read_bytes()
+        result = self.bridge("reporting-enable")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["status"], "contribution_choice_required")
+        self.assertEqual(consent.consent_path().read_bytes(), before)
+        self.assertFalse(self.policy.exists())
 
-    def write_policy(self, decision):
-        self.policy.write_text(
-            json.dumps(
-                {
-                    "schema": "mindie.diagnostics.reporting.v1",
-                    "purpose": "tool_fault_reporting",
-                    "decision": decision,
-                    "repository": "mindie-agent/mindie-agent",
-                    "revision": "a" * 32,
-                    "roots": [str(self.diag / "logs")],
-                }
-            )
-            + "\n"
-        )
+    def test_legacy_contribution_needs_new_explicit_choice_and_cannot_start_worker(self):
+        authority = consent.consent_path()
+        authority.write_text(json.dumps(dict(schema=consent.SCHEMA, choice="contribute", reporting="enabled")))
+        before = authority.read_bytes()
+        result = self.bridge("reporting-ensure")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        value = json.loads(result.stdout)
+        self.assertEqual(value["status"], "needs_choice")
+        self.assertFalse(value["enabled"])
+        self.assertEqual(value["worker"]["status"], "not_started")
+        self.assertEqual(authority.read_bytes(), before)
+
+    def test_explicit_choice_activates_the_worker_without_rewriting_choice(self):
+        import diagnostic_support
+        consent.record_choice("contribute")
+        before = consent.consent_path().read_bytes()
+        with patch("mindie_diagnostics.reporting_commands.ensure", return_value={"status": "running"}) as start:
+            result = diagnostic_support.activate_reporting()
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(Path(start.call_args.args[0]), self.policy)
+        self.assertEqual(consent.consent_path().read_bytes(), before)
+        policy = json.loads(self.policy.read_text())
+        self.assertEqual(policy["consent_config"], str(consent.consent_path()))
+
+    def test_disabled_choice_wins_over_previous_enabled_policy(self):
+        import diagnostic_support
+        consent.record_choice("contribute")
+        diagnostic_support.activate_reporting(ensure=False)
+        consent.record_choice("disabled")
+        result = self.bridge("reporting-status")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        value = json.loads(result.stdout)
+        self.assertFalse(value["enabled"])
 
     def bridge(self, *args):
         return subprocess.run(
             [sys.executable, str(SCRIPTS / "bridge.py"), *args],
             text=True, capture_output=True, timeout=15, cwd=str(self.root),
         )
-
-    def status(self):
-        result = self.bridge("status")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        return json.loads(result.stdout)
-
-    def test_saved_reporting_later_is_not_reasked(self):
-        self.write_consent("read-only", "later")
-        payload = self.status()
-        diagnostics = payload.get("diagnostics") or {}
-        self.assertIsNone(diagnostics.get("choice"))
-        self.assertIsNot((diagnostics.get("reporting") or {}).get("enabled"), True)
-
-    def test_saved_later_overrides_an_enabled_policy_on_status(self):
-        self.write_consent("read-only", "later")
-        self.write_policy("enabled")
-        payload = self.status()
-        reporting = (payload.get("diagnostics") or {}).get("reporting") or {}
-        self.assertIsNot(reporting.get("enabled"), True)
-        self.assertIn("saved", reporting.get("detail", ""))
-        self.assertIsNone((payload.get("diagnostics") or {}).get("choice"))
-
-    def test_reporting_ensure_requires_saved_enabled(self):
-        self.write_consent("read-only", "later")
-        self.write_policy("enabled")
-        result = self.bridge("reporting-ensure")
-        self.assertEqual(result.returncode, 1)
-        payload = json.loads(result.stdout)
-        self.assertEqual(payload["status"], "unavailable")
-        self.assertEqual(payload["error"]["stage"], "consent")
-
-    def test_reporting_disable_writes_policy_and_preference_together(self):
-        self.write_consent("read-only", "enabled")
-        self.write_policy("enabled")
-        result = self.bridge("reporting-disable")
-        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        policy = json.loads(self.policy.read_text())
-        self.assertEqual(policy["decision"], "disabled")
-        saved = consent.load()
-        self.assertEqual(saved["reporting"], "disabled")
-        # And the next status shows neither the offer nor an enabled reporter.
-        payload = self.status()
-        diagnostics = payload.get("diagnostics") or {}
-        self.assertIsNone(diagnostics.get("choice"))
-        self.assertIsNot((diagnostics.get("reporting") or {}).get("enabled"), True)
-
-    def test_reporting_enable_records_preference_first(self):
-        self.write_consent("read-only", "later")
-        result = self.bridge("reporting-enable")
-        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        saved = consent.load()
-        self.assertEqual(saved["reporting"], "enabled")
-        self.assertEqual(saved["choice"], "read-only")  # contribution untouched
-        policy = json.loads(self.policy.read_text())
-        self.assertEqual(policy["decision"], "enabled")
-        payload = self.status()
-        reporting = (payload.get("diagnostics") or {}).get("reporting") or {}
-        self.assertIs(reporting.get("enabled"), True)
-
-
-if __name__ == "__main__":
-    unittest.main()

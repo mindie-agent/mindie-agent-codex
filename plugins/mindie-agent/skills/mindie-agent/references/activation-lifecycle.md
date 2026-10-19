@@ -70,3 +70,5 @@ Never suggest or launch a history scan during onboarding, `Stop`, recovery, or b
    - `unchanged`: duplicate.
    - `empty`: no public messages.
    - `failed`: requires resolving the reported source/runtime problem. Never automatically retry a failed historical import. For an explicitly requested index retry, add `--retry-summary` (noting an earlier uncertain invocation may already have been billed).
+
+Contribution setup also activates sanitized fault reporting from the same saved choice. Run configuration with at least a 180-second outer budget. Inspect `reporting.status`: only `running` confirms worker readiness, while `degraded` and `needs_choice` remain incomplete. Do not re-authorize a legacy choice during startup, claim delivery from configuration alone, or use legacy reporting-enable to bypass contribution setup.

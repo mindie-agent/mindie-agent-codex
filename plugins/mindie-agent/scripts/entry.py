@@ -9,6 +9,8 @@ Fixed release entrypoint (`releases/<version>/entry.py`) that validates `runtime
 
 [Timeouts & Locks]
 - Acquires `update_lock(config)` (`blocking=True` except on `stop`) around profile validation and initialization.
+- Session maintenance has a 300-second execution budget for reporter, feed,
+  and knowledge readiness, followed by bounded owned-process cleanup.
 
 [Side-Effect Policy]
 - First-use `profile(..., prepare=True)` runs headless `setup.install` under `exclusive=True` `update_lock`; subsequent calls validate and dispatch without mutating config.
@@ -84,7 +86,7 @@ def session_start(config):
     adapter = read(config)
     result = run([adapter["python"], "-I",
                   str(Path(runtime_scripts(adapter)) / "session_maintenance.py"), str(config)],
-                 "", env=runtime_env(config), allow_service=True)
+                 "", timeout=300.0, env=runtime_env(config), allow_service=True)
     print(result.checked_stdout(), file=sys.stderr)
 
 
