@@ -43,7 +43,9 @@ Hermes is experience revision across tiers; exploration does not require an L4 r
 - **Revise from bounded evidence**: use `task_state="verified_milestone"` for a finished finding in an ongoing task, or `"completed"` for completion. Preserve counterevidence, human corrections, superseded plans and unresolved alternatives; compare related units and prefer revision or no-op. Separate evidence validity, goal attainment and reusable information, with supported/refuted/inconclusive feedback. L4 transformations still require a verified final-combination ablation receipt; diagnostic L2/L3 findings do not require performance gains.
 
 For first-divergence checks, observer effects, history-dependent reproducers,
-independent oracles and recovery, read [Diagnostic Reasoning](references/diagnostic-reasoning.md).
+independent oracles, progressive scale-up verification (pruned vs. full weights),
+same-topology baseline A/B parity, speculative graph/SLA sweeps, and parent/child
+PR delivery workflows, read [Diagnostic Reasoning](references/diagnostic-reasoning.md).
 
 ## Progressive Knowledge Loading & Experience Flywheel (`P0`–`P3`)
 

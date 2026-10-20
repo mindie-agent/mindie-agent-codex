@@ -116,7 +116,27 @@ constraints, superseded plans, scoped exclusions, open questions, the next
 discriminating action and in-flight run references. On recovery, query those
 runs before submitting another. Simple tasks need no extra ledger ceremony.
 
+## Scale verification, baseline parity and PR delivery workflows
+
+1. **Progressive verification ladder & pruned-vs-full weight boundary (`W1`)**:
+   - Advance strictly through `Single-Op → 1-Node Pruned Weights / 2-Node Minimal Topology → 4-Node Full Weights → Immediate Cluster Release`.
+   - On 1-node pruned weights (e.g., 16 experts), do **not** judge long-text semantic quality, but mandatorily verify: (a) operator/weight loading, (b) KV Cache grouping and `build()` count, (c) minimal 2-bucket `ACLGraph` capture covering boundary shapes (never compile all buckets during debugging), (d) non-zero active execution and acceptance rate on quantized/speculative paths, and (e) Peak Activation memory parity against the baseline (`fix hangs/crashes on 1–2 nodes → verify memory activation on 1 node → run full accuracy and SLA sweep on 4 nodes`).
+   - On 4-node full weights, run all known historical failure cases first, then benchmark datasets (e.g., GPQA), speculative acceptance rate, and the SLA sweep, and release the multi-node cluster immediately after summarizing. Downscale 4-node or long-context bugs to 1–2 nodes whenever reproducible before instrumenting.
+2. **Same-topology baseline A/B diff & three-axis migration parity (`W2`)**:
+   - Lock the last known-good baseline anchor first (verified branch or pre-regression PR commit). When operator code is unchanged from the verified baseline, freeze operator suspicion and diff framework glue (Runner, Metadata Builder, KV Cache Specs, Weight Loader).
+   - Compare old vs. new side-by-side on dual nodes or single-node split cards (`0..7` vs. `8..15` with identical `TP` and `block_size`) on the same weights, instrumenting key module boundaries in one pass rather than micro-managing debug dump switches.
+   - Require three-axis parity before declaring migration complete: **(a) numerical/case accuracy**, **(b) Peak Activation memory** (e.g., catching `SP` / `flashcomm` regressions), and **(c) speculative acceptance rate**.
+3. **Upstream/sibling-first implementation & pre-review panorama audit (`W3`)**:
+   - Before coding, check whether upstream `vllm` already provides native hooks (`process_weights_after_loading`, native custom ops) and drop obsolete patches; mirror mature sibling patterns in `vllm-ascend` (e.g., placing `FusedInferAttentionScoreV2SinkMetadata` in `AttentionMetadataBuilder` like `DSA V1`, or aligning GQA DSpark with GLM); inherit `common` base classes rather than cross-vendor `ROCm`/`CUDA` runners that require reverse monkey-patching.
+   - Before entering review or after a large rebase, perform a file-by-file, line-by-line panorama audit (`before → after → why`) to remove debug remnants, dead code, `NotImplementedError` defensive guards, and string-grep filler UTs, and check cross-model blast radius on shared core files (`kv_cache_interface.py`, `model_runner`).
+4. **Speculative graph alignment, out-of-graph metadata & SLA sweep (`W4`)**:
+   - For `K`-step speculative decoding (DSpark/MTP), align `ACLGraph` capture buckets to multiples of `K+1` (or the `TP`-compatible step), select initial graphs by padded `num_input_tokens`, and keep fixed-buffer allocation and Tiling/Sink metadata construction in `AttentionMetadataBuilder` / `ModelRunner` outside the captured graph while eliminating `seq_lens` and Mamba `num_accepted_tokens` Host D2H syncs. Validate `greedy` before `probabilistic` sampling.
+   - Run SLA sweeps on ~95% prefix-cache datasets with fixed `1K` output, power-of-2 inputs (`2K → 256K`), and per-DP concurrency `1, 2, 4...` under `TPOT <= 30ms`, reporting `TPOT`, `ITL (p50/p90)`, and `mean_acceptance_length` together (plus matched-acceptance `ITL` delta for pure system/D2H optimizations).
+5. **Parent + atomic child PR stack, `< 5 min` reduced-weight CI & lightweight pre-flight (`W5–W6`)**:
+   - For large full-stack features, maintain **1 parent integration PR** (full stack + deployment doc for multi-node E2E verification) and split orthogonal features into an ordered stack of **atomic child PRs**; keep PR descriptions focused on current responsibilities, post separate clean benchmark tables + desensitized launch commands per weight variant (no internal hashes, artifact paths, or false-positive notes), triage all non-AI human review comments with regression checks, and build single-file layer/expert-reduced or dummy-weight E2E CI smoke tests finishing in `< 5 min`.
+   - Use a lightweight 4-point pre-flight check instead of heavy hash-gate runbooks: (a) parallel C++ builds (`-j` / `MAX_JOBS`) + `ASCEND_CUSTOM_OPP_PATH` `.so` check, (b) explicit `VLLM_VERSION` pinning, (c) `GLOO/HCCL_SOCKET_IFNAME`, and (d) running benchmark clients inside the remote server container rather than over VPN.
+
 Design provenance: `mindie-agent/docs/knowledge-context-and-exploration.md`,
-section 15, mechanisms M1-M6 and transcript sources T1-T5. Those historical
-cases motivate the mechanisms; their hardware parameters and specific fixes
-are not defaults for a new task.
+section 15, mechanisms M1-M6, workflows W1-W6 and transcript sources T1-T6.
+Those historical cases motivate the mechanisms; their hardware parameters and
+specific fixes are not defaults for a new task.
