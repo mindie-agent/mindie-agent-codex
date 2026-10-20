@@ -2,7 +2,7 @@
   "knowledge": [
     {
       "name": "knowledge_query",
-      "description": "The host binds native task identity per call. Search the selected domain's published knowledge and experience. Matches are grouped by a resolvable cited source without treating citation counts as evidence. Each match has a directly readable block ref and a separate feedback_ref for the observed task revision. To read more related matches, pass related_next as continuation without query; limit controls the next page. A changed corpus rejects the continuation explicitly.",
+      "description": "The host binds native task identity per call. Search graded rules and task material in the selected domain. Each match identifies its source, has a readable ref, and returns feedback_ref for the exact observed revision. Pass known task conditions to filter graded rules; unknown conditions are excluded by default. For related task blocks, pass related_next as continuation without query. A changed corpus rejects the continuation. Reference material does not establish applicability.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -14,8 +14,33 @@
             "minimum": 1,
             "maximum": 20
           },
+          "conditions": {
+            "type": "object",
+            "description": "Observed task facts used to check rule applicability."
+          },
           "continuation": {
             "type": "string"
+          },
+          "domain_path": {
+            "type": "string",
+            "description": "Preferred graded domain_path prefix; cross-directory fallback remains available."
+          },
+          "token_budget": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16000,
+            "default": 800,
+            "description": "Body excerpt and inherited-rule budget in estimated tokens."
+          },
+          "include_unknown": {
+            "type": "boolean",
+            "default": false,
+            "description": "Include units whose declared conditions are unknown; unknown is not evidence of applicability."
+          },
+          "domain": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "description": "One configured canonical knowledge domain; omit to use the installed default."
           }
         },
         "required": [],
@@ -30,13 +55,13 @@
     },
     {
       "name": "knowledge_explain",
-      "description": "The host binds native task identity per call. Read one exact immutable block by its returned ref, with current task navigation and adjacent block refs. A task ref returns current navigation, block count and first block ref without assembling the transcript. An appended task keeps unchanged block refs readable. Removed or withdrawn material is unavailable. Use feedback_ref only for feedback, never as a reading ref.",
+      "description": "The host binds native task identity per call. Read a returned graded-unit, task or block ref. A graded-unit ref returns its exact current revision and conditions; a task ref returns navigation and first_block_ref; a block ref returns its immutable body and adjacent block refs. Replaced graded revisions and withdrawn material are unavailable. Use the returned ref to read and feedback_ref to vote.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "ref": {
             "type": "string",
-            "description": "Copy a task or block ref returned by query/explain exactly; feedback_ref is not a reading ref."
+            "description": "Copy the graded-unit, task or block ref returned by query/explain exactly."
           }
         },
         "required": [
@@ -82,6 +107,93 @@
         "readOnlyHint": false,
         "destructiveHint": false,
         "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "knowledge_distill",
+      "description": "The host binds native task identity per call. Explicitly distill caller-selected, already-authorized evidence into graded knowledge. task_state is supplied by the caller; ordinary Stop never selects completion. The host binds native task identity and the active lease. May invoke the configured native organizer once and apply a returned C6 decision locally; no GitHub write.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "experiment_ledger",
+                    "run_manifest",
+                    "authorized_transcript",
+                    "ecosystem_repo",
+                    "hardware_spec",
+                    "ablation_receipt"
+                  ]
+                },
+                "outcome": {
+                  "type": "string",
+                  "enum": [
+                    "observed",
+                    "verified",
+                    "compile_failed",
+                    "infra_failed",
+                    "measurement_invalid",
+                    "in_flight"
+                  ]
+                },
+                "source_locator": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                },
+                "evidence_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "repetitions": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "kind",
+                "outcome",
+                "source_locator",
+                "content",
+                "evidence_refs"
+              ]
+            }
+          },
+          "task_state": {
+            "type": "string",
+            "enum": [
+              "in_flight",
+              "verified_milestone",
+              "completed"
+            ]
+          },
+          "domain": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "description": "One configured canonical knowledge domain; omit to use the installed default."
+          }
+        },
+        "required": [
+          "inputs",
+          "task_state"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
         "openWorldHint": false
       }
     }

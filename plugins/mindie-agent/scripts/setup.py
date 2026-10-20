@@ -114,10 +114,6 @@ def community_settings(args, parser, python, *, scripts=SCRIPTS):
         if value:
             settings[key] = value
     settings["visibility"] = args.community_visibility
-    declaration, _ = product_contract.product(product_contract.source_root(scripts))
-    publication = declaration["publication"]
-    if settings["repository"] == publication["repository"]:
-        settings["publication_contract_sha256"] = publication["contract_sha256"]
     try:
         structural = sharing.validate(settings)
         return sharing.normalize_with_runtime(structural, python)
@@ -226,8 +222,9 @@ def install(args, parser, *, validation=None):
     )
     from capture_config import prepare, prepare_store
     value.update(prepare(python, SCRIPTS))
-    if args.domain == declaration["publication"]["domain"] and not args.no_public_feed:
-        value["feeds"] = [product_contract.publication_feed(declaration)]
+    published = product_contract.publication_feed(declaration, domain=args.domain)
+    if published is not None and not args.no_public_feed:
+        value["feeds"] = [published]
     adapter = dict(
         python=python,
         engine_config=str(engine_config),
@@ -247,6 +244,12 @@ def install(args, parser, *, validation=None):
     # with the pinned core here, without starting a service or calling a model.
     # A damaged existing authority fails before installation config is written.
     prepare_store(python, SCRIPTS, value)
+    from capture_config import prepare_domains
+    adapter['domain_configs'] = prepare_domains(
+        python, adapter, value, config_directory=str(config.with_name(config.stem + '.domains')),
+        authority_directory=str(config.parent / 'knowledge-domains'),
+        consent_config=str(consent.consent_path_for(config)), public_feeds=not args.no_public_feed,
+        domains=product_contract.official_feeds())
     write_private(engine_config, value)
     write_private(config, adapter)
     if sharing_choice:
@@ -382,9 +385,9 @@ def configure(args, parser):
             extensions = {
                 key: value
                 for key, value in old.items()
-                if key not in sharing.CORE_KEYS and key != "consent_config"
-                and (key != "publication_contract_sha256"
-                     or old.get("repository") == community["repository"])
+                if key not in sharing.CORE_KEYS and key not in {
+                    "consent_config", "publication_contract_sha256",
+                }
             }
         merged = sharing.normalize_with_runtime(
             {**extensions, **community}, python, config, previous=old

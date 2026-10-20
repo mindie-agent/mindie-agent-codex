@@ -22,7 +22,6 @@ from pathlib import Path
 import re
 import sys
 import threading
-import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -67,6 +66,7 @@ CONTRIBUTION_OPERATIONS = {
     "contribution-compact",
 }
 IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
+DOMAIN = re.compile(r"[a-z][a-z0-9-]{0,63}\Z")
 BATCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 # Includes JSON escaping of the native final-answer copy; only references
 # are forwarded. This byte cap bounds memory without imposing a run deadline.
@@ -241,14 +241,22 @@ def _runtime_identity():
     return scripts, build
 
 
-def activate(operation):
-    result = getattr(Sessions(), operation)()
+def activate(operation, *, domain=None):
+    sessions = Sessions()
+    if operation == "activate" and domain is not None:
+        # Target-domain activation returns its own lease and domain facts. It
+        # must not enter the default capture preparation with a target token.
+        result = sessions.activate(domain=domain)
+    else:
+        result = getattr(sessions, operation)()
     if operation != "activate":
         return result
     scripts, build = _runtime_identity()
     result["scripts"] = str(scripts)
     if build:
         result["build"] = build
+    if domain is not None:
+        return result
     return _prepare_capture(result)
 
 
@@ -881,7 +889,17 @@ def main():
             )
             raise SystemExit(1)
         return
-    if len(argv) != 1:
+    domain = None
+    if operation == "activate":
+        if len(argv) == 3 and argv[1] == "--domain":
+            domain = argv[2]
+            if DOMAIN.fullmatch(domain) is None:
+                print("Invalid MindIE domain", file=sys.stderr)
+                raise SystemExit(1)
+        elif len(argv) != 1:
+            print("Unsupported MindIE entry operation", file=sys.stderr)
+            raise SystemExit(1)
+    elif len(argv) != 1:
         print("Unsupported MindIE entry operation", file=sys.stderr)
         raise SystemExit(1)
     if operation.startswith("reporting-"):
@@ -893,9 +911,9 @@ def main():
         return serve("knowledge")
     if operation in {"activate", "deactivate"}:
         try:
-            result = activate(operation)
+            result = activate(operation, domain=domain)
             print(json.dumps(result))
-            if result.get("status") == "degraded":
+            if result.get("status") in {"degraded", "partial"}:
                 raise SystemExit(1)
         except Exception as exc:
             print(

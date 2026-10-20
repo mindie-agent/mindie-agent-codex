@@ -1,18 +1,29 @@
 #!/usr/bin/env python3
-"""Index complete new material through one bounded native small-model call.
+"""Run one bounded native organizer call for summary or explicit C6 distillation.
 
 [Role]
-Implements `NativeSummaryModel` and the CLI worker (`agent_worker.py`) that invokes `codex exec` (`gpt-5.6-luna`) in a sandboxed temporary workspace to summarize captured task transcripts.
+Implements `NativeSummaryModel` and the CLI worker (`agent_worker.py`) that
+invokes `codex exec` (`gpt-5.6-luna`) in a sandboxed temporary workspace. The
+ordinary summary request keeps its existing path; only an explicit
+`mindie-distill-request/1` selects the shared C6 branch.
 
 [Invariants]
-- Emits an explicit JSON outcome envelope (`status="returned"` or `"failed"`). Exit 0 means the envelope was delivered, not summary success.
-- Verifies `worker_policy` (`summary_provider`) before spawning `codex exec` so route changes abort before any model call.
+- Emits an explicit JSON outcome envelope (`status="returned"`, `"failed"` or
+  `"outcome_unknown"`). Exit 0 means the envelope was delivered, not success.
+- Verifies `worker_policy` (`summary_provider`) before spawning `codex exec` so
+  route changes abort before any model call.
+- A Stop or in-flight task never becomes a completed milestone; the shared
+  `value_gate`/noop decision runs before any paid C6 call.
+- C6 prompt/schema/validation are imported from `mindie_knowledge.graded.distill`
+  at call time; the old summary path must start without the new API.
 
 [Timeouts & Locks]
-- Native execution uses at most 120s and leaves cleanup time inside the parent summary deadline.
+- Native execution uses at most 120s and leaves cleanup time inside the parent
+  worker deadline.
 
 [Side-Effect Policy]
-- Creates and cleans up a temporary `mindie-codex-summary-*` directory; never modifies user workspaces or material stores directly.
+- Creates and cleans up one private temporary profile; never modifies user
+  workspaces, material stores or publication state directly.
 """
 import argparse
 import hashlib
@@ -34,23 +45,50 @@ from process_guard import InvalidResultError, NativeFailure, NativeStartError, O
 SUMMARY_MODEL = "gpt-5.6-luna"
 SUMMARY_EFFORT = "low"
 MAX_REQUEST_BYTES = 128 * 1024
+# A prepared C6 request carries its sanitized evidence plus the worker receipt
+# fields; it is bounded separately so old summary wire limits do not change.
+MAX_WIRE_BYTES = 512 * 1024
+MAX_DISTILL_PROMPT_BYTES = 320 * 1024
+DISTILL_REQUEST_SCHEMA = "mindie-distill-request/1"
 
 
 class ConfigurationError(ValueError):
     pass
 
 
+def _distill_capability():
+    """Advertise C6 only when the installed runtime actually provides it."""
+    try:
+        from mindie_knowledge.graded import distill
+    except ImportError:
+        return [], None
+    required = ("build_prompt", "decision_schema", "parse_validate_result", "validate_decision")
+    if (getattr(distill, "REQUEST_SCHEMA", None) != DISTILL_REQUEST_SCHEMA
+            or not all(callable(getattr(distill, name, None)) for name in required)):
+        return [], None
+    return [DISTILL_REQUEST_SCHEMA], Path(distill.__file__)
+
+
 def identity(route=None):
     # Read the implementation actually executing, not merely its command path.
-    sources = (Path(__file__), Path(process_guard.__file__), Path(summarizer.__file__),
-               Path(summary_provider.__file__), Path(summary_scratch.__file__))
+    sources = [Path(__file__), Path(process_guard.__file__), Path(summarizer.__file__),
+               Path(summary_provider.__file__), Path(summary_scratch.__file__)]
+    capabilities, distill_source = _distill_capability()
+    if distill_source is not None:
+        sources.append(distill_source)
     implementation = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sources}
     implementation["native_command"] = os.environ.get("MINDIE_CODEX_BIN", "codex")
     route = summary_provider.selected(SUMMARY_MODEL) if route is None else route
     if route["provider"] is not None:
         implementation["provider_route_sha256"] = route["route_sha256"]
-    return summarizer.policy_identity(model=route["model"], effort=SUMMARY_EFFORT,
-                                      implementation=implementation)
+    value = summarizer.policy_identity(model=route["model"], effort=SUMMARY_EFFORT,
+                                       implementation=implementation)
+    # Capabilities extend the validated policy identity; they do not replace
+    # the ordinary summary identity fields.
+    value["capabilities"] = capabilities
+    value["fingerprint"] = summarizer.digest({key: item for key, item in value.items()
+                                              if key != "fingerprint"})
+    return value
 
 
 class NativeSummaryModel:
@@ -63,22 +101,17 @@ class NativeSummaryModel:
         self.calls = 0
         self.route = None
 
-    def invoke(self, messages):
-        from langchain_core.messages import AIMessage
+    def _invoke(self, prompt, schema, *, prefix):
+        """One native call shared by summary and explicit C6 distillation."""
         self.calls += 1
         if self.calls != 1:
-            raise NativeFailure("summary attempted another model call")
-        data = [dict(role=message.type, content=message.content) for message in messages]
-        prompt = summarizer.render_prompt(data)
-        if len(prompt.encode("utf-8")) > summarizer.MAX_PROMPT_BYTES:
-            raise summarizer.SummaryInputError("complete prompt exceeds budget")
-        directory, managed = summary_scratch.create_profile(prefix="mindie-summary-")
+            raise NativeFailure("worker attempted another model call")
+        directory, managed = summary_scratch.create_profile(prefix=prefix)
         try:
             route = self.route or summary_provider.selected(SUMMARY_MODEL)
             env = summary_provider.environment(route, directory)
-            schema = Path(directory) / "schema.json"
-            schema.write_text(json.dumps(summarizer.output_schema(
-                [message.id for message in messages if message.id])), encoding="utf-8")
+            schema_path = Path(directory) / "schema.json"
+            schema_path.write_text(json.dumps(schema), encoding="utf-8")
             command = [os.environ.get("MINDIE_CODEX_BIN", "codex"), "exec", "--model", route["model"],
                        "-c", f'model_reasoning_effort="{SUMMARY_EFFORT}"', "--ignore-rules",
                        "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-C", directory,
@@ -88,7 +121,7 @@ class NativeSummaryModel:
                        "-c", "suppress_unstable_features_warning=true",
                        "-c", "features.skill_search=false",
                        "-c", "features.unbounded_connection_retries=false", "-c", 'web_search="disabled"',
-                       "--output-schema", str(schema), "--json", "-"]
+                       "--output-schema", str(schema_path), "--json", "-"]
             if env is None:
                 command.insert(2, "--ignore-user-config")
             run_codex(command, prompt, timeout=native_timeout(120.0),
@@ -98,16 +131,16 @@ class NativeSummaryModel:
             try:
                 message = self.receipt.get('final_message')
                 if not isinstance(message, str) or not message:
-                    raise InvalidResultError("completed summary message is unavailable")
+                    raise InvalidResultError("completed worker message is unavailable")
                 raw = message.encode('utf-8')
                 if len(raw) > summarizer.MAX_RESPONSE_BYTES:
-                    raise OutputLimitExceeded("summary metadata exceeds output budget")
+                    raise OutputLimitExceeded("worker metadata exceeds output budget")
                 self.raw_result = message
             except OutputLimitExceeded:
                 raise
             except UnicodeError:
-                raise InvalidResultError("summary output is unavailable or invalid") from None
-            return AIMessage(content=self.raw_result)
+                raise InvalidResultError("worker output is unavailable or invalid") from None
+            return self.raw_result
         finally:
             try:
                 if not managed:
@@ -121,6 +154,33 @@ class NativeSummaryModel:
                             reportable=False)
                 except Exception:
                     pass
+
+    def invoke(self, messages):
+        from langchain_core.messages import AIMessage
+        data = [dict(role=message.type, content=message.content) for message in messages]
+        prompt = summarizer.render_prompt(data)
+        if len(prompt.encode("utf-8")) > summarizer.MAX_PROMPT_BYTES:
+            raise summarizer.SummaryInputError("complete prompt exceeds budget")
+        schema = summarizer.output_schema([message.id for message in messages if message.id])
+        self._invoke(prompt, schema, prefix="mindie-summary-")
+        return AIMessage(content=self.raw_result)
+
+    def invoke_distill(self, request):
+        """Use only the shared C6 prompt/schema; never a local contract copy."""
+        from mindie_knowledge.graded import distill
+        build_prompt = getattr(distill, "build_prompt", None)
+        decision_schema = getattr(distill, "decision_schema", None)
+        if not callable(build_prompt) or not callable(decision_schema):
+            raise ImportError("installed runtime does not provide the C6 prompt/schema")
+        prompt = build_prompt(request)
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise summarizer.SummaryInputError("shared C6 prompt is unavailable")
+        if len(prompt.encode("utf-8")) > MAX_DISTILL_PROMPT_BYTES:
+            raise summarizer.SummaryInputError("complete C6 prompt exceeds budget")
+        schema = decision_schema()
+        if not isinstance(schema, dict):
+            raise summarizer.SummaryInputError("shared C6 decision schema is unavailable")
+        return self._invoke(prompt, schema, prefix="mindie-distill-")
 
 
 def _category(error):
@@ -174,6 +234,14 @@ def _reason(error, receipt):
 def run(payload):
     # Invalid wire input is rejected before a model object exists. Valid requests
     # always receive an explicit outcome, even for configuration/parse failures.
+    # Only the explicit new schema selects C6; ordinary summary requests remain
+    # on the existing summarizer path. A future C6 version fails closed instead
+    # of silently being treated as a summary request.
+    version = payload.get("schema_version") if isinstance(payload, dict) else None
+    if (isinstance(version, str) and version.startswith("mindie-distill-request/")
+            and version != DISTILL_REQUEST_SCHEMA):
+        raise summarizer.SummaryInputError("unsupported distillation request schema")
+    distill_request = version == DISTILL_REQUEST_SCHEMA
     summarizer.validate_request(payload)
     started = time.monotonic()
     model = NativeSummaryModel()
@@ -183,7 +251,11 @@ def run(payload):
         if payload["policy_identity"] != identity(route):
             raise ConfigurationError("summary worker policy changed")
         model.route = route
-        result = summarizer.summarize_batch(payload, model)
+        if distill_request:
+            from organizer_distill import decide as decide_distillation
+            result = decide_distillation(payload, model)
+        else:
+            result = summarizer.summarize_batch(payload, model)
     except Exception as exc:
         error = _category(exc)
         error_reason = _reason(exc, model.receipt)
@@ -212,10 +284,15 @@ def main():
         if args.identity:
             value = identity()
         else:
-            raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
-            if len(raw) > MAX_REQUEST_BYTES:
+            raw = sys.stdin.buffer.read(MAX_WIRE_BYTES + 1)
+            if len(raw) > MAX_WIRE_BYTES:
+                raise summarizer.SummaryInputError("worker request exceeds wire budget")
+            payload = json.loads(raw)
+            distill = (isinstance(payload, dict)
+                       and payload.get("schema_version") == DISTILL_REQUEST_SCHEMA)
+            if not distill and len(raw) > MAX_REQUEST_BYTES:
                 raise summarizer.SummaryInputError("summary request exceeds wire budget")
-            value = run(json.loads(raw))
+            value = run(payload)
         sys.stdout.buffer.write((summarizer.canonical(value) + "\n").encode("utf-8"))
         sys.stdout.buffer.flush()
         return 0

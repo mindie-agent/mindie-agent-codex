@@ -96,6 +96,7 @@ def adapter_check(source):
         "codex_transcript.py",
         "history_import.py",
         "agent_worker.py",
+        "organizer_distill.py",
         "capture_config.py",
         "entry.py",
         "bootstrap.py",
@@ -107,7 +108,7 @@ def adapter_check(source):
             raise ValueError("missing bounded runtime entry: " + name)
     catalog = read_json(plugin / "scripts" / "mcp_catalog.json")[0]
     names = {tool.get("name") for tool in catalog.get("knowledge") or []}
-    if not {"knowledge_query", "knowledge_explain", "knowledge_feedback"} <= names:
+    if not {"knowledge_query", "knowledge_explain", "knowledge_feedback", "knowledge_distill"} <= names:
         raise ValueError("adapter knowledge catalogue is incomplete")
     if "knowledge_use" in names or "knowledge_judge" in names:
         raise ValueError("retired knowledge tools are advertised")
@@ -204,8 +205,9 @@ def publication_contract(publication):
         if observed != publication["verified_commit"]:
             raise CheckFailure("publication_fetch", "revision_mismatch")
         try:
-            return read_git_contract(directory, observed, publication["domain"],
-                                     expected_sha256=publication["contract_sha256"], env=env)
+            return read_git_contract(
+                directory, observed, publication["domain"], env=env,
+            )
         except Exception as exc:
             code = "contract_mismatch" if getattr(exc, "code", None) == "contract_mismatch" else "read_failed"
             raise CheckFailure("publication_contract", code) from exc
@@ -221,10 +223,10 @@ def validate(source, expected, verified_receipt=None):
     checked("runtime_api", "api_incompatible", lambda: runtime_check(Path(__file__).resolve().parent))
     if verified_receipt is None:
         # The runtime parser checks material formats and review semantics.
-        # The exact product-selected declaration digest binds the independent
-        # trusted publication validator. A runtime-only change does not select
-        # new Bot code; executable code never comes from candidate content.
-        checked("publication_contract", "read_failed", lambda: publication_contract(actual["publication"]))
+        # The verified Git revision still binds the trusted publication read;
+        # current-format selection no longer depends on a fixed content digest.
+        checked("publication_contract", "read_failed",
+                lambda: publication_contract(actual["publication"]))
     else:
         # This baseline is immutable and already verified for these exact
         # source/product/runtime identities. Rechecking before installation

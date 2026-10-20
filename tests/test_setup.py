@@ -31,7 +31,16 @@ def _in_process_normalize(settings, python, config_file=None, *, previous=None):
         raise sharing.SharingError("community settings rejected by core normalize: " + str(exc)[:200])
 
 
-def run_setup(python, *args, real_probe=False, real_store=False, env=None):
+def _config_write_validation(declaration=None):
+    declaration = declaration or product_contract.product(
+        product_contract.source_root(SCRIPTS))[0]
+    value = {"schema": product_contract.RECEIPT_SCHEMA,
+             "publication": declaration["publication"]}
+    return dict(value, status="validated")
+
+
+def run_setup(python, *args, real_probe=False, real_store=False, env=None,
+              declaration=None):
     # Config-write cases isolate the product verification boundary. Candidate
     # ownership, real subprocess failures and receipt identities have their
     # own tests; no config unit case downloads publication history.
@@ -69,7 +78,20 @@ def run_setup(python, *args, real_probe=False, real_store=False, env=None):
         stack.enter_context(patch.object(release_metadata, "require_harness", lambda source: "0.153.4"))
         stack.enter_context(patch.object(
             setup_script, "probe_runtime",
-            lambda _py: dict(product_contract.identity(product_contract.source_root(setup_script.SCRIPTS)), status="validated"),
+            lambda _py: _config_write_validation(declaration),
+        ))
+        if declaration is not None:
+            stack.enter_context(patch.object(
+                product_contract, "product",
+                lambda _source: (declaration, "0" * 64),
+            ))
+        # Scanner installation writes outside the profile; config-write cases
+        # isolate that unrelated side effect and keep the real prepare/store path.
+        stack.enter_context(patch.object(
+            capture_config, "prepare",
+            lambda python, scripts: dict(
+                capture_mode="public-transcript", redactor_executable=sys.executable,
+                summary_command=[str(python), str(Path(scripts) / "agent_worker.py")]),
         ))
         if not real_store:
             stack.enter_context(patch.object(capture_config, "prepare_store", validate_store_config))
@@ -115,6 +137,42 @@ def run_configure(*args, reporter_status="running"):
 
 
 class SetupTests(unittest.TestCase):
+    def test_product_contract_has_no_fixed_digest(self):
+        declaration, _ = product_contract.product(ROOT)
+        publication = declaration["publication"]
+        self.assertEqual(set(publication),
+                         {"repository", "ref", "domain", "verified_commit"})
+        self.assertEqual(publication["ref"], "main")
+        self.assertNotIn("contract_sha256", publication)
+
+    def test_fresh_install_writes_two_official_main_feeds(self):
+        declaration = dict(
+            schema="mindie-product/1", validation="mindie-candidate-check/1",
+            publication=dict(repository="mindie-agent/knowledge-vllm-ascend",
+                             ref="main", domain="vllm-ascend",
+                             verified_commit="1" * 40))
+        rows = product_contract.official_feeds()
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            config = base / "codex.json"
+            result = run_setup(sys.executable, "--config", config,
+                               "--root", base / "data", declaration=declaration)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            adapter = json.loads(config.read_text())
+            engine = json.loads(Path(adapter["engine_config"]).read_text())
+            self.assertEqual(engine["feeds"], [rows[0]])
+            self.assertNotIn("contract_sha256", engine["feeds"][0])
+            operators = json.loads(
+                Path(adapter["domain_configs"]["operators"]).read_text())
+            self.assertEqual(operators["feeds"], [rows[1]])
+            settings = json.loads(Path(operators["community_config"]).read_text())
+            self.assertEqual(settings["branch"], "main")
+            self.assertEqual(settings["repository"], "mindie-agent/knowledge-operators")
+            self.assertFalse(settings["enabled"])
+            self.assertEqual(settings["consent_config"],
+                             str(config.with_name("mindie-consent.json")))
+            self.assertFalse(config.with_name("mindie-community.json").exists())
+
     def test_first_codex_install_reuses_unconfigured_disabled_shared_document(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -487,8 +545,7 @@ class SetupTests(unittest.TestCase):
                 self.assertTrue(community.is_file())
             settings = json.loads(community.read_text())
             self.assertEqual(settings["schema"], "mindie-community-config/1")
-            declaration, _ = setup_script.product_contract.product(ROOT)
-            self.assertEqual(settings["publication_contract_sha256"], declaration["publication"]["contract_sha256"])
+            self.assertNotIn("publication_contract_sha256", settings)
             self.assertTrue(settings["enabled"])
             self.assertEqual(settings["repository"], "mindie-agent/knowledge-vllm-ascend")
             self.assertEqual(settings["project_roots"], [str(scope.resolve())])
@@ -506,7 +563,7 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(consent_doc["choice"], "contribute")
             self.assertNotIn("token", community.read_text().lower())
 
-    def test_first_configure_projects_product_and_repo_change_drops_old_hash(self):
+    def test_configure_does_not_add_a_fixed_digest(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             config = base / "codex.json"
@@ -514,7 +571,6 @@ class SetupTests(unittest.TestCase):
             scope.mkdir()
             installed = run_setup(sys.executable, "--config", config, "--root", base / "data")
             self.assertEqual(installed.returncode, 0, installed.stderr)
-            declaration, _ = setup_script.product_contract.product(ROOT)
             def configure(repository):
                 result = run_configure(
                     "--config", str(config), "--community-repository", repository,
@@ -523,13 +579,10 @@ class SetupTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 return json.loads(config.with_name("mindie-community.json").read_text())
-            selected = configure(declaration["publication"]["repository"])
-            self.assertEqual(selected["publication_contract_sha256"], declaration["publication"]["contract_sha256"])
-            selected = configure("owner/custom")
-            self.assertNotIn("publication_contract_sha256", selected)
-            selected["publication_contract_sha256"] = "b" * 64
-            config.with_name("mindie-community.json").write_text(json.dumps(selected))
-            self.assertEqual(configure("owner/custom")["publication_contract_sha256"], "b" * 64)
+            self.assertNotIn("publication_contract_sha256",
+                             configure("mindie-agent/knowledge-vllm-ascend"))
+            self.assertNotIn("publication_contract_sha256",
+                             configure("owner/custom"))
 
     def test_partial_community_selection_fails_before_any_write(self):
         for module in setup_script.PROBE_MODULES:

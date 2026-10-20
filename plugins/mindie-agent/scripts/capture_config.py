@@ -50,6 +50,14 @@ def prepare(python, scripts):
                 summary_command=[str(python), str(Path(scripts) / 'agent_worker.py')])
 
 
+def prepare_domains(python, adapter, engine, **options):
+    """Use the selected core's one catalog and policy-preserving preparation."""
+    output = run([str(python), '-m', 'mindie_knowledge.loop.domain_catalog'],
+                 json.dumps(dict(adapter=adapter, engine=engine, **options)),
+                 timeout=90, max_output=65536).checked_stdout()
+    return json.loads(output)['domain_configs']
+
+
 if __name__ == "__main__":
     from pathlib import Path
     import sys

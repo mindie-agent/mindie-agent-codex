@@ -75,6 +75,18 @@ class McpKnowledgeEndToEndTests(unittest.TestCase):
             MINDIE_DIAGNOSTICS_ROOT=str(self.root / "diagnostics"),
         )
         self.environment.start()
+        # The production helper strips PYTHONPATH to use its installed pin.
+        # This fixture's joint source carries the configured-domain router, so
+        # keep it for the helper/service subprocesses.
+        from session_gate import runtime_env as base_runtime_env
+        def joint_env(config_file=None, *, adapter=None):
+            value = base_runtime_env(config_file, adapter=adapter)
+            value["PYTHONPATH"] = os.environ.get("PYTHONPATH", "")
+            return value
+        self.runtime_env_patch = patch.object(
+            mcp_gate, "runtime_env", side_effect=joint_env)
+        self.runtime_env_patch.start()
+        self.addCleanup(self.runtime_env_patch.stop)
         import consent
         consent.record_choice("disabled", self.config)
         self.community.write_text(

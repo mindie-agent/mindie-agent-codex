@@ -20,11 +20,12 @@ from tests.process_fixtures import recorded_wake_runtime, wake_requests
 from tests.process_fixtures import public_engine_config
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
+JOINT_BRIDGE = SCRIPTS.parents[2] / "tests/fixtures/joint_bridge.py"
 sys.path.insert(0, str(SCRIPTS))
-from session_gate import Inactive, Sessions
-from bounded_process import ProcessResult
-import bounded_process
-import mcp_gate
+from session_gate import Inactive, Sessions  # noqa: E402
+from bounded_process import ProcessResult  # noqa: E402
+import bounded_process  # noqa: E402
+import mcp_gate  # noqa: E402
 
 
 class SessionGateTests(unittest.TestCase):
@@ -143,8 +144,13 @@ class SessionGateTests(unittest.TestCase):
             # Activation admits the lease (30s), then optionally binds capture
             # (30s); each owned child can need 6s cleanup plus outer exit grace.
             timeout = 75 if operation == "activate" else 5
+        bridge = SCRIPTS / "bridge.py"
+        if os.environ.get("PYTHONPATH"):
+            # Keep the joint source visible to bridge's fixed-runtime helpers;
+            # production still strips PYTHONPATH when this fixture is absent.
+            bridge = JOINT_BRIDGE
         return subprocess.run(
-            [sys.executable, str(SCRIPTS / "bridge.py"), operation, *extra],
+            [sys.executable, str(bridge), operation, *extra],
             input=json.dumps(event or {}),
             text=True,
             capture_output=True,
@@ -251,7 +257,7 @@ class SessionGateTests(unittest.TestCase):
             dict(jsonrpc="2.0", id=2, method="tools/list"),
         ]
         for script, argv, count in [
-            ("bridge.py", ["mcp"], 3),
+            ("bridge.py", ["mcp"], 4),
             ("remote_bridge.py", [], 11),
         ]:
             result = subprocess.run(

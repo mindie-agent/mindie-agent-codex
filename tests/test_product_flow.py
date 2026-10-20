@@ -3,7 +3,6 @@
 Only the external service attachment is fault-injected. Real configuration,
 consent, native-task binding and status paths run; this is not native E2E proof.
 """
-import json
 import os
 from pathlib import Path
 import subprocess
@@ -30,6 +29,21 @@ class ProductFlowTests(SharingFixture):
         boundary = patch.object(bridge, "run", side_effect=isolated_reporter)
         boundary.start()
         self.addCleanup(boundary.stop)
+        # The production runtime strips PYTHONPATH for its fixed-runtime
+        # helpers. This fixture's joint source carries the current consent and
+        # diagnostics modules, so keep it for the isolated setup subprocess.
+        from session_gate import runtime_env as base_runtime_env
+        def joint_env(config_file=None, *, adapter=None):
+            value = base_runtime_env(config_file, adapter=adapter)
+            joint = os.environ.get("PYTHONPATH")
+            if joint:
+                value["PYTHONPATH"] = joint
+            else:
+                value.pop("PYTHONPATH", None)
+            return value
+        runtime = patch.object(bridge, "runtime_env", side_effect=joint_env)
+        runtime.start()
+        self.addCleanup(runtime.stop)
 
     def test_removed_modes_cannot_complete_new_setup(self):
         for word in ('read-only', 'later'):

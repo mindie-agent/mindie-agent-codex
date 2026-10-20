@@ -26,7 +26,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from product_contract import read_json
+from product_contract import official_feeds, read_json
 from session_gate import runtime_binding
 from update_lock import update_lock
 
@@ -72,6 +72,13 @@ def prepare(config, release):
     adapter = dict(old, python=sys.executable, runtime_scripts=str(scripts),
                    engine_config=str(path), product_validation=receipt["validation"])
     engine["service_launch_context"] = service_launch_context(config, adapter)
+    from capture_config import prepare_domains
+    from consent import consent_path_for
+    adapter['domain_configs'] = prepare_domains(
+        sys.executable, adapter, engine, config_directory=str(release / ('profile-' + digest + '.domains')),
+        authority_directory=str(config.parent / 'knowledge-domains'),
+        consent_config=str(consent_path_for(config)), public_feeds=bool(old_engine.get('feeds')),
+        domains=official_feeds())
     validate(engine)
     required_environment(engine["service_launch_context"]["paths"].get("CODEX_HOME"))
     state_root(engine["root"], engine["domain"])
@@ -148,11 +155,20 @@ def activate(config, prepared, *, control_seconds=CONTROL_SECONDS):
                     return incomplete()
                 time.sleep(min(.05, max(0, deadline - time.monotonic())))
                 state = probe(new_engine, new_config)
+            from mindie_knowledge.loop.domain_catalog import retire_changed, restore_changed
+            stage = 'domain_retirement'
+            domains = retire_changed(current, target, timeout=max(0, deadline - time.monotonic()))
+            if domains['status'] != 'retired':
+                return incomplete(domains=domains)
             # Preserve mutable profile fields that may have changed during
             # background preparation; only the complete runtime binding moves.
             value = dict(current, **runtime_binding(target))
             stage = "binding_publish"
-            _atomic(config, value)
+            try:
+                _atomic(config, value)
+            except (OSError, ValueError) as exc:
+                return incomplete(error_type=type(exc).__name__,
+                                  domain_restoration=restore_changed(domains, timeout=max(0, deadline - time.monotonic())))
             return dict(status="active", unavailable_seconds=time.monotonic() - started)
     except BlockingIOError:
         if stage == "installation_lock":
