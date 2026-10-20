@@ -152,7 +152,19 @@ class KnowledgePageTests(unittest.TestCase):
         distill = next(item for item in generated["knowledge"] if item["name"] == "knowledge_distill")
         self.assertEqual(
             set(explain["inputSchema"]["properties"]),
-            {"ref", "refs", "conditions", "known_refs", "token_budget", "run_id"},
+            {
+                "ref",
+                "refs",
+                "conditions",
+                "known_refs",
+                "token_budget",
+                "run_id",
+                "mode",
+                "ledger_entries",
+                "bottleneck_summary",
+                "native_subcontext",
+                "goal",
+            },
         )
         self.assertEqual(explain["inputSchema"]["required"], [])
         self.assertEqual(explain["inputSchema"]["properties"]["token_budget"]["default"], 4096)

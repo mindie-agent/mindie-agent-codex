@@ -101,7 +101,7 @@ class DistillOrganizerTests(unittest.TestCase):
         summarizer.validate_outcome(value, prepared)
 
     def test_in_flight_stop_returns_shared_noop_without_paid_call(self):
-        prepared = self.prepared('in_flight')
+        prepared = self.prepared('in_flight', outcome='in_flight')
         with patch.object(agent_worker, 'run_codex') as native:
             value = agent_worker.run(prepared)
         native.assert_not_called()

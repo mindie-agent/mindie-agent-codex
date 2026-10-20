@@ -26,7 +26,6 @@ Normalizes the optional `mode`, `ledger_entries`, `bottleneck_summary`,
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Mapping
 
 MODES = frozenset({"reuse", "diagnose", "explore"})
@@ -142,72 +141,6 @@ def _promote(unit) -> list:
     return promoted
 
 
-def _compact(unit) -> dict:
-    return {
-        "id": unit.get("id"),
-        "tier": _tier(unit),
-        "revision": unit.get("revision"),
-        "category": unit.get("category"),
-        "title": unit.get("title"),
-        "conditions": unit.get("conditions"),
-        "ref": unit.get("ref"),
-        "body": unit.get("body") or unit.get("content") or unit.get("excerpt") or "",
-    }
-
-
-def _fallback_context(units, body) -> dict:
-    mounted, stripped = [], []
-    for index, unit in enumerate(units):
-        if _tier(unit) == "L3":
-            stripped.append(_ident(unit, index))
-        elif _tier(unit) in {"L1", "L2", "L4"}:
-            mounted.append(_compact(unit))
-    mounted.sort(key=lambda item: (item["id"], item.get("revision") or 0))
-    return {
-        "schema": CONTEXT_SCHEMA,
-        "mode": "explore",
-        "goal": body.get("goal", ""),
-        "native_subcontext": body.get("native_subcontext", False),
-        "isolation_mode": (
-            "native_subcontext"
-            if body.get("native_subcontext")
-            else "in_session_strategy_shift"
-        ),
-        "mounted_units": mounted,
-        "units": mounted,
-        "stripped_l3_ids": sorted(set(stripped)),
-        "conditional_avoid": _conditional_avoid(body.get("ledger_entries") or []),
-        "bottleneck_summary": body.get("bottleneck_summary") or {},
-        "conditions": body.get("conditions") or {},
-    }
-
-
-def _conditional_avoid(ledger) -> list:
-    avoid = []
-    for entry in ledger:
-        if entry.get("verdict") != "refuted":
-            continue
-        axes = entry.get("axes")
-        if isinstance(axes, Mapping) and axes.get("evidence_validity") != "valid":
-            continue
-        conditions = entry.get("conditions")
-        if conditions is None and isinstance(entry.get("applicability"), Mapping):
-            conditions = entry["applicability"].get("conditions")
-        avoid.append({
-            "unit_id": entry.get("unit_id") or entry.get("candidate_id") or entry.get("run_id"),
-            "hypothesis": entry.get("hypothesis") or entry.get("mutation_summary") or "",
-            "failure_reason": entry.get("failure_reason") or entry.get("reason") or "",
-            "observed_bottleneck": (
-                entry.get("observed_bottleneck")
-                or entry.get("bottleneck_summary")
-                or ""
-            ),
-            "conditions": conditions if isinstance(conditions, Mapping) else {},
-            "scope_note": SCOPE_NOTE,
-        })
-    return avoid
-
-
 def _load_builder():
     try:
         from mindie_knowledge.graded import explore
@@ -218,32 +151,14 @@ def _load_builder():
 
 
 def _build(builder, units, body) -> dict:
-    ledger = body.get("ledger_entries") or []
-    bottleneck = body.get("bottleneck_summary") or {}
-    native = body.get("native_subcontext", False)
-    goal = body.get("goal", "")
-    conditions = body.get("conditions") or {}
-    try:
-        parameters = inspect.signature(builder).parameters
-    except (TypeError, ValueError):
-        parameters = {}
-    if "retrieved_units" in parameters or "ledger_entries" in parameters:
-        return builder(
-            goal=goal or "Exploration",
-            retrieved_units=units,
-            bottleneck_summary=bottleneck,
-            ledger_entries=ledger,
-            conditions=conditions,
-            native_subcontext=native,
-        )
-    options = {
-        "bottleneck_summary": bottleneck,
-        "native_subcontext": native,
-        "goal": goal,
-    }
-    if "failed_attempts" in parameters or "ledger_entries" in parameters:
-        options["failed_attempts" if "failed_attempts" in parameters else "ledger_entries"] = ledger
-    return builder(units, **options)
+    return builder(
+        goal=body.get("goal", "") or "Exploration",
+        retrieved_units=units,
+        bottleneck_summary=body.get("bottleneck_summary") or {},
+        ledger_entries=body.get("ledger_entries") or [],
+        conditions=body.get("conditions") or {},
+        native_subcontext=body.get("native_subcontext", False),
+    )
 
 
 def _normalize(context, units, body, stripped) -> dict:
@@ -370,14 +285,14 @@ def attach(result, arguments):
             promoted.extend(_promote(unit))
     units.extend(promoted)
     context = result.get("exploration_context")
-    builder = _load_builder()
-    if not isinstance(context, Mapping) and builder is not None:
-        try:
-            context = _build(builder, units, body)
-        except (TypeError, ValueError, AttributeError):
-            context = None
     if not isinstance(context, Mapping):
-        context = _fallback_context(units, body)
+        builder = _load_builder()
+        if builder is None:
+            raise RuntimeError(
+                "the installed knowledge runtime lacks the exploration builder; "
+                "update the paired runtime"
+            )
+        context = _build(builder, units, body)
     context = _normalize(context, units, body, stripped)
     shaped = dict(result)
     shaped["mode"] = "explore"

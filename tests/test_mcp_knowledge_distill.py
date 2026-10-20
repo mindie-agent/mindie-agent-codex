@@ -416,7 +416,7 @@ class DistillRoutingTests(ServiceCase):
         self._enable_sharing()
         gate = mcp_gate.Gate('knowledge')
         result = gate.call(self._request(11, 'knowledge_distill', {
-            'inputs': EVIDENCE, 'task_state': 'in_flight'}))
+            'inputs': [dict(EVIDENCE[0], outcome='in_flight')], 'task_state': 'in_flight'}))
         self.assertFalse(result['isError'], result)
         value = result['structuredContent']
         self.assertEqual(value['status'], 'noop')
@@ -551,6 +551,12 @@ class ExploreModeTests(unittest.TestCase):
         self.assertIn('unit-l1-foundation', pack['l1_foundation_ids'])
         self.assertNotIn('Old workflow', pack['prompt_brief'])
         self.assertIn('Do not replay', pack['prompt_brief'])
+
+    def test_explore_surfaces_error_when_runtime_builder_is_missing(self):
+        import rsi_explore
+        with patch.object(rsi_explore, '_load_builder', return_value=None):
+            with self.assertRaisesRegex(RuntimeError, 'lacks the exploration builder'):
+                rsi_explore.attach({'results': []}, {'mode': 'explore'})
 
 
 if __name__ == '__main__':

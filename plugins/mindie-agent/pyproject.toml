@@ -10,8 +10,8 @@ requires-python = ">=3.11"
 dependencies = ["mindie-knowledge", "remote-dev"]
 
 [tool.uv.sources]
-mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "532c4367be7c72c493c4d04e86e53ee5a2d1ee5f" }
-remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "0b84ac8a9e2fdccb66107bab21b59cdf59748aec" }
+mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "8e4377bacdb0d5ff529217c5963a68f989e0fe5d" }
+remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "293045f87193fbe749dd161f3fa4bd6a8fbff37f" }
 
 [tool.setuptools]
 packages = ["mindie_codex", "mindie_codex.scripts"]
