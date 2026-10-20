@@ -57,6 +57,11 @@ and preserving corrections. Keep evidence validity, goal attainment and
 reusable information distinct. Repeated no-information attempts prompt review;
 new facts are progress even without a performance improvement.
 
+- **Stagnation gate**: after `assess_stagnation` reports three consecutive unimproved attempts (deduplicated by `run_id`, no new fact or identified divergent layer), stop tuning the same L3 branch.
+- **Native de-biased exploration**: call `knowledge_query(query=..., mode="explore", native_subcontext=True, ledger_entries=[...], bottleneck_summary={...}, goal=...)`; inspect `exploration_context.subagent_fact_pack`.
+- **Pack-only seeding**: spawn a fresh native subagent/subcontext seeded ONLY with `subagent_fact_pack.prompt_brief` (L1 hard constraints + L2 bottleneck + L4 mutators + `conditional_avoid`); prior L3 trajectory is stripped.
+- **Isolation proof**: check `subagent_fact_pack.schema_version == "mindie-rsi-subagent-pack/1"` and `stripped_l3_ids`; `native_subcontext=false` is only an in-session warning.
+
 Use `task_state="verified_milestone"` for a finished sub-result in a continuing
 task. `in_flight` and all-pending inputs remain no-op; Stop is not completion.
 Keep supported/refuted/inconclusive judgments with their scope and source.
