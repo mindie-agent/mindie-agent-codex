@@ -108,7 +108,7 @@ class GradedFeedbackEntryTests(ServiceCase):
         self.assertFalse(mismatch["isError"], mismatch)
         self.assertEqual(mismatch["structuredContent"]["results"], [])
         hit = self._query(gate, 100)
-        observed = f"mindie://{self.domain}/units/{UNIT_ID}@{unit.content_sha256}"
+        observed = f"mindie://{self.domain}/units/{UNIT_ID}@{unit.revision}"
         self.assertEqual(hit["feedback_ref"], observed)
         self.assertEqual(hit["revision"], 1)
 
@@ -116,14 +116,13 @@ class GradedFeedbackEntryTests(ServiceCase):
                               "Confirmed during the fixture run.")
         self.assertEqual(vote["unit_id"], UNIT_ID)
         self.assertEqual(vote["revision"], 1)
-        self.assertEqual(vote["content_digest"], unit.metadata["content_digest"])
         self.assertEqual(vote["rating"], "up")
 
         rows, opaque = self._votes()
         self.assertIsNotNone(opaque)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["entry_id"], UNIT_ID)
-        self.assertEqual(rows[0]["revision"], unit.content_sha256)
+        self.assertEqual(int(rows[0]["revision"]), unit.revision)
         self.assertEqual(rows[0]["root_opaque"], opaque)
 
     def test_stale_ref_keeps_the_observed_revision_after_the_unit_is_revised(self):
@@ -140,23 +139,21 @@ class GradedFeedbackEntryTests(ServiceCase):
         self.assertNotEqual(first["feedback_ref"], second["feedback_ref"])
         self.assertEqual(
             second["feedback_ref"],
-            f"mindie://{self.domain}/units/{UNIT_ID}@{revised.content_sha256}",
+            f"mindie://{self.domain}/units/{UNIT_ID}@{revised.revision}",
         )
 
         old_vote = self._feedback(gate, 112, first["feedback_ref"], "down",
                                   "The first revision failed.")
         new_vote = self._feedback(gate, 113, second["feedback_ref"], "up",
                                   "The correction worked.")
-        self.assertEqual((old_vote["revision"], old_vote["content_digest"]),
-                         (1, original.metadata["content_digest"]))
-        self.assertEqual((new_vote["revision"], new_vote["content_digest"]),
-                         (2, revised.metadata["content_digest"]))
+        self.assertEqual(old_vote["revision"], 1)
+        self.assertEqual(new_vote["revision"], 2)
 
         rows, _ = self._votes()
-        by_revision = {row["revision"]: row for row in rows}
-        self.assertEqual(set(by_revision), {original.content_sha256, revised.content_sha256})
-        self.assertEqual(by_revision[original.content_sha256]["rating"], "down")
-        self.assertEqual(by_revision[revised.content_sha256]["rating"], "up")
+        by_revision = {int(row["revision"]): row for row in rows}
+        self.assertEqual(set(by_revision), {1, 2})
+        self.assertEqual(by_revision[1]["rating"], "down")
+        self.assertEqual(by_revision[2]["rating"], "up")
 
 class MultiDomainEntryTests(ServiceCase):
     """One native entry, two existing engines, no federated fallback."""
@@ -244,7 +241,7 @@ class MultiDomainEntryTests(ServiceCase):
         self.assertEqual(default_hit["revision"], 1)
         self.assertIn("Operators repository", default_hit["excerpt"])
         self.assertEqual(default_hit["feedback_ref"],
-                         f"mindie://{self.domain}/units/{UNIT_ID}@{default.content_sha256}")
+                         f"mindie://{self.domain}/units/{UNIT_ID}@{default.revision}")
 
         # Explicit domain selects only the configured target store; same
         # unit_id is a different unit with a different revision.
@@ -252,7 +249,7 @@ class MultiDomainEntryTests(ServiceCase):
         self.assertEqual(target_hit["revision"], 2)
         self.assertIn("vllm-ascend repository", target_hit["excerpt"])
         self.assertEqual(target_hit["feedback_ref"],
-                         f"mindie://{self.target_domain}/units/{UNIT_ID}@{target.content_sha256}")
+                         f"mindie://{self.target_domain}/units/{UNIT_ID}@{target.revision}")
         self.assertNotEqual(default_hit["feedback_ref"], target_hit["feedback_ref"])
 
         # The returned URI, not a caller path/map, selects the read engine.
@@ -329,9 +326,14 @@ class MultiDomainEntryTests(ServiceCase):
         self._enable_sharing()
         gate = mcp_gate.Gate("knowledge")
         hit = self._query(gate, 1100, domain=self.target_domain)
+        explained = gate.call(self._request(
+            1101, "knowledge_explain", {"ref": hit["ref"]}))
+        self.assertFalse(explained["isError"], explained)
+        page = explained["structuredContent"]
+        self.assertEqual(page["feedback_ref"], hit["ref"])
 
-        result = gate.call(self._request(1101, "knowledge_feedback", {
-            "ref": hit["feedback_ref"], "rating": "up",
+        result = gate.call(self._request(1102, "knowledge_feedback", {
+            "ref": page["feedback_ref"], "rating": "up",
             "reason": "Confirmed only in the target repository fixture."}))
         self.assertFalse(result["isError"], result)
         vote = result["structuredContent"]
@@ -341,7 +343,7 @@ class MultiDomainEntryTests(ServiceCase):
 
         rows = self._votes_in(self.target_data_root, self.target_domain)
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["revision"], target.content_sha256)
+        self.assertEqual(int(rows[0]["revision"]), target.revision)
         self.assertFalse(bool(rows[0]["publishable"]))
         self.assertEqual(self._votes_in(self.data_root, self.domain), [])
         self.assertFalse(self.target_admission.exists())

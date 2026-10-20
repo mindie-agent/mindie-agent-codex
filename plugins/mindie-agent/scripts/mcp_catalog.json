@@ -252,7 +252,7 @@
           },
           "path": {
             "type": "string",
-            "description": "Alias of file_path (Kimi/Cursor native Read habit)."
+            "description": "Alias of file_path (Kimi/Cursor/DSH native Read habit)."
           },
           "verify_content": {
             "type": "boolean",
@@ -281,12 +281,41 @@
             "type": "integer",
             "description": "Alias of limit (Kimi native Read habit)."
           },
+          "start_line": {
+            "type": "integer",
+            "description": "1-based inclusive start line (Antigravity StartLine / Cursor / DSH habit)."
+          },
+          "end_line": {
+            "type": "integer",
+            "description": "1-based inclusive end line (Antigravity EndLine / Cursor / DSH habit)."
+          },
+          "content_offset": {
+            "type": "integer",
+            "description": "0-based byte/character offset for reading truncated content (Antigravity ContentOffset habit)."
+          },
+          "outline": {
+            "type": "boolean",
+            "default": false,
+            "description": "Return structured class/function symbol outline with line ranges (Antigravity view_file_outline habit)."
+          },
+          "item_offset": {
+            "type": "integer",
+            "default": 0,
+            "description": "0-based symbol offset when outline=true (Antigravity ItemOffset habit)."
+          },
+          "node_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Inspect specific class/function symbol paths by AST/definition range (Antigravity view_code_item NodePaths habit)."
+          },
           "client_context_id": {
             "type": "string"
           }
         },
         "required": [],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; the alias path is also accepted (Kimi/Cursor habit). Enforced by the server so alias-only calls pass provider schema validation."
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; aliases path / AbsolutePath / TargetFile / target_file are also accepted. Enforced by the server so alias-only calls pass provider schema validation."
       },
       "annotations": {
         "readOnlyHint": true,
@@ -358,10 +387,23 @@
           },
           "append": {
             "type": "boolean",
-            "description": "Append content at end of file instead of replacing it (Kimi Write mode=append). Mutually exclusive with overwrite; creates a missing file."
+            "description": "Append content at end of file instead of replacing it (Kimi Write mode=append / Antigravity Append). Mutually exclusive with overwrite; creates a missing file."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "write",
+              "append"
+            ],
+            "description": "Optional Kimi WriteFile mode ('overwrite'/'write' or 'append')."
           },
           "create_dirs": {
             "type": "boolean"
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional change description (Antigravity write_to_file Description habit)."
           },
           "client_context_id": {
             "type": "string"
@@ -370,7 +412,7 @@
         "required": [
           "content"
         ],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; the alias path is also accepted. Enforced by the server so alias-only calls pass provider schema validation."
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; the alias path / TargetFile is also accepted. Enforced by the server so alias-only calls pass provider schema validation."
       },
       "annotations": {
         "readOnlyHint": false,
@@ -463,6 +505,10 @@
             "default": 10000,
             "description": "Remote wait for output/completion after connection and preparation. Returns session_id when running or unread output remains."
           },
+          "run_in_background": {
+            "type": "boolean",
+            "description": "Launch in background and return job_id/session_id immediately (Claude Code run_in_background / Antigravity IsDaemon / Cursor is_background habit)."
+          },
           "max_output_tokens": {
             "type": "integer",
             "minimum": 1,
@@ -476,7 +522,7 @@
           }
         },
         "required": [],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. command is required; the alias cmd is also accepted (Codex habit). Enforced by the server so alias-only calls pass provider schema validation."
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. command is required; the alias cmd / CommandLine is also accepted (Codex / Antigravity habit). Enforced by the server so alias-only calls pass provider schema validation."
       },
       "annotations": {
         "readOnlyHint": false,
@@ -542,6 +588,20 @@
           "glob": {
             "type": "string"
           },
+          "includes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Additional glob patterns to include (Antigravity Includes / Cursor include_pattern habit)."
+          },
+          "excludes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Glob patterns to exclude (Antigravity Excludes / Cursor exclude_pattern habit)."
+          },
           "type": {
             "type": "string"
           },
@@ -557,6 +617,10 @@
           },
           "multiline": {
             "type": "boolean"
+          },
+          "fixed_strings": {
+            "type": "boolean",
+            "description": "Treat pattern as a literal string instead of a regular expression (rg -F / grep -F; Antigravity IsRegex=false habit)."
           },
           "case_insensitive": {
             "type": "boolean",
@@ -749,6 +813,31 @@
           },
           "job_id": {
             "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "status",
+              "list",
+              "kill",
+              "stop",
+              "send_input",
+              "tail"
+            ],
+            "description": "Optional task management action (Antigravity manage_task Action habit). Defaults to status."
+          },
+          "chars": {
+            "type": "string",
+            "description": "Input bytes when action='send_input' (Antigravity manage_task Input habit)."
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Force kill when action='kill'/'stop'."
+          },
+          "lines": {
+            "type": "integer",
+            "maximum": 500,
+            "description": "Line count when action='tail'."
           },
           "session_id": {
             "type": "string",
@@ -965,7 +1054,7 @@
           },
           "chars": {
             "type": "string",
-            "description": "Bytes to write to the job's stdin (Codex write_stdin habit). Omit or pass an empty string to only poll output. When stdin_buffer_full is reported, resend only the unwritten remainder: slice the original string at the returned written_chars character count (a byte count cannot slice a Unicode string)."
+            "description": "Bytes to write to the job's stdin (Codex write_stdin / Antigravity manage_task Input habit). Omit or pass an empty string to only poll output. When stdin_buffer_full is reported, resend only the unwritten remainder: slice the original string at the returned written_chars character count (a byte count cannot slice a Unicode string)."
           },
           "eof": {
             "type": "boolean",

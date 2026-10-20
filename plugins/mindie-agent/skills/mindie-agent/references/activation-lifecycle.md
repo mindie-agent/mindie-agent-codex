@@ -21,6 +21,12 @@ Unknown external writes or model outcomes retain their receipts and are never
 blindly replayed. Saved model output resumes local processing without a new call.
 
 Normal and failed Hooks return a neutral response and no continuation decision.
+A single-turn host `Stop` event only hands off the completed turn's public
+transcript slice to the background organizer; it does **not** mean a multi-turn
+or long-horizon engineering task is finished. Unverified intermediate hypotheses
+or in-flight runs are not promoted into empirical rules (`reproduced_empirical`),
+and local receipt or organizer accounting failures never overwrite a succeeded
+remote execution outcome.
 Failures emit a fixed native warning and preserve local diagnostic evidence.
 Existing local diagnostic records preserve faults. A later natural capability
 call carries bounded machine diagnostic references for the Agent; delivery is
@@ -52,6 +58,18 @@ available internally, but users only need `/mindie-agent` (or `$mindie-agent`).
     gh repo fork owner/repo --clone=false --remote=false
     ```
   - Then include `--community-fork USER/repo` along with `--community-repository owner/repo --community-account USER --community-project-root /absolute/path --community-visibility public` when running `entry.py bridge config` so contribution branches push to the user's personal Fork.
+- **Multi-Domain Route Registration, Target-Domain Activation & Bare `deactivate` Semantics**:
+  - **Route Registration (`domain_routes register`)**: Registering an additional domain Engine/Feed in an existing adapter config uses the shared CLI:
+    ```sh
+    <python> -m mindie_knowledge.loop.domain_routes register --adapter-config "<adapter-config.json>" --domain "<domain>" --engine-config "<domain-engine-config.json>"
+    ```
+    This only updates `domain_configs` (preserving `default_domain`) and **never** creates or widens `consent`.
+  - **Target-Domain Activation for Distillation/Writes**: Ordinary reads (`knowledge_query(domain=...)`, `knowledge_explain(ref="mindie://<domain>/...")`) do not widen authorization. Distilling or contributing to a non-default registered `domain` requires that target domain's own existing `consent` and `project_root` scope plus explicit target activation:
+    ```sh
+    <python> "<release-entry.py>" bridge activate --domain "<domain>"
+    ```
+    which binds only the target domain's `Admission` lease without overwriting the default task binding.
+  - **Bare `deactivate` Across Registered Domains**: Running `<python> "<release-entry.py>" bridge deactivate` (with no `--domain` argument) revokes **only the current `CODEX_THREAD_ID` session** across the default domain and all registered `domain_configs` (never revoking other sessions). If any registered domain fails or times out during revocation, `deactivate` reports `status="partial"` (exiting non-zero) while preserving `changed` and per-domain outcomes (`domains[]`) so partial failure and already-revoked side effects remain distinct.
 
 ### Historical Experience Import (On Explicit User Request Only)
 

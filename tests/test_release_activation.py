@@ -12,6 +12,115 @@ sys.path.insert(0, str(SCRIPTS))
 import release_activation
 from session_gate import runtime_binding
 
+OFFICIAL_OPERATORS = dict(
+    domain="operators", repository="mindie-agent/knowledge-operators",
+    ref="main", interval_seconds=300)
+OFFICIAL_VLLM = dict(
+    domain="vllm-ascend", repository="mindie-agent/knowledge-vllm-ascend",
+    ref="main", interval_seconds=300)
+VALIDATION = dict(schema="mindie-candidate-check/1", publication=dict(
+    repository="mindie-agent/knowledge-vllm-ascend", ref="main",
+    domain="vllm-ascend", verified_commit="1" * 40))
+
+
+def _engine(root, domain="vllm-ascend", *, feeds=None, community=None):
+    return dict(
+        root=str(root), domain=domain, admission_path=str(root.parent / "admission.sqlite3"),
+        transcript_adapter=str(SCRIPTS / "codex_transcript.py"),
+        redactor_executable=sys.executable,
+        summary_command=[sys.executable, str(SCRIPTS / "agent_worker.py")],
+        community_config=str(community or root.parent / "mindie-community.json"),
+        service_launch_context={"paths": {"MINDIE_AGENT_CONFIG": str(root.parent / "codex.json")},
+                                "environment": []},
+        feeds=list(feeds or []),
+    )
+
+
+class OfficialFeedUpdateTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.base = Path(directory.name)
+        self.scripts = SCRIPTS
+
+    def profile(self, *, feeds, domain_configs=None):
+        config = self.base / "codex.json"
+        engine_path = self.base / "codex.engine.json"
+        engine = _engine(self.base / "data", feeds=feeds)
+        engine_path.write_text(json.dumps(engine), encoding="utf-8")
+        adapter = dict(
+            python=sys.executable, engine_config=str(engine_path),
+            community_config=str(self.base / "mindie-community.json"),
+            admission_path=str(self.base / "admission.sqlite3"),
+            runtime_scripts=str(self.scripts), product_validation={},
+            domain_configs=dict(domain_configs or {}),
+        )
+        config.write_text(json.dumps(adapter), encoding="utf-8")
+        from mindie_knowledge import consent_store
+        consent_store.record_choice(self.base / "mindie-consent.json", "disabled")
+        return config, self.base / "mindie-consent.json"
+
+    def prepare(self, config, name="release-a"):
+        release = self.base / name
+        release.mkdir()
+        (release / "runtime.json").write_text(json.dumps(dict(
+            python=sys.executable, validation=VALIDATION)), encoding="utf-8")
+        with patch("capture_config.prepare", return_value=dict(
+                capture_mode="public-transcript", redactor_executable=sys.executable,
+                summary_command=[sys.executable, str(self.scripts / "agent_worker.py")])), \
+             patch("native_context.service_launch_context", return_value={
+                 "paths": {"MINDIE_AGENT_CONFIG": str(config)}, "environment": []}), \
+             patch("summary_provider.required_environment"):
+            return release_activation.prepare(config, release)
+
+    def test_update_adds_disabled_operators_route_on_main(self):
+        config, consent = self.profile(feeds=[dict(OFFICIAL_VLLM)])
+        before = consent.read_bytes()
+        prepared = self.prepare(config)
+        engine = json.loads(Path(prepared["adapter"]["engine_config"]).read_text())
+        self.assertEqual(engine["feeds"], [OFFICIAL_VLLM])
+        operators_path = prepared["adapter"]["domain_configs"]["operators"]
+        operators = json.loads(Path(operators_path).read_text())
+        self.assertEqual(operators["feeds"], [OFFICIAL_OPERATORS])
+        settings = json.loads(Path(operators["community_config"]).read_text())
+        self.assertEqual(settings["branch"], "main")
+        self.assertEqual(settings["repository"], "mindie-agent/knowledge-operators")
+        self.assertFalse(settings["enabled"])
+        self.assertEqual(settings["consent_config"], str(consent))
+        self.assertEqual(consent.read_bytes(), before)
+
+    def test_custom_root_ref_and_route_survive_update(self):
+        custom_root = dict(repository="owner/custom-vllm", ref="topic",
+                           domain="vllm-ascend", interval_seconds=300)
+        custom_operators = dict(repository="owner/custom-operators", ref="review",
+                                domain="operators", interval_seconds=300)
+        operators_engine = _engine(
+            self.base / "data", "operators", feeds=[custom_operators],
+            community=self.base / "knowledge-domains/operators/community.json")
+        operators_engine["domain_catalog"] = "mindie-domain-catalog/1"
+        operators_path = self.base / "custom-operators.engine.json"
+        operators_path.write_text(json.dumps(operators_engine), encoding="utf-8")
+        settings_path = self.base / "knowledge-domains/operators/community.json"
+        settings_path.parent.mkdir(parents=True)
+        settings_path.write_text(json.dumps(dict(
+            enabled=False, repository=custom_operators["repository"],
+            branch=custom_operators["ref"], project_roots=[], idle_seconds=300,
+            consent_config=str(self.base / "mindie-consent.json"),
+            visibility="public", schema="mindie-community-config/1",
+            generation="custom-generation", enabled_at=None)), encoding="utf-8")
+        config, consent = self.profile(
+            feeds=[custom_root], domain_configs={"operators": str(operators_path)})
+        settings_before = settings_path.read_bytes()
+        before = consent.read_bytes()
+        prepared = self.prepare(config)
+        engine = json.loads(Path(prepared["adapter"]["engine_config"]).read_text())
+        self.assertEqual(engine["feeds"], [custom_root])
+        prepared_operators = json.loads(
+            Path(prepared["adapter"]["domain_configs"]["operators"]).read_text())
+        self.assertEqual(prepared_operators["feeds"], [custom_operators])
+        self.assertEqual(settings_path.read_bytes(), settings_before)
+        self.assertEqual(consent.read_bytes(), before)
+
 
 class ActivationTests(unittest.TestCase):
     def setUp(self):

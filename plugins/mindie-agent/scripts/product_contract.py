@@ -25,8 +25,14 @@ import tomllib
 PRODUCT_SCHEMA = "mindie-product/1"
 RECEIPT_SCHEMA = "mindie-candidate-check/1"
 HEX40 = re.compile(r"[0-9a-f]{40}\Z")
-HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+PUBLICATION_FIELDS = {"repository", "ref", "domain", "verified_commit"}
+OFFICIAL_FEEDS = (
+    dict(domain="vllm-ascend", repository="mindie-agent/knowledge-vllm-ascend",
+         ref="main", interval_seconds=300),
+    dict(domain="operators", repository="mindie-agent/knowledge-operators",
+         ref="main", interval_seconds=300),
+)
 
 
 FAILURE_CODES = {
@@ -183,25 +189,38 @@ def native_version(source):
     return manifest
 
 
+def _publication(value, label):
+    if not isinstance(value, dict) or set(value) != PUBLICATION_FIELDS:
+        raise ValueError("invalid " + label + " declaration")
+    if not all(isinstance(value[field], str) for field in PUBLICATION_FIELDS):
+        raise ValueError(label + " fields must be text")
+    if (not REPOSITORY.fullmatch(value["repository"])
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}", value["ref"])
+            or not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", value["domain"])
+            or not HEX40.fullmatch(value["verified_commit"])):
+        raise ValueError("invalid " + label + " identity")
+    return value
+
+
 def product(source):
     value, raw = read_json(package_root(source) / "product-contract.json")
     if not isinstance(value, dict) or set(value) != {"schema", "validation", "publication"}:
         raise ValueError("invalid product declaration")
     if value["schema"] != PRODUCT_SCHEMA or value["validation"] != RECEIPT_SCHEMA:
         raise ValueError("unsupported product or candidate receipt protocol")
-    publication = value["publication"]
-    fields = {"repository", "ref", "domain", "verified_commit", "contract_sha256"}
-    if not isinstance(publication, dict) or set(publication) != fields:
-        raise ValueError("invalid product publication declaration")
-    if not all(isinstance(publication[field], str) for field in fields):
-        raise ValueError("product publication fields must be text")
-    if (not REPOSITORY.fullmatch(publication["repository"])
-            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}", publication["ref"])
-            or not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", publication["domain"])
-            or not HEX40.fullmatch(publication["verified_commit"])
-            or not HEX64.fullmatch(publication["contract_sha256"])):
-        raise ValueError("invalid product publication identity")
+    _publication(value["publication"], "product publication")
     return value, hashlib.sha256(raw).hexdigest()
+
+
+def official_feeds():
+    """The two official, moving public feeds; no content digest gating."""
+    return [dict(row) for row in OFFICIAL_FEEDS]
+
+
+def publication_feed(declaration, *, domain=None):
+    row = next((item for item in OFFICIAL_FEEDS
+                if domain is None or item["domain"] == domain), None)
+    return dict(row) if row is not None else None
 
 
 def source_root(scripts):
@@ -280,13 +299,6 @@ def probe(python, scripts, command, *, revision=None, verified_receipt=None):
     if identity(source, revision) != expected:
         raise ValueError("candidate source changed during validation")
     return receipt
-
-
-def publication_feed(declaration):
-    value = declaration["publication"]
-    return dict(repository=value["repository"], ref=value["ref"],
-                domain=value["domain"], contract_sha256=value["contract_sha256"],
-                interval_seconds=300)
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from product_contract import read_json
+from product_contract import official_feeds, read_json
 from session_gate import runtime_binding
 from update_lock import update_lock
 
@@ -77,7 +77,8 @@ def prepare(config, release):
     adapter['domain_configs'] = prepare_domains(
         sys.executable, adapter, engine, config_directory=str(release / ('profile-' + digest + '.domains')),
         authority_directory=str(config.parent / 'knowledge-domains'),
-        consent_config=str(consent_path_for(config)), public_feeds=bool(old_engine.get('feeds')))
+        consent_config=str(consent_path_for(config)), public_feeds=bool(old_engine.get('feeds')),
+        domains=official_feeds())
     validate(engine)
     required_environment(engine["service_launch_context"]["paths"].get("CODEX_HOME"))
     state_root(engine["root"], engine["domain"])
