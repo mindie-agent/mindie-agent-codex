@@ -32,10 +32,16 @@ Check shape, dtype, stride, ownership, readiness and lifetime at the boundary
 that first diverges. A matching collective result does not validate the order
 of downstream operations.
 
-For performance, connect stage service demand, dependencies, queues, last
-readers and buffer reuse to the critical path. Missing durations stay unknown.
-Hardware lower bounds are not attainable latency predictions, and isolated
-kernel savings cannot simply be added into an end-to-end gain.
+For performance, perform Phase 0 upfront subgraph fusion analysis before tuning
+an isolated operator's microstages: identify fusable producer-consumer links
+(eliminating GM round-trips, standalone `pack`/`cast`/`quant` helpers) and hard
+non-fusable boundaries (collective barriers, `L1`/`UB` residency limits, full-reduction
+normalization), and check exposed critical-path overlap (`max(P+C, Q+G)`). Then
+connect stage service demand, dependencies, queues, last readers and buffer reuse
+to the critical path. Missing durations stay unknown. Hardware lower bounds are
+not attainable latency predictions, and isolated kernel savings cannot simply be
+added into an end-to-end gain. Use the pre-built qualification gate ladder
+(`G0-G3`) when available rather than ad-hoc build/timing scripts.
 
 ## Treat observation as a possible intervention
 
