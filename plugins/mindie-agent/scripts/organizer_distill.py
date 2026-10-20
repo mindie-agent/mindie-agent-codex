@@ -29,7 +29,6 @@ import json
 from mindie_knowledge.materials import summarizer
 
 REQUEST_SCHEMA = "mindie-distill-request/1"
-_MODEL_STATES = {"verified_milestone", "completed"}
 
 
 def _shared(distill, *names):
@@ -47,8 +46,6 @@ def decide(request, model):
     value_gate, noop_decision, parse_validate_result = _shared(
         distill, "value_gate", "noop_decision", "parse_validate_result")
     gate = value_gate(request)
-    if gate is None and request.get("task_state") not in _MODEL_STATES:
-        gate = "in_flight_incomplete"
     if gate is not None:
         return noop_decision(request, gate)
 

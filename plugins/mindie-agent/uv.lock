@@ -1947,22 +1947,23 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=4e328305323eafc7fd43ecc0c53eb3cc0541fdef" },
+    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=b900f11ef6be1edfe54e3d739b10588bc0cb0fce" },
     { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=f441d52f8dcb227ad31adeeeb1d66da4a28915bb" },
 ]
 
 [[package]]
 name = "mindie-diagnostics"
-version = "0.4.3"
-source = { git = "https://github.com/mindie-agent/diagnostics?rev=1b5a0eeb79d498c39002fc1853271c17e0f26e66#1b5a0eeb79d498c39002fc1853271c17e0f26e66" }
+version = "0.5.0"
+source = { git = "https://github.com/mindie-agent/diagnostics?rev=6460cde3a50a7f91c9ded38557a7f921654f0c6a#6460cde3a50a7f91c9ded38557a7f921654f0c6a" }
 
 [[package]]
 name = "mindie-knowledge"
-version = "0.12.2"
-source = { git = "https://github.com/mindie-agent/knowledge?rev=4e328305323eafc7fd43ecc0c53eb3cc0541fdef#4e328305323eafc7fd43ecc0c53eb3cc0541fdef" }
+version = "0.13.0"
+source = { git = "https://github.com/mindie-agent/knowledge?rev=b900f11ef6be1edfe54e3d739b10588bc0cb0fce#b900f11ef6be1edfe54e3d739b10588bc0cb0fce" }
 dependencies = [
     { name = "langmem" },
     { name = "mindie-diagnostics" },
+    { name = "packaging" },
     { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "pyyaml" },
     { name = "reme-ai", extra = ["as"] },
@@ -3375,7 +3376,7 @@ as = [
 
 [[package]]
 name = "remote-dev"
-version = "0.10.1"
+version = "0.10.3"
 source = { git = "https://github.com/mindie-agent/remote-dev?rev=f441d52f8dcb227ad31adeeeb1d66da4a28915bb#f441d52f8dcb227ad31adeeeb1d66da4a28915bb" }
 dependencies = [
     { name = "mindie-diagnostics" },

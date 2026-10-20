@@ -198,14 +198,20 @@ class DistillRegistrationTests(ServiceCase):
                          & set(distill['inputSchema']['properties']))
         query = next(tool for tool in gate.tools if tool['name'] == 'knowledge_query')
         self.assertLessEqual(
-            {'domain', 'domain_path', 'token_budget', 'include_unknown', 'include_archived'},
+            {'domain', 'domain_path', 'token_budget', 'include_unknown', 'include_archived',
+             'navigation_only', 'run_id'},
             set(query['inputSchema']['properties']))
         explain = next(tool for tool in gate.tools if tool['name'] == 'knowledge_explain')
         self.assertEqual(
             set(explain['inputSchema']['properties']),
-            {'ref', 'refs', 'conditions', 'known_refs', 'token_budget'},
+            {'ref', 'refs', 'conditions', 'known_refs', 'token_budget', 'run_id'},
         )
         self.assertEqual(explain['inputSchema']['required'], [])
+        feedback = next(tool for tool in gate.tools if tool['name'] == 'knowledge_feedback')
+        self.assertEqual(
+            feedback['inputSchema']['properties']['evidence_source']['enum'],
+            ['agent_declared', 'run_manifest_verified', 'ablation_verified'],
+        )
         generated = export_catalog.catalog()
         self.assertIn('knowledge_distill',
                       {tool['name'] for tool in generated['knowledge']})
