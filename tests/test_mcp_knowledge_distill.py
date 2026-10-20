@@ -199,12 +199,14 @@ class DistillRegistrationTests(ServiceCase):
         query = next(tool for tool in gate.tools if tool['name'] == 'knowledge_query')
         self.assertLessEqual(
             {'domain', 'domain_path', 'token_budget', 'include_unknown', 'include_archived',
-             'navigation_only', 'run_id'},
+             'navigation_only', 'run_id', 'mode', 'ledger_entries', 'bottleneck_summary',
+             'native_subcontext', 'goal'},
             set(query['inputSchema']['properties']))
         explain = next(tool for tool in gate.tools if tool['name'] == 'knowledge_explain')
         self.assertEqual(
             set(explain['inputSchema']['properties']),
-            {'ref', 'refs', 'conditions', 'known_refs', 'token_budget', 'run_id'},
+            {'ref', 'refs', 'conditions', 'known_refs', 'token_budget', 'run_id',
+             'mode', 'ledger_entries', 'bottleneck_summary', 'native_subcontext', 'goal'},
         )
         self.assertEqual(explain['inputSchema']['required'], [])
         feedback = next(tool for tool in gate.tools if tool['name'] == 'knowledge_feedback')
@@ -480,6 +482,75 @@ class QueryParameterTests(ServiceCase):
         self.assertTrue(rejected['isError'])
         self.assertIn('token_budget', rejected['content'][0]['text'])
         self.assertIn('16000', rejected['content'][0]['text'])
+
+
+class ExploreModeTests(unittest.TestCase):
+    """RSI explore reads strip L3 and always return a native fact pack."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.config = self.root / 'codex.json'
+        self.config.write_text(json.dumps({
+            'engine_config': {'domain': 'mindie'},
+        }), encoding='utf-8')
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_query_explore_strips_l3_retains_l1_and_returns_pack(self):
+        l1 = {
+            'id': 'unit-l1-foundation', 'tier': 'L1', 'category': 'axiom',
+            'revision': 1, 'title': 'L1 hard limit', 'body': 'DP must stay <= 8.',
+            'ref': 'mindie://mindie/units/unit-l1-foundation@1',
+        }
+        l3 = {
+            'id': 'unit-l3-workflow', 'tier': 'L3', 'category': 'workflow',
+            'revision': 1, 'title': 'Old workflow', 'body': 'Replay the old L3 path.',
+            'ref': 'mindie://mindie/units/unit-l3-workflow@1',
+        }
+        payload = dict(
+            surface='knowledge', name='knowledge_query',
+            arguments={
+                'query': 'HCCL hang', 'mode': 'explore', 'native_subcontext': True,
+                'ledger_entries': [{
+                    'run_id': 'run-1', 'verdict': 'refuted',
+                    'axes': {'evidence_validity': 'valid'},
+                    'conditions': {'soc': 'Ascend910B'},
+                    'mutation_summary': 'increase buffer size',
+                }],
+                'bottleneck_summary': {'pipe': 'HCCL ring wait'},
+                'goal': 'remove the HCCL stall',
+            },
+            mindie_session_id='thread-explore-1',
+            native_session_verified=True,
+        )
+        result = {'results': [l3, l1], 'cards': [l3], 'foundation_cards': [l1]}
+        with patch.object(runtime_call, 'config_path', return_value=self.config), \
+                patch('service_client.select_engine', return_value={'domain': 'mindie'}), \
+                patch('service_client.connect', return_value={}), \
+                patch('mindie_knowledge.loop.transport.rpc', return_value=result) as rpc:
+            shaped = runtime_call.call(payload)
+        self.assertFalse(shaped['isError'], shaped)
+        forwarded = rpc.call_args.args[2]
+        self.assertEqual(forwarded['mode'], 'explore')
+        self.assertTrue(forwarded['native_subcontext'])
+        self.assertEqual(forwarded['goal'], 'remove the HCCL stall')
+        value = shaped['structuredContent']
+        self.assertEqual([item['id'] for item in value['results']],
+                         ['unit-l1-foundation'])
+        context = value['exploration_context']
+        self.assertEqual(context['mode'], 'explore')
+        self.assertEqual(context['stripped_l3_ids'], ['unit-l3-workflow'])
+        self.assertEqual([item['id'] for item in context['mounted_units']],
+                         ['unit-l1-foundation'])
+        pack = context['subagent_fact_pack']
+        self.assertEqual(pack['schema_version'], 'mindie-rsi-subagent-pack/1')
+        self.assertTrue(pack['isolation_required'])
+        self.assertEqual(pack['isolation_mode'], 'native_subcontext')
+        self.assertIn('unit-l1-foundation', pack['l1_foundation_ids'])
+        self.assertNotIn('Old workflow', pack['prompt_brief'])
+        self.assertIn('Do not replay', pack['prompt_brief'])
 
 
 if __name__ == '__main__':

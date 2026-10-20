@@ -40,6 +40,8 @@ def _transient_unavailable(exc):
     }
 
 from diagnostic_support import attach, failure, reference
+from rsi_explore import attach as attach_exploration
+from rsi_explore import forwarded as forwarded_exploration
 from session_gate import IDENTITY, config_path, runtime_env, runtime_scripts
 
 
@@ -109,6 +111,8 @@ def call(payload):
         return remote(payload)
     config = json.loads(config_path().read_text(encoding='utf-8'))
     args, name = payload["arguments"], payload["name"]
+    if name in {"knowledge_query", "knowledge_explain"}:
+        args = forwarded_exploration(args)
     token = payload.get("mindie_activation")
     session = payload.get("mindie_session_id")
     if (not isinstance(session, str) or not IDENTITY.fullmatch(session)
@@ -206,6 +210,8 @@ def call(payload):
             if name == "knowledge_distill":
                 from mindie_knowledge.graded.distill import result_view
                 value, is_error = result_view(value)
+            elif name in {"knowledge_query", "knowledge_explain"}:
+                value = attach_exploration(value, args)
             succeeded = not is_error
             result = dict(
                 content=[dict(type="text", text=json.dumps(value, ensure_ascii=False))],

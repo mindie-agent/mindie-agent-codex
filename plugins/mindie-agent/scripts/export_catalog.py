@@ -18,6 +18,8 @@ import copy
 import json
 from pathlib import Path
 
+from rsi_explore import schema_properties
+
 REMOTE_TOOLS = {
     "remote_bash",
     "remote_read",
@@ -127,6 +129,7 @@ KNOWLEDGE_TOOLS = [
                 run_id={"type": "string",
                         "description": "Bind delivery and discovered events to this run for deduplicated usage accounting."},
                 domain=domain_property(),
+                **schema_properties(),
             ),
             [],
         ),
@@ -155,6 +158,7 @@ KNOWLEDGE_TOOLS = [
                               "default": 4096},
                 run_id={"type": "string",
                         "description": "Bind delivery and loaded events to this run for deduplicated usage accounting."},
+                **schema_properties(),
             ),
             [],
         ),

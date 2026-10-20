@@ -43,44 +43,30 @@ use does not activate or change it.
 - **`P2` contraction**: prefer revise/merge/supersede/archive over creating another near-duplicate. Keep the old unit addressable by exact ref, and let superseded/archived units leave ordinary discovery (`include_archived=false`). Distillation `related_refs` supplies the delta basis; a `proposal` can express the merge/replace decision deterministically.
 - **`P3` exploration and rewrite-back**: a verified exploration result returns at the right granularity—hardware/invariant limits as `L1`, diagnostic procedures as `L2`, branch-selection experience as `L3`, code transformations as `L4`. Preserve verified sub-findings and open hypotheses when resources run out; do not declare an entire direction failed.
 
-## 2. Graded Execution Loop: `L1`+`L2` Foundation, `L3` Hermes, `L4` RSI
+## 2. Diagnosis and exploration
 
-The loop is cumulative: establish the foundation before executing a workflow, and escalate only when verified evidence shows that routine convergence has stalled.
+Knowledge tiers describe use, not a mandatory execution order. Apply complete,
+condition-matched prerequisites; select L3 branches from observations. Hermes
+can revise any tier, and an exploration finding may be L1, L2, L3 or L4.
 
-### 2.1 `L1` + `L2` Foundation Baseline (Hardware/Runtime Axioms + Triage SOPs)
+Read [Diagnostic Reasoning](diagnostic-reasoning.md) when the routine path no
+longer explains the evidence, accuracy depends on state/observation, or a
+milestone challenges existing knowledge. It covers discriminating experiments,
+first divergence, observer controls, sequence reproducers, independent oracles,
+and preserving corrections. Keep evidence validity, goal attainment and
+reusable information distinct. Repeated no-information attempts prompt review;
+new facts are progress even without a performance improvement.
 
-- **Query with observed conditions, never guessed ones**: pass the facts actually observed for the task (`soc`, `cann`, `driver`, `framework`, `repository`/`revision`, `dtype`, `input_shape`, workload case, etc.) as `conditions`. A missing or `"unknown"` fact stays `condition_unknown`; do not manufacture a value to make a unit match.
-- **`L1` foundation is mounted automatically**: when a `_common` (or preferred `domain_path`) `L1` unit's declared conditions match, query mounts it even without lexical overlap—either as a top-level result with `route: "foundation_baseline"` or under a higher-scoring unit's `inherited_rules`. `L1` units are `category: axiom` (hardware/runtime invariants) or `category: measurement` (measurement gates and validity preconditions); they are not optional background reading.
-- **Mount matched `L2` SOPs alongside `L1`**: `L2` units (`category: sop`) provide bottleneck diagnosis and triage procedures. Build one foundation view containing (a) applicable `L1` axioms and measurement gates, (b) inherited rules with their own conditions, and (c) candidate `L2` SOPs. Resolve conflicts in favor of `L1`; an `L2` SOP never overrides an `L1` axiom or measurement gate. Record the selected `id`/`revision` and `route` for later citation.
-- **Foundation is a gate, not a suggestion**: do not begin an `L3` workflow until the `L1` measurement conditions are actually established. If a measurement gate cannot be satisfied, record the limitation and do not promote the result to `reproduced_empirical` or `hardware_spec`.
+- **Stagnation gate**: after `assess_stagnation` reports three consecutive unimproved attempts (deduplicated by `run_id`, no new fact or identified divergent layer), stop tuning the same L3 branch.
+- **Native de-biased exploration**: call `knowledge_query(query=..., mode="explore", native_subcontext=True, ledger_entries=[...], bottleneck_summary={...}, goal=...)`; inspect `exploration_context.subagent_fact_pack`.
+- **Pack-only seeding**: spawn a fresh native subagent/subcontext seeded ONLY with `subagent_fact_pack.prompt_brief` (L1 hard constraints + L2 bottleneck + L4 mutators + `conditional_avoid`); prior L3 trajectory is stripped.
+- **Isolation proof**: check `subagent_fact_pack.schema_version == "mindie-rsi-subagent-pack/1"` and `stripped_l3_ids`; `native_subcontext=false` is only an in-session warning.
 
-### 2.2 `L3` Hermes Mode (Heuristic Convergence & Skill Self-Evolution)
-
-- **Execute staged convergence workflows**: select `L3` units (`category: workflow`) and execute their stages in order. A stage is not a free-form retry; it has an explicit goal, the conditions under which it applies, one action or tool invocation, the expected observable signal, and a stop/continue judgment.
-- **Record structured probes**: for every stage append a probe record containing at least `stage_id`, `goal`, `conditions`, `action`/tool, `run_id` or `job_id` (when a managed run exists), the observed metric or artifact reference, and `judgment` (`supported` | `refuted` | `inconclusive`). Keep the detailed probe in the run artifacts and the concise judgment in `experiment-ledger.jsonl`; never rewrite an observed execution as a success.
-- **Close the P3 reuse flywheel at verified milestones**: once a stage or the task has verified evidence, call `knowledge_distill` with the selected evidence at `task_state: "verified_milestone"` (verified milestone) or `"completed"` (genuinely complete). Then call `knowledge_feedback` with the observed `unit_id` and integer `revision` (through the exact returned revision-bound `feedback_ref`) for each unit that helped or misled the run. This is how a converged workflow, a repaired SOP, or a refuted heuristic becomes reusable knowledge instead of staying in one session. `task_state: "in_flight"` is a zero-call no-op; an ordinary host `Stop` event is never completion.
-- **Stall definition**: a routine `L3` workflow has stalled when two successive attempts fail to produce a new verified improvement under the same foundation, or both attempts are `inconclusive` for the same reason. A compile error, SSH drop, or invalid measurement window is `inconclusive`, not a domain `refuted`—repair the execution condition before counting it as an attempt. Once the stall is established, escalate to `L4`; do not run a third near-identical `L3` variant.
-
-### 2.3 `L4` RSI Mode (Recursive Self-Improvement De-biased Exploration)
-
-- **Escalation trigger**: only after the `L3` workflow stalls after 2 attempts. Record the two attempt identities and why each failed in `PROGRESS.md` before entering `L4`.
-- **Strip `L3` routine workflow bias**: remove the prior workflow's stage ordering, candidate names, routine heuristics, and narrative recommendations from the candidate-generation context. Keep exactly `Goal + L1 foundation + L2 bottleneck data + L4 mutators + experiment-ledger.jsonl conditional_avoid`; a subagent must not inherit the stalled `L3` plan or its preferred answer.
-- **Generate orthogonal `L4` mutators**: select `L4` units (`category: mutator`) as independent, falsifiable changes to one factor or one inseparable factor group. State the hypothesis, the factor role (`performance` | `correctness_required` | `dependency` | `inseparable_group`), the expected observable, and the condition scope before compiling anything.
-- **Parallel CPU compile, serial exclusive NPU timing**: candidate variants may run CPU-only operator compilation in parallel across isolated worktrees/caches with `npu_count=0` (`MINDIE_SLOT_ID`, `ASCEND_CACHE_PATH`, `TORCHINDUCTOR_CACHE_DIR`, `TRITON_CACHE_DIR`). Physical performance timing is serial and exclusive: acquire the `coordinator` timing lease, drain prior process trees, and use `devices=[0]` for the same physical NPU (or the same A3 dual-Die package). Never overlap timing runs on shared hardware.
-- **Enforce Gate 1–4 before believing a candidate**:
-  1. `OracleFreezer` — freeze the goal, acceptance criteria, input identity, and measurement oracle before candidate generation; do not move the target after seeing a result.
-  2. `MeasurementGuard` — require a synchronized, valid measurement window with explicit scene/clock annotations. An invalid, overlapping, or clock-incomparable window is `measurement_invalid`/`inconclusive`, never a speedup.
-  3. `AblationGate` — require a baseline-bound verified final-combination ablation receipt (`baseline_run_id` + `verification_run_id`). Leave-One-Out `candidate_for_sequential_pruning` with `pruned_combination_verified=false` is **RETAIN**, not a win.
-  4. `Distill/Refute` — a candidate is accepted only after a supported judgment; otherwise record refuted. Never promote a single observation to `hardware_spec` or `reproduced_empirical`.
-- **Append the judgment and update `PROGRESS.md`**: append one `experiment-ledger.jsonl` object per experiment with `judgment: "supported" | "refuted"` and a concrete `conditional_avoid` for a refuted direction; include `run_ids`, `unit_refs` (`unit_id` + integer `revision`), `receipt_refs`, and `scope_conditions`. Update `PROGRESS.md` with the verified baseline and best candidate `run_id`, `in_flight_runs`, the next minimal experiment, and the retained `conditional_avoid` rules. If a candidate survives Gate 1–4, distill it and return to `L3` execution; otherwise start the next `L4` round from the reduced context.
-
-### 2.4 Three-Axis Result Judgment (`Performance` / `Correctness/Invariants` / `Diagnostic Information Gain`)
-
-Judge every experiment on three orthogonal axes before deciding whether to continue, distill, or refute:
-
-- **`Performance`**: compare the measured result with a valid baseline and the stated target. A valid 1.04× result against a 1.05× target is `subtarget_valid`, not a refutation; a result inside the noise margin is `inconclusive`. Record the baseline `run_id`, the measurement window, and the target; never attribute a cumulative gain to the latest change without an isolated measurement.
-- **`Correctness/Invariants`**: compile success, oracle/acceptance checks, and condition-bound invariants. A compile failure, numerical error, or invalid measurement says the implementation or evidence is invalid (`compile_failed` / `oracle_failed` / `measurement_invalid`); it rejects that candidate, not automatically the whole mechanism. Repair invalid execution conditions before counting an attempt toward information stagnation.
-- **`Diagnostic Information Gain`**: did the attempt identify a divergent layer, narrow a condition, exclude a mechanism, or otherwise produce a new discriminating fact? Any of these is progress and reusable evidence, even when performance did not improve. Two deduplicated attempts with no new fact are information stagnation and trigger the `L4` review; they are not domain `refuted`. Feed `supported`, `refuted`, and `inconclusive` judgments back through `knowledge_feedback(event_type="evaluated", outcome=...)` and, at a verified milestone, through `knowledge_distill`.
+Use `task_state="verified_milestone"` for a finished sub-result in a continuing
+task. `in_flight` and all-pending inputs remain no-op; Stop is not completion.
+Keep supported/refuted/inconclusive judgments with their scope and source.
+Only L4 transformation admission requires the verified final-combination
+ablation receipt; diagnostic findings need the evidence appropriate to their claim.
 
 ## 3. Long-Horizon Continuation Ledger (`PROGRESS.md` + `experiment-ledger.jsonl`) & Sequential Ablation
 
@@ -89,7 +75,7 @@ Long-horizon optimization and 0-Day model adaptation reuse `coordinator`'s autho
 - **1. Launch-Time `run_id` Registration (`in_flight_runs`) & Atomic `PROGRESS.md` Maintenance**:
   - `coordinator` assigns `run_id` (`run_id == execution_id`) at submission time (`client.run`), and a submitted `run_id` is never replaced.
   - **Immediately upon launch** (before polling or ending the turn), atomically replace `PROGRESS.md` (`os.replace` / full-file write) to add `{run_id, job_id, slot_id, host_endpoint, manifest_path, started_at}` under `in_flight_runs`.
-  - **Mandatory `PROGRESS.md` Structure**: (1) Goal, acceptance criteria & remaining budget; (2) Current workspace `git_commit`/`diff_digest` vs. **verified baseline `run_id`** vs. **best verified candidate `run_id`** (never conflate unverified edits with verified runs); (3) Remote endpoint & last verified environment timestamp; (4) Active `in_flight_runs`; (5) Active hypothesis & next minimal experiment; (6) Key historical `conditional_avoid` references (`exp_id` + `run_id`) that still constrain decisions beyond the recent context window.
+  - **Long-task recovery facts (use the existing task record; simple tasks need no extra ledger)**: (1) Goal, acceptance criteria & remaining budget; (2) Current workspace `git_commit`/`diff_digest` vs. **verified baseline `run_id`** vs. **best verified candidate `run_id`** (never conflate unverified edits with verified runs); (3) Remote endpoint & last verified environment timestamp; (4) Active `in_flight_runs`; (5) Active hypothesis & next minimal experiment; (6) Key historical `conditional_avoid` references (`exp_id` + `run_id`) that still constrain decisions beyond the recent context window.
 - **2. Recovery-First-Query Protocol (Zero Duplicate Submission on Compaction/Resume)**:
   - On any context compaction, turn interruption, or session resume, **read `PROGRESS.md` `in_flight_runs` first** and query the original execution via `TaskClient.observe(run_id=...)` or `remote_job_status(job_id=...)`.
   - Only move a `run_id` out of `in_flight_runs` after its terminal `Run Manifest` receipt is observed and recorded. Never submit a new execution to replace an active or uncertain in-flight `run_id`.
@@ -102,8 +88,8 @@ Long-horizon optimization and 0-Day model adaptation reuse `coordinator`'s autho
 
 ## 4. Pre-Compilation Parallelism, Physical NPU Timing Mutual Exclusion & Profiler Discipline
 
-- **Parallel Ideation & CPU Pre-Compilation (`npu_count=0`)**: Multiple candidate variants or subagents may edit isolated worktrees and run CPU-only operator compilation concurrently using per-slot cache directories (`MINDIE_SLOT_ID`, `ASCEND_CACHE_PATH`, `TORCHINDUCTOR_CACHE_DIR`, `TRITON_CACHE_DIR`). When conventional `L2/L3` candidates stall, record a concise `Exploration Rationale` before delegating orthogonal `L4` hypotheses (passing only the target, hardware facts, and verified negative constraints, with subagents returning brief summaries and keeping raw logs on disk).
-- **Exclusive Physical NPU Timing Lease**: Any performance benchmark, Gate 3/4 check, or `mindie_profiler` collection on the same physical NPU (or same Ascend A3 dual-Die package) must acquire an exclusive `coordinator` timing lease and drain `/proc` process trees before the next run starts.
+- **Parallel Ideation & CPU Pre-Compilation (`npu_count=0`)**: When parallel work is authorized, confirmed device-free steps may run concurrently using per-slot cache directories (`MINDIE_SLOT_ID`, `ASCEND_CACHE_PATH`, `TORCHINDUCTOR_CACHE_DIR`, `TRITON_CACHE_DIR`). Select the next experiment for its discriminating observation; use native isolated context only when supported and authorized, preserving current facts and conditional counterevidence.
+- **Exclusive Physical NPU Timing Lease**: Any performance benchmark, attribution check, or `mindie_profiler` collection on the same physical NPU (or same Ascend A3 dual-Die package) must acquire an exclusive `coordinator` timing lease and drain `/proc` process trees before the next run starts.
 - **Layered Profiling & Honest Narrowings (`mindie_profiler`)**:
   - **Explicit Unlabeled or Labeled Windows (`segment.py`)**: `python -m mindie_profiler` supports **explicit unlabeled time windows** (`--time-window START:END` / `--window START:END`), **explicit labeled step windows** (`--step-window STEP=START:END` / `--step STEP=START:END` / `--steps-file`), and explicit `--full-range` (in `--unit us|ns|ms`). Not every analysis requires step labels, and `mindie_profiler` **never** infers real step identity from kernel rows, timestamps, or CSV headers.
   - **Explicit Scene Annotations & `clock_domain`**: Scene metadata (`--mode`, `--framework`, `--phase`, `--tp`, `--dp`, `--graph-mode`, `--clock-domain`, `--input-signature`) uses explicit caller annotations and reports `uncertain` otherwise (`scene_detector.py` never infers hidden runtime state from kernel rows). Without `--clock-domain`, multi-rank DB analysis emits `measurement_limitation: "clock_domain_unknown"`, and `compare.py` refuses cross-run timing comparison unless `clock_domain` matches.
