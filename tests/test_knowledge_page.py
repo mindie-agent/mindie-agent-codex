@@ -141,21 +141,47 @@ class KnowledgePageTests(unittest.TestCase):
 
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_explain_schema_ref_only_and_query_continuation(self):
+    def test_progressive_schemas_and_query_continuation(self):
         from export_catalog import catalog
 
         generated = catalog()
         checked = json.loads((SCRIPTS / "mcp_catalog.json").read_text())
         explain = next(item for item in generated["knowledge"] if item["name"] == "knowledge_explain")
         query = next(item for item in generated["knowledge"] if item["name"] == "knowledge_query")
-        self.assertEqual(set(explain["inputSchema"]["properties"]), {"ref"})
-        self.assertEqual(explain["inputSchema"]["required"], ["ref"])
+        feedback = next(item for item in generated["knowledge"] if item["name"] == "knowledge_feedback")
+        distill = next(item for item in generated["knowledge"] if item["name"] == "knowledge_distill")
+        self.assertEqual(
+            set(explain["inputSchema"]["properties"]),
+            {"ref", "refs", "conditions", "known_refs", "token_budget"},
+        )
+        self.assertEqual(explain["inputSchema"]["required"], [])
+        self.assertEqual(explain["inputSchema"]["properties"]["token_budget"]["default"], 4096)
+        self.assertEqual(explain["inputSchema"]["properties"]["refs"]["items"], {"type": "string"})
         self.assertIs(explain["inputSchema"]["additionalProperties"], False)
         self.assertIn("block", explain["description"])
         self.assertIn("continuation", query["inputSchema"]["properties"])
+        self.assertIn("include_archived", query["inputSchema"]["properties"])
+        self.assertIs(query["inputSchema"]["properties"]["include_archived"]["default"], False)
         self.assertEqual(query["inputSchema"]["required"], [])
         self.assertNotIn("offset", query["inputSchema"]["properties"])
         self.assertEqual(query["inputSchema"]["properties"]["limit"]["maximum"], 20)
+        self.assertEqual(
+            set(feedback["inputSchema"]["properties"]),
+            {"ref", "rating", "reason", "event_type", "run_id", "step_id", "outcome"},
+        )
+        self.assertEqual(feedback["inputSchema"]["required"], ["ref"])
+        self.assertEqual(
+            feedback["inputSchema"]["properties"]["event_type"]["enum"],
+            ["discovered", "loaded", "applied", "evaluated"],
+        )
+        self.assertEqual(
+            feedback["inputSchema"]["properties"]["outcome"]["enum"],
+            ["supported", "refuted", "inconclusive"],
+        )
+        self.assertEqual(
+            set(distill["inputSchema"]["properties"]),
+            {"inputs", "task_state", "domain", "related_refs", "proposal"},
+        )
         self.assertEqual(
             json.dumps(generated, ensure_ascii=False, indent=2) + "\n",
             (SCRIPTS / "mcp_catalog.json").read_text(),

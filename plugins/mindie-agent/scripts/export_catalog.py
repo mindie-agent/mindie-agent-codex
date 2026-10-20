@@ -98,9 +98,11 @@ KNOWLEDGE_TOOLS = [
     dict(
         name="knowledge_query",
         description=(
-            "Search graded rules and task material in the selected domain. Each match identifies its source, "
+            "Search graded rules and task material in the selected domain. Returns bounded navigation cards "
+            "and deduplicated foundation_cards for progressive loading; each match identifies its source, "
             "has a readable ref, and returns feedback_ref for the exact observed revision. "
             "Pass known task conditions to filter graded rules; unknown conditions are excluded by default. "
+            "Archived or superseded units are omitted unless include_archived is true. "
             "For related task blocks, pass related_next as continuation without query. "
             "A changed corpus rejects the continuation. Reference material does not establish applicability."
         ),
@@ -117,6 +119,8 @@ KNOWLEDGE_TOOLS = [
                               "description": "Body excerpt and inherited-rule budget in estimated tokens."},
                 include_unknown={"type": "boolean", "default": False,
                                  "description": "Include units whose declared conditions are unknown; unknown is not evidence of applicability."},
+                include_archived={"type": "boolean", "default": False,
+                                  "description": "Include archived or superseded units in discovery."},
                 domain=domain_property(),
             ),
             [],
@@ -126,16 +130,26 @@ KNOWLEDGE_TOOLS = [
     dict(
         name="knowledge_explain",
         description=(
-            "Read a returned graded-unit, task or block ref. A graded-unit ref returns its exact current revision "
-            "and conditions; a task ref returns navigation and first_block_ref; a block ref returns its immutable "
-            "body and adjacent block refs. Replaced graded revisions and withdrawn material are unavailable. "
+            "Read a returned graded-unit, task or block ref, or assemble a batch from refs. A graded-unit ref "
+            "returns its exact current revision and conditions; a task ref returns navigation and first_block_ref; "
+            "a block ref returns its immutable body and adjacent block refs. Batch refs assemble the dependency "
+            "closure minus known_refs, returning complete bodies with shared premises expanded once. "
+            "Replaced graded revisions and withdrawn material are unavailable. "
             "Use the returned ref to read and feedback_ref to vote."
         ),
         inputSchema=schema(
             dict(
                 ref={"type": "string", "description": "Copy the graded-unit, task or block ref returned by query/explain exactly."},
+                refs={"type": "array", "items": STRING,
+                      "description": "Batch of graded-unit refs to assemble with dependency closure."},
+                conditions={"type": "object",
+                            "description": "Observed task facts for closure applicability verification."},
+                known_refs={"type": "array", "items": STRING,
+                            "description": "Exact id@revision refs already visible in the active context."},
+                token_budget={"type": "integer", "minimum": 1, "maximum": 16000,
+                              "default": 4096},
             ),
-            ["ref"],
+            [],
         ),
         annotations=READ_ONLY,
     ),
@@ -143,15 +157,23 @@ KNOWLEDGE_TOOLS = [
         name="knowledge_feedback",
         description=(
             "Optional: copy feedback_ref from query/explain into ref to record an up/down vote on that observed revision "
-            "with an optional one-line reason. Never required; silence is not a vote."
+            "with an optional one-line reason. Also records the four-stage usage flywheel: discovered, loaded, "
+            "applied, or evaluated (applied/evaluated bind run_id and an evaluated outcome). "
+            "Vote and usage event may be combined. Never required; silence is not a vote."
         ),
         inputSchema=schema(
             dict(
                 ref=STRING,
                 rating={"type": "string", "enum": ["up", "down"]},
                 reason={"type": "string", "maxLength": 1000},
+                event_type={"type": "string",
+                            "enum": ["discovered", "loaded", "applied", "evaluated"]},
+                run_id=STRING,
+                step_id=STRING,
+                outcome={"type": "string",
+                         "enum": ["supported", "refuted", "inconclusive"]},
             ),
-            ["ref", "rating"],
+            ["ref"],
         ),
         annotations=FEEDBACK_WRITE,
     ),
@@ -160,6 +182,8 @@ KNOWLEDGE_TOOLS = [
         description=(
             "Explicitly distill caller-selected, already-authorized evidence into graded knowledge. "
             "task_state is supplied by the caller; ordinary Stop never selects completion. "
+            "Pass related_refs to compare against existing units for a milestone/delta proposal; "
+            "pass a mindie-distill-decision/1 proposal to apply deterministic validation with no model call. "
             "The host binds native task identity and the active lease. "
             "May invoke the configured native organizer once and apply a returned C6 decision locally; "
             "no GitHub write."
@@ -183,6 +207,8 @@ KNOWLEDGE_TOOLS = [
                     },
                 },
                 task_state={"type": "string", "enum": DISTILL_TASK_STATES},
+                related_refs={"type": "array", "items": STRING},
+                proposal={"type": "object"},
                 domain=domain_property(),
             ),
             ["inputs", "task_state"],
