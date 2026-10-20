@@ -172,6 +172,7 @@ class MultiDomainEntryTests(ServiceCase):
             adapter_profile=self.config, admission_path=str(self.target_admission),
             community_config=str(self.target_community))
         config["summary_command"] = [sys.executable, str(SCRIPTS / "agent_worker.py")]
+        config["service_launch_context"]["paths"]["MINDIE_CODEX_BIN"] = str(self.fake_codex)
         self.target_engine.write_text(json.dumps(config), encoding="utf-8")
         self.target_community.write_text(json.dumps(dict(
             schema="mindie-community-config/1", enabled=False, generation=None,

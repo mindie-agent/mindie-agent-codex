@@ -11,12 +11,13 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from tests.process_fixtures import native_fixture
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
 sys.path.insert(0, str(SCRIPTS))
 import agent_worker
 from mindie_knowledge.materials import summarizer
-from k3_material_fixture import request, result, completion, isolate_native_profile
+from tests.k3_material_fixture import request, result, completion, isolate_native_profile
 
 try:
     from mindie_knowledge.graded import distill
@@ -231,7 +232,7 @@ class DistillOrganizerTests(unittest.TestCase):
 
     def test_cli_returns_c6_decision_over_the_process_protocol(self):
         with tempfile.TemporaryDirectory() as directory:
-            fake = Path(directory) / 'fake-codex'
+            fake = Path(directory) / ('fake-codex.cmd' if os.name == 'nt' else 'fake-codex')
             with patch.dict(os.environ, MINDIE_CODEX_BIN=str(fake)):
                 prepared = self.prepared()
                 expected = self.decision(prepared)
@@ -244,9 +245,8 @@ class DistillOrganizerTests(unittest.TestCase):
                      'usage': {'input_tokens': 120, 'cached_input_tokens': 20,
                                'output_tokens': 30}},
                 ]
-                fake.write_text('#!' + sys.executable + '\n' + '\n'.join(
-                    f'print({json.dumps(row)!r}, flush=True)' for row in rows), encoding='utf-8')
-                fake.chmod(0o700)
+                fake = native_fixture(fake, '\n'.join(
+                    f'print({json.dumps(row)!r}, flush=True)' for row in rows))
                 completed = subprocess.run(
                     [sys.executable, str(SCRIPTS / 'agent_worker.py')],
                     input=json.dumps(prepared), text=True, capture_output=True, timeout=15,
@@ -260,11 +260,11 @@ class DistillOrganizerTests(unittest.TestCase):
 
     def test_cli_accepts_distill_request_above_legacy_summary_wire_cap(self):
         with tempfile.TemporaryDirectory() as directory:
-            fake = Path(directory) / 'fake-codex'
+            fake = Path(directory) / ('fake-codex.cmd' if os.name == 'nt' else 'fake-codex')
             with patch.dict(os.environ, MINDIE_CODEX_BIN=str(fake)):
                 prepared = self.prepared(content='x' * 140000)
                 expected = self.decision(prepared)
-                fake.write_text('#!' + sys.executable + '\n' + '\n'.join(
+                fake = native_fixture(fake, '\n'.join(
                     f'print({json.dumps(row)!r}, flush=True)' for row in [
                         {'type': 'turn.started'},
                         {'type': 'item.completed',
@@ -273,8 +273,7 @@ class DistillOrganizerTests(unittest.TestCase):
                         {'type': 'turn.completed',
                          'usage': {'input_tokens': 1, 'cached_input_tokens': 0,
                                    'output_tokens': 1}},
-                    ]), encoding='utf-8')
-                fake.chmod(0o700)
+                    ]))
                 self.assertGreater(len(json.dumps(prepared)), agent_worker.MAX_REQUEST_BYTES)
                 completed = subprocess.run(
                     [sys.executable, str(SCRIPTS / 'agent_worker.py')],

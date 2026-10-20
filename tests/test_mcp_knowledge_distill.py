@@ -22,6 +22,7 @@ import runtime_call
 from mindie_knowledge.loop.store import Store
 from tests.process_fixtures import (
     cleanup_temporary_directory,
+    native_fixture,
     public_engine_config,
     stop_owned_knowledge_service,
 )
@@ -58,13 +59,14 @@ class ServiceCase(unittest.TestCase):
         self.admission = self.root / 'codex.admission.sqlite3'
         self.consent = self.root / 'mindie-consent.json'
         self.marker = self.root / 'native-model-called'
-        self.fake_codex = self.root / 'fake-codex'
+        self.fake_codex = native_fixture(self.root / 'fake-codex', self._fake_codex())
 
         self.engine_config = public_engine_config(
             self.data_root, domain=self.domain, adapter_profile=self.config,
             admission_path=str(self.admission), community_config=str(self.community))
         self.engine_config['summary_command'] = [
             sys.executable, str(SCRIPTS / 'agent_worker.py')]
+        self.engine_config['service_launch_context']['paths']['MINDIE_CODEX_BIN'] = str(self.fake_codex)
         self.engine.write_text(json.dumps(self.engine_config), encoding='utf-8')
         self.config.write_text(json.dumps(dict(
             python=sys.executable,
@@ -74,8 +76,6 @@ class ServiceCase(unittest.TestCase):
             runtime_scripts=str(SCRIPTS),
         )), encoding='utf-8')
         self._write_disabled_sharing()
-        self.fake_codex.write_text(self._fake_codex(), encoding='utf-8')
-        self.fake_codex.chmod(0o700)
 
         self.environment = patch.dict(os.environ, {
             'MINDIE_AGENT_CONFIG': str(self.config),

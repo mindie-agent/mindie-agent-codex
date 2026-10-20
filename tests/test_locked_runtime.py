@@ -304,6 +304,7 @@ class RuntimeTests(unittest.TestCase):
                 key = bootstrap.runtime_key(SCRIPTS.parent)
                 runtime = data / "runtimes" / (key[:24] if os.name == "nt" else key)
                 self.assertEqual(kwargs["env"]["UV_PROJECT_ENVIRONMENT"], str(runtime))
+                self.assertEqual(kwargs["env"]["UV_NATIVE_TLS"], "true")
                 log = command[4]
                 # Exercise the actual descriptor redirection and owned runner;
                 # replace only uv's executable/args with a no-network process.
