@@ -39,7 +39,7 @@ def launcher_code(version, *, name="mindie-agent", marketplace="mindie-agent"):
 
 
 def command_args(version, role, **names):
-    return ["uv", "run", "--no-project",
+    return ["uv", "--native-tls", "run", "--no-project",
             *(["--offline", "--no-python-downloads"] if role == "stop" else []),
             "--python", "3.13", "python",
             "-c", launcher_code(version, **names), role]
@@ -119,7 +119,7 @@ def neutral_hook_commands(argv, *, failure="MindIE Stop helper failed; capture c
 
 
 def hook_commands(role, **names):
-    arguments = ["uv", "run", "--no-project",
+    arguments = ["uv", "--native-tls", "run", "--no-project",
                  *(["--offline", "--no-python-downloads"] if role == "stop" else []),
                  "--python", "3.13", "python", "-c", hook_launcher_code(**names), role]
     if role == "stop":
@@ -129,6 +129,7 @@ def hook_commands(role, **names):
 
 
 def write_manifests(root):
+    from native_context import TRANSPORT_ENV
     root = Path(root)
     version = json.loads((root / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
     hooks = {name: [{"hooks": [{"type": "command", "statusMessage": "MindIE Agent",
@@ -152,7 +153,7 @@ def write_manifests(root):
                              startup_timeout_sec=600,
                              env_vars=["CODEX_HOME", "MINDIE_AGENT_CONFIG",
                                        "MINDIE_CODEX_BIN", "MINDIE_DIAGNOSTICS_CONFIG",
-                                       "MINDIE_DIAGNOSTICS_ROOT"])
+                                       "MINDIE_DIAGNOSTICS_ROOT", *TRANSPORT_ENV])
     (root / ".mcp.json").write_text(json.dumps({"mcpServers": servers}, indent=2) + "\n")
 
 

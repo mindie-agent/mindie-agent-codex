@@ -116,6 +116,8 @@ def ensure_runtime(source, data):
         env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
         env.update(UV_PROJECT_ENVIRONMENT=str(runtime), UV_NO_PROGRESS="1",
                    GIT_TERMINAL_PROMPT="0")
+        if "UV_SYSTEM_CERTS" not in env:
+            env.setdefault("UV_NATIVE_TLS", "true")
         # uv locks its target environment. An interrupted, unpublished build
         # can be synced again; a completed runtime above is never repaired.
         with preparing("locked-sync"):
