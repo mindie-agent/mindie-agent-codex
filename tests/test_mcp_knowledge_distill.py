@@ -190,17 +190,108 @@ class DistillRegistrationTests(ServiceCase):
         names = {tool['name'] for tool in gate.tools}
         self.assertIn('knowledge_distill', names)
         distill = next(tool for tool in gate.tools if tool['name'] == 'knowledge_distill')
-        self.assertEqual(set(distill['inputSchema']['properties']), {'inputs', 'task_state', 'domain'})
+        self.assertEqual(
+            set(distill['inputSchema']['properties']),
+            {'inputs', 'task_state', 'domain', 'related_refs', 'proposal'},
+        )
         self.assertFalse({'_session_id', '_activation', '_session_verified'}
                          & set(distill['inputSchema']['properties']))
         query = next(tool for tool in gate.tools if tool['name'] == 'knowledge_query')
-        self.assertLessEqual({'domain', 'domain_path', 'token_budget', 'include_unknown'},
-                             set(query['inputSchema']['properties']))
+        self.assertLessEqual(
+            {'domain', 'domain_path', 'token_budget', 'include_unknown', 'include_archived'},
+            set(query['inputSchema']['properties']))
+        explain = next(tool for tool in gate.tools if tool['name'] == 'knowledge_explain')
+        self.assertEqual(
+            set(explain['inputSchema']['properties']),
+            {'ref', 'refs', 'conditions', 'known_refs', 'token_budget'},
+        )
+        self.assertEqual(explain['inputSchema']['required'], [])
         generated = export_catalog.catalog()
         self.assertIn('knowledge_distill',
                       {tool['name'] for tool in generated['knowledge']})
         checked = json.loads((SCRIPTS / 'mcp_catalog.json').read_text())
         self.assertEqual(generated['knowledge'], checked['knowledge'])
+
+    def test_batch_explain_and_distill_options_forward_cleanly(self):
+        refs = [
+            'mindie://mindie/units/unit-batch-a@1',
+            'mindie://mindie/units/unit-batch-b@2',
+        ]
+        explain_payload = dict(
+            surface='knowledge', name='knowledge_explain',
+            arguments={
+                'refs': refs,
+                'conditions': {'soc': 'Ascend910B'},
+                'known_refs': [refs[0]],
+                'token_budget': 2048,
+            },
+            mindie_session_id='thread-distill-1',
+            native_session_verified=True,
+        )
+        with patch.object(runtime_call, 'config_path', return_value=self.config), \
+                patch('service_client.connect', return_value={}), \
+                patch('mindie_knowledge.loop.transport.rpc',
+                      return_value={'units': [], 'requires': [], 'unresolved': []}) as rpc:
+            explained = runtime_call.call(explain_payload)
+        self.assertFalse(explained['isError'])
+        self.assertEqual(rpc.call_args.args[1], 'explain')
+        forwarded = rpc.call_args.args[2]
+        self.assertEqual(forwarded['refs'], refs)
+        self.assertEqual(forwarded['conditions'], {'soc': 'Ascend910B'})
+        self.assertEqual(forwarded['known_refs'], [refs[0]])
+        self.assertEqual(forwarded['token_budget'], 2048)
+        self.assertEqual(forwarded['_session_id'], 'thread-distill-1')
+
+        proposal = {
+            'schema_version': 'mindie-distill-decision/1',
+            'session_digest': 'a' * 64, 'evidence_inputs': [],
+            'action': 'noop', 'drop_reason': 'already_covered', 'units': [],
+        }
+        distill_payload = dict(
+            surface='knowledge', name='knowledge_distill',
+            arguments={
+                'inputs': EVIDENCE, 'task_state': 'verified_milestone',
+                'related_refs': ['unit-batch-a'], 'proposal': proposal,
+            },
+            mindie_session_id='thread-distill-1',
+            native_session_verified=True,
+        )
+        with patch.object(runtime_call, 'config_path', return_value=self.config), \
+                patch.object(runtime_call, '_active_lease_token',
+                             return_value='lease-token'), \
+                patch.object(runtime_call, 'resolve_lease',
+                             return_value={'session': 'thread-distill-1'}), \
+                patch.object(runtime_call, 'finish_outcome'), \
+                patch('service_client.connect', return_value={}), \
+                patch('mindie_knowledge.loop.transport.rpc',
+                      return_value={'status': 'noop'}) as rpc:
+            distilled = runtime_call.call(distill_payload)
+        self.assertFalse(distilled['isError'])
+        self.assertEqual(rpc.call_args.args[1], 'distill')
+        forwarded = rpc.call_args.args[2]
+        self.assertEqual(forwarded['related_refs'], ['unit-batch-a'])
+        self.assertEqual(forwarded['proposal'], proposal)
+        self.assertEqual(forwarded['task_state'], 'verified_milestone')
+
+    def test_batch_explain_rejects_mixed_domain_authorities_before_service_start(self):
+        from service_client import DomainRouteError
+
+        payload = dict(
+            surface='knowledge', name='knowledge_explain',
+            arguments={
+                'refs': [
+                    'mindie://mindie/units/unit-batch-a@1',
+                    'mindie://operators/units/unit-batch-b@2',
+                ],
+            },
+            mindie_session_id='thread-distill-1',
+            native_session_verified=True,
+        )
+        with patch.object(runtime_call, 'config_path', return_value=self.config), \
+                patch('service_client.connect') as connect:
+            with self.assertRaises(DomainRouteError):
+                runtime_call.call(payload)
+        connect.assert_not_called()
 
     def test_new_organizer_helper_is_in_the_installed_payload(self):
         from product_contract import package_files

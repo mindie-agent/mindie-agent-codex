@@ -59,6 +59,24 @@ class ClientTests(unittest.TestCase):
                         str(engine), domain="test",
                         domain_configs={"test": "/mapped/engine.json"})
 
+    def test_batch_refs_use_first_canonical_authority_without_mixing(self):
+        first = "mindie://test/units/a@1"
+        self.assertEqual(
+            service_client.route_ref(refs=[first, "mindie://test/units/b@2"]),
+            first)
+        self.assertIsNone(service_client.route_ref(refs=["unit-without-authority"]))
+        with self.assertRaisesRegex(service_client.DomainRouteError, "multiple domain"):
+            service_client.route_ref(
+                refs=[first, "mindie://vllm-ascend/units/b@2"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            engine = Path(directory) / "engine.json"
+            engine.write_text(json.dumps({"domain": "test"}), encoding="utf-8")
+            self.assertEqual(
+                service_client.select_engine(
+                    str(engine), refs=[first, "mindie://test/units/b@2"]),
+                str(engine))
+
     def test_internal_helper_import_failure_is_not_misreported_as_old_runtime(self):
         import builtins
 

@@ -8,8 +8,9 @@ fixed installed runtime environment.
 - Admission belongs to the shared core; each request uses the exact installed
   configuration without script or runtime reselection.
 - An explicit public domain or canonical `mindie://DOMAIN/...` reference routes
-  to one existing configured engine. A missing/failed target route never falls
-  back to the default; a no-domain call keeps the exact default path.
+  to one existing configured engine; a batch `refs` list routes by its first
+  canonical entry and never merges authorities. A missing/failed target route
+  never falls back to the default; a no-domain call keeps the exact default path.
 - The target engine's own admission store owns capture/distill leases and its
   own sharing configuration owns publishability. No authority is copied across
   domains.
@@ -123,13 +124,23 @@ def call(payload):
         pass
     else:
         raise ValueError("unknown knowledge tool")
-    from service_client import connect, explicit_route, select_engine
+    from service_client import (
+        connect,
+        explicit_route,
+        route_ref as batch_route_ref,
+        select_engine,
+    )
     from mindie_knowledge.loop.transport import RequestRejected, rpc
 
     # Select exactly one existing engine before any public data read. A
     # no-domain call returns the configured default unchanged (old-runtime
     # compatible); an explicit domain or URI must select its own engine.
-    route_domain, route_ref = args.get("domain"), args.get("ref")
+    # Batch explain has no singular `ref`; route by its first canonical
+    # mindie:// entry and reject a batch that spans multiple authorities.
+    route_domain = args.get("domain")
+    route_ref = args.get("ref")
+    if route_ref is None:
+        route_ref = batch_route_ref(refs=args.get("refs"))
     routed = explicit_route(route_domain, route_ref)
     selected = select_engine(
         config["engine_config"], domain=route_domain, ref=route_ref,
