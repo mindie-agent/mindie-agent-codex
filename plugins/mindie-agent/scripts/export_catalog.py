@@ -104,7 +104,8 @@ KNOWLEDGE_TOOLS = [
             "Pass known task conditions to filter graded rules; unknown conditions are excluded by default. "
             "Archived or superseded units are omitted unless include_archived is true. "
             "For related task blocks, pass related_next as continuation without query. "
-            "A changed corpus rejects the continuation. Reference material does not establish applicability."
+            "A changed corpus rejects the continuation. Pass navigation_only to omit inline bodies. "
+            "Reference material does not establish applicability."
         ),
         inputSchema=schema(
             dict(
@@ -121,6 +122,10 @@ KNOWLEDGE_TOOLS = [
                                  "description": "Include units whose declared conditions are unknown; unknown is not evidence of applicability."},
                 include_archived={"type": "boolean", "default": False,
                                   "description": "Include archived or superseded units in discovery."},
+                navigation_only={"type": "boolean", "default": False,
+                                 "description": "Return navigation cards only; omit inline result bodies while keeping exact read costs."},
+                run_id={"type": "string",
+                        "description": "Bind delivery and discovered events to this run for deduplicated usage accounting."},
                 domain=domain_property(),
             ),
             [],
@@ -135,7 +140,7 @@ KNOWLEDGE_TOOLS = [
             "a block ref returns its immutable body and adjacent block refs. Batch refs assemble the dependency "
             "closure minus known_refs, returning complete bodies with shared premises expanded once. "
             "Replaced graded revisions and withdrawn material are unavailable. "
-            "Use the returned ref to read and feedback_ref to vote."
+            "Use the returned ref to read and feedback_ref to vote. Pass run_id to bind delivery events."
         ),
         inputSchema=schema(
             dict(
@@ -148,6 +153,8 @@ KNOWLEDGE_TOOLS = [
                             "description": "Exact id@revision refs already visible in the active context."},
                 token_budget={"type": "integer", "minimum": 1, "maximum": 16000,
                               "default": 4096},
+                run_id={"type": "string",
+                        "description": "Bind delivery and loaded events to this run for deduplicated usage accounting."},
             ),
             [],
         ),
@@ -159,6 +166,7 @@ KNOWLEDGE_TOOLS = [
             "Optional: copy feedback_ref from query/explain into ref to record an up/down vote on that observed revision "
             "with an optional one-line reason. Also records the four-stage usage flywheel: discovered, loaded, "
             "applied, or evaluated (applied/evaluated bind run_id and an evaluated outcome). "
+            "evaluated records how the outcome was established through evidence_source. "
             "Vote and usage event may be combined. Never required; silence is not a vote."
         ),
         inputSchema=schema(
@@ -172,6 +180,10 @@ KNOWLEDGE_TOOLS = [
                 step_id=STRING,
                 outcome={"type": "string",
                          "enum": ["supported", "refuted", "inconclusive"]},
+                evidence_source={"type": "string",
+                                 "enum": ["agent_declared", "run_manifest_verified", "ablation_verified"],
+                                 "default": "agent_declared",
+                                 "description": "How an evaluated outcome was established; defaults to an agent declaration."},
             ),
             ["ref"],
         ),

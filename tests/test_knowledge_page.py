@@ -152,7 +152,7 @@ class KnowledgePageTests(unittest.TestCase):
         distill = next(item for item in generated["knowledge"] if item["name"] == "knowledge_distill")
         self.assertEqual(
             set(explain["inputSchema"]["properties"]),
-            {"ref", "refs", "conditions", "known_refs", "token_budget"},
+            {"ref", "refs", "conditions", "known_refs", "token_budget", "run_id"},
         )
         self.assertEqual(explain["inputSchema"]["required"], [])
         self.assertEqual(explain["inputSchema"]["properties"]["token_budget"]["default"], 4096)
@@ -161,13 +161,16 @@ class KnowledgePageTests(unittest.TestCase):
         self.assertIn("block", explain["description"])
         self.assertIn("continuation", query["inputSchema"]["properties"])
         self.assertIn("include_archived", query["inputSchema"]["properties"])
+        self.assertIn("navigation_only", query["inputSchema"]["properties"])
+        self.assertIn("run_id", query["inputSchema"]["properties"])
         self.assertIs(query["inputSchema"]["properties"]["include_archived"]["default"], False)
         self.assertEqual(query["inputSchema"]["required"], [])
         self.assertNotIn("offset", query["inputSchema"]["properties"])
         self.assertEqual(query["inputSchema"]["properties"]["limit"]["maximum"], 20)
         self.assertEqual(
             set(feedback["inputSchema"]["properties"]),
-            {"ref", "rating", "reason", "event_type", "run_id", "step_id", "outcome"},
+            {"ref", "rating", "reason", "event_type", "run_id", "step_id", "outcome",
+             "evidence_source"},
         )
         self.assertEqual(feedback["inputSchema"]["required"], ["ref"])
         self.assertEqual(

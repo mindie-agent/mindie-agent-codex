@@ -2,7 +2,7 @@
   "knowledge": [
     {
       "name": "knowledge_query",
-      "description": "The host binds native task identity per call. Search graded rules and task material in the selected domain. Returns bounded navigation cards and deduplicated foundation_cards for progressive loading; each match identifies its source, has a readable ref, and returns feedback_ref for the exact observed revision. Pass known task conditions to filter graded rules; unknown conditions are excluded by default. Archived or superseded units are omitted unless include_archived is true. For related task blocks, pass related_next as continuation without query. A changed corpus rejects the continuation. Reference material does not establish applicability.",
+      "description": "The host binds native task identity per call. Search graded rules and task material in the selected domain. Returns bounded navigation cards and deduplicated foundation_cards for progressive loading; each match identifies its source, has a readable ref, and returns feedback_ref for the exact observed revision. Pass known task conditions to filter graded rules; unknown conditions are excluded by default. Archived or superseded units are omitted unless include_archived is true. For related task blocks, pass related_next as continuation without query. A changed corpus rejects the continuation. Pass navigation_only to omit inline bodies. Reference material does not establish applicability.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -42,6 +42,15 @@
             "default": false,
             "description": "Include archived or superseded units in discovery."
           },
+          "navigation_only": {
+            "type": "boolean",
+            "default": false,
+            "description": "Return navigation cards only; omit inline result bodies while keeping exact read costs."
+          },
+          "run_id": {
+            "type": "string",
+            "description": "Bind delivery and discovered events to this run for deduplicated usage accounting."
+          },
           "domain": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]{0,63}$",
@@ -60,7 +69,7 @@
     },
     {
       "name": "knowledge_explain",
-      "description": "The host binds native task identity per call. Read a returned graded-unit, task or block ref, or assemble a batch from refs. A graded-unit ref returns its exact current revision and conditions; a task ref returns navigation and first_block_ref; a block ref returns its immutable body and adjacent block refs. Batch refs assemble the dependency closure minus known_refs, returning complete bodies with shared premises expanded once. Replaced graded revisions and withdrawn material are unavailable. Use the returned ref to read and feedback_ref to vote.",
+      "description": "The host binds native task identity per call. Read a returned graded-unit, task or block ref, or assemble a batch from refs. A graded-unit ref returns its exact current revision and conditions; a task ref returns navigation and first_block_ref; a block ref returns its immutable body and adjacent block refs. Batch refs assemble the dependency closure minus known_refs, returning complete bodies with shared premises expanded once. Replaced graded revisions and withdrawn material are unavailable. Use the returned ref to read and feedback_ref to vote. Pass run_id to bind delivery events.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -91,6 +100,10 @@
             "minimum": 1,
             "maximum": 16000,
             "default": 4096
+          },
+          "run_id": {
+            "type": "string",
+            "description": "Bind delivery and loaded events to this run for deduplicated usage accounting."
           }
         },
         "required": [],
@@ -105,7 +118,7 @@
     },
     {
       "name": "knowledge_feedback",
-      "description": "The host binds native task identity per call. Optional: copy feedback_ref from query/explain into ref to record an up/down vote on that observed revision with an optional one-line reason. Also records the four-stage usage flywheel: discovered, loaded, applied, or evaluated (applied/evaluated bind run_id and an evaluated outcome). Vote and usage event may be combined. Never required; silence is not a vote.",
+      "description": "The host binds native task identity per call. Optional: copy feedback_ref from query/explain into ref to record an up/down vote on that observed revision with an optional one-line reason. Also records the four-stage usage flywheel: discovered, loaded, applied, or evaluated (applied/evaluated bind run_id and an evaluated outcome). evaluated records how the outcome was established through evidence_source. Vote and usage event may be combined. Never required; silence is not a vote.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -145,6 +158,16 @@
               "refuted",
               "inconclusive"
             ]
+          },
+          "evidence_source": {
+            "type": "string",
+            "enum": [
+              "agent_declared",
+              "run_manifest_verified",
+              "ablation_verified"
+            ],
+            "default": "agent_declared",
+            "description": "How an evaluated outcome was established; defaults to an agent declaration."
           }
         },
         "required": [
@@ -310,7 +333,7 @@
           },
           "path": {
             "type": "string",
-            "description": "Alias of file_path (Kimi/Cursor/DSH native Read habit)."
+            "description": "Alias of file_path (Kimi/Cursor native Read habit)."
           },
           "verify_content": {
             "type": "boolean",
@@ -339,41 +362,12 @@
             "type": "integer",
             "description": "Alias of limit (Kimi native Read habit)."
           },
-          "start_line": {
-            "type": "integer",
-            "description": "1-based inclusive start line (Antigravity StartLine / Cursor / DSH habit)."
-          },
-          "end_line": {
-            "type": "integer",
-            "description": "1-based inclusive end line (Antigravity EndLine / Cursor / DSH habit)."
-          },
-          "content_offset": {
-            "type": "integer",
-            "description": "0-based byte/character offset for reading truncated content (Antigravity ContentOffset habit)."
-          },
-          "outline": {
-            "type": "boolean",
-            "default": false,
-            "description": "Return structured class/function symbol outline with line ranges (Antigravity view_file_outline habit)."
-          },
-          "item_offset": {
-            "type": "integer",
-            "default": 0,
-            "description": "0-based symbol offset when outline=true (Antigravity ItemOffset habit)."
-          },
-          "node_paths": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Inspect specific class/function symbol paths by AST/definition range (Antigravity view_code_item NodePaths habit)."
-          },
           "client_context_id": {
             "type": "string"
           }
         },
         "required": [],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; aliases path / AbsolutePath / TargetFile / target_file are also accepted. Enforced by the server so alias-only calls pass provider schema validation."
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; the alias path is also accepted (Kimi/Cursor habit). Enforced by the server so alias-only calls pass provider schema validation."
       },
       "annotations": {
         "readOnlyHint": true,
@@ -445,23 +439,10 @@
           },
           "append": {
             "type": "boolean",
-            "description": "Append content at end of file instead of replacing it (Kimi Write mode=append / Antigravity Append). Mutually exclusive with overwrite; creates a missing file."
-          },
-          "mode": {
-            "type": "string",
-            "enum": [
-              "overwrite",
-              "write",
-              "append"
-            ],
-            "description": "Optional Kimi WriteFile mode ('overwrite'/'write' or 'append')."
+            "description": "Append content at end of file instead of replacing it (Kimi Write mode=append). Mutually exclusive with overwrite; creates a missing file."
           },
           "create_dirs": {
             "type": "boolean"
-          },
-          "description": {
-            "type": "string",
-            "description": "Optional change description (Antigravity write_to_file Description habit)."
           },
           "client_context_id": {
             "type": "string"
@@ -470,7 +451,7 @@
         "required": [
           "content"
         ],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; the alias path / TargetFile is also accepted. Enforced by the server so alias-only calls pass provider schema validation."
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; the alias path is also accepted. Enforced by the server so alias-only calls pass provider schema validation."
       },
       "annotations": {
         "readOnlyHint": false,
@@ -563,10 +544,6 @@
             "default": 10000,
             "description": "Remote wait for output/completion after connection and preparation. Returns session_id when running or unread output remains."
           },
-          "run_in_background": {
-            "type": "boolean",
-            "description": "Launch in background and return job_id/session_id immediately (Claude Code run_in_background / Antigravity IsDaemon / Cursor is_background habit)."
-          },
           "max_output_tokens": {
             "type": "integer",
             "minimum": 1,
@@ -580,7 +557,7 @@
           }
         },
         "required": [],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. command is required; the alias cmd / CommandLine is also accepted (Codex / Antigravity habit). Enforced by the server so alias-only calls pass provider schema validation."
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. command is required; the alias cmd is also accepted (Codex habit). Enforced by the server so alias-only calls pass provider schema validation."
       },
       "annotations": {
         "readOnlyHint": false,
@@ -646,20 +623,6 @@
           "glob": {
             "type": "string"
           },
-          "includes": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Additional glob patterns to include (Antigravity Includes / Cursor include_pattern habit)."
-          },
-          "excludes": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Glob patterns to exclude (Antigravity Excludes / Cursor exclude_pattern habit)."
-          },
           "type": {
             "type": "string"
           },
@@ -675,10 +638,6 @@
           },
           "multiline": {
             "type": "boolean"
-          },
-          "fixed_strings": {
-            "type": "boolean",
-            "description": "Treat pattern as a literal string instead of a regular expression (rg -F / grep -F; Antigravity IsRegex=false habit)."
           },
           "case_insensitive": {
             "type": "boolean",
@@ -871,31 +830,6 @@
           },
           "job_id": {
             "type": "string"
-          },
-          "action": {
-            "type": "string",
-            "enum": [
-              "status",
-              "list",
-              "kill",
-              "stop",
-              "send_input",
-              "tail"
-            ],
-            "description": "Optional task management action (Antigravity manage_task Action habit). Defaults to status."
-          },
-          "chars": {
-            "type": "string",
-            "description": "Input bytes when action='send_input' (Antigravity manage_task Input habit)."
-          },
-          "force": {
-            "type": "boolean",
-            "description": "Force kill when action='kill'/'stop'."
-          },
-          "lines": {
-            "type": "integer",
-            "maximum": 500,
-            "description": "Line count when action='tail'."
           },
           "session_id": {
             "type": "string",
@@ -1112,7 +1046,7 @@
           },
           "chars": {
             "type": "string",
-            "description": "Bytes to write to the job's stdin (Codex write_stdin / Antigravity manage_task Input habit). Omit or pass an empty string to only poll output. When stdin_buffer_full is reported, resend only the unwritten remainder: slice the original string at the returned written_chars character count (a byte count cannot slice a Unicode string)."
+            "description": "Bytes to write to the job's stdin (Codex write_stdin habit). Omit or pass an empty string to only poll output. When stdin_buffer_full is reported, resend only the unwritten remainder: slice the original string at the returned written_chars character count (a byte count cannot slice a Unicode string)."
           },
           "eof": {
             "type": "boolean",
