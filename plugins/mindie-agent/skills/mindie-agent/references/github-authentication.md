@@ -40,9 +40,14 @@ tasks do not need another login check or choice.
    manage storage without `--insecure-storage`. A stale `GH_TOKEN` or
    `GITHUB_TOKEN` overrides saved login: repair that caller's credential
    source rather than repeatedly logging in under the stale environment.
-6. Verify the expected account again, run
-   `gh auth setup-git --hostname github.com`, and read the actual target
-   repository before continuing. For saved login, also verify in a child
+6. Verify the expected account again, ensure `git`'s directory is on `PATH`
+   (since `gh` shells out to `git`), and on Windows clear any unscoped
+   `helper-selector` in system `etc/gitconfig` (`git config --system --unset-all credential.helper`
+   and `GCM_INTERACTIVE=never` so GUI dialogs cannot block non-interactive commands;
+   if Windows `schannel` behind a corporate proxy fails with `CRYPT_E_NO_REVOCATION_CHECK`,
+   set `http.sslBackend=schannel` and `http.schannelCheckRevoke=false` while keeping
+   `http.sslVerify=true`), then run `gh auth setup-git --hostname github.com`, and read
+   the actual target repository before continuing. For saved login, also verify in a child
    process without `GH_TOKEN`/`GITHUB_TOKEN`, using the same user and
    `GH_CONFIG_DIR`. Handle 401 as credential expiry/rejection and investigate
    repository access, permissions or SSO for 403/404. Do not create test
