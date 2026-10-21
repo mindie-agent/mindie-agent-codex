@@ -112,12 +112,19 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
    codex plugin add mindie-agent@mindie-agent --json
    ```
 
-4. **核对安装状态并向用户汇报**：
+4. **核对插件安装状态**：
    ```sh
    codex plugin list --json
    ```
    - 确认 `codex plugin list --json` 显示 `mindie-agent@mindie-agent` 版本为 `0.0.3` 且处于启用状态。
    - 向用户汇报已验证的 GitHub 交互通道账号（`$GH_USER`），并告知用户：下次启动新的原生 Codex 会话时将自动触发 `SessionStart` 与 MCP 初始化（首次冷启动会通过 `uv sync --locked --no-editable` 在 `PLUGIN_DATA` 下构建隔离运行时，准备窗口最长 10 分钟），暴露 `mindie-knowledge` 与 `mindie-remote-dev` 工具集。
+
+   验证成功后继续第 5 步，完成首次配置后一起汇报安装结果。
+
+5. **完成首次配置与开发工作区引导**：
+   - 在本次安装中介绍已有 [用户须知](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md)，随后执行 [工作区配置指南](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md)。即使未开启贡献，也要提供创建并初始化 `vllm-ascend-workspace`、复用已有目录或继续当前目录的选择；复用已经确认的选择。
+   - 用户同意创建或复用后，自动通过当前宿主的原生项目/工作区入口登记所选路径，核对实际结果。源码初始化使用工作区检出的 `repo_init.py`，复用本次已验证的 GitHub 认证和已有 Fork 配置。
+   - 安装结果同时报告插件、工作区路径、宿主登记与源码初始化状态；需要原生界面操作时明确剩余步骤。
 
 </details>
 
@@ -131,6 +138,8 @@ codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.
 codex plugin add mindie-agent@mindie-agent --json && \
 codex plugin list --json
 ```
+
+安装命令完成后，在新会话输入 **`/mindie-agent 帮我完成首次配置`**，按 [工作区配置指南](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md) 完成本次安装引导。Agent 会复用 GitHub 登录，提供工作区创建/复用选择，并在同意后登记到当前客户端；选择当前目录也可完成引导。
 
 #### 环境要求说明
 - **基础依赖与硬性指标**：`git`、`uv`、已登录认证的 **`gh`（GitHub CLI）**，以及已登录且支持原生插件的 `codex` CLI。

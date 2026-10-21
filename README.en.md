@@ -112,12 +112,19 @@ If you are an AI Agent asked by the user to install this plugin, execute the fol
    codex plugin add mindie-agent@mindie-agent --json
    ```
 
-4. **Verify the installation record and report back**:
+4. **Verify plugin installation**:
    ```sh
    codex plugin list --json
    ```
    - Confirm `codex plugin list --json` shows `mindie-agent@mindie-agent` version `0.0.3` enabled in the active profile.
    - Report the verified GitHub account (`$GH_USER`), and inform the user that starting a new native Codex session will trigger `SessionStart` and MCP initialization (building the isolated locked runtime under `PLUGIN_DATA` via `uv sync --locked --no-editable`, with an initial cold-start window of up to 10 minutes) and expose both `mindie-knowledge` and `mindie-remote-dev`.
+
+   Continue with step 5 after verification, then report the complete setup result.
+
+5. **Finish first-time setup and development workspace onboarding**:
+   - In this installation, present the existing [user notice](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md), then follow [Workspace Setup](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md). Offer creating and initializing `vllm-ascend-workspace`, reusing a directory, or keeping the current one even when contribution is disabled. Reuse choices already made.
+   - Approval to create or reuse includes automatically adding the selected path through the current harness's native project/workspace entry and checking the result. Initialize sources through the checkout's `repo_init.py`, reusing the verified GitHub authentication and saved fork configuration.
+   - Report plugin status, workspace path, native registration and source initialization together, including any remaining native UI action.
 
 </details>
 
@@ -131,6 +138,8 @@ codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.
 codex plugin add mindie-agent@mindie-agent --json && \
 codex plugin list --json
 ```
+
+After the commands, enter **`/mindie-agent help me finish first-time setup`** in a new session and complete [Workspace Setup](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md) as part of installation. The agent reuses GitHub authentication, offers workspace creation/reuse and adds the approved path to the current client. Keeping the current directory also completes the offer.
 
 #### Environment Notes
 - **Prerequisites (Hard Requirements)**: `git`, `uv`, an authenticated **`gh` (GitHub CLI)**, and an authenticated `codex` CLI with native plugin support.
