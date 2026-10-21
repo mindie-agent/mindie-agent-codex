@@ -60,6 +60,8 @@ PR delivery workflows, read [Diagnostic Reasoning](references/diagnostic-reasoni
 
 ## Progressive Context Disclosure (Read Only on Demand)
 
+- **Installation, first-use GitHub authentication, enterprise-network token login or authentication repair**: read [GitHub Sign-In](references/github-authentication.md). Reuse a working login; otherwise guide browser login or token creation/input and verify credential reuse.
+
 Do **not** load all reference files during ordinary troubleshooting. Read the specific reference file **only** when the current turn requires it:
 
 - **Detailed tool schemas (`knowledge_query`, `knowledge_explain`, `knowledge_distill`, `remote_*`), graded response shapes, dual-layer ledger (`PROGRESS.md` + `experiment-ledger.jsonl`), and NPU timing / profiler rules**: read [Domain Tooling](references/domain-skills.md).
