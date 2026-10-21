@@ -7,11 +7,12 @@ name = "mindie-agent-codex"
 version = "0.0.3"
 description = "Codex adapter for MindIE Agent"
 requires-python = ">=3.11"
-dependencies = ["mindie-knowledge", "remote-dev"]
+dependencies = ["mindie-knowledge", "remote-dev", "mindie-diagnostics"]
 
 [tool.uv.sources]
-mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "1d78f1dbadeb770f7489d5a9378cfbfd4ca26c6a" }
-remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "293045f87193fbe749dd161f3fa4bd6a8fbff37f" }
+mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "10ee85606aa43de7975e3c4542013be4c177730a" }
+remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "6bd1a15380195a95d450458e7c1856905d95bf73" }
+mindie-diagnostics = { git = "https://github.com/mindie-agent/diagnostics", rev = "fba07e8607ddadde14cea315c9dbda23726c1c79" }
 
 [tool.setuptools]
 packages = ["mindie_codex", "mindie_codex.scripts"]

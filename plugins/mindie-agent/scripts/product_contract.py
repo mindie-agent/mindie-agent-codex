@@ -5,7 +5,7 @@ Computes candidate source/product/dependency digests (`mindie-product/1`, `mindi
 
 [Invariants]
 - The running installer never imports the candidate's private runtime probe; the candidate validates its own runtime and publication contract.
-- `uv.lock` revisions must match `pyproject.toml` exact official commit pins for `mindie-knowledge` and `remote-dev`.
+- `uv.lock` revisions must match `pyproject.toml` exact official commit pins for `mindie-knowledge`, `remote-dev`, and `mindie-diagnostics`.
 
 [Timeouts & Locks]
 - Delegates execution timeout and output bounds (`max_output=65536`) to the caller-supplied `command` runner in `probe()`.
@@ -46,7 +46,7 @@ FAILURE_CODES = {
     "validation": {"internal_error"},
     "process": {"nonzero_exit"},
 }
-FAILURE_COMPONENTS = {"mindie-knowledge", "remote-dev"}
+FAILURE_COMPONENTS = {"mindie-knowledge", "remote-dev", "mindie-diagnostics"}
 PUBLICATION_PROCESS_CODES = {"init_failed", "fetch_failed", "revision_read_failed"}
 
 
@@ -154,7 +154,8 @@ def requirements(source):
     project = tomllib.loads(raw.decode("utf-8"))
     sources = project["tool"]["uv"]["sources"]
     pins = {}
-    expected = {"mindie-knowledge": "knowledge", "remote-dev": "remote-dev"}
+    expected = {"mindie-knowledge": "knowledge", "remote-dev": "remote-dev",
+                "mindie-diagnostics": "diagnostics"}
     for name, repo in expected.items():
         value = sources.get(name, {})
         if (set(value) != {"git", "rev"}
