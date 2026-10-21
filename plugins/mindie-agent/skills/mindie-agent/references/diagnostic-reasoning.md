@@ -32,6 +32,17 @@ Check shape, dtype, stride, ownership, readiness and lifetime at the boundary
 that first diverges. A matching collective result does not validate the order
 of downstream operations.
 
+For cross-instance or prefill/decode (PD) disaggregated handoff, do not trust
+lifecycle hook names (`wait_for_layer_load`, `start_load_kv`) or scheduler token
+counters (`num_computed_tokens` while waiting for remote KV) as proof that data
+arrived. Dump consumer tensors only after the layer's actual wait and state
+relocation finish and right before the first consuming operator. When checking
+whether a transfer missed bytes or used the wrong stride (`(N-1)*stride + valid_bytes`),
+pre-fill exclusively owned destination blocks with a dtype-safe sentinel (`NaN`
+for floating-point, extreme finite values for quantized caches) before the load,
+and never poison shared prefix-cache blocks or page-shared sibling views
+(`layer_stride == 0`).
+
 For performance, perform Phase 0 upfront subgraph fusion analysis before tuning
 an isolated operator's microstages: identify fusable producer-consumer links
 (eliminating GM round-trips, standalone `pack`/`cast`/`quant` helpers) and hard
@@ -66,7 +77,14 @@ correctness.
 
 Choose a reference that does not share the suspected defect. Agreement between
 two broken paths, 100% acceptance, service health or exit zero does not establish
-semantic correctness. Quantized implementation comparisons need equivalent
+semantic correctness. In disaggregated serving, an HTTP 200 response can hide a
+failed remote KV pull that silently fell back to local prefill recomputation;
+always verify non-zero transferred KV bytes and zero recompute fallback alongside
+output morphology (`repeated_ngram`, `punctuation_run`, `immediate_eos`). When a
+runtime feature (`batch_invariant`, `enable_fused_mc2`, prefix cache, `ACLGraph`,
+`MTP`, or `PCP/DCP`) is active, inspect the effective post-init config and run a
+`2×2` `(Colocated vs Disaggregated) × (Feature Off vs On)` check before blaming
+the transfer path. Quantized implementation comparisons need equivalent
 quantized inputs and an explicit output/scale/layout contract. Keep operator,
 module, first-token, continued-decode and concurrent acceptance scopes distinct.
 OracleFreezer protects the chosen probes; it does not prove their independence
