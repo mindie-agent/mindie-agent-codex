@@ -93,12 +93,11 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
    git --version
    uv --version
    gh --version
-   gh auth status
-   GH_USER=$(gh api user --jq .login) && echo "GitHub channel verified for account: $GH_USER"
-   gh auth setup-git
+   GH_USER=$(gh api --hostname github.com user --jq .login) && echo "GitHub channel verified for account: $GH_USER"
+   gh auth setup-git --hostname github.com
    codex --version
    ```
-   - **硬性门禁（严禁跳过或静默忽略）**：若未安装 `gh`，请先协助安装（macOS：`brew install gh`；Windows：`winget install --id GitHub.cli`；Ubuntu / WSL：`sudo apt update && sudo apt install -y gh`）；若 `gh auth status` 未登录或 `gh api user` 失败，**请勿继续执行后续步骤**，立即引导用户完成 `gh auth login` 并运行 `gh auth setup-git`，直至 `gh api user --jq .login` 稳定返回当前 GitHub 账号名。
+   - **硬性门禁（严禁跳过或静默忽略）**：若未安装 `gh`，请先协助安装（macOS：`brew install gh`；Windows：`winget install --id GitHub.cli`；Ubuntu / WSL：`sudo apt update && sudo apt install -y gh`）。账号读取成功时复用已有认证；需要登录时按 [GitHub 登录引导](plugins/mindie-agent/skills/mindie-agent/references/github-authentication.md) 选择方式：普通网络使用浏览器，企业网络或浏览器授权受阻时优先 Token。已有 Token 就在 `gh` 隐藏输入提示中粘贴（或使用已提供的私有文件），没有则引导创建。验证账号、Git 和后续进程可复用凭据后继续；网络/证书错误先修复传输，不反复要求登录。
    - 确认 `codex --version` 匹配兼容声明中记录的宿主版本（声明于 [`plugins/mindie-agent/harness-compatibility.json`](plugins/mindie-agent/harness-compatibility.json)）：
      - macOS：`codex-cli 0.162.0-alpha.17.2`
      - 原生 Windows / Windows WSL：`codex-cli 0.153.4`
@@ -127,7 +126,7 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 如果你习惯在终端手动执行（macOS / Linux / WSL 终端或原生 Windows PowerShell），可直接运行：
 
 ```sh
-gh auth status && gh auth setup-git && \
+gh api --hostname github.com user --jq .login && gh auth setup-git --hostname github.com && \
 codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.0.3 && \
 codex plugin add mindie-agent@mindie-agent --json && \
 codex plugin list --json

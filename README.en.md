@@ -93,12 +93,11 @@ If you are an AI Agent asked by the user to install this plugin, execute the fol
    git --version
    uv --version
    gh --version
-   gh auth status
-   GH_USER=$(gh api user --jq .login) && echo "GitHub channel verified for account: $GH_USER"
-   gh auth setup-git
+   GH_USER=$(gh api --hostname github.com user --jq .login) && echo "GitHub channel verified for account: $GH_USER"
+   gh auth setup-git --hostname github.com
    codex --version
    ```
-   - **Hard Gate (Never skip or silently ignore)**: If `gh` is missing, assist the user in installing it first (macOS: `brew install gh`; Windows: `winget install --id GitHub.cli`; Ubuntu / WSL: `sudo apt update && sudo apt install -y gh`). If `gh auth status` is not logged in or `gh api user` fails, **do not proceed**—guide the user to complete `gh auth login` and run `gh auth setup-git` until `gh api user --jq .login` reliably returns their GitHub username.
+   - **Hard Gate (Never skip or silently ignore)**: If `gh` is missing, assist the user in installing it first (macOS: `brew install gh`; Windows: `winget install --id GitHub.cli`; Ubuntu / WSL: `sudo apt update && sudo apt install -y gh`). Reuse a working account. Otherwise follow [GitHub Sign-In](plugins/mindie-agent/skills/mindie-agent/references/github-authentication.md): browser login on ordinary networks, or token login on enterprise networks / blocked browser authorization. Use an existing token in the hidden `gh` prompt (or a supplied private file), or guide token creation. Verify the account, Git and credential reuse before continuing; fix transport/certificate failures before retrying authentication.
    - Verify `codex --version` matches a host version recorded in the compatibility declaration (declared in [`plugins/mindie-agent/harness-compatibility.json`](plugins/mindie-agent/harness-compatibility.json)):
      - macOS: `codex-cli 0.162.0-alpha.17.2`
      - Native Windows / Windows WSL: `codex-cli 0.153.4`
@@ -127,7 +126,7 @@ If you are an AI Agent asked by the user to install this plugin, execute the fol
 To install manually from a macOS / Linux / WSL shell or native Windows PowerShell:
 
 ```sh
-gh auth status && gh auth setup-git && \
+gh api --hostname github.com user --jq .login && gh auth setup-git --hostname github.com && \
 codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.0.3 && \
 codex plugin add mindie-agent@mindie-agent --json && \
 codex plugin list --json
