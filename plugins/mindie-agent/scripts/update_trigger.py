@@ -107,7 +107,7 @@ class Maintenance:
                         "--config", str(self.config)]
                 environment = runtime_env(self.config)
             output = run(argv, "", env=environment, cancel=self.cancel,
-                         allow_service=True).checked_stdout()
+                         allow_service=True, timeout=1500.0).checked_stdout()
             outcome = json.loads(output)
             if not isinstance(outcome, dict):
                 raise ValueError("update helper returned an invalid status")

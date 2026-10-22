@@ -39,7 +39,7 @@ MARKETPLACE = "mindie-agent"
 
 
 def harness_version(native, env):
-    value = run([native, "--version"], "", env=env).checked_stdout().strip()
+    value = run([native, "--version"], "", env=env, timeout=15.0).checked_stdout().strip()
     match = re.fullmatch(r"codex-cli (\S+)", value)
     if match is None:
         raise ValueError("native Harness version is unavailable")
@@ -48,7 +48,7 @@ def harness_version(native, env):
 
 def installed(native, env):
     value = json.loads(run([native, "plugin", "list", "--marketplace",
-                           MARKETPLACE, "--json"], "", env=env).checked_stdout())
+                           MARKETPLACE, "--json"], "", env=env, timeout=30.0).checked_stdout())
     rows = value.get("installed")
     if not isinstance(rows, list):
         raise ValueError("native installed-plugin response is invalid")
@@ -87,7 +87,7 @@ def _native_mutation(path, pending, action, argv, env):
     _atomic(path, pending)
     result = None
     try:
-        result = run(argv, "", env=env)
+        result = run(argv, "", env=env, timeout=300.0)
         output = json.loads(result.checked_stdout())
         if not isinstance(output, dict):
             raise ValueError("native administrative result is not an object")
@@ -206,7 +206,7 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
         result = None
         try:
             result = run(["uv", "run", "--no-project", "--python", "3.13", "python",
-                          "-I", "-c", code, str(source), str(data)], "", env=env)
+                          "-I", "-c", code, str(source), str(data)], "", env=env, timeout=540.0)
             runtime = json.loads(result.checked_stdout())
             if (not isinstance(runtime, dict) or set(runtime) != {"python", "scripts", "release"}
                     or any(not isinstance(value, str) or not Path(value).is_absolute()
@@ -215,7 +215,7 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
         except Exception as exc:
             fact = _process_fact(getattr(exc, "process_result", result))
             pending["preparation"] = fact
-            if fact.get("cleanup_failed") is not False:
+            if fact.get("cleanup_failed") is True:
                 pending["stage"] = "runtime_prepare_unknown"
             exc.native_effect = dict(stage="runtime_prepare", process=fact)
             try:
@@ -255,7 +255,7 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
     _atomic(root / "native.json", pending)
     result, value = None, None
     try:
-        result = run(argv, "", env=env, allow_service=True)
+        result = run(argv, "", env=env, allow_service=True, timeout=120.0)
         value = dict(status="active") if first_install else json.loads(result.stdout)
         if not isinstance(value, dict):
             raise ValueError("activation control response is invalid")
@@ -287,7 +287,7 @@ def _can_supersede(pending):
     activation = pending.get("activation", {})
     control_settled = ("process" not in activation
                        or (activation["process"] or {}).get("cleanup_failed") is False)
-    return settled and control_settled and (preparation is None or preparation.get("cleanup_failed") is False) and (
+    return settled and control_settled and (preparation is None or preparation.get("cleanup_failed") is not True) and (
         pending.get("stage") == "installed"
         or (pending.get("stage") == "prepared"
             and (pending.get("activation") == {"status": "not_started"}
@@ -331,7 +331,7 @@ def check(config, *, first_install=False):
                         pending = None
                     if pending is not None:
                         if (pending.get("stage") == "installed"
-                                and pending.get("preparation", {}).get("cleanup_failed", False) is not False):
+                                and pending.get("preparation", {}).get("cleanup_failed") is True):
                             status.update(status="unknown", stage="runtime_prepare",
                                           process=pending["preparation"])
                             _atomic(status_path, status)

@@ -187,6 +187,30 @@ class UpdateTests(unittest.TestCase):
         install.assert_not_called()
         prepare.assert_not_called()
 
+    def test_interrupted_runtime_prepare_without_cleanup_failure_retries_preparation(self):
+        source = self.root / "source"
+        (source / ".codex-plugin").mkdir(parents=True)
+        (source / ".codex-plugin/plugin.json").write_text(json.dumps(dict(version=self.version)))
+        (source / "pyproject.toml").write_text(f'[project]\nversion="{self.version}"\n')
+        (source / "harness-compatibility.json").write_text(json.dumps(self.metadata["compatibility"]))
+        self.installed.return_value = dict(self.before, version=self.version)
+        for prep in (
+            dict(execution="unknown", cleanup_failed=None),
+            dict(execution="unknown", returncode=None, cleanup_failed=False),
+        ):
+            pending = dict(metadata=self.metadata, stage="installed", source=str(source),
+                           process=dict(execution="completed", returncode=0, cleanup_failed=False),
+                           preparation=prep)
+            (self.state / "native.json").write_text(json.dumps(pending))
+            with patch.object(update, "_native_install") as install, \
+                    patch.object(update, "_prepare_and_activate",
+                                 return_value=dict(status="active")) as prepare:
+                status = update.check(self.config)
+            self.assertEqual(status["status"], "active")
+            install.assert_not_called()
+            prepare.assert_called_once()
+            (self.state / "status.json").unlink(missing_ok=True)
+
     def prepared_candidate(self):
         source = self.root / "source"
         (source / ".codex-plugin").mkdir(parents=True)
