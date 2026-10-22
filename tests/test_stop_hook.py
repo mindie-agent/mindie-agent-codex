@@ -46,6 +46,8 @@ def run_owned_hook(argv, event, *, shell, env, timeout):
                 stage = Path(stage_path).read_text(encoding="utf-8")
             except FileNotFoundError:
                 stage = "bridge-not-started"
+            except TimeoutError:
+                raise
             except OSError as stage_error:
                 stage = "stage-unreadable:" + type(stage_error).__name__
         exc.add_note(f"Hook host pid={process.pid}, returncode={process.poll()}, bridge stage={stage}")
@@ -98,7 +100,8 @@ class StopHookTests(unittest.TestCase):
                 timeout=timeout,
                 shell=self.host_shell is None,
                 env={**os.environ, "PLUGIN_ROOT": str(plugin),
-                     'MINDIE_DIAGNOSTICS_ROOT': diagnostics, **env},
+                     'MINDIE_DIAGNOSTICS_ROOT': diagnostics,
+                     'MINDIE_DIAGNOSTICS_CONFIG': str(Path(diagnostics) / 'diagnostics.json'), **env},
             )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout),

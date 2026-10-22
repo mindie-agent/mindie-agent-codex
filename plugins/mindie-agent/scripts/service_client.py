@@ -82,6 +82,8 @@ def _default_domain(engine):
     """Read the configured default authority for a no-import default route."""
     try:
         config = json.loads(Path(engine).read_text(encoding="utf-8"))
+    except TimeoutError:
+        raise
     except (OSError, ValueError):
         return None
     domain = config.get("domain") if isinstance(config, dict) else None

@@ -75,16 +75,22 @@ def spawn(command, *, allow_service=False, **kwargs):
         except BaseException:
             try:
                 process.kill()
+            except TimeoutError:
+                raise
             except OSError:
                 pass
         try:
             process.wait(timeout=5)
+        except TimeoutError:
+            raise
         except (OSError, subprocess.TimeoutExpired):
             pass
         for stream in (process.stdout, process.stderr, process.stdin):
             if stream is not None:
                 try:
                     stream.close()
+                except TimeoutError:
+                    raise
                 except OSError:
                     pass
         raise

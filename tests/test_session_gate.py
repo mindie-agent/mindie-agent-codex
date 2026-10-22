@@ -371,7 +371,7 @@ class SessionGateTests(unittest.TestCase):
             self.assertFalse(gate.call(self.request())["isError"])
             self.assertFalse(gate.call(self.request(name="knowledge_explain", ref="x"))["isError"])
             self.assertEqual(run.call_count, 2)
-            self.assertIsNone(run.call_args.kwargs['timeout'])
+            self.assertEqual(run.call_args.kwargs['timeout'], 45.0)
         self.assertFalse(self.sessions.path.exists())
 
     def test_repeated_reads_need_no_durable_request_record(self):
@@ -394,7 +394,7 @@ class SessionGateTests(unittest.TestCase):
             payload = json.loads(run.call_args.args[1])
             self.assertEqual(payload["arguments"]["session_id"], "remote-job-7")
             self.assertEqual(payload["remote_session_id"], "manual-A")
-            self.assertIsNone(run.call_args.kwargs["timeout"])
+            self.assertEqual(run.call_args.kwargs["timeout"], 120.0)
 
     def test_rejected_reads_do_not_consume_the_failure_circuit(self):
         lease = self.activate()

@@ -367,10 +367,16 @@ def remote(payload):
             close_connections()
         except Exception as cleanup_error:
             if shaped is not None:
-                shaped["cleanup"] = dict(status="failed", stage="close_connections",
-                                         error_type=type(cleanup_error).__name__,
-                                         operation_outcome="preserved", automatic_retry=False)
-                shaped["isError"] = True
+                warning = dict(status="failed", stage="close_connections",
+                               error_type=type(cleanup_error).__name__,
+                               operation_outcome="preserved", automatic_retry=False)
+                shaped["cleanup"] = warning
+                structured = shaped.get("structuredContent")
+                if isinstance(structured, dict):
+                    structured["cleanup_warning"] = dict(warning)
+                # The primary call owns the business result. A secondary
+                # connection-cleanup fault is reported without rewriting a
+                # succeeded remote call into an error.
                 shaped["content"].append(dict(type="text", text=
                     "Remote operation result preserved; local connection cleanup failed. Do not repeat the operation."))
             elif original is not None:

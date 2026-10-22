@@ -91,7 +91,8 @@ class RuntimeProbeTests(unittest.TestCase):
 
     def test_candidate_requires_safe_capture_failure_projection_module(self):
         shutil.copytree(ROOT / "plugins/mindie-agent", self.scripts.parent,
-                        dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+                        dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("__pycache__", ".venv"))
         candidate_validate.adapter_check(self.source)
         (self.scripts / "capture_errors.py").unlink()
         with self.assertRaisesRegex(ValueError, "missing bounded runtime entry: capture_errors.py"):
@@ -99,7 +100,8 @@ class RuntimeProbeTests(unittest.TestCase):
 
     def test_candidate_requires_both_exact_native_interrupt_controls(self):
         shutil.copytree(ROOT / "plugins/mindie-agent", self.scripts.parent,
-                        dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__", "build", "*.egg-info"))
+                        dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("__pycache__", ".venv", "build", "*.egg-info"))
         path = self.scripts.parent / "hooks/hooks.json"
         original = json.loads(path.read_text(encoding="utf-8"))
         candidate_validate.adapter_check(self.source)
@@ -181,7 +183,7 @@ class RuntimeProbeTests(unittest.TestCase):
             self.invoke()
         self.validator.write_text('import time; time.sleep(30)')
         def quick_command(argv, **kwargs):
-            self.assertIsNone(kwargs['timeout'])
+            self.assertEqual(kwargs['timeout'], 180.0)
             self.assertEqual(kwargs['max_output'], 65536)
             return run(argv, '', **dict(kwargs, timeout=0.1)).checked_stdout()
         with self.assertRaises(TimeoutError):

@@ -396,7 +396,7 @@ class DistillRegistrationTests(ServiceCase):
                            runtime_call.distill_rpc_timeout())
         self.assertEqual(mcp_gate.knowledge_timeout('knowledge_distill', None),
                          runtime_call.distill_helper_timeout())
-        self.assertIsNone(mcp_gate.knowledge_timeout('knowledge_query', None))
+        self.assertEqual(mcp_gate.knowledge_timeout('knowledge_query', None), 45.0)
         with self.assertRaises(mcp_gate.InvalidToolArguments):
             mcp_gate.knowledge_timeout('knowledge_distill', 12.0)
         self.assertEqual(runtime_call.distill_rpc_timeout(), summary_budget.distill_rpc_timeout())

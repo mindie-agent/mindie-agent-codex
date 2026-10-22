@@ -133,6 +133,8 @@ def run_codex(command, prompt, *, timeout: float | None = 120.0, receipt=None, d
                     stderr=subprocess.PIPE,
                     env=env,
                 )
+        except TimeoutError:
+            raise
         except OSError as exc:
             receipt['elapsed_ms'] = round((time.monotonic() - started) * 1000)
             raise NativeStartError("native executable could not start") from exc
@@ -173,6 +175,8 @@ def run_codex(command, prompt, *, timeout: float | None = 120.0, receipt=None, d
         def checked_reader(read):
             try:
                 read()
+            except TimeoutError:
+                raise
             except (OSError, ValueError) as exc:
                 read_errors.append(exc)
                 lines.put(None)
@@ -277,6 +281,8 @@ def run_codex(command, prompt, *, timeout: float | None = 120.0, receipt=None, d
                     # The event loop already observed actual process exit;
                     # it kept owner checks and explicit deadlines live after EOF.
                     code = process.wait()
+            except TimeoutError:
+                raise
             except (subprocess.TimeoutExpired, OSError):
                 if not receipt['turn_completed']:
                     raise
@@ -347,6 +353,8 @@ def run_codex(command, prompt, *, timeout: float | None = 120.0, receipt=None, d
                     if os.name == "nt":
                         try:
                             process.kill()
+                        except TimeoutError:
+                            raise
                         except OSError:
                             pass
                         process.wait(timeout=2)
@@ -367,6 +375,8 @@ def run_codex(command, prompt, *, timeout: float | None = 120.0, receipt=None, d
                     owner_fd, process._mindie_owner_fd = process._mindie_owner_fd, None
                     try:
                         os.close(owner_fd)
+                    except TimeoutError:
+                        raise
                     except OSError:
                         receipt['cleanup_failed'] = True
                 receipt['elapsed_ms'] = round((time.monotonic() - started) * 1000)

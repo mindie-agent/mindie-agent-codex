@@ -11,6 +11,7 @@ Fixed release entrypoint (`releases/<version>/entry.py`) that validates `runtime
 - Acquires `update_lock(config)` (`blocking=True` except on `stop`) around profile validation and initialization.
 - Session maintenance has a 300-second execution budget for reporter, feed,
   and knowledge readiness, followed by bounded owned-process cleanup.
+- Release dispatch to helper scripts is bounded at 120.0s.
 
 [Side-Effect Policy]
 - First-use `profile(..., prepare=True)` runs headless `setup.install` under `exclusive=True` `update_lock`; subsequent calls validate and dispatch without mutating config.
@@ -125,7 +126,7 @@ def dispatch(args, config, *, stop_adapter=None):
             data = json.dumps(dict(adapter=adapter, hook_input=data), ensure_ascii=False)
             arguments = ["stop", "--snapshot"]
         result = run([adapter["python"], "-I", str(script), *arguments],
-                     data, env=runtime_env(config, adapter=adapter), allow_service=True,
+                     data, timeout=120.0, env=runtime_env(config, adapter=adapter), allow_service=True,
                      allowed_returncodes=(0, 1, 2))
         print(result.checked_stdout(), end="")
         return result.returncode

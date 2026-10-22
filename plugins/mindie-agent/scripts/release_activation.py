@@ -166,6 +166,8 @@ def activate(config, prepared, *, control_seconds=CONTROL_SECONDS):
             stage = "binding_publish"
             try:
                 _atomic(config, value)
+            except TimeoutError:
+                raise
             except (OSError, ValueError) as exc:
                 return incomplete(error_type=type(exc).__name__,
                                   domain_restoration=restore_changed(domains, timeout=max(0, deadline - time.monotonic())))
@@ -174,6 +176,8 @@ def activate(config, prepared, *, control_seconds=CONTROL_SECONDS):
         if stage == "installation_lock":
             return dict(status="deferred", reason="operation_busy", execution="not_started")
         return incomplete(error_type="BlockingIOError")
+    except TimeoutError:
+        raise
     except (OSError, ValueError, RuntimeError) as exc:
         # The candidate's ready observation survives a separate local write
         # failure. Never convert this to not_started or restore the old owner.

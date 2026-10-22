@@ -8,7 +8,7 @@ Bootstraps the plugin's isolated `uv` virtual environment under `PLUGIN_DATA/run
 - Records preparation failures via stdlib `diagnostic_support.failure` before runtime packages exist.
 
 [Timeouts & Locks]
-- Acquires `exclusive_lock(release / "prepare.lock")` across `uv sync`, `readback`, `probe`, and `runtime.json` publication.
+- Acquires `exclusive_lock(release / "prepare.lock")` across bounded `uv sync` (`540.0s`), `readback` (`60.0s`), `probe`, and `runtime.json` publication.
 
 [Side-Effect Policy]
 - Writes only under `PLUGIN_DATA/runtimes/<key>` and `PLUGIN_DATA/releases/<version>`; atomic `os.replace()` publishes `runtime.json`.
@@ -69,7 +69,7 @@ if json.loads(d.read_text('direct_url.json') or '{}').get('dir_info',{}).get('ed
 root=pathlib.Path(importlib.util.find_spec('mindie_codex').origin).parent
 print(json.dumps({'root':str(root),'prefix':sys.prefix,'version':d.version}))
 """
-    value = json.loads(run([str(python), "-I", "-c", code], "").checked_stdout())
+    value = json.loads(run([str(python), "-I", "-c", code], "", timeout=60.0).checked_stdout())
     if value["version"] != native_version(source):
         raise ValueError("installed distribution differs from native plugin version")
     installed = Path(value["root"])
@@ -134,7 +134,7 @@ def ensure_runtime(source, data):
                         "sys.exit(subprocess.run(sys.argv[2:]).returncode)")
             run([sys.executable, "-I", "-c", redirect, log, uv, "sync",
                  "--project", str(source), "--locked", "--no-editable", "--no-dev",
-                 "--python", sys.executable], "", env=env).checked_stdout()
+                 "--python", sys.executable], "", timeout=540.0, env=env).checked_stdout()
             Path(log).unlink()
         with preparing("installed-readback"):
             scripts = readback(python, source)

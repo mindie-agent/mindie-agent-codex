@@ -55,7 +55,8 @@ class ProcessResultTests(unittest.TestCase):
         shaped = mcp_gate.runtime_result(result)
         self.assertEqual(shaped['structuredContent']['receipt'], 'done')
         self.assertEqual(shaped['cleanup']['operation_outcome'], 'preserved')
-        self.assertTrue(shaped['isError'])
+        self.assertEqual(shaped['cleanup_warning']['operation_outcome'], 'preserved')
+        self.assertFalse(shaped['isError'])
 
     @unittest.skipUnless(os.name == 'posix', 'actual POSIX subprocess evidence')
     def test_primary_deadline_survives_cleanup_failure(self):

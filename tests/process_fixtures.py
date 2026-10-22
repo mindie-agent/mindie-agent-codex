@@ -255,6 +255,8 @@ def _close_test_diagnostic_writers(temporary):
                     continue
                 recorder.close()
                 registry.pop(key, None)
+            except TimeoutError:
+                raise
             except (OSError, ValueError, IndexError, TypeError):
                 continue
 

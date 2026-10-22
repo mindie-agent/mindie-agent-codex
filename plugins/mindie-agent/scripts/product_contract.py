@@ -8,7 +8,7 @@ Computes candidate source/product/dependency digests (`mindie-product/1`, `mindi
 - `uv.lock` revisions must match `pyproject.toml` exact official commit pins for `mindie-knowledge`, `remote-dev`, and `mindie-diagnostics`.
 
 [Timeouts & Locks]
-- Delegates execution timeout and output bounds (`max_output=65536`) to the caller-supplied `command` runner in `probe()`.
+- `probe()` bounds candidate validation at `180.0s` and `max_output=65536` through the caller-supplied `command` runner.
 
 [Side-Effect Policy]
 - Purely read-only over the candidate source tree except when `probe()` spawns `candidate_validate.py -I -B`.
@@ -294,7 +294,7 @@ def probe(python, scripts, command, *, revision=None, verified_receipt=None):
         # Candidate source and installed runtime are checked again locally.
         validate_receipt(json.dumps(verified_receipt), expected)
         argv.extend(["--verified-receipt", json.dumps(verified_receipt, sort_keys=True)])
-    output = command(argv, timeout=None, max_output=65536,
+    output = command(argv, timeout=180.0, max_output=65536,
                      on_failure=lambda output, code: failure_receipt(output, expected, code))
     receipt = validate_receipt(output, expected)
     if identity(source, revision) != expected:

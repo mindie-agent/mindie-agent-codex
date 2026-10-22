@@ -32,7 +32,7 @@ def prepare_store(python, scripts, config):
     """Initialize through the selected core before publishing an installation."""
     result = run(
         [str(python), str(scripts / 'capture_config.py'), 'prepare-store'],
-        json.dumps(config), max_output=8192, on_failure=store_failure,
+        json.dumps(config), timeout=30.0, max_output=8192, on_failure=store_failure,
     ).checked_stdout()
     if json.loads(result) != {'status': 'ready'}:
         raise RuntimeError('knowledge store preparation did not confirm readiness')
@@ -41,7 +41,7 @@ def prepare_store(python, scripts, config):
 def prepare(python, scripts):
     path = run(
         [str(python), '-m', 'mindie_knowledge.loop.transcript_redaction'],
-        '', max_output=8192,
+        '', timeout=15.0, max_output=8192,
     ).checked_stdout().strip()
     from pathlib import Path
     if not Path(path).is_absolute() or not Path(path).is_file():

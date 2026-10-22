@@ -54,6 +54,8 @@ def _read(path, limit):
         if len(raw) > limit:
             raise ProviderConfigurationError("summary_provider_document_invalid")
         return raw.decode("utf-8")
+    except TimeoutError:
+        raise
     except (OSError, UnicodeError):
         raise ProviderConfigurationError("summary_provider_document_unavailable") from None
 
@@ -244,6 +246,8 @@ def environment(route, directory):
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
                 stream.write(content)
+    except TimeoutError:
+        raise
     except OSError:
         raise ProviderConfigurationError("summary_provider_temporary_config_unavailable") from None
     env = {key: value for key, value in os.environ.items()

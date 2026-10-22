@@ -61,7 +61,8 @@ class SharingFixture(unittest.TestCase):
         )
         self.environment = patch.dict(
             os.environ, MINDIE_AGENT_CONFIG=str(self.config), CODEX_THREAD_ID="manual-A",
-            CODEX_HOME=str(self.codex_home), MINDIE_DIAGNOSTICS_ROOT=str(self.root / "diagnostics")
+            CODEX_HOME=str(self.codex_home), MINDIE_DIAGNOSTICS_ROOT=str(self.root / "diagnostics"),
+            MINDIE_DIAGNOSTICS_CONFIG=str(self.root / "diagnostics.json")
         )
         self.environment.start()
         self.sessions = Sessions()

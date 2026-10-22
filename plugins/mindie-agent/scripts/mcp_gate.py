@@ -9,7 +9,7 @@ Implements the JSON-RPC MCP server gate (`Gate`, `serve`) for both `knowledge` a
 - When a remote operation has already succeeded (`outcome == "succeeded"`), a local receipt-accounting failure NEVER overwrites the business result with `isError=True` (`receipt_unconfirmed=True` is attached instead).
 
 [Timeouts & Locks]
-- Uses shared `update_lock` around runtime subprocess dispatch (`runtime_call.py`), SQLite WAL mode with `busy_timeout=5000` for `RemoteReceipts`, and per-request cancellation events triggered by `notifications/cancelled` or `mindie_interrupt`.
+- Uses shared `update_lock` around bounded runtime subprocess dispatch (`120.0s` remote, `45.0s` knowledge, distill helper budget), SQLite WAL mode with `busy_timeout=5000` for `RemoteReceipts`, and per-request cancellation events triggered by `notifications/cancelled` or `mindie_interrupt`.
 
 [Side-Effect Policy]
 - `initialize` and `tools/list` are pure in-memory catalog reads (`mcp_catalog.json`) that never touch disk or start services.
@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -62,10 +63,18 @@ class SwitchingRuntime(RuntimeError):
     """The operation lock was unavailable before any request admission."""
 
 
+def coerce_timeout(timeout):
+    """Return one positive finite explicit budget, else no explicit budget."""
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        return None
+    return timeout if math.isfinite(timeout) and timeout > 0 else None
+
+
 def knowledge_timeout(name, timeout):
     """Bind helper and inner RPC budgets; never hand C6 an unbounded deadline."""
+    timeout = coerce_timeout(timeout)
     if name != "knowledge_distill":
-        return timeout
+        return timeout or 45.0
     import runtime_call
     minimum = runtime_call.distill_helper_timeout()
     if timeout is not None and timeout < minimum:
@@ -127,10 +136,15 @@ def runtime_result(completed):
                           and detail.get("status") in {"local_receipt_failed", "local_application_failed"}
                           and detail.get("model_execution") == "completed"
                           and detail.get("model_status") == "returned")
+        preserved_primary = preserved_paid or (
+            completed.execution == "completed" and result.get("isError") is False)
+        warning = dict(status="failed", issues=completed.cleanup,
+                       operation_outcome="preserved", automatic_retry=False)
         result = dict(result, operation_outcome="failed" if result.get("isError") is True else "succeeded",
-                      isError=result.get("isError", False) if preserved_paid else True, cleanup=dict(
-            status="failed", issues=completed.cleanup, operation_outcome="preserved",
-            automatic_retry=False))
+                      isError=result.get("isError", False) if preserved_primary else True,
+                      cleanup=warning)
+        if preserved_primary:
+            result["cleanup_warning"] = dict(warning)
         result["content"].append(dict(type="text", text=
             "Runtime operation result preserved; local process cleanup failed. Do not repeat the operation."))
     return result
@@ -463,7 +477,7 @@ class Gate:
                 arguments=args,
                 remote_session_id=session,
             )
-            bound = timeout
+            bound = coerce_timeout(timeout) or 120.0
             with update_lock(config_path()):
                 config = _adapter_config()
                 stage = "helper_run"

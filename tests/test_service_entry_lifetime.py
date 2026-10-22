@@ -124,6 +124,8 @@ class ServiceEntryLifetimeTests(SharingFixture):
                 if status.get("worker_alive") is True and status.get("admission_frozen") is False:
                     self.assertIs(lock_held(self.root / "data/test/consumer.lock"), True)
                     return
+            except TimeoutError:
+                raise
             except (OSError, ValueError):
                 pass
             time.sleep(.05)

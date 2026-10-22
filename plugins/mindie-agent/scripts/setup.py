@@ -193,6 +193,8 @@ def install(args, parser, *, validation=None):
                     or shared_community["enabled"]
                     and (saved["state"] != "ok" or not saved["choice"])):
                 raise ValueError("shared settings lack explicit profile consent")
+        except TimeoutError:
+            raise
         except (OSError, ValueError) as exc:
             parser.error(
                 "existing shared community configuration is unavailable or unsupported; "
@@ -330,6 +332,8 @@ def configure(args, parser):
         if not isinstance(engine_path, str) or not Path(engine_path).is_absolute():
             raise ValueError("engine_config must be absolute")
         config_at(engine_path)
+    except TimeoutError:
+        raise
     except (OSError, ValueError, KeyError) as exc:
         parser.error(
             "existing engine configuration is unavailable or unsupported; "
@@ -358,6 +362,8 @@ def configure(args, parser):
             raw = community_config.read_bytes()
         except FileNotFoundError:
             raw = None
+        except TimeoutError:
+            raise
         except OSError as exc:
             parser.error(
                 "community settings file is unreadable; inspect and repair "

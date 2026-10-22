@@ -59,6 +59,8 @@ def _read_adapter_config(config_file: Path) -> dict:
         data = json.loads(Path(config_file).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
+    except TimeoutError:
+        raise
     except OSError as exc:
         raise ConsentError("adapter configuration is unreadable", state="unreadable") from exc
     except ValueError as exc:

@@ -57,7 +57,8 @@ class SilentCaptureTests(unittest.TestCase):
         store.db.commit()
         store.close()
         self.stack.enter_context(patch.dict(os.environ, MINDIE_AGENT_CONFIG=str(self.config),
-            CODEX_HOME=str(self.profile), MINDIE_DIAGNOSTICS_ROOT=str(self.root / 'diagnostics')))
+            CODEX_HOME=str(self.profile), MINDIE_DIAGNOSTICS_ROOT=str(self.root / 'diagnostics'),
+            MINDIE_DIAGNOSTICS_CONFIG=str(self.root / 'diagnostics.json')))
         self.stack.enter_context(patch('mindie_knowledge.loop.handoff._probe', return_value='absent'))
         self.wake = self.stack.enter_context(patch('mindie_knowledge.loop.handoff.request_wake',
             return_value=dict(wake='requested', runtime='unavailable', reason='requested')))

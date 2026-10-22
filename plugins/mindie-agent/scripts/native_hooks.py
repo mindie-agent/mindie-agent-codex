@@ -50,6 +50,8 @@ class NativeHooks:
                         raise ValueError("native management output exceeded its bound")
                     if stdout:
                         self.responses.put(json.loads(line))
+            except TimeoutError:
+                raise
             except (OSError, ValueError) as exc:
                 self.responses.put(type(exc).__name__)
             finally:
@@ -161,6 +163,8 @@ class NativeHooks:
         if process.stdin is not None:
             try:
                 process.stdin.close()
+            except TimeoutError:
+                raise
             except OSError as exc:
                 result.cleanup.append(dict(stage="close_stdin", error_type=type(exc).__name__))
         _cleanup(process, result, threads=self.threads)

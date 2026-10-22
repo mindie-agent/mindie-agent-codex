@@ -50,6 +50,8 @@ def main():
     os.close(owner_pipe)
     try:
         child = subprocess.Popen(command)
+    except TimeoutError:
+        raise
     except OSError:
         # The caller gets an explicit failed start, without raw credentials or
         # arbitrary argv in stderr. Native target output is otherwise direct.

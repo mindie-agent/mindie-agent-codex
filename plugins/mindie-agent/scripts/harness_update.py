@@ -8,7 +8,7 @@ Validates compatibility with the installed `codex --version` (`harness_version`)
 - Carries forward only previously user-approved hook trust entries via compare-and-swap (`NativeHooks`).
 
 [Timeouts & Locks]
-- Enforces `timeout=15.0s` for `codex --version` and `timeout=300.0s` for `codex plugin install`.
+- Enforces `timeout=15.0s` for `codex --version`, `timeout=300.0s` for `codex plugin install`, and `timeout=330.0s` for activation (outer 330s >= inner 300s session maintenance + 30s grace).
 
 [Side-Effect Policy]
 - Updates the local marketplace catalog, native Codex plugin cache/config, and MindIE release binding only after candidate validation succeeds.
@@ -97,6 +97,8 @@ def _native_mutation(path, pending, action, argv, env):
         exc.native_effect = dict(stage=action, process=pending["process"])
         try:
             _atomic(path, pending)
+        except TimeoutError:
+            raise
         except (OSError, ValueError) as record_error:
             exc.receipt_error_type = type(record_error).__name__
             exc.add_note("Native operation receipt also failed: " + type(record_error).__name__)
@@ -104,6 +106,8 @@ def _native_mutation(path, pending, action, argv, env):
     pending.update(process=_process_fact(result), native_output=output)
     try:
         _atomic(path, pending)
+    except TimeoutError:
+        raise
     except (OSError, ValueError) as exc:
         exc.native_effect = dict(stage=action, process=pending["process"])
         exc.receipt_error_type = type(exc).__name__
@@ -140,6 +144,8 @@ def _select_catalog(native, env, root, pending):
         pending["writer_settled"] = getattr(exc, "native_writer_settled", False) is True
         try:
             _atomic(root / "native.json", pending)
+        except TimeoutError:
+            raise
         except (OSError, ValueError) as record_error:
             exc.receipt_error_type = type(record_error).__name__
         raise
@@ -220,6 +226,8 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
             exc.native_effect = dict(stage="runtime_prepare", process=fact)
             try:
                 _atomic(root / "native.json", pending)
+            except TimeoutError:
+                raise
             except (OSError, ValueError) as record_error:
                 exc.receipt_error_type = type(record_error).__name__
             raise
@@ -239,6 +247,8 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
                 pending.update(stage="hook_trust_unknown", process=_process_fact(process))
                 try:
                     _atomic(root / "native.json", pending)
+                except TimeoutError:
+                    raise
                 except (OSError, ValueError) as record_error:
                     exc.add_note("Hook management receipt also failed: " + type(record_error).__name__)
                     exc.receipt_error_type = type(record_error).__name__
@@ -255,7 +265,7 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
     _atomic(root / "native.json", pending)
     result, value = None, None
     try:
-        result = run(argv, "", env=env, allow_service=True, timeout=120.0)
+        result = run(argv, "", env=env, allow_service=True, timeout=330.0)
         value = dict(status="active") if first_install else json.loads(result.stdout)
         if not isinstance(value, dict):
             raise ValueError("activation control response is invalid")
@@ -267,12 +277,16 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
         exc.native_effect = dict(stage="runtime_activation", activation=pending["activation"])
         try:
             _atomic(root / "native.json", pending)
+        except TimeoutError:
+            raise
         except (OSError, ValueError) as record_error:
             exc.receipt_error_type = type(record_error).__name__
         raise
     pending["activation"] = dict(value, process=_process_fact(result))
     try:
         _atomic(root / "native.json", pending)
+    except TimeoutError:
+        raise
     except (OSError, ValueError) as exc:
         exc.native_effect = dict(stage="runtime_activation", activation=pending["activation"])
         exc.receipt_error_type = type(exc).__name__
@@ -428,6 +442,8 @@ def check(config, *, first_install=False):
                     status["receipt_error_type"] = exc.receipt_error_type
                 try:
                     _atomic(status_path, status)
+                except TimeoutError:
+                    raise
                 except (OSError, ValueError) as record_error:
                     status["status_receipt_error_type"] = type(record_error).__name__
                 return status

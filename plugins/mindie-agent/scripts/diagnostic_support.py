@@ -101,7 +101,9 @@ def _read_build_json(path):
             return {}
         data = json.loads(raw.decode("utf-8"))
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except TimeoutError:
+        raise
+    except (OSError, ValueError, UnicodeDecodeError):
         return {}
 
 

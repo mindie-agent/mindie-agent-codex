@@ -12,8 +12,8 @@ consent authority shared between the Codex adapter and knowledge core.
   `transport`, `consent_config`, etc.) byte-identical across mutations.
 
 [Timeouts & Locks]
-- Uses `bounded_process.run` when delegating normalization to the configured
-  runtime interpreter.
+- Uses `bounded_process.run` with a `30.0s` deadline when delegating
+  normalization to the configured runtime interpreter.
 
 [Side-Effect Policy]
 - Writes only to the designated MindIE community config and consent files via
@@ -218,7 +218,7 @@ def normalize_with_runtime(settings, python, config_file=None, *, previous=None)
         output = run(
             [python, "-c", NORMALIZE_SCRIPT],
             request,
-            timeout=None,
+            timeout=30.0,
             max_output=max(65536, len(request.encode('utf-8')) * 2),
             env=runtime_env(config_file) if config_file is not None else {
                 key: value for key, value in os.environ.items() if key != "PYTHONPATH"
@@ -298,6 +298,8 @@ def capture_allowed(lease, cwd, config_file=None, *, adapter=None):
         raise SharingError("capture lease metadata is incomplete")
     try:
         root = Path(canonical_root(lease["project_root"]))
+    except TimeoutError:
+        raise
     except (OSError, ValueError) as exc:
         raise SharingError("capture lease scope is unreadable") from exc
     return any(
@@ -343,6 +345,8 @@ def first_use(config_file=None, saved=None):
         json.loads(configured_path(config_file).read_text(encoding='utf-8'))
     except json.JSONDecodeError:
         return None  # damaged settings: a fault, not onboarding
+    except TimeoutError:
+        raise
     except (OSError, ValueError, SharingError):
         pass
     return dict(
@@ -381,6 +385,8 @@ def set_enabled(enable, config_file=None):
                 "community sharing is not configured; run setup.py configure "
                 "with --community-* to select repository, scope and visibility first"
             ) from None
+        except TimeoutError:
+            raise
         except OSError:
             raise SharingError(
                 "community settings file is unreadable; inspect and repair "
@@ -432,6 +438,8 @@ def status(config_file=None, saved=None, *, adapter=None):
                     sharing_choice=choice, first_use=None)
     try:
         path = configured_path(config_file, adapter=adapter)
+    except TimeoutError:
+        raise
     except (OSError, ValueError) as exc:
         return dict(
             state="unconfigured",
@@ -448,6 +456,8 @@ def status(config_file=None, saved=None, *, adapter=None):
         )
     try:
         settings = validate(json.loads(path.read_text(encoding='utf-8')))
+    except TimeoutError:
+        raise
     except (OSError, ValueError) as exc:
         return dict(
             state="malformed",

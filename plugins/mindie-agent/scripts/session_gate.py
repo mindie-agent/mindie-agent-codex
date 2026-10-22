@@ -150,6 +150,8 @@ class Sessions:
     def _config(self):
         try:
             config = json.loads(self.config.read_text(encoding='utf-8'))
+        except TimeoutError:
+            raise
         except (OSError, ValueError) as exc:
             raise Inactive(f"MindIE adapter configuration is unreadable: {exc}")
         python = config.get("python")

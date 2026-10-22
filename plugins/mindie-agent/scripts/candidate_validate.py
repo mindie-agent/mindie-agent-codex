@@ -100,6 +100,8 @@ def adapter_check(source):
         "capture_config.py",
         "entry.py",
         "bootstrap.py",
+        "bridge.py",
+        "bridge_commands.py",
         "service_client.py",
         "mcp_catalog.json",
         "agent_diagnostics.py",

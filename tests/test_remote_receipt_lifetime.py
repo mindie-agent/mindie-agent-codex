@@ -105,8 +105,9 @@ class ReceiptLifetimeTests(unittest.TestCase):
             gate = mcp_gate.Gate("remote")
             result = gate.call(request)
         self.objects.extend(gate._remote_receipts.values())
-        self.assertTrue(result["isError"])
+        self.assertFalse(result["isError"])
         self.assertEqual(result["operation_outcome"], "succeeded")
+        self.assertEqual(result["cleanup_warning"]["operation_outcome"], "preserved")
         with closing(sqlite3.connect(gate._remote_receipts["cleanup"].path)) as db:
             self.assertEqual(db.execute("SELECT status FROM attempts").fetchone()[0], "succeeded")
 

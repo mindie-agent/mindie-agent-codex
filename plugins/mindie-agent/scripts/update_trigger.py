@@ -89,6 +89,8 @@ class Maintenance:
                 self.next_attempt = next_check(self.config)
                 if time.time() < self.next_attempt:
                     return
+            except TimeoutError:
+                raise
             except (OSError, ValueError):
                 # Let the selected helper report a damaged maintenance receipt;
                 # it must not block unrelated business at this trigger boundary.
@@ -126,6 +128,8 @@ class Maintenance:
                 if isinstance(outcome, dict):
                     self.last_failure["helper_result"] = outcome
                 _atomic(root / "trigger-failure.json", self.last_failure)
+            except TimeoutError:
+                raise
             except (OSError, ValueError) as write_error:
                 self.last_failure = dict(self.last_failure or {},
                                          receipt_error_type=type(write_error).__name__)
@@ -134,6 +138,8 @@ class Maintenance:
         finally:
             try:
                 self.next_attempt = next_check(self.config)
+            except TimeoutError:
+                raise
             except (OSError, ValueError):
                 self.next_attempt = time.time() + FAILURE_BACKOFF
             # A helper may fail before writing status, or lose the check lock

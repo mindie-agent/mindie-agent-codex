@@ -91,6 +91,8 @@ def prepare_layout(base):
             except BaseException as error:
                 try:
                     Path(name).unlink(missing_ok=True)
+                except TimeoutError:
+                    raise
                 except OSError as cleanup:
                     error.add_note('Layout cleanup also failed: ' + type(cleanup).__name__)
                 raise

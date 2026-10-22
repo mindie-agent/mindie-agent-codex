@@ -398,6 +398,8 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
                     cap.add(chunk)
                     if dest is not None:
                         dest.extend(chunk)
+        except TimeoutError:
+            raise
         except (OSError, ValueError) as exc:
             failure.append(exc)
 

@@ -145,6 +145,8 @@ class NativeSummaryModel:
             try:
                 if not managed:
                     shutil.rmtree(directory)
+            except TimeoutError:
+                raise
             except OSError as exc:
                 self.receipt["cleanup_failed"] = True
                 try:

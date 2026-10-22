@@ -29,6 +29,8 @@ class NativeContextTests(unittest.TestCase):
                 diagnostics_context={"MINDIE_DIAGNOSTICS_ROOT": str(base / "events")},
             )
             with patch.dict(os.environ, {"CODEX_HOME": str(base / "wrong"),
+                                         "MINDIE_AGENT_CONFIG": str(config),
+                                         "MINDIE_DIAGNOSTICS_CONFIG": str(config.parent / "diagnostics.json"),
                                          "TASK_PROVIDER_KEY": "PRIVATE_CANARY",
                                          "UNRELATED_KEY": "OTHER_CANARY"}):
                 value = native_context.service_launch_context(config, adapter)
