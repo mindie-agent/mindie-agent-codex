@@ -1938,7 +1938,7 @@ wheels = [
 
 [[package]]
 name = "mindie-agent-codex"
-version = "0.0.3"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "mindie-diagnostics" },
@@ -1949,8 +1949,8 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=fba07e8607ddadde14cea315c9dbda23726c1c79" },
-    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=6bb92e41edd5161d6287c70e49daf06a4be6c3da" },
-    { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=6bd1a15380195a95d450458e7c1856905d95bf73" },
+    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=2e5cf79050a6634a53b9c2cff52d98ca87850e50" },
+    { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=20d34abebeab17bb6a68f0966ac4d627af54be88" },
 ]
 
 [[package]]
@@ -1960,8 +1960,8 @@ source = { git = "https://github.com/mindie-agent/diagnostics?rev=fba07e8607ddad
 
 [[package]]
 name = "mindie-knowledge"
-version = "0.13.0"
-source = { git = "https://github.com/mindie-agent/knowledge?rev=6bb92e41edd5161d6287c70e49daf06a4be6c3da#6bb92e41edd5161d6287c70e49daf06a4be6c3da" }
+version = "0.13.1"
+source = { git = "https://github.com/mindie-agent/knowledge?rev=2e5cf79050a6634a53b9c2cff52d98ca87850e50#2e5cf79050a6634a53b9c2cff52d98ca87850e50" }
 dependencies = [
     { name = "langmem" },
     { name = "mindie-diagnostics" },
@@ -3378,8 +3378,8 @@ as = [
 
 [[package]]
 name = "remote-dev"
-version = "0.10.4"
-source = { git = "https://github.com/mindie-agent/remote-dev?rev=6bd1a15380195a95d450458e7c1856905d95bf73#6bd1a15380195a95d450458e7c1856905d95bf73" }
+version = "0.10.5"
+source = { git = "https://github.com/mindie-agent/remote-dev?rev=20d34abebeab17bb6a68f0966ac4d627af54be88#20d34abebeab17bb6a68f0966ac4d627af54be88" }
 dependencies = [
     { name = "mindie-diagnostics" },
 ]
