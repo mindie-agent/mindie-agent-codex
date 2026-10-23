@@ -178,7 +178,7 @@ KNOWN = {"session_meta", "turn_context", "response_item", "event_msg", "compacte
 INJECTED_PREFIXES = (
     "<recommended_plugins>", "<environment_context>",
     "# AGENTS.md instructions", "<permissions instructions>",
-    "<skills_instructions>", "<app-context>",
+    "<skills_instructions>", "<skill>", "<app-context>",
 )
 ATTACHMENTS = {"input_image": "Image", "image": "Image", "input_audio": "Audio", "input_file": "File"}
 

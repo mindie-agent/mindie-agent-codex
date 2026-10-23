@@ -35,6 +35,10 @@ import subprocess
 import sys
 import time
 
+_SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
 from mindie_knowledge.materials import summarizer
 from mindie_knowledge.loop import summary_scratch
 from mindie_knowledge.loop.summary_budget import native_timeout
@@ -42,7 +46,7 @@ import process_guard
 import summary_provider
 from process_guard import InvalidResultError, NativeFailure, NativeStartError, OutputLimitExceeded, run_codex
 
-SUMMARY_MODEL = "gpt-5.6-luna"
+SUMMARY_MODEL = os.environ.get("MINDIE_SUMMARY_MODEL") or "gpt-5.6-luna"
 SUMMARY_EFFORT = "low"
 MAX_REQUEST_BYTES = 128 * 1024
 # A prepared C6 request carries its sanitized evidence plus the worker receipt

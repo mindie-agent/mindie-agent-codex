@@ -313,7 +313,7 @@ def recorded_wake_runtime(config_path, destination):
         "from pathlib import Path\n"
         "from unittest.mock import patch\n"
         "from mindie_knowledge.loop import handoff\n"
-        "def request_wake(config_path, *, session_id, event=None):\n"
+        "def request_wake(config_path, *, session_id, event=None, timeout=None, **_kwargs):\n"
         "    row = dict(config=str(config_path), session=session_id, event=event)\n"
         f"    with Path({str(receipt)!r}).open('a', encoding='utf-8') as stream:\n"
         "        stream.write(json.dumps(row) + '\\n')\n"

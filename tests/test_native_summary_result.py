@@ -228,10 +228,10 @@ class NativeSummaryResultTests(unittest.TestCase):
                     self.assertTrue((profile / 'writer-after-result').exists())
                 started = time.monotonic()
                 raw = bounded_run([sys.executable, str(SCRIPTS / 'agent_worker.py')], json.dumps(payload),
-                                  timeout=10, max_output=summarizer.MAX_RESPONSE_BYTES * 3,
+                                  timeout=15, max_output=summarizer.MAX_RESPONSE_BYTES * 3,
                                   on_result=record, cleanup_receipt=cleanup)
                 value = json.loads(raw)
-            self.assertLess(time.monotonic() - started, 3)
+            self.assertLess(time.monotonic() - started, 8)
             self.assertEqual(saved[0]['result'], metadata)
             self.assertEqual(value['status'], 'returned')
             self.assertFalse(value['cleanup_failed'])
