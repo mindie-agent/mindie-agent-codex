@@ -1044,6 +1044,18 @@
               "both"
             ]
           },
+          "yield_time_ms": {
+            "type": "integer",
+            "description": "Optional poll wait in milliseconds (DSH/Codex job_output/write_stdin habit)."
+          },
+          "max_output_tokens": {
+            "type": "integer",
+            "description": "Optional output token cap (DSH/Codex habit)."
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "description": "Optional timeout in milliseconds."
+          },
           "session_id": {
             "type": "string",
             "description": "Alias of job_id returned by remote.bash."
