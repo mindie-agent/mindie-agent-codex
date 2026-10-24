@@ -10,8 +10,12 @@ publishes through release_activation. No consent or knowledge lease is created.
 from __future__ import annotations
 
 import json
+import argparse
 from pathlib import Path
 import sys
+
+# Isolated Python omits the script directory; helpers belong to this candidate.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bounded_process import run
 from product_contract import identity, package_files, probe, read_json
@@ -59,5 +63,16 @@ def check(config, source, data, *, force=False):
     return dict(result, runtime=runtime)
 
 
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("source", type=Path)
+    parser.add_argument("python")
+    parser.add_argument("data", type=Path)
+    parser.add_argument("current_python")
+    args = parser.parse_args()
+    print(json.dumps(prepare(args.source, args.python, args.data,
+                             current_python=args.current_python), sort_keys=True))
+
+
 if __name__ == "__main__":
-    print(json.dumps(prepare(*sys.argv[1:4], current_python=sys.argv[4]), sort_keys=True))
+    main()

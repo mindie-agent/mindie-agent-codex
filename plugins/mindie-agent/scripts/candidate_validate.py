@@ -104,6 +104,7 @@ def adapter_check(source):
         "entry.py",
         "manual_entry.py",
         "bootstrap.py",
+        "component_update.py",
         "bridge.py",
         "bridge_commands.py",
         "service_client.py",
@@ -153,6 +154,11 @@ def installed_revisions(pins):
 
 
 def runtime_check(scripts):
+    from bounded_process import run
+
+    # Exercise the actual isolated CLI import boundary without discovery/builds.
+    run([sys.executable, "-I", "-B", str(Path(scripts) / "component_update.py"),
+         "--help"], "", timeout=5.0).checked_stdout()
     output = io.StringIO()
     with redirect_stdout(output):
         exec(build_probe_script(Path(scripts) / "codex_transcript.py"), {})
