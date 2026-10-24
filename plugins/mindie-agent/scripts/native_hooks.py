@@ -120,7 +120,12 @@ class NativeHooks:
     def write_trust(self, hook, previous_hash):
         config, layer, target = self.user_config()
         state = ((config.get("config", {}).get("hooks") or {}).get("state") or {}).get(hook["key"]) or {}
-        if state.get("enabled") is False or state.get("trusted_hash") != previous_hash:
+        approved = state.get("trusted_hash")
+        # Desktop 0.164 stores command and plugin-content hashes separately;
+        # hooks/list still returns their combined identity.
+        if state.get("trusted_content_hash") is not None:
+            approved = f"{approved}/{state['trusted_content_hash']}"
+        if state.get("enabled") is False or approved != previous_hash:
             return False
         self.call("config/value/write", dict(
             keyPath="hooks.state." + json.dumps(hook["key"]) + ".trusted_hash",
