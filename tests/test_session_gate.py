@@ -260,7 +260,7 @@ class SessionGateTests(unittest.TestCase):
         ]
         for script, argv, count in [
             ("bridge.py", ["mcp"], 4),
-            ("remote_bridge.py", [], 11),
+            ("remote_bridge.py", [], 22),
         ]:
             result = subprocess.run(
                 [sys.executable, str(SCRIPTS / script), *argv],

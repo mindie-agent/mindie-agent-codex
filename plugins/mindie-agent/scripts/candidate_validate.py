@@ -33,6 +33,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from product_contract import identity, native_version, read_json, validate_receipt
 from runtime_probe import build_probe_script
 
+CATALOG_MAX_BYTES = 1024 * 1024
+
+
+def read_catalog(path):
+    """Read the generated discovery snapshot under its own bounded envelope.
+
+    Contract metadata stays at the 64 KiB `read_json` bound; the Codex-profile
+    catalog legitimately carries canonical plus native schemas and is larger.
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise ValueError("required catalog is not a regular file: " + str(path))
+    with path.open("rb") as stream:
+        raw = stream.read(CATALOG_MAX_BYTES + 1)
+    if len(raw) > CATALOG_MAX_BYTES:
+        raise ValueError("catalog exceeds its metadata byte bound")
+    return json.loads(raw.decode("utf-8"))
+
 
 class CheckFailure(ValueError):
     def __init__(self, stage, code, component=None, *, process=None):
@@ -113,7 +131,7 @@ def adapter_check(source):
     ):
         if not (plugin / "scripts" / name).is_file():
             raise ValueError("missing bounded runtime entry: " + name)
-    catalog = read_json(plugin / "scripts" / "mcp_catalog.json")[0]
+    catalog = read_catalog(plugin / "scripts" / "mcp_catalog.json")
     names = {tool.get("name") for tool in catalog.get("knowledge") or []}
     if not {"knowledge_query", "knowledge_explain", "knowledge_feedback", "knowledge_distill"} <= names:
         raise ValueError("adapter knowledge catalogue is incomplete")
