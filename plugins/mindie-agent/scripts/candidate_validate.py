@@ -201,8 +201,9 @@ def publication_contract(publication):
         if value <= 0:
             raise TimeoutError("publication validation budget exhausted")
         return min(60.0, value)
-    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1",
-               GIT_CONFIG_GLOBAL=os.devnull)
+    # The user's Git configuration owns enterprise proxy and CA trust.
+    # The temporary bare repository and disabled hooks isolate this read.
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
     with tempfile.TemporaryDirectory(prefix="mindie-publication-contract-") as directory:
         git = ["git", "-c", "core.hooksPath=" + os.devnull, "-C", directory]
         publication_git(git + ["init", "--bare", "--quiet"], "init_failed", env, timeout=remaining())
