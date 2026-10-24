@@ -26,6 +26,7 @@ from pathlib import Path
 import re
 import sys
 import tempfile
+import time
 
 # -I intentionally discards ambient imports; helpers belong to this candidate.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -194,24 +195,30 @@ def publication_git(args, code, env, *, timeout: float | None = 60.0):
 def publication_contract(publication):
     """One bounded, read-only fetch; no checkout, Git hooks or retries."""
     from mindie_knowledge.publication_contract import read_git_contract
+    deadline = time.monotonic() + 150
+    def remaining():
+        value = deadline - time.monotonic() - 5
+        if value <= 0:
+            raise TimeoutError("publication validation budget exhausted")
+        return min(60.0, value)
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1",
                GIT_CONFIG_GLOBAL=os.devnull)
     with tempfile.TemporaryDirectory(prefix="mindie-publication-contract-") as directory:
         git = ["git", "-c", "core.hooksPath=" + os.devnull, "-C", directory]
-        publication_git(git + ["init", "--bare", "--quiet"], "init_failed", env)
+        publication_git(git + ["init", "--bare", "--quiet"], "init_failed", env, timeout=remaining())
         publication_git(git + [
             "fetch", "--no-auto-maintenance", "--depth=1", "--no-tags",
             "https://github.com/" + publication["repository"] + ".git",
             publication["verified_commit"],
-        ], "fetch_failed", env)
+        ], "fetch_failed", env, timeout=remaining())
         observed = publication_git(
-            git + ["rev-parse", "FETCH_HEAD"], "revision_read_failed", env,
+            git + ["rev-parse", "FETCH_HEAD"], "revision_read_failed", env, timeout=remaining(),
         ).strip()
         if observed != publication["verified_commit"]:
             raise CheckFailure("publication_fetch", "revision_mismatch")
         try:
             return read_git_contract(
-                directory, observed, publication["domain"], env=env,
+                directory, observed, publication["domain"], env=env, deadline=deadline,
             )
         except Exception as exc:
             code = "contract_mismatch" if getattr(exc, "code", None) == "contract_mismatch" else "read_failed"
@@ -219,11 +226,15 @@ def publication_contract(publication):
 
 
 def validate(source, expected, verified_receipt=None):
-    actual = checked("source", "source_invalid", lambda: identity(source, expected.get("candidate_revision")))
+    actual = checked("source", "source_invalid", lambda: identity(source, expected.get("candidate_revision"), components=expected.get("component_updates")))
     if actual != expected:
         raise CheckFailure("source", "source_changed")
     # Verify provenance before adapter checks import runtime state declarations.
     installed_revisions(actual["runtime"])
+    if "component_updates" in actual:
+        from mindie_knowledge.runtime_inventory import verify, verify_lock
+        checked("runtime_pins", "receipt_invalid", lambda: verify_lock(actual["component_updates"]))
+        checked("runtime_pins", "revision_mismatch", lambda: verify(actual["component_updates"]["runtime"]))
     checked("adapter", "adapter_incompatible", lambda: adapter_check(Path(source)))
     checked("runtime_api", "api_incompatible", lambda: runtime_check(Path(__file__).resolve().parent))
     if verified_receipt is None:
@@ -238,7 +249,7 @@ def validate(source, expected, verified_receipt=None):
         # never repeats the network read; local checks above always rerun.
         checked("receipt", "receipt_mismatch", lambda: validate_receipt(json.dumps(verified_receipt), actual))
     # Re-read the source after validation to reject concurrent local edits.
-    if checked("source", "source_invalid", lambda: identity(source, actual["candidate_revision"])) != actual:
+    if checked("source", "source_invalid", lambda: identity(source, actual["candidate_revision"], components=actual.get("component_updates"))) != actual:
         raise CheckFailure("source", "source_changed")
     return dict(actual, status="validated")
 

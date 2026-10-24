@@ -71,6 +71,7 @@ def prepare(config, release):
                   product_validation=receipt["validation"])
     adapter = dict(old, python=sys.executable, runtime_scripts=str(scripts),
                    engine_config=str(path), product_validation=receipt["validation"])
+    adapter["component_release"] = (str(release) if "component_updates" in receipt["validation"] else None)
     engine["service_launch_context"] = service_launch_context(config, adapter)
     from capture_config import prepare_domains
     from consent import consent_path_for
@@ -94,7 +95,7 @@ def prepare(config, release):
 
 def activate(config, prepared, *, control_seconds=CONTROL_SECONDS):
     """Only the update path calls this; loaded facades never select a release."""
-    from mindie_knowledge.loop.cli import config_at, prepare_service
+    from mindie_knowledge.loop.cli import config_at
     from mindie_knowledge.loop.handoff import _probe
     from mindie_knowledge.loop.lifecycle import inspect_retirement, retire_service
 
@@ -123,7 +124,7 @@ def activate(config, prepared, *, control_seconds=CONTROL_SECONDS):
             if runtime_binding(current) == runtime_binding(target):
                 state = probe(Path(target["engine_config"]), config_at(target["engine_config"]))
                 return (dict(status="active", unavailable_seconds=0)
-                        if state == "ready" else incomplete(binding_published=True))
+                        if state in {"ready", "absent"} else incomplete(binding_published=True))
             if runtime_binding(current) != prepared["expected_binding"]:
                 return dict(status="deferred", reason="installation_changed", execution="not_started")
             old_engine, new_engine = Path(current["engine_config"]), Path(target["engine_config"])
@@ -144,17 +145,12 @@ def activate(config, prepared, *, control_seconds=CONTROL_SECONDS):
                 if result.get("cleanup_failed"):
                     return incomplete(retirement=result)
                 state = probe(new_engine, new_config)
-            stage = "new_owner_start"
-            if state == "absent":
-                if time.monotonic() >= deadline:
-                    return incomplete()
-                state = prepare_service(new_engine, probe_timeout=deadline - time.monotonic())
-            stage = "new_owner_ready"
-            while state != "ready":
-                if state in {"unknown", "worker-dead", "stopping"} or time.monotonic() >= deadline:
-                    return incomplete()
-                time.sleep(min(.05, max(0, deadline - time.monotonic())))
-                state = probe(new_engine, new_config)
+            # The candidate already passed its isolated API probe. Updating
+            # software never starts a knowledge worker; a granted session's
+            # next operation starts its selected owner through normal admission.
+            if state not in {"ready", "absent"}:
+                stage = "new_owner_readiness"
+                return incomplete()
             from mindie_knowledge.loop.domain_catalog import retire_changed, restore_changed
             stage = 'domain_retirement'
             domains = retire_changed(current, target, timeout=max(0, deadline - time.monotonic()))

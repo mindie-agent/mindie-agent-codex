@@ -29,7 +29,7 @@ from product_contract import read_json
 from session_gate import runtime_env, runtime_scripts
 from update_lock import update_lock
 
-CHECK_INTERVAL = 86400
+CHECK_INTERVAL = 300
 FAILURE_BACKOFF = 60
 ACTIVATION_BACKOFF = 5
 
@@ -109,7 +109,7 @@ class Maintenance:
                         "--config", str(self.config)]
                 environment = runtime_env(self.config)
             output = run(argv, "", env=environment, cancel=self.cancel,
-                         allow_service=True, timeout=1500.0).checked_stdout()
+                         allow_service=True, timeout=2700.0).checked_stdout()
             outcome = json.loads(output)
             if not isinstance(outcome, dict):
                 raise ValueError("update helper returned an invalid status")

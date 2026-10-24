@@ -96,7 +96,7 @@ class RuntimeTests(unittest.TestCase):
     def test_native_startup_window_covers_installation_without_changing_tool_timeouts(self):
         servers = json.loads((SCRIPTS.parent / ".mcp.json").read_text())["mcpServers"]
         for server in servers.values():
-            self.assertEqual(server["startup_timeout_sec"], 600)
+            self.assertEqual(server["startup_timeout_sec"], 1080)
             self.assertNotIn("tool_timeout_sec", server)
 
     def test_fixed_entry_prefers_prepared_release_after_cache_eviction(self):

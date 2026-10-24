@@ -60,6 +60,8 @@ def runtime_binding(config):
     """Code identity only; contribution and reporting choices remain mutable."""
     binding = {key: config.get(key) for key in
                ("python", "runtime_scripts", "engine_config", "product_validation")}
+    if "component_release" in config:
+        binding["component_release"] = config["component_release"]
     if "domain_configs" in config:
         binding["domain_configs"] = config["domain_configs"]
     return binding

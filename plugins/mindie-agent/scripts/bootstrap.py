@@ -24,8 +24,9 @@ import shutil
 import sys
 import sysconfig
 import tempfile
+import time
 
-from product_contract import package_files, source_identity, probe, identity, validate_receipt, native_version
+from product_contract import package_files, source_identity, probe, identity, validate_receipt, native_version, read_json
 from bootstrap_lock import exclusive_lock
 from bounded_process import run
 from windows_process import exec_or_wait
@@ -83,6 +84,36 @@ print(json.dumps({'root':str(root),'prefix':sys.prefix,'version':d.version}))
 
 
 def ensure_runtime(source, data):
+    """Keep an independently updated runtime when native reloads this plugin."""
+    from session_gate import config_path
+    config = config_path()
+    current = json.loads(config.read_text(encoding="utf-8")) if config.is_file() else {}
+    active = current.get("component_release")
+    if active:
+        receipt = read_json(Path(active) / "runtime.json")[0]
+        if receipt["validation"]["source_sha256"] == source_identity(source):
+            python = Path(receipt["python"])
+            return python, readback(python, source), Path(active)
+    python, scripts, release = _baseline_runtime(source, data)
+    if active:
+        # A newer plugin may carry older component pins. Build its adapter with
+        # the installed floor before publishing any binding for the new plugin.
+        result = run([str(python), "-I", str(scripts / "component_update.py"),
+                      str(source), str(python), str(data), current["python"]],
+                     "", timeout=830).checked_stdout()
+        effective = json.loads(result)
+        if effective:
+            return Path(effective["python"]), Path(effective["scripts"]), Path(effective["release"])
+    return python, scripts, release
+
+
+def _baseline_runtime(source, data):
+    deadline = time.monotonic() + 900
+    def budget(maximum, reserve):
+        remaining = deadline - time.monotonic() - reserve
+        if remaining <= 0:
+            raise TimeoutError('runtime preparation budget exhausted')
+        return min(maximum, remaining)
     with preparing("source-identity"):
         source, data = Path(source).resolve(), Path(data).absolute()
         version = native_version(source)
@@ -95,7 +126,7 @@ def ensure_runtime(source, data):
     executable = "Scripts/python.exe" if os.name == "nt" else "bin/python"
     python = runtime / executable
     receipt = release / "runtime.json"
-    with exclusive_lock(release / "prepare.lock"):
+    with exclusive_lock(release / "prepare.lock", timeout=budget(825, 75)):
         if receipt.exists():
             existing = json.loads(receipt.read_text(encoding="utf-8"))
             bound_python = Path(existing["python"])
@@ -134,7 +165,7 @@ def ensure_runtime(source, data):
                         "sys.exit(subprocess.run(sys.argv[2:]).returncode)")
             run([sys.executable, "-I", "-c", redirect, log, uv, "sync",
                  "--project", str(source), "--locked", "--no-editable", "--no-dev",
-                 "--python", sys.executable], "", timeout=540.0, env=env).checked_stdout()
+                 "--python", sys.executable], "", timeout=budget(540, 255), env=env).checked_stdout()
             Path(log).unlink()
         with preparing("installed-readback"):
             scripts = readback(python, source)

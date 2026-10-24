@@ -40,6 +40,9 @@ class UpdateTests(unittest.TestCase):
         self.patch("harness_version", "0.153.4")
         self.patch("runtime_env", self.env)
         self.installed = self.patch("installed", self.before)
+        component = patch("component_update.check", return_value={"status": "up_to_date"})
+        self.components = component.start()
+        self.addCleanup(component.stop)
 
     def patch(self, name, result):
         context = patch.object(update, name, return_value=result)
@@ -393,11 +396,11 @@ class UpdateTests(unittest.TestCase):
                 patch.object(update, "harness_version", return_value="0.153.4"):
             self.assertEqual(release_metadata.require_harness(SCRIPTS.parent), "0.153.4")
 
-    def test_trigger_24h_backoff_and_process_fast_path(self):
+    def test_trigger_refresh_backoff_and_process_fast_path(self):
         path = self.state / "status.json"
         path.write_text(json.dumps(dict(status="up_to_date", last_successful_check=100)))
-        self.assertFalse(update_trigger.due(self.config, 100 + 86399))
-        self.assertTrue(update_trigger.due(self.config, 100 + 86400))
+        self.assertFalse(update_trigger.due(self.config, 100 + 299))
+        self.assertTrue(update_trigger.due(self.config, 100 + 300))
         path.write_text(json.dumps(dict(status="failed", checked_at=100,
                                         last_successful_check=1)))
         self.assertFalse(update_trigger.due(self.config, 159))

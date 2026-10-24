@@ -212,7 +212,7 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
         result = None
         try:
             result = run(["uv", "run", "--no-project", "--python", "3.13", "python",
-                          "-I", "-c", code, str(source), str(data)], "", env=env, timeout=540.0)
+                          "-I", "-c", code, str(source), str(data)], "", env=env, timeout=1800.0)
             runtime = json.loads(result.checked_stdout())
             if (not isinstance(runtime, dict) or set(runtime) != {"python", "scripts", "release"}
                     or any(not isinstance(value, str) or not Path(value).is_absolute()
@@ -309,16 +309,18 @@ def _can_supersede(pending):
     )
 
 
-def check(config, *, first_install=False):
+def check(config, *, first_install=False, force=False):
     from mindie_knowledge.releases import select_release, supports_harness, validate_release_metadata
     from mindie_knowledge.releases_io import fetch_releases, verify_release_source
 
+    if force:
+        os.environ["MINDIE_RELEASE_FORCE"] = "1"
     config = Path(config).expanduser().absolute()
     root = directory(config)
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
         with file_lock(root / "check.lock", exclusive=True):
-            if not first_install and not due(config):
+            if not first_install and not force and not due(config):
                 return dict(status="throttled")
             if first_install:
                 env = dict(os.environ, **capture())
@@ -411,10 +413,17 @@ def check(config, *, first_install=False):
                             raise ValueError("native installation changed before candidate activation")
                     if pending is None:
                         stage = "release_selection"
-                        selected = select_release(fetch_releases(REPOSITORY),
+                        selected = select_release(fetch_releases(REPOSITORY,
+                            minimum_version=before["version"] if before is not None else None),
                             repository=REPOSITORY, harness_name="codex", harness_version=version,
                             installed_version=before["version"] if before is not None else None)
                         if selected["status"] != "candidate":
+                            if before is not None:
+                                from component_update import check as component_check
+                                source = (Path(env["CODEX_HOME"]) / "plugins/cache/mindie-agent/mindie-agent"
+                                          / before["version"])
+                                data = Path(env["CODEX_HOME"]) / "plugins/data/mindie-agent-mindie-agent"
+                                status["components"] = component_check(config, source, data, force=force)
                             status["last_successful_check"] = time.time()
                             status.update(selected)
                             _atomic(status_path, status)
@@ -455,5 +464,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--install", action="store_true")
+    parser.add_argument("--force", action="store_true", help="refresh release metadata now; idle and compatibility gates still apply")
     args = parser.parse_args()
-    print(json.dumps(check(args.config, first_install=args.install), sort_keys=True))
+    print(json.dumps(check(args.config, first_install=args.install, force=args.force), sort_keys=True))
