@@ -272,6 +272,62 @@ def call(payload):
                     pending.add_note("MindIE outcome accounting also failed: " + type(exc).__name__)
 
 
+def remote_content(value):
+    """Ordered MCP blocks: one textual receipt plus every real native block.
+
+    The shared dispatcher may return image blocks through ``content`` while the
+    textual receipt lives in ``text``. Dropping them here would turn a native
+    image read into a text-only result even though the core returned the bytes.
+    Unknown item shapes are ignored rather than stringified.
+    """
+    from remote_dev.mcp.server import tool_text
+
+    blocks = [dict(type="text", text=tool_text(value))]
+    native = value.get("content") if isinstance(value, dict) else None
+    if isinstance(native, list):
+        blocks.extend(item for item in native
+                      if isinstance(item, dict) and isinstance(item.get("type"), str))
+    return blocks
+
+
+def completed_native_command(name, result):
+    """A command that really ran may exit nonzero; that is native output.
+
+    Helper failures and pre-dispatch errors have no terminal command state and
+    must stay MCP errors. ``exit_code`` is an integer observation, including 0
+    and nonzero; it is never synthesized here.
+    """
+    if name not in {
+        "remote_bash", "remote_job_stdin",
+        "remote_exec_command", "remote_write_stdin",
+        "remote_shell",
+    }:
+        return False
+    if not isinstance(result, dict):
+        return False
+    error_details = result.get("error_details")
+    if result.get("unknown") or (
+            isinstance(error_details, dict)
+            and error_details.get("submission_state") == "uncertain"):
+        return False
+    if result.get("state") not in {"succeeded", "failed", "timeout", "cancelled"}:
+        return False
+    return isinstance(result.get("exit_code"), int) and not isinstance(result.get("exit_code"), bool)
+
+
+def codex_dispatch_name(name):
+    """Route portable canonical aliases through their dotted wire.
+
+    The Codex catalog exposes the portable `remote_*` aliases. A strict core
+    resolver rejects a name that another profile owns as a native wire (for
+    example DSH `read` -> `remote_read`). The dotted canonical name has no
+    native collision and is the same operation.
+    """
+    from remote_dev.mcp.schemas import ALIASES
+
+    return ALIASES.get(name, name)
+
+
 def remote(payload):
     """General remote dispatch: gate-bound native task identity, no lease.
 
@@ -294,7 +350,6 @@ def remote(payload):
     os.environ["REMOTE_DEV_SESSION_ID"] = "codex-task-" + session
     from remote_dev.mcp.tools import call_tool
     from remote_dev.core.rpc_transport import close_connections
-    from remote_dev.mcp.server import tool_text
 
     args = dict(payload["arguments"])
     shaped = None
@@ -303,7 +358,7 @@ def remote(payload):
     # same literal value, and this in-process dispatch pins it independently.
     os.environ["REMOTE_DEV_HARNESS_PROFILE"] = "codex"
     try:
-        value = call_tool(name, args)
+        value = call_tool(codex_dispatch_name(name), args)
         result = value.get("result", {}) if isinstance(value, dict) else {}
         # Job authorization stays inside remote-dev's task-local store. The
         # model controls jobs by opaque job_id and must not receive IPC tokens.
@@ -316,21 +371,25 @@ def remote(payload):
             or (isinstance(details, dict) and details.get("submission_state") == "uncertain")
         )
         outcome = result.get("outcome") if isinstance(result, dict) else None
+        if isinstance(result, dict) and result.get("status") == "local_recording_failed":
+            completed_locally = (
+                result.get("operation_completed") is True
+                or (isinstance(details, dict)
+                    and details.get("operation_completed") is True)
+            )
+            if completed_locally:
+                outcome = result.get("execution_outcome", outcome)
         # Nonzero command exits are valid observations only when the command
         # actually completed. A failed start/status/artifact RPC still trips the
         # failure circuit; its outcome must not be disguised as successful I/O.
-        completed_command = (
-            name in {"remote_bash", "remote_job_stdin"}
-            and result.get("state") in {"succeeded", "failed", "timeout", "cancelled"}
-            and isinstance(result.get("exit_code"), int)
-        )
+        completed_command = completed_native_command(name, result)
         is_error = (
             not isinstance(result, dict)
             or uncertain
             or (outcome not in {"success", "cancelled"} and not completed_command)
         )
         shaped = dict(
-            content=[dict(type="text", text=tool_text(value))],
+            content=remote_content(value),
             structuredContent=result,
             isError=is_error,
         )

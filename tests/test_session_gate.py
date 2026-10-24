@@ -395,7 +395,7 @@ class SessionGateTests(unittest.TestCase):
             payload = json.loads(run.call_args.args[1])
             self.assertEqual(payload["arguments"]["session_id"], "remote-job-7")
             self.assertEqual(payload["remote_session_id"], "manual-A")
-            self.assertEqual(run.call_args.kwargs["timeout"], 120.0)
+            self.assertEqual(run.call_args.kwargs["timeout"], 180.0)
         self.assertFalse(self.sessions.path.exists())
 
     def test_rejected_reads_do_not_consume_the_failure_circuit(self):

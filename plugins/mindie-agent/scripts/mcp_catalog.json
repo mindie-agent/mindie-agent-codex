@@ -398,7 +398,7 @@
           "limit": {
             "type": "integer",
             "default": 200,
-            "maximum": 100000
+            "maximum": 1000000
           },
           "max_chars": {
             "type": "integer",
@@ -417,6 +417,10 @@
           "strict_offset": {
             "type": "boolean",
             "description": "Fail when offset is past EOF instead of returning an empty page (native DSH read)."
+          },
+          "utf16_units": {
+            "type": "boolean",
+            "description": "Measure column_offset/max_chars/line lengths in JavaScript UTF-16 code units (native Kimi Read)."
           },
           "line_offset": {
             "type": "integer",
@@ -870,6 +874,14 @@
           "job_id": {
             "type": "string",
             "description": "Optional caller-assigned job id. Native Codex session ids are numeric; the profile generates a numeric id and returns it as session_id."
+          },
+          "shell": {
+            "type": "string",
+            "description": "Shell binary for this command. Defaults to the remote user's bash."
+          },
+          "login": {
+            "type": "boolean",
+            "description": "Run the selected shell with login semantics (-l); native Codex default is true."
           }
         },
         "required": [],
@@ -2152,15 +2164,17 @@
           },
           "max_output_tokens": {
             "type": "number",
+            "default": 10000,
             "description": "Output token budget. Defaults to 10000 tokens."
           },
           "shell": {
             "type": "string",
-            "description": "Host-local shell binary; rejected for remote calls."
+            "description": "Shell binary executed on the remote endpoint; omitted uses bash."
           },
           "login": {
             "type": "boolean",
-            "description": "Host-local login-shell selection; rejected for remote calls."
+            "default": true,
+            "description": "Run the selected remote shell with -l; native default true."
           },
           "environment_id": {
             "type": "string",
@@ -2171,7 +2185,8 @@
             "enum": [
               "use_default",
               "require_escalated"
-            ]
+            ],
+            "default": "use_default"
           },
           "justification": {
             "type": "string"

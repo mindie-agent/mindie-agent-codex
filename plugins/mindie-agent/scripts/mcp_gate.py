@@ -10,7 +10,7 @@ Implements the JSON-RPC MCP server gate (`Gate`, `serve`) for both `knowledge` a
 - When a remote operation has already succeeded (`outcome == "succeeded"`), a local receipt-accounting failure NEVER overwrites the business result with `isError=True` (`receipt_unconfirmed=True` is attached instead).
 
 [Timeouts & Locks]
-- Uses shared `update_lock` around bounded runtime subprocess dispatch (`120.0s` remote, `45.0s` knowledge, distill helper budget), SQLite WAL mode with `busy_timeout=5000` for `RemoteReceipts`, and per-request cancellation events triggered by `notifications/cancelled` or `mindie_interrupt`.
+- Uses shared `update_lock` around bounded runtime subprocess dispatch (per-tool remote budget derived from the native inner wait plus 60s grace, knowledge `45.0s`, distill helper budget), SQLite WAL mode with `busy_timeout=5000` for `RemoteReceipts`, and per-request cancellation events triggered by `notifications/cancelled` or `mindie_interrupt`.
 
 [Side-Effect Policy]
 - `initialize` and `tools/list` are pure in-memory catalog reads (`mcp_catalog.json`) that never touch disk or start services.
@@ -43,6 +43,22 @@ import receipt_layout
 
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
 KNOWLEDGE_MAX_OUTPUT = 1024 * 1024
+# A native image response is base64 JSON (multi-page PDFs and images can
+# approach the raw byte cap) plus the textual receipt; text pages can
+# legitimately exceed 1 MiB. This cap applies only to the remote helper,
+# never to knowledge.
+REMOTE_MAX_OUTPUT = 32 * 1024 * 1024
+REMOTE_GRACE_SECONDS = 60.0
+REMOTE_MIN_BUDGET_SECONDS = 180.0
+# Native outer wait contracts (milliseconds). write_stdin's empty poll may wait
+# 300000 ms even though a non-empty write yields sooner; the outer helper must
+# include the larger contract or it would cut off a legal inner poll.
+REMOTE_NATIVE_MAX_WAIT_MS = {
+    "remote_write_stdin": 300000,
+    "remote_job_stdin": 300000,
+    "remote_bash": 600000,
+    "remote_exec_command": 30000,
+}
 CATALOG = Path(__file__).with_name("mcp_catalog.json")
 INTERRUPT_TOOL = "mindie_interrupt"
 RECEIPT_SCHEMA = {
@@ -69,6 +85,38 @@ def coerce_timeout(timeout):
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
         return None
     return timeout if math.isfinite(timeout) and timeout > 0 else None
+
+
+def remote_timeout(name, args=None, *, native_wait_ms=None, grace=REMOTE_GRACE_SECONDS,
+                   minimum=REMOTE_MIN_BUDGET_SECONDS):
+    """Outer helper budget from the native inner wait plus transport/cleanup.
+
+    The inner call may legally wait for its native maximum (300s empty
+    write_stdin poll, 600s remote Bash yield, 30s exec yield), then SSH setup,
+    JSON framing, pipe drain and process-tree cleanup happen outside it. A
+    fixed 120s outer budget is therefore shorter than a legal inner call. The
+    function is pure and injectable so the arithmetic can be tested without a
+    five-minute sleep.
+    """
+    if isinstance(grace, bool) or not isinstance(grace, (int, float)) or not math.isfinite(grace) or grace <= 0:
+        raise ValueError("remote grace must be a positive finite number")
+    if isinstance(minimum, bool) or not isinstance(minimum, (int, float)) or not math.isfinite(minimum) or minimum <= 0:
+        raise ValueError("remote minimum budget must be a positive finite number")
+    if native_wait_ms is None:
+        native_wait_ms = REMOTE_NATIVE_MAX_WAIT_MS.get(name, 0)
+    if isinstance(native_wait_ms, bool) or not isinstance(native_wait_ms, (int, float)) \
+            or not math.isfinite(native_wait_ms) or native_wait_ms < 0:
+        raise ValueError("native wait must be a nonnegative finite number of milliseconds")
+    explicit_ms = 0.0
+    if isinstance(args, dict):
+        for key in ("yield_time_ms", "timeout_ms"):
+            value = args.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            if math.isfinite(value) and value > 0:
+                explicit_ms = max(explicit_ms, float(value))
+    inner_seconds = max(float(native_wait_ms) / 1000.0, explicit_ms / 1000.0)
+    return max(float(minimum), inner_seconds + float(grace))
 
 
 def knowledge_timeout(name, timeout):
@@ -478,7 +526,10 @@ class Gate:
                 arguments=args,
                 remote_session_id=session,
             )
-            bound = coerce_timeout(timeout) or 120.0
+            # Derive the outer budget from this tool's native inner wait, then
+            # add SSH preparation, JSON framing, pipe drain and cleanup. An
+            # explicit caller budget may only lengthen this bound.
+            bound = max(coerce_timeout(timeout) or 0.0, remote_timeout(name, args))
             with update_lock(config_path()):
                 config = _adapter_config()
                 stage = "helper_run"
@@ -489,6 +540,7 @@ class Gate:
                     ],
                     json.dumps(payload),
                     timeout=bound,
+                    max_output=REMOTE_MAX_OUTPUT,
                     cancel=cancel,
                     env=runtime_env(config_path()),
                 )

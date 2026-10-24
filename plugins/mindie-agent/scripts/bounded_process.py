@@ -8,7 +8,7 @@ Runs a child subprocess (`run(command, payload, timeout=..., max_output=..., can
 - Kills the entire owned process tree (`owned_process.py` process group on POSIX; suspended Job object on Windows) upon timeout, output overflow, or cancellation.
 
 [Timeouts & Locks]
-- Enforces caller-supplied `timeout` (monotonic deadline) and `max_output` (`default 65536` bytes), plus a 2.0s reader-join grace on Windows.
+- Enforces caller-supplied `timeout` (monotonic deadline) and `max_output` (`default 1 MiB` bytes), plus a 2.0s reader-join grace on Windows.
 
 [Side-Effect Policy]
 - Spawns and reaps the requested child process tree; attaches structured `ProcessResult` metadata to raised exceptions.
