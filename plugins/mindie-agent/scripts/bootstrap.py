@@ -98,7 +98,7 @@ def ensure_runtime(source, data):
     if active:
         # A newer plugin may carry older component pins. Build its adapter with
         # the installed floor before publishing any binding for the new plugin.
-        result = run([str(python), "-I", str(scripts / "component_update.py"),
+        result = run([str(python), "-I", "-B", str(scripts / "component_update.py"),
                       str(source), str(python), str(data), current["python"]],
                      "", timeout=830).checked_stdout()
         effective = json.loads(result)

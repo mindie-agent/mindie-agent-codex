@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import os
 import subprocess
+import shutil
 from unittest.mock import patch
 
 import pytest
@@ -14,6 +15,35 @@ import bootstrap
 import component_update
 from product_contract import identity
 import native_entry
+import candidate_validate
+
+
+def test_component_cli_starts_isolated_from_a_unicode_path(tmp_path, monkeypatch):
+    scripts = tmp_path / "插件 with spaces" / "scripts"
+    shutil.copytree(SCRIPTS, scripts, ignore=shutil.ignore_patterns("__pycache__"))
+    # Ambient modules must not hide a missing candidate-owned import under -I.
+    ambient = tmp_path / "ambient"
+    ambient.mkdir()
+    (ambient / "bounded_process.py").write_text("raise RuntimeError('ambient import')\n", encoding="utf-8")
+    monkeypatch.setenv("PYTHONPATH", str(ambient))
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", str(scripts / "component_update.py"), "--help"],
+        cwd=ambient, capture_output=True, text=True, timeout=5,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "current_python" in result.stdout
+    assert not list(scripts.rglob("*.pyc"))
+
+
+def test_candidate_probe_rejects_a_broken_isolated_update_entry(tmp_path):
+    scripts = tmp_path / "candidate" / "scripts"
+    shutil.copytree(SCRIPTS, scripts, ignore=shutil.ignore_patterns("__pycache__"))
+    (scripts / "bounded_process.py").unlink()
+    with patch.object(candidate_validate, "build_probe_script", return_value="print('OK')"):
+        with pytest.raises(RuntimeError) as caught:
+            candidate_validate.runtime_check(scripts)
+    assert caught.value.process_result.returncode != 0
+    assert "bounded_process" in caught.value.process_result.stderr
 
 
 def test_an_unchanged_independent_runtime_is_not_rebuilt(tmp_path):
