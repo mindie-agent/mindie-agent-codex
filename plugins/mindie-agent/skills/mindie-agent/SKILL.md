@@ -1,18 +1,31 @@
 ---
 name: mindie-agent
-description: Unified MindIE Agent entry for Ascend / vLLM-Ascend knowledge, skills, remote-dev, and preferences. Approved current-task capture runs automatically from the installation choice and project scope, with no per-task activation command or maintenance prompt.
+description: Manually enable MindIE knowledge, domain skills, feedback, distillation and background capture for the current session through /mindie-agent or $mindie-agent. Configured deterministic tools remain available without this entry.
 ---
 
 # MindIE Agent (Unified Entry)
 
-Use knowledge when relevant experience could help the current task, and remote
-tools when remote files, commands, or jobs are needed. Ordinary business tasks
-require no MindIE activation command, status check, extra user message, or
-closing step. Once the user opts in during installation or setup, the saved
-contribution choice and project scope govern automatic capture at session end
-(`Stop`)—never ask for that choice again in each task, and users never need to
-explicitly ask to save experience. Explicit disable and scope limits remain
-authoritative.
+Use this skill only after the user explicitly invokes `/mindie-agent` or
+`$mindie-agent` in the current native task. Do not activate it from topic matching.
+The native UserPromptSubmit hook grants session access on that manual gesture.
+Before the first knowledge call, resolve the active adapter configuration and
+run its configured `python -I <runtime_scripts>/bridge.py activate` once in the
+native shell. The shell supplies `CODEX_THREAD_ID`; never invent task identity.
+This reuses the native grant and prepares eligible capture. Check the returned
+activation result before querying. Reuse that task's grant
+until explicit deactivation; new chats, forks and subagents need their own entry.
+
+The manual entry gates the entire knowledge flywheel: query, explain, feedback,
+distillation, knowledge sync and background `Stop` capture. Capture additionally
+requires the saved contribution choice and approved project scope. Installation,
+consent, discovery and ordinary prompts never activate knowledge or capture.
+Reuse saved contribution choices without asking again.
+
+The manual grant controls knowledge and experience context only. Configured
+deterministic tools, including resource probes/leases, monitoring, profiling,
+simulation calculations, local diagnostics and factual status checks, remain
+available independently. Call their ordinary tool/CLI interfaces directly;
+they do not require loading this knowledge skill.
 
 ## Core Tools in Everyday Tasks
 

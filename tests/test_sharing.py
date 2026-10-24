@@ -355,14 +355,13 @@ class GateTests(SharingFixture):
         self.assertEqual({row["session"] for row in wake_requests(wake)}, {"manual-A"})
 
     def test_env_thread_disagreeing_with_event_session_drops_capture(self):
-        # When the host does supply CODEX_THREAD_ID to the hook process, an
-        # event naming a different session is an anomaly: fail closed.
+        # A child with no manual grant stays passive before transcript parsing.
         self.write_sharing()
         self.activate()
         self.prepare_store()
         with patch.dict(os.environ, CODEX_THREAD_ID="child-task"):
             result = self.bridge("stop", self.event(last_assistant_message="Done"))
-        self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
         self.assertEqual(self.captures(), 0)
         self.assertEqual(self.attempts(), 0)
 
@@ -400,27 +399,19 @@ class GateTests(SharingFixture):
         self.assertEqual(self.attempts(), before)
         self.assertFalse(self.community.exists())
 
-    def test_verified_native_metadata_repairs_incomplete_automatic_binding(self):
+    def test_verified_native_metadata_does_not_promote_automatic_binding(self):
         wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.write_sharing()
         self.prepare_store()
-        # A verified current transcript supplies the missing capture metadata.
-        lease = self.activate()
-        db = sqlite3.connect(self.sessions.path)
-        with db:
-            db.execute(
-                "UPDATE leases SET project_root=NULL, root_session=NULL, activated_at=NULL"
-            )
-        db.close()
-        self.assertEqual(
-            self.sessions.check("manual-A", lease["mindie_activation"])["session"],
-            "manual-A",
-        )
+        from mindie_knowledge.loop.activation import Admission
+        authority = Admission(self.sessions.path)
+        authority.associate("manual-A", project_root=str(self.scope), not_before=time.time())
         result = self.bridge("stop", self.event(last_assistant_message="Done"))
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
-        self.assertEqual(self.captures(), 1)
+        self.assertEqual(self.captures(), 0)
         self.assertEqual(self.attempts(), 0)
-        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"manual-A"})
+        self.assertEqual(wake_requests(wake), [])
+        self.assertIsNone(authority.knowledge_lease("manual-A"))
 
     def test_sharing_toggle_does_not_invalidate_ordinary_activation(self):
         self.write_sharing()

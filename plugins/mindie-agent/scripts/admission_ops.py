@@ -211,6 +211,9 @@ def operation(name, payload):
         if not isinstance(session, str) or not IDENTITY.fullmatch(session):
             raise ValueError("Valid MindIE session identity required")
         import sharing
+        lease = store.knowledge_lease(session)
+        if lease is None:
+            return dict(stage="inert", reason="manual-entry-required")
         settings = sharing.read(adapter=config)
         if settings is None:
             if sharing.status(adapter=config).get("state") == "disabled":
@@ -232,8 +235,6 @@ def operation(name, payload):
             )
         if inspected.get('status') == 'inactive':
             return dict(stage='inert', reason='task-revoked')
-        lease = store.associate(session, project_root=source['project_root'],
-                                not_before=candidate['activated_at'])
         turn = event.get("turn_id")
         if not isinstance(turn, str) or not IDENTITY.fullmatch(turn):
             raise ValueError("invalid hook identity")

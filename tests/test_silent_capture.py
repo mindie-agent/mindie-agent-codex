@@ -83,13 +83,22 @@ class SilentCaptureTests(unittest.TestCase):
     def accept(self, event):
         return admission_ops.operation('stop_capture', dict(event=event))
 
-    def test_first_stop_associates_and_keeps_first_authorized_turn(self):
+    def activate(self, *, boundary=None):
+        with patch('mindie_knowledge.loop.activation.time.time',
+                   return_value=self.enabled + .5 if boundary is None else boundary):
+            return Admission(self.admission).activate('current', project_root=str(self.scope))
+
+    def test_stop_stays_passive_until_manual_entry_then_keeps_authorized_turns(self):
         event = self.event()
         self.assertFalse(self.admission.exists())
+        self.assertEqual(self.accept(event)['reason'], 'manual-entry-required')
+        self.assertFalse(self.admission.exists())
+        self.wake.assert_not_called()
+        self.activate()
         result = self.accept(event)
         self.assertEqual(result['stage'], 'accepted-local')
         lease = Admission(self.admission).check('current')
-        self.assertEqual(lease['activated_at'], self.enabled)
+        self.assertEqual(lease['activated_at'], self.enabled + .5)
         with closing(sqlite3.connect(self.root / 'data/test/state-v1/state-v4.sqlite3')) as db:
             boundary = db.execute('SELECT boundary FROM captures').fetchone()[0]
         captured = codex_transcript.read_material(event['transcript_path'], 0,
@@ -100,6 +109,7 @@ class SilentCaptureTests(unittest.TestCase):
 
     def test_stop_snapshot_queues_after_canonical_replacement_and_reads_live_consent(self):
         event = self.event()
+        self.activate()
         adapter = json.loads(self.config.read_text())
         self.config.write_text("replaced canonical is not this invocation's binding")
         with patch.object(admission_ops, "read_config", side_effect=AssertionError("reread")):
@@ -120,15 +130,19 @@ class SilentCaptureTests(unittest.TestCase):
 
     def test_scope_and_sibling_artifact_cannot_create_a_binding(self):
         result = self.accept(self.event(scope=self.root / 'other'))
-        self.assertEqual(result['reason'], 'out-of-scope')
+        self.assertEqual(result['reason'], 'manual-entry-required')
         self.assertFalse(self.admission.exists())
+        self.activate()
+        result = self.accept(self.event(scope=self.root / 'other'))
+        self.assertEqual(result['reason'], 'out-of-scope')
         with self.assertRaisesRegex(ValueError, 'another task'):
             self.accept(self.event(owner='sibling'))
-        self.assertFalse(self.admission.exists())
+        self.assertTrue(Admission(self.admission).knowledge_lease('current'))
         self.wake.assert_not_called()
 
     def test_source_failure_crosses_real_helper_and_remains_pending(self):
         event = self.event()
+        self.activate()
         foreign = self.root / "other-profile/sessions/task.jsonl"
         foreign.parent.mkdir(parents=True)
         foreign.write_bytes(Path(event["transcript_path"]).read_bytes())
@@ -144,10 +158,12 @@ class SilentCaptureTests(unittest.TestCase):
         self.assertEqual(item["code"], "transcript_outside_profile")
         self.assertEqual(item["stage"], "transcript")
         self.assertNotIn(str(foreign), json.dumps(projection))
-        self.assertFalse(self.admission.exists())
+        self.assertTrue(Admission(self.admission).knowledge_lease('current'))
 
     def test_fork_boundary_and_explicit_task_revocation_are_preserved(self):
         event = self.event(fork=True)
+        self.assertEqual(self.accept(event)['reason'], 'manual-entry-required')
+        self.activate(boundary=self.enabled + 3)
         self.accept(event)
         store = Admission(self.admission)
         lease = store.check('current')
@@ -156,15 +172,16 @@ class SilentCaptureTests(unittest.TestCase):
         self.assertNotIn('FIRST_TURN', captured['text'])
         self.assertIn('AFTER_FORK', captured['text'])
         store.deactivate('current')
-        self.assertEqual(self.accept(event)['reason'], 'task-revoked')
+        self.assertEqual(self.accept(event)['reason'], 'manual-entry-required')
         self.assertEqual(store.inspect('current')['status'], 'inactive')
 
     def test_disabled_contribution_reads_no_transcript_or_state(self):
+        self.activate()
         self.settings.update(enabled=False, enabled_at=None)
         self.community.write_text(json.dumps(self.settings))
         with patch.object(codex_transcript, 'capture_source', side_effect=AssertionError('read')):
             self.assertEqual(self.accept(dict(session_id='current'))['reason'], 'sharing-disabled')
-        self.assertFalse(self.admission.exists())
+        self.wake.assert_not_called()
 
     def test_real_stdio_delivers_pending_fault_once_on_natural_call(self):
         agent_diagnostics.enqueue('mindie-knowledge', 'capture', 'summary', 'worker_failed',

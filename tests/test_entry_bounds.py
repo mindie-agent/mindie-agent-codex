@@ -78,6 +78,7 @@ class EntryBoundsTests(unittest.TestCase):
                     engine_config=str(root / "engine.json"),
                     runtime_scripts=str(runtime_scripts),
                     community_config=str(community),
+                    admission_path=str(root / "admission.sqlite3"),
                 ))
             )
             for index, case in enumerate(cases):
@@ -91,7 +92,9 @@ class EntryBoundsTests(unittest.TestCase):
                     env={**os.environ, "MINDIE_AGENT_CONFIG": str(config)},
                     timeout=3,
                 )
-                self.assertEqual(result.returncode, 1 if index == 2 else 0)
+                # No manual session grant: even malformed unrelated Stop
+                # input cannot start knowledge work or inject a warning.
+                self.assertEqual(result.returncode, 0)
                 self.assertEqual(json.loads(result.stdout), {})
                 self.assertFalse(marker.exists())
 
@@ -144,12 +147,6 @@ class EntryBoundsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 65)
         self.assertEqual(result.stderr.strip(), "summary protocol failed: invalid_result")
         self.assertNotIn("x" * 32, result.stderr)
-
-    def test_session_start_prepares_the_fixed_release(self):
-        hooks = json.loads((SCRIPTS.parent / "hooks/hooks.json").read_text())
-        self.assertEqual(set(hooks["hooks"]), {"SessionStart", "Stop", "Interrupt"})
-        self.assertEqual(len(hooks["hooks"]["SessionStart"]), 1)
-
 
 if __name__ == "__main__":
     unittest.main()

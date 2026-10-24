@@ -10,7 +10,7 @@
 
 - **Why Fixed Entries Matter**: When Codex refreshes a marketplace plugin, it can evict the previous cache directory while the running `app-server` still holds existing hook and MCP references. Placing the prepared release entry and `uv` runtime under persistent `PLUGIN_DATA` ensures active sessions never break mid-flight.
 - **Single Canonical Binding**: The user adapter configuration file is the single source of truth for the active runtime binding. Loaded entrypoints read that canonical profile and dispatch the complete interpreter + helper pair together, never mixing modules across versions.
-- **Stable Hook Trust Hashes**: Keeping hook command declarations stable across versions allows `app-server` to preserve user hook trust approvals across updates without silently dropping `SessionStart` or `Stop` execution.
+- **Stable Hook Trust Hashes**: Keeping hook command declarations stable across versions allows `app-server` to preserve user hook trust approvals across updates without silently dropping `SessionStart`, `UserPromptSubmit`, `Stop`, or `Interrupt` execution.
 
 ---
 

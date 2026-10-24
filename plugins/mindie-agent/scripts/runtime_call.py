@@ -67,9 +67,13 @@ class LeaseRequired(ValueError):
     """The current native session has no active lease in the selected engine."""
 
 
+class KnowledgeInactive(ValueError):
+    """Native identity exists but the user has not enabled knowledge here."""
+
+
 def _active_lease_token(config, session):
     """Resolve the existing target-engine lease; never mint a caller token."""
-    lease = _admission(config).active_lease(session)
+    lease = _admission(config).knowledge_lease(session)
     if lease is None:
         raise LeaseRequired(
             "knowledge distill requires an active task lease in the selected domain"
@@ -149,6 +153,15 @@ def call(payload):
         config["engine_config"], domain=route_domain, ref=route_ref,
         domain_configs=config.get("domain_configs"),
     )
+    # A host identity is not a manual-entry grant. Reads and usage feedback
+    # retain the session grant while routing to the target's own consent.
+    # Capture and paid distillation additionally need that engine's lease.
+    default_lease = _admission(config).knowledge_lease(session)
+    target_lease = _admission(selected).knowledge_lease(session) if routed else default_lease
+    if target_lease is None and default_lease is None:
+        raise KnowledgeInactive("Knowledge requires manual /mindie-agent activation in this task")
+    if target_lease is None and name in {"knowledge_distill", "knowledge_attach"}:
+        raise LeaseRequired("the selected domain requires its own manual /mindie-agent activation")
     # C6 capture admission needs the existing target-engine lease token, not a
     # fabricated `_session_verified` flag. A target with an independent
     # admission store must already hold this session's lease; a deliberately
@@ -409,9 +422,12 @@ if __name__ == "__main__":
         else:
             domain_route_error = isinstance(exc, DomainRouteError)
         lease_required = isinstance(exc, LeaseRequired)
-        routing_error = lease_required or domain_route_error
+        knowledge_inactive = isinstance(exc, KnowledgeInactive)
+        routing_error = lease_required or domain_route_error or knowledge_inactive
         if feed_unavailable:
             stage, execution = "query-source", "not_started"
+        elif knowledge_inactive:
+            stage, execution = "authorization", "not_started"
         elif routing_error:
             stage, execution = "routing", "not_started"
         message = (
@@ -437,6 +453,7 @@ if __name__ == "__main__":
             shaped["structuredContent"]["code"] = "feed_unavailable"
         elif routing_error:
             shaped["structuredContent"]["code"] = (
+                "knowledge_inactive" if knowledge_inactive else
                 "lease_required" if lease_required else "domain_routing_rejected"
             )
             shaped["structuredContent"]["message"] = str(exc)[:300]

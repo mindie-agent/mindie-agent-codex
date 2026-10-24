@@ -17,7 +17,7 @@ Both verified Codex revisions expose `hooks/list`, `config/read`, and `config/va
 ### How Native Marketplace & Hook Trust Updates Work
 - **Immutable Tag Pinning**: Installing the marketplace with `--ref v0.0.2` pins the catalog to that immutable Release tag so a later `main` branch update never silently upgrades an unverified version.
 - **Git Subdirectory Source**: Native catalog entries use `source: "git-subdir"` with `url`, `path`, and `sha` (tested through native `codex plugin list` and `codex plugin add`).
-- **Preserving User Hook Approvals**: During a compatible silent update, `native_hooks.py` updates only this marketplace's source via optimistic CAS (`expectedVersion`), installs the selected subdirectory at its exact commit SHA, and carries forward trust hashes **only** for `SessionStart` / `Stop` hooks that the user had already enabled and trusted. Explicitly disabled or untrusted hooks remain disabled, and unrelated plugins are never touched.
+- **Preserving User Hook Approvals**: During a compatible silent update, `native_hooks.py` updates only this marketplace's source via optimistic CAS (`expectedVersion`), installs the selected subdirectory at its exact commit SHA, and carries forward trust hashes **only** for `SessionStart`, `UserPromptSubmit`, `Stop`, and `Interrupt` hooks that the user had already enabled and trusted. Explicitly disabled or untrusted hooks remain disabled, and unrelated plugins are never touched.
 
 ---
 

@@ -392,13 +392,13 @@ class EntryReuseTests(LaneCase):
             "diagnostics_choice": (payload.get("diagnostics") or {}).get("choice"),
         }
 
-    def test_second_task_and_fork_do_not_present_choices_again(self):
+    def test_passive_status_in_new_tasks_and_forks_does_not_present_choices(self):
         self.engine.write_text(json.dumps(self.engine_doc))
         first = self.bridge("status", thread="task-first")
         self.assertEqual(first.returncode, 0, first.stderr)
         opened = json.loads(first.stdout)
         visible = json.dumps(self._visible(opened))
-        self.assertIn(CHOICE_PROMPT, visible, visible)
+        self.assertNotIn(CHOICE_PROMPT, visible, visible)
         chosen = self.bridge("sharing-disable", thread="task-first")
         self.assertEqual(chosen.returncode, 0, chosen.stderr)
         self.assertEqual(json.loads(chosen.stdout)["sharing_choice"], "disabled")

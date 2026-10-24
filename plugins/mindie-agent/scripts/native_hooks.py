@@ -1,7 +1,8 @@
 """Use Codex's public config API to carry forward only already-trusted own hooks.
 
 [Role]
-Communicates with `codex app-server` (`config/read`, `config/batchWrite`) to inspect user-layer plugin/hook trust and atomically update local marketplace catalog and approved MindIE hook handlers (`SessionStart`, `Stop`, `Interrupt`).
+Communicates with `codex app-server` to inspect user-layer hook trust and carry
+forward approved SessionStart, UserPromptSubmit, Stop and Interrupt handlers.
 
 [Invariants]
 - Uses compare-and-swap (`expectedVersion`) on the exact user config layer (`user_config`).
@@ -27,7 +28,8 @@ from product_contract import read_json
 PLUGIN = "mindie-agent@mindie-agent"
 MARKETPLACE = "mindie-agent"
 OFFICIAL_SOURCE = "https://github.com/mindie-agent/mindie-agent-codex.git"
-EVENTS = {"sessionStart": "SessionStart", "stop": "Stop", "interrupt": "Interrupt"}
+EVENTS = {"sessionStart": "SessionStart", "userPromptSubmit": "UserPromptSubmit",
+          "stop": "Stop", "interrupt": "Interrupt"}
 
 
 class NativeHooks:
