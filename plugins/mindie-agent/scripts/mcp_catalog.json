@@ -422,6 +422,10 @@
             "type": "boolean",
             "description": "Measure column_offset/max_chars/line lengths in JavaScript UTF-16 code units (native Kimi Read)."
           },
+          "utf8_only": {
+            "type": "boolean",
+            "description": "Do not auto-detect UTF-16; native Claude/DSH Read are UTF-8 only."
+          },
           "line_offset": {
             "type": "integer",
             "description": "Alias of offset (Kimi native Read habit)."
