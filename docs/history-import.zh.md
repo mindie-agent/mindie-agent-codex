@@ -11,12 +11,12 @@
 通过当前发行版入口调用 `bridge history-import`，并通过 `--source` 指定一个或多个本地 JSONL 会话文件的绝对路径（Windows 下可将 `python3` 替换为 `python`）：
 
 ```sh
-python3 <PLUGIN_DATA>/releases/0.0.2/entry.py bridge history-import \
+python3 <PLUGIN_DATA>/releases/0.1.1/entry.py bridge history-import \
   --source /absolute/path/to/rollout.jsonl
 ```
 
 - **严格按指定文件读取**：无默认路径、无目录监听、无定时扫描；会话正文内的任何指令均被视为纯文本数据，无权触发其他文件导入。
-- **复用已保存的贡献授权**：导入前会自动校验当前会话与源历史会话的工作目录是否均处于用户已批准的公开贡献项目范围内，不会重复弹窗询问，也不会重新激活历史会话。
+- **要求当前会话已手动激活且满足贡献范围**：发起导入的当前会话（`CODEX_THREAD_ID`）必须已通过 `/mindie-agent` 或 `$mindie-agent` 获得显式手动会话租约（`authority.knowledge_lease(session)`）——`history-import` 绝不会自动关联未激活的当前会话。同时，当前会话与源历史会话的工作目录均须处于用户已批准的公开贡献项目范围内（`sharing.capture_allowed`），不会重复弹窗询问，也不会重新激活历史会话。
 
 ---
 

@@ -99,13 +99,15 @@ class FailureVisibilityTests(unittest.TestCase):
 
     def test_accounting_failure_preserves_completed_mutation_and_original_failure(self):
         import runtime_call
-        payload = dict(surface='knowledge', name='knowledge_feedback', arguments={},
-                       mindie_activation='fixture-token', mindie_session_id='fixture-task')
+        from mindie_knowledge.loop.activation import Admission
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'adapter.json'
-            path.write_text('{"engine_config":"synthetic"}')
+            admission = Path(directory) / 'admission.sqlite3'
+            path.write_text(json.dumps(dict(engine_config='synthetic', admission_path=str(admission))))
+            lease = Admission(admission).activate('fixture-task', project_root=directory)
+            payload = dict(surface='knowledge', name='knowledge_feedback', arguments={},
+                           mindie_activation=lease['token'], mindie_session_id='fixture-task')
             with patch.object(runtime_call, 'config_path', return_value=path), \
-                 patch.object(runtime_call, 'resolve_lease', return_value={'session': 'fixture-task'}), \
                  patch.object(runtime_call, 'finish_outcome', side_effect=OSError('fixture accounting failure')), \
                  patch('service_client.connect', return_value={}), \
                  patch('mindie_knowledge.loop.transport.rpc', return_value={'status': 'recorded'}) as rpc:

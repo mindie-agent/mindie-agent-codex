@@ -70,6 +70,26 @@ class HookTests(unittest.TestCase):
         self.assertEqual(result, [dict(key=self.rows[0]["key"], event="sessionStart",
                                       hash="new-sessionStart")])
 
+    def test_user_prompt_hook_inherits_trust_only_after_explicit_approval(self):
+        path = self.root / "hooks/hooks.json"
+        value = json.loads(path.read_text())
+        value["hooks"]["UserPromptSubmit"] = [dict(hooks=[
+            dict(type="command", command="fixture command")])]
+        path.write_text(json.dumps(value))
+        row = dict(self.rows[0], key="fixture:userPromptSubmit", eventName="userPromptSubmit",
+                   currentHash="user-prompt-v1", trustStatus="untrusted")
+        self.rows = [row]
+        self.assertEqual(native_hooks.snapshot("/native", {}, self.root), [])
+        self.assertEqual(native_hooks.preserve("/native", {}, self.root, []),
+                         dict(status="unchanged", trusted=0))
+        self.assertEqual(self.writes, [])
+        row["trustStatus"] = "trusted"
+        approved = native_hooks.snapshot("/native", {}, self.root)
+        self.assertEqual(len(approved), 1)
+        row.update(currentHash="user-prompt-v2", trustStatus="modified")
+        self.assertEqual(native_hooks.preserve("/native", {}, self.root, approved)["trusted"], 1)
+        self.assertEqual(self.writes, [(row["key"], "user-prompt-v1")])
+
     def test_interrupt_trust_is_limited_to_exact_previously_approved_handlers(self):
         path = self.root / "hooks/hooks.json"
         value = json.loads(path.read_text())

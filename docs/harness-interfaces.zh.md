@@ -17,7 +17,7 @@
 ### 原生插件市场与 Hook 信任继承机制
 - **固定不可变 Release Tag**：通过 `--ref v0.0.2` 注册插件市场可将目录锁定在不可变发行标签上，防止后续 `main` 分支演进时宿主在未经兼容性检查的情况下自动拉取未验证版本。
 - **Git 子目录插件源**：原生目录项采用 `source: "git-subdir"`（指定精确的 `url`、`path` 与 `sha`），已通过原生 `codex plugin list` 与 `codex plugin add` 实机验证。
-- **严格尊重用户 Hook 授权**：在静默兼容更新时，`native_hooks.py` 仅通过原生配置 CAS 更新本插件源至目标 SHA，并**仅对用户此前已启用且信任的本插件 `SessionStart` / `Stop` Hook** 继承信任哈希；用户显式禁用或撤权的 Hook 保持禁用，且绝不触碰其他无关插件。
+- **严格尊重用户 Hook 授权**：在静默兼容更新时，`native_hooks.py` 仅通过原生配置 CAS 更新本插件源至目标 SHA，并**仅对用户此前已启用且信任的本插件 `SessionStart`、`UserPromptSubmit`、`Stop` 与 `Interrupt` Hook** 继承信任哈希；用户显式禁用或撤权的 Hook 保持禁用，且绝不触碰其他无关插件。
 
 ---
 

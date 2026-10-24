@@ -20,18 +20,19 @@ class StatusErrors(unittest.TestCase):
         )
         return result, json.loads(result.stdout)
 
-    def test_only_missing_configuration_offers_first_use(self):
+    def test_missing_configuration_does_not_inject_knowledge_setup(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "adapter.json"
             process, payload = self.call(path)
             self.assertEqual(process.returncode, 0)
-            self.assertTrue(payload["first_use"])
+            self.assertFalse(payload["configured"])
+            self.assertFalse({"first_use", "next", "recovery"}.intersection(payload))
             self.assertEqual(list(Path(directory).iterdir()), [])
             path.write_text('{PRIVATE_CONFIG_MARKER')
             process, payload = self.call(path)
             self.assertEqual(process.returncode, 1)
             self.assertEqual(payload["status"], "invalid_config")
-            self.assertIsNone(payload["first_use"])
+            self.assertNotIn("first_use", payload)
             self.assertIsNot(payload["configured"], False)
             self.assertNotIn("PRIVATE_CONFIG_MARKER", process.stdout + process.stderr)
 
@@ -46,7 +47,7 @@ class StatusErrors(unittest.TestCase):
                 process, payload = self.call(path)
             self.assertEqual(process.returncode, 1)
             self.assertEqual(payload["status"], "update_busy")
-            self.assertIsNone(payload["first_use"])
+            self.assertNotIn("first_use", payload)
 
     def test_selected_helper_failure_has_no_raw_stderr(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -138,7 +139,7 @@ class ScopedStatus(unittest.TestCase):
             before = state.read_bytes(), Path(engine["admission_path"]).read_bytes()
             base_env = {key: value for key, value in os.environ.items()
                         if key not in {"CODEX_THREAD_ID", "PYTHONPATH"}}
-            for task in ("own-task", None, "invalid identity"):
+            for task in ("own-task", "passive-task", None, "invalid identity"):
                 env = dict(base_env)
                 if task is not None:
                     env["CODEX_THREAD_ID"] = task
@@ -150,6 +151,8 @@ class ScopedStatus(unittest.TestCase):
                 self.assertNotIn("PRIVATE_", process.stdout + process.stderr)
                 self.assertNotIn("other-task-batch", process.stdout)
                 payload = json.loads(process.stdout)
+                self.assertFalse({"first_use", "next", "recovery"}.intersection(payload))
+                self.assertNotIn("first_use", payload["sharing"])
                 self.assertNotIn("outbox", payload["service"])
                 self.assertNotIn("token", payload["admission"])
                 if task == "own-task":

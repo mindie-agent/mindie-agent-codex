@@ -5,7 +5,8 @@ Implements the JSON-RPC MCP server gate (`Gate`, `serve`) for both `knowledge` a
 
 [Invariants]
 - Remote tools are available to any native Codex task without a knowledge lease, scoped by `REMOTE_DEV_SESSION_ID`.
-- Knowledge mutation tools (`knowledge_feedback`) require an active task lease; `knowledge_distill` additionally requires the active capture lease and uses the shared summary budget. Read tools (`knowledge_query`, `knowledge_explain`) work without capture binding.
+- Every knowledge tool requires this task's explicit manual-entry grant;
+  distillation additionally requires the selected target's capture lease.
 - When a remote operation has already succeeded (`outcome == "succeeded"`), a local receipt-accounting failure NEVER overwrites the business result with `isError=True` (`receipt_unconfirmed=True` is attached instead).
 
 [Timeouts & Locks]

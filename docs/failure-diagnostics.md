@@ -9,7 +9,7 @@ Following Principle 9 of the [MindIE Agent Engineering Design Principles](https:
 ## 1. Read-Only Status Inspection (`bridge status`)
 
 - **Clear State Distinction**: `bridge.py status` distinguishes between a missing configuration, a corrupted/invalid configuration file, an occupied update lock, and a failed runtime. Corrupted settings are reported directly as a diagnostic error and never trigger a fresh install/onboarding prompt.
-- **Task-Scoped Snapshot**: Using the native `CODEX_THREAD_ID`, `status` returns the startup stage, configuration/storage/service health, active task binding, diagnostic failure counter, and the latest 5 captures and contribution batches for that task (returning no task records when called outside a task identity).
+- **Task-Scoped Snapshot**: Using the native `CODEX_THREAD_ID`, `status` returns factual control-plane state (`experience`, `sharing`, `admission` lease state, startup stage, configuration/storage/service health, `diagnostics.reporting` status, `updates` check state, and the latest 5 captures, summaries, and contribution batches for that task; or `configured: false` when unconfigured) without injecting onboarding prompt fields (`first_use`, `next`, `recovery`). When called outside a task identity, it returns no task records.
 - **Strictly Read-Only**: Running `status` (within its 5-second execution budget) never binds a task, resets failure counters, starts background services, or replays failed work. Uncertain external PR publications must be reconciled before any explicit `recover` retry.
 
 ---

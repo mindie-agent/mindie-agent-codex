@@ -2,13 +2,13 @@
 
 <a href="public-transcript.zh.md">中文</a> | <b>English</b> · <a href="README.en.md">Documentation Index</a>
 
-When community sharing is explicitly enabled for an approved project scope, `mindie-agent-codex` extracts public conversation messages from native Codex JSONL transcripts, runs local deterministic redaction, stores immutable Markdown blocks, and generates bounded navigation metadata.
+When a session has been manually enabled with `/mindie-agent` (or `$mindie-agent`, setting `entry_enabled = 1`) and community sharing (`contribute`) is explicitly enabled for that session's approved `project_root`, `mindie-agent-codex` extracts public conversation messages from native Codex JSONL transcripts on `Stop`, runs local deterministic redaction, stores immutable Markdown blocks, and generates bounded navigation metadata. Unactivated sessions short-circuit on `Stop` before reading sharing settings or transcript files.
 
 ---
 
 ## 1. Deterministic Public Message Filtering
 
-- **Included Content**: Only public user prompts, visible assistant progress commentary, and final assistant answers (`response_item` records) from the active task.
+- **Included Content**: Only public user prompts, visible assistant progress commentary, and final assistant answers (`response_item` records) from the active `/mindie-agent` session (`max(created_at, activated_at)` onward).
 - **Excluded Content**: Tool calls and outputs, hidden reasoning tokens, system/developer instructions, injected catalogs, duplicate wrappers, and inherited fork history. Attachment placeholders never fetch external files or URLs.
 - **Strict Integrity Checks**: Records missing timestamps or containing corrupted JSON fail visibly rather than silently advancing the capture cursor.
 

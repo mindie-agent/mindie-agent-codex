@@ -87,6 +87,9 @@ class McpKnowledgeEndToEndTests(unittest.TestCase):
             mcp_gate, "runtime_env", side_effect=joint_env)
         self.runtime_env_patch.start()
         self.addCleanup(self.runtime_env_patch.stop)
+        self.admission_env_patch = patch("session_gate.runtime_env", side_effect=joint_env)
+        self.admission_env_patch.start()
+        self.addCleanup(self.admission_env_patch.stop)
         import consent
         consent.record_choice("disabled", self.config)
         self.community.write_text(
@@ -152,6 +155,15 @@ class McpKnowledgeEndToEndTests(unittest.TestCase):
         return gate.call(request)
 
     def test_mcp_knowledge_query_explain_feedback_end_to_end(self):
+        gate = mcp_gate.Gate("knowledge")
+        denied = self._call_mcp(gate, 0, "knowledge_query", {"query": "HCCL"})
+        self.assertTrue(denied["isError"])
+        self.assertEqual(denied["structuredContent"]["code"], "knowledge_inactive")
+        self.assertEqual(denied["structuredContent"]["execution"], "not_started")
+        from manual_entry import authorize
+        authorize(json.loads(self.config.read_text()), dict(
+            hook_event_name="UserPromptSubmit", session_id="thread-e2e-1",
+            cwd=str(self.scope), prompt="/mindie-agent"))
         with patch.object(Path, "cwd", return_value=self.scope):
             activated = bridge.activate("activate")
         self.assertEqual(activated["status"], "active")
@@ -173,6 +185,9 @@ class McpKnowledgeEndToEndTests(unittest.TestCase):
         first_hit = structured_query["results"][0]
         self.assertEqual(first_hit["entry_id"], self.seeded["entry_id"])
         block_ref = first_hit["ref"]
+
+        # A new native turn/connection in the same session needs no new entry.
+        gate = mcp_gate.Gate("knowledge")
 
         # 2. knowledge_explain
         explain_res = self._call_mcp(
@@ -203,6 +218,10 @@ class McpKnowledgeEndToEndTests(unittest.TestCase):
         self.assertEqual(structured_feedback["entry_id"], self.seeded["entry_id"])
         self.assertEqual(structured_feedback["rating"], "up")
         self.assertTrue(structured_feedback["vote_id"])
+        gate.sessions.deactivate()
+        denied = self._call_mcp(gate, 4, "knowledge_query", {"query": "HCCL"})
+        self.assertTrue(denied["isError"])
+        self.assertEqual(denied["structuredContent"]["code"], "knowledge_inactive")
 
 
 if __name__ == "__main__":

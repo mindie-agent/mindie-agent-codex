@@ -274,6 +274,10 @@ def _runtime_identity():
 
 
 def activate(operation, *, domain=None):
+    if operation == "activate":
+        from admission_ops import admission, native_session, read_config
+        if admission(read_config()).knowledge_lease(native_session()) is None:
+            raise Inactive("Knowledge is not authorized in this session; the user must invoke /mindie-agent first")
     sessions = Sessions()
     if operation == "activate" and domain is not None:
         # Target-domain activation returns its own lease and domain facts. It
@@ -398,6 +402,14 @@ def stop(*, adapter=None, hook_input=None):
             adapter = read_json(config_path())[0]
         if not isinstance(adapter, dict):
             raise ValueError("invalid Stop binding")
+        from admission_ops import admission
+        authority = admission(adapter)
+        native = os.environ.get("CODEX_THREAD_ID")
+        enabled = (authority.knowledge_lease(native) is not None if native else
+                   any(lease.get("entry_enabled") for lease in authority.leases()))
+        if not enabled:
+            print("{}")
+            return 0
         settings = sharing.read(adapter=adapter)
         # Missing setup is an Agent diagnostic; an explicit disable is inert.
         # Neither branch reads stdin, starts a helper or creates a capture row.
@@ -412,7 +424,7 @@ def stop(*, adapter=None, hook_input=None):
             return 0
     except TimeoutError:
         raise
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RuntimeError) as exc:
         _record_stop("configuration", "unavailable", exc)
         print("{}")
         return 1
@@ -429,6 +441,9 @@ def stop(*, adapter=None, hook_input=None):
             _record_stop("envelope", "identity_mismatch")
             print("{}")
             return 1
+        if authority.knowledge_lease(event["session_id"]) is None:
+            print("{}")
+            return 0
     except ValueError as exc:
         if str(exc) in {"unexpected hook event", "recursive Stop is not a capture"}:
             print("{}")

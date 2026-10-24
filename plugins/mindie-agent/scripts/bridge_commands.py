@@ -34,38 +34,11 @@ def _bridge():
 
 
 def unconfigured_status():
-    """Stdlib-only offline first-use payload. Creates no files or services.
-
-    A profile that already holds a saved choice (e.g. from a sibling adapter)
-    is an existing installation: setup reuses the choice, no onboarding."""
-    b = _bridge()
-    import consent
-
-    saved = consent.load()
-    first_use = dict(
-        state="unconfigured",
-        prompt=b.sharing.CHOICES,
-        choices=[],
-        required=["runtime", "repository", "project_roots", "public_visibility"],
-    )
-    if saved["state"] == "ok" and saved["choice"]:
-        first_use = dict(state="chosen", choice=saved["choice"])
-    elif saved["state"] in {"corrupt", "unreadable"} or consent.install_traces():
-        first_use = dict(state="existing", detail=saved.get("error"))
+    """Offline configuration facts; no knowledge onboarding or state writes."""
     return dict(
         configured=False,
         experience="needs-configuration",
         sharing=dict(state="unconfigured"),
-        first_use=first_use,
-        next=(
-            "Run scripts/setup.py install --knowledge-python PYTHON "
-            "(headless leaves sharing off). The saved install-level choice is "
-            "reused; configure contribution via setup.py configure "
-            "--community-repository OWNER/REPO --community-project-root PATH "
-            "--community-visibility public. Installation alone does not enable "
-            "the experience loop. Reuse existing approved values."
-        ),
-        recovery=[],
         service=dict(state="not-running"),
         diagnostics=_reporting_choice(),
     )
@@ -84,11 +57,6 @@ def _status_failure(state, stage, exc, config_file, selected=None):
             str(config_file),
         ],
     }
-    recovery = {
-        "invalid_config": "Inspect the named config and correct its JSON or required absolute runtime paths, then run status. Existing state has not been reinitialized.",
-        "update_busy": "An update holds the profile lock. Let that operation finish, then explicitly run status; installation is not missing.",
-        "helper_failed": "Inspect the selected runtime and the reported helper stage, then explicitly run status. No recovery action was started.",
-    }
     if selected:
         commands["check_runtime"] = [
             python, "-c",
@@ -98,13 +66,10 @@ def _status_failure(state, stage, exc, config_file, selected=None):
         status=state,
         configured=None,
         config=str(config_file),
-        first_use=None,
         sharing=dict(state="unknown"),
         service=dict(state="unknown"),
         error=dict(stage=stage, type=type(exc).__name__),
         commands=commands,
-        recovery=[recovery[state]],
-        next="Use the listed status/check commands. Native shell/SSH or separately configured remote-dev remain available without knowledge activation.",
     )
     # Config and lock contention are expected. Only a failed status helper
     # is recorded; a bad response is a protocol failure.
@@ -183,7 +148,9 @@ def offline_status():
 def sharing_operation(operation, extra=None):
     b = _bridge()
     if operation == "sharing-status":
-        return b.sharing.status()
+        result = b.sharing.status()
+        result.pop("first_use", None)
+        return result
     if operation == "sharing-choice":
         raise ValueError(
             "read-only/later product modes were removed. Configure the "
@@ -372,7 +339,7 @@ def _refresh_capture(result):
             result["status"] = "degraded"
             result["activation"] = dict(status="unavailable", error=str(exc)[:240])
         else:
-            if lease is None:
+            if lease is None or not lease.get("entry_enabled"):
                 return result
             result["activation"] = b._prepare_capture(dict(
                 status="active", mindie_session_id=lease["session"],

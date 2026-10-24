@@ -45,20 +45,10 @@ def run_imports(sources, *, emit, retry_summary=False):
     config = read_config()
     authority = admission(config)
     session = native_session()
+    lease = authority.knowledge_lease(session)
+    if lease is None:
+        raise ValueError('history import requires manual /mindie-agent activation in this session')
     import sharing
-    settings = sharing.read()
-    inspected = authority.inspect(session)
-    if inspected.get('status') == 'active':
-        lease = authority.check(session)
-    elif inspected.get('status') == 'missing':
-        candidate = dict(project_root=str(Path.cwd().resolve()), root_session=session,
-                         activated_at=(settings or {}).get('enabled_at'))
-        if not sharing.capture_allowed(candidate, None):
-            raise ValueError('history import requires enabled contribution in this task scope')
-        lease = authority.associate(session, project_root=candidate['project_root'],
-                                    not_before=candidate['activated_at'])
-    else:
-        raise ValueError('current native task association is revoked or unavailable')
     if not sharing.capture_allowed(lease, None):
         raise ValueError('history import requires enabled contribution in this task scope')
     from mindie_knowledge.loop.cli import config_at, load_transcript_adapter

@@ -80,9 +80,15 @@ class SessionGateTests(unittest.TestCase):
 
     def activate(self, session="manual-A"):
         # Activation records the authorized project root from the task cwd.
+        from session_gate import runtime_env as base_runtime_env
+        def joint_env(config=None, *, adapter=None):
+            value = base_runtime_env(config, adapter=adapter)
+            value["PYTHONPATH"] = os.environ.get("PYTHONPATH", "")
+            return value
         with (
             patch.dict(os.environ, CODEX_THREAD_ID=session),
             patch.object(Path, "cwd", return_value=self.root),
+            patch("session_gate.runtime_env", side_effect=joint_env),
         ):
             return self.sessions.activate()
 
@@ -140,6 +146,13 @@ class SessionGateTests(unittest.TestCase):
         )
 
     def bridge(self, operation, event=None, timeout=None, extra=()):
+        if operation == "activate" and os.environ.get("CODEX_THREAD_ID"):
+            # This fixture represents the user's slash-entry flow, including
+            # the native prompt hook before the Skill's activation command.
+            from manual_entry import authorize
+            authorize(json.loads(self.config.read_text()), dict(
+                hook_event_name="UserPromptSubmit", session_id=os.environ["CODEX_THREAD_ID"],
+                cwd=str(self.root), prompt="/mindie-agent"))
         if timeout is None:
             # Activation admits the lease (30s), then optionally binds capture
             # (30s); each owned child can need 6s cleanup plus outer exit grace.
@@ -192,17 +205,6 @@ class SessionGateTests(unittest.TestCase):
         return dict(hook_event_name="Stop", transcript_path=str(path), session_id=session,
                     turn_id=turn, cwd=str(cwd or self.root), last_assistant_message="A verified result")
 
-    def test_informational_skill_and_native_session_preparation(self):
-        skill = SCRIPTS.parent / "skills/mindie-agent"
-        self.assertIn(
-            "allow_implicit_invocation: true",
-            (skill / "agents/openai.yaml").read_text(encoding="utf-8"),
-        )
-        self.assertIn(
-            "SessionStart",
-            json.loads((SCRIPTS.parent / "hooks/hooks.json").read_text())["hooks"],
-        )
-
     def test_activation_binds_only_when_community_sharing_is_enabled(self):
         marker = self.runtime_fixture()
         with patch.dict(os.environ, CODEX_THREAD_ID=""):
@@ -236,12 +238,12 @@ class SessionGateTests(unittest.TestCase):
             # and remains outside this mode-bit assertion.
             self.assertTrue(self.sessions.path.is_file())
 
-    def test_unconfigured_hooks_report_fault_without_capture_or_runtime(self):
+    def test_unactivated_stop_is_silent_without_capture_or_runtime(self):
         marker = self.runtime_fixture()
         event = self.event()
         before = set(self.root.iterdir())
         result = self.bridge("stop", event)
-        self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
         result = self.bridge(
             "session-start", dict(hook_event_name="SessionStart", session_id="manual-A")
         )
@@ -383,9 +385,8 @@ class SessionGateTests(unittest.TestCase):
         self.assertFalse(self.sessions.path.exists())
 
     def test_remote_job_identity_is_not_overwritten(self):
-        lease = self.activate()
         request = self.request(
-            lease, name="remote_job_status", session_id="remote-job-7"
+            name="remote_job_status", session_id="remote-job-7"
         )
         with patch.object(
             mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)
@@ -395,6 +396,7 @@ class SessionGateTests(unittest.TestCase):
             self.assertEqual(payload["arguments"]["session_id"], "remote-job-7")
             self.assertEqual(payload["remote_session_id"], "manual-A")
             self.assertEqual(run.call_args.kwargs["timeout"], 120.0)
+        self.assertFalse(self.sessions.path.exists())
 
     def test_rejected_reads_do_not_consume_the_failure_circuit(self):
         lease = self.activate()
@@ -756,7 +758,7 @@ class SessionGateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(payload["service"]["state"], "not-running")
-        self.assertIsNone(payload["first_use"])
+        self.assertNotIn("first_use", payload)
         self.assertFalse((self.root / "data").exists())
         init = self.bridge("init")
         self.assertEqual(init.returncode, 0, init.stderr)
@@ -765,12 +767,12 @@ class SessionGateTests(unittest.TestCase):
         self.assertEqual(recorded.returncode, 0, recorded.stderr)
         self.assertEqual(json.loads(recorded.stdout)["sharing_choice"], "disabled")
         again = json.loads(self.bridge("init").stdout)
-        self.assertIsNone(again["first_use"])
+        self.assertNotIn("first_use", again)
         self.assertFalse((self.root / "data").exists())
 
 
 
-    def test_init_without_config_returns_first_use_choices(self):
+    def test_init_without_config_is_factual_without_knowledge_setup(self):
         absent = self.root / "missing-codex.json"
         env = {
             key: value
@@ -788,8 +790,7 @@ class SessionGateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertFalse(payload["configured"])
-        self.assertEqual(payload["first_use"]["choices"], [])
-        self.assertIn("setup.py", payload["next"])
+        self.assertFalse({"first_use", "next", "recovery"}.intersection(payload))
         self.assertEqual(payload["service"]["state"], "not-running")
         self.assertFalse(absent.exists())
         self.assertFalse((self.root / "data").exists())

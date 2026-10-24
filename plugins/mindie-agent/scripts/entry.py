@@ -82,17 +82,34 @@ def profile(release, source=None, *, prepare=True):
         return _installed_profile(config, receipt)
 
 
-def session_start(config):
+def session_start(config, *, session_id=None):
     from bounded_process import run
     adapter = read(config)
+    environment = runtime_env(config)
+    if session_id is not None:
+        environment["CODEX_THREAD_ID"] = session_id
     result = run([adapter["python"], "-I",
                   str(Path(runtime_scripts(adapter)) / "session_maintenance.py"), str(config)],
-                 "", timeout=300.0, env=runtime_env(config), allow_service=True)
+                 "", timeout=300.0, env=environment, allow_service=True)
     print(result.checked_stdout(), file=sys.stderr)
 
 
 def dispatch(args, config, *, stop_adapter=None):
     remaining = args.arguments
+    if args.role == 'user-prompt-submit':
+        from manual_entry import action, authorize
+        result = authorize(read(config), args.prompt_event)
+        if action(args.prompt_event) != "deactivate":
+            try:
+                session_start(config, session_id=args.prompt_event["session_id"])
+            except Exception as exc:
+                # The grant is committed. Readiness failure must remain
+                # visible without discarding that known activation result.
+                result["systemMessage"] = (
+                    "MindIE session entry succeeded, but knowledge preparation failed "
+                    f"({type(exc).__name__}); inspect local status before recovery.")
+        print(json.dumps(result))
+        return
     if args.role == 'session-start':
         session_start(config)
         return
@@ -136,9 +153,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--release', type=Path, required=True)
     parser.add_argument('--source', type=Path)
-    parser.add_argument('role', choices=['session-start', 'stop', 'knowledge-mcp', 'remote-mcp', 'sync', 'configure', 'status', 'bridge'])
+    parser.add_argument('role', choices=['session-start', 'user-prompt-submit', 'stop', 'knowledge-mcp', 'remote-mcp', 'sync', 'configure', 'status', 'bridge'])
     parser.add_argument('arguments', nargs=argparse.REMAINDER)
     args = parser.parse_args()
+    if args.role == 'user-prompt-submit':
+        from manual_entry import read_event, requested
+        args.prompt_event = read_event(sys.stdin.buffer)
+        if not requested(args.prompt_event):
+            print("{}")
+            return
     from bootstrap import preparing
     from session_gate import runtime_env
     with preparing("profile-binding"):

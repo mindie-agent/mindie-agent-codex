@@ -50,13 +50,17 @@ class QuerySourceFailureTests(unittest.TestCase):
             self.assertIs(report.call_args.kwargs["exception"], original_error)
 
     def test_real_helper_main_preserves_typed_failure_without_internal_report(self):
+        from mindie_knowledge.loop.activation import Admission
         from mindie_knowledge.loop.transport import FeedUnavailableError
         payload = dict(surface="knowledge", name="knowledge_query",
                        arguments={"query": "synthetic"}, mindie_session_id="native-task",
                        native_session_verified=True)
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "codex.json"
-            config.write_text(json.dumps(dict(engine_config=str(Path(directory) / "engine.json"))))
+            admission = Path(directory) / "admission.sqlite3"
+            Admission(admission).activate("native-task", project_root=directory)
+            config.write_text(json.dumps(dict(engine_config=str(Path(directory) / "engine.json"),
+                                             admission_path=str(admission))))
             output = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
             stdin = io.TextIOWrapper(io.BytesIO(json.dumps(payload).encode()))
             with patch.dict(os.environ, MINDIE_AGENT_CONFIG=str(config)), \

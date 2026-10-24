@@ -97,6 +97,9 @@ class ServiceCase(unittest.TestCase):
         self.runtime_env_patch = patch.object(mcp_gate, 'runtime_env', side_effect=joint_env)
         self.runtime_env_patch.start()
         self.addCleanup(self.runtime_env_patch.stop)
+        self.admission_env_patch = patch('session_gate.runtime_env', side_effect=joint_env)
+        self.admission_env_patch.start()
+        self.addCleanup(self.admission_env_patch.stop)
 
     def tearDown(self):
         try:
@@ -122,6 +125,10 @@ class ServiceCase(unittest.TestCase):
         )), encoding='utf-8')
 
     def _activate(self):
+        from manual_entry import authorize
+        authorize(json.loads(self.config.read_text()), dict(
+            hook_event_name='UserPromptSubmit', session_id='thread-distill-1',
+            cwd=str(self.scope), prompt='/mindie-agent'))
         with patch.object(Path, 'cwd', return_value=self.scope):
             value = bridge.activate('activate')
         self.assertEqual(value['status'], 'active')
@@ -221,6 +228,7 @@ class DistillRegistrationTests(ServiceCase):
         self.assertEqual(generated['knowledge'], checked['knowledge'])
 
     def test_batch_explain_and_distill_options_forward_cleanly(self):
+        self._activate()
         refs = [
             'mindie://mindie/units/unit-batch-a@1',
             'mindie://mindie/units/unit-batch-b@2',
@@ -325,6 +333,7 @@ class DistillRegistrationTests(ServiceCase):
         self.assertFalse(self.marker.exists())
 
     def test_runtime_call_forwards_active_lease_and_distill_timeout(self):
+        self._activate()
         payload = dict(surface='knowledge', name='knowledge_distill',
                        arguments={'inputs': [], 'task_state': 'in_flight'},
                        mindie_session_id='thread-distill-1',
@@ -408,7 +417,7 @@ class DistillRoutingTests(ServiceCase):
         result = gate.call(self._request(10, 'knowledge_distill', {
             'inputs': EVIDENCE, 'task_state': 'verified_milestone'}))
         self.assertTrue(result['isError'])
-        self.assertEqual(result['structuredContent']['execution'], 'outcome_unconfirmed')
+        self.assertEqual(result['structuredContent']['execution'], 'not_started')
         self.assertFalse(self.marker.exists())
 
     def test_in_flight_distill_returns_noop_without_model_call(self):
@@ -465,6 +474,7 @@ class QueryParameterTests(ServiceCase):
             store.close()
 
     def test_query_domain_budget_and_unknown_reach_shared_graded_query(self):
+        self._activate()
         gate = mcp_gate.Gate('knowledge')
         result = gate.call(self._request(20, 'knowledge_query', {
             'query': 'HCCL', 'domain_path': 'ops/ascendc', 'token_budget': 200,
@@ -491,8 +501,15 @@ class ExploreModeTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.config = self.root / 'codex.json'
+        self.admission = self.root / 'admission.sqlite3'
+        self.engine = self.root / 'engine.json'
+        self.engine.write_text(json.dumps(dict(
+            domain='mindie', root=str(self.root / 'data'), admission_path=str(self.admission))))
+        from mindie_knowledge.loop.activation import Admission
+        Admission(self.admission).activate('thread-explore-1', project_root=str(self.root))
         self.config.write_text(json.dumps({
-            'engine_config': {'domain': 'mindie'},
+            'engine_config': str(self.engine), 'admission_path': str(self.admission),
+            'python': sys.executable, 'runtime_scripts': str(SCRIPTS),
         }), encoding='utf-8')
 
     def tearDown(self):

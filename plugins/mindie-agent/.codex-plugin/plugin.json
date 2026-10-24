@@ -1,6 +1,6 @@
 {
   "name": "mindie-agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Domain knowledge and experience feedback for Ascend development",
   "author": {
     "name": "MindIE Agent contributors"
@@ -17,7 +17,7 @@
     "developerName": "MindIE Agent contributors",
     "category": "Productivity",
     "capabilities": [],
-    "defaultPrompt": "Use $mindie-agent:mindie-agent to help with this vLLM-Ascend task."
+    "defaultPrompt": "$mindie-agent:mindie-agent Help with this vLLM-Ascend task."
   },
   "mcpServers": "./.mcp.json"
 }

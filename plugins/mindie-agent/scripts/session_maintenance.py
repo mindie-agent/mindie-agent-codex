@@ -19,6 +19,7 @@ refresh, and diagnostic maintenance.
   diagnostic maintenance under the profile directory.
 """
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -35,6 +36,10 @@ def maintain(config):
     from diagnostic_maintenance import maintain as diagnostics_maintain
     with preparing("diagnostic-maintenance"):
         diagnostics = diagnostics_maintain(config)
+    from mindie_knowledge.loop.activation import Admission
+    if Admission(adapter["admission_path"]).knowledge_lease(os.environ.get("CODEX_THREAD_ID")) is None:
+        print(json.dumps(dict(status="inactive", diagnostics=diagnostics)))
+        return
     from service_client import connect
     with preparing("service-start"):
         connect(adapter["engine_config"])

@@ -2,13 +2,13 @@
 
 <b>中文</b> | <a href="public-transcript.md">English</a> · <a href="README.md">返回文档索引</a>
 
-当用户显式为某个批准的公开项目开启社区贡献后，`mindie-agent-codex` 会从原生 Codex JSONL 会话记录中提取公开对话，在本地执行确定性脱敏并落盘为不可变 Markdown 分块，随后调用隔离小模型生成检索导航索引。
+当当前会话已通过 `/mindie-agent`（或 `$mindie-agent`，即 `entry_enabled = 1`）显式启用，且用户已为该会话所属的批准项目范围（`project_root`）开启社区贡献（`contribute`）时，`mindie-agent-codex` 会在 `Stop` 阶段从原生 Codex JSONL 会话记录中提取公开对话，在本地执行确定性脱敏并落盘为不可变 Markdown 分块，随后调用隔离小模型生成检索导航索引。未调用 `/mindie-agent` 的普通会话在 `Stop` 阶段会直接短路返回，不读取共享配置或会话记录。
 
 ---
 
 ## 1. 确定性的公开消息筛选
 
-- **保留内容**：仅提取当前任务原生 `response_item` 记录中的用户输入、助手公开进展说明（Commentary）与最终回答。
+- **保留内容**：仅提取当前已激活 `/mindie-agent` 会话自激活边界（`max(created_at, activated_at)`）起的原生 `response_item` 记录中的用户输入、助手公开进展说明（Commentary）与最终回答。
 - **剔除内容**：工具调用与返回载荷、隐藏推理过程（Reasoning）、系统与开发者提示词、注入的目录信息、重复包装层以及从父会话继承的 Fork 历史均被确定性剔除。附件占位符绝不会主动拉取外部文件或 URL。
 - **完整性校验**：遇到缺失时间戳、记录损坏或范围不完整时直接报错，绝不静默跳过或推进采集游标。
 
