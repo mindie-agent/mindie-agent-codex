@@ -1,7 +1,7 @@
 """Run each component case once, with public-boundary checks first."""
 from pathlib import Path
 import sys
-import unittest
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -21,9 +21,7 @@ if __name__ == "__main__":
     if missing:
         raise SystemExit("Missing required contract module: " + ", ".join(sorted(missing)))
     ordered = [*FIRST, *sorted(available - set(FIRST))]
-    suite = unittest.TestSuite(
-        unittest.defaultTestLoader.loadTestsFromName("tests." + name)
-        for name in ordered
-    )
-    result = unittest.TextTestRunner(verbosity=2, failfast=False).run(suite)
-    raise SystemExit(0 if result.wasSuccessful() else 1)
+    raise SystemExit(pytest.main([
+        "-q", "--tb=short", "-m", "not live_npu",
+        *(str(ROOT / "tests" / (name + ".py")) for name in ordered),
+    ]))
