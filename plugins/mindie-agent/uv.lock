@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -1267,7 +1267,7 @@ name = "importlib-metadata"
 version = "9.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "zipp", marker = "python_full_version < '3.12'" },
+    { name = "zipp" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6f/7e/1e7e8dc30634b93ebb3d58a3dea569ad146e656218d3960ab04f62047b29/importlib_metadata-9.0.1.tar.gz", hash = "sha256:ab830580bc0ef3db61ce8fae716389e5462b67e033018bab6d8f80ef17172f99", size = 59124, upload-time = "2026-08-28T15:30:34.646Z" }
 wheels = [
@@ -1938,7 +1938,7 @@ wheels = [
 
 [[package]]
 name = "mindie-agent-codex"
-version = "0.1.2"
+version = "0.1.3"
 source = { editable = "." }
 dependencies = [
     { name = "mindie-diagnostics" },
@@ -1949,7 +1949,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=801a01b2789aed7f58e971a909205a7d40b61077" },
-    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=38a42f6f778cfa555d8918fdcacd12cee4a181f5" },
+    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=6e921b205c00d592c25f849653cbfb72b73fe318" },
     { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=0463a13fce9618ec9a51904869d61acb0cdb8538" },
 ]
 
@@ -1960,8 +1960,8 @@ source = { git = "https://github.com/mindie-agent/diagnostics?rev=801a01b2789aed
 
 [[package]]
 name = "mindie-knowledge"
-version = "0.13.3"
-source = { git = "https://github.com/mindie-agent/knowledge?rev=38a42f6f778cfa555d8918fdcacd12cee4a181f5#38a42f6f778cfa555d8918fdcacd12cee4a181f5" }
+version = "0.13.4"
+source = { git = "https://github.com/mindie-agent/knowledge?rev=6e921b205c00d592c25f849653cbfb72b73fe318#6e921b205c00d592c25f849653cbfb72b73fe318" }
 dependencies = [
     { name = "langmem" },
     { name = "mindie-diagnostics" },
@@ -3577,8 +3577,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography", marker = "python_full_version >= '3.15' or sys_platform != 'win32'" },
-    { name = "jeepney", marker = "python_full_version >= '3.15' or sys_platform != 'win32'" },
+    { name = "cryptography" },
+    { name = "jeepney" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [
