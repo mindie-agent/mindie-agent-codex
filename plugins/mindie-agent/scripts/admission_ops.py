@@ -235,8 +235,6 @@ def operation(name, payload):
             )
         if inspected.get('status') == 'inactive':
             return dict(stage='inert', reason='task-revoked')
-        if lease["project_root"] != source["project_root"]:
-            raise ValueError("Stop transcript differs from the manually activated project scope")
         turn = event.get("turn_id")
         if not isinstance(turn, str) or not IDENTITY.fullmatch(turn):
             raise ValueError("invalid hook identity")
