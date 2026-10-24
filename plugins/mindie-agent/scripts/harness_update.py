@@ -423,9 +423,13 @@ def check(config, *, first_install=False, force=False):
                                 source = (Path(env["CODEX_HOME"]) / "plugins/cache/mindie-agent/mindie-agent"
                                           / before["version"])
                                 data = Path(env["CODEX_HOME"]) / "plugins/data/mindie-agent-mindie-agent"
+                                stage = "component_update"
                                 status["components"] = component_check(config, source, data, force=force)
                             status["last_successful_check"] = time.time()
                             status.update(selected)
+                            component_status = status.get("components", {}).get("status")
+                            if component_status in {"deferred", "incomplete"}:
+                                status["status"] = component_status
                             _atomic(status_path, status)
                             return status
                         stage = "release_source"

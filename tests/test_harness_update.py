@@ -406,13 +406,39 @@ class UpdateTests(unittest.TestCase):
         self.assertFalse(update_trigger.due(self.config, 159))
         self.assertTrue(update_trigger.due(self.config, 160))
         maintenance = update_trigger.Maintenance(self.config)
+        self.addCleanup(maintenance.close)
         maintenance.next_attempt = time.time() + 100
         with patch.object(update_trigger, "next_check", side_effect=AssertionError("disk read")):
             maintenance.trigger()
-        self.assertIsNone(maintenance.thread)
+        self.assertTrue(maintenance.thread.is_alive())
+
+    def test_idle_facade_checks_twice_without_another_rpc(self):
+        self.config.write_text(json.dumps(dict(python=sys.executable, runtime_scripts=str(SCRIPTS))))
+        maintenance = update_trigger.Maintenance(self.config)
+        clock, waits = [100.0], []
+
+        def wait(delay):
+            waits.append(delay)
+            clock[0] += delay
+            return len(waits) > 2
+
+        def helper(*args, **kwargs):
+            (self.state / "status.json").write_text(json.dumps(dict(
+                status="up_to_date", last_successful_check=clock[0])))
+            return ProcessResult("completed", '{"status":"up_to_date"}', 0)
+
+        with patch.object(maintenance.cancel, "wait", side_effect=wait), \
+                patch.object(update_trigger.time, "time", side_effect=lambda: clock[0]), \
+                patch.object(update_trigger, "run", side_effect=helper) as run, \
+                patch.object(update_trigger, "runtime_env", return_value={}):
+            maintenance._loop()
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(waits, [0, 300, 300])
+        self.assertEqual(maintenance.next_attempt, 700)
 
     def test_trigger_close_cancels_and_joins_owned_runner(self):
         maintenance = update_trigger.Maintenance(self.config)
+        self.addCleanup(maintenance.close)
         started = threading.Event()
         def wait_for_cancel():
             started.set()
@@ -429,6 +455,7 @@ class UpdateTests(unittest.TestCase):
                 "completed", '{"status":"deferred","reason":"check_busy"}', 0)):
             with self.subTest(outcome=type(outcome).__name__):
                 maintenance = update_trigger.Maintenance(self.config)
+                self.addCleanup(maintenance.close)
                 kwargs = {"side_effect": outcome} if isinstance(outcome, Exception) else {"return_value": outcome}
                 with patch.object(update_trigger, "run", **kwargs) as helper, \
                         patch.object(update_trigger, "runtime_env", return_value={}), \
@@ -438,7 +465,7 @@ class UpdateTests(unittest.TestCase):
                     maintenance.trigger()
                 helper.assert_called_once()
                 self.assertGreater(maintenance.next_attempt, time.time() + 58)
-                self.assertIsNone(maintenance.thread)
+                self.assertTrue(maintenance.thread.is_alive())
 
     def test_nonfinite_timestamp_is_not_a_successful_future_check(self):
         for value in (float("nan"), float("inf"), True):
@@ -451,6 +478,7 @@ class UpdateTests(unittest.TestCase):
         (self.state / "status.json").write_text(json.dumps(dict(
             status="up_to_date", last_successful_check=time.time())))
         maintenance = update_trigger.Maintenance(self.config)
+        self.addCleanup(maintenance.close)
         with patch.object(update_trigger, "read_optional", wraps=update_trigger.read_optional) as read:
             maintenance.trigger()
             read.assert_called_once()
@@ -464,13 +492,14 @@ class UpdateTests(unittest.TestCase):
             for _ in range(10000):
                 maintenance.trigger()
             elapsed = time.perf_counter() - started
-        self.assertIsNone(maintenance.thread)
+        self.assertTrue(maintenance.thread.is_alive())
         print(json.dumps(dict(test="10000_hot_triggers", wall_seconds=elapsed,
                               receipt_reads=0, subprocesses=0, network_requests=0)))
 
     def test_twenty_concurrent_due_triggers_start_one_worker(self):
         self.config.write_text(json.dumps(dict(python=sys.executable, runtime_scripts=str(SCRIPTS))))
         maintenance = update_trigger.Maintenance(self.config)
+        self.addCleanup(maintenance.close)
         barrier = threading.Barrier(20)
         started, release = threading.Event(), threading.Event()
 

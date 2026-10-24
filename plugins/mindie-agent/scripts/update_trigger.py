@@ -5,7 +5,7 @@ Schedules and rate-limits background candidate update checks inside the MCP
 server process without blocking tool calls.
 
 [Invariants]
-- Enforces `CHECK_INTERVAL = 86400`, `FAILURE_BACKOFF = 60`, and
+- Enforces `CHECK_INTERVAL = 300`, `FAILURE_BACKOFF = 60`, and
   `ACTIVATION_BACKOFF = 5`.
 - Never blocks foreground MCP tool execution.
 
@@ -83,20 +83,23 @@ class Maintenance:
         with self.lock:
             if self.cancel.is_set() or self.thread is not None and self.thread.is_alive():
                 return
-            if time.time() < self.next_attempt:
-                return
             try:
-                self.next_attempt = next_check(self.config)
-                if time.time() < self.next_attempt:
-                    return
+                if self.next_attempt <= time.time():
+                    self.next_attempt = next_check(self.config)
             except TimeoutError:
                 raise
             except (OSError, ValueError):
                 # Let the selected helper report a damaged maintenance receipt;
                 # it must not block unrelated business at this trigger boundary.
                 pass
-            self.thread = threading.Thread(target=self._run, name="mindie-release-check")
+            self.thread = threading.Thread(target=self._loop, name="mindie-release-check")
             self.thread.start()
+
+    def _loop(self):
+        # Keep polling while the native facade is open, including idle periods.
+        # One cancellable wait owns scheduling; foreground calls only coalesce.
+        while not self.cancel.wait(max(0, self.next_attempt - time.time())):
+            self._run()
 
     def _run(self):
         failed = False
