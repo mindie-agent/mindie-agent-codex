@@ -159,7 +159,7 @@
         "scripts/native_entry.py:write_manifests"
       ],
       "test_ids": [
-        "tests/test_locked_runtime.py::RuntimeTests.test_native_startup_window_covers_installation_without_changing_tool_timeouts"
+        "tests/test_locked_runtime.py::RuntimeTests.test_native_startup_and_component_call_windows_cover_inner_budgets"
       ],
       "evidence_refs": [
         "docs/harness-interfaces.md#native-turn-interruption",
