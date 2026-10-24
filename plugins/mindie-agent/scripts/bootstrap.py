@@ -163,9 +163,23 @@ def _baseline_runtime(source, data):
                         "fd=os.open(sys.argv[1],os.O_WRONLY|os.O_APPEND);"
                         "os.dup2(fd,1);os.dup2(fd,2);os.close(fd);"
                         "sys.exit(subprocess.run(sys.argv[2:]).returncode)")
-            run([sys.executable, "-I", "-c", redirect, log, uv, "sync",
-                 "--project", str(source), "--locked", "--no-editable", "--no-dev",
-                 "--python", sys.executable], "", timeout=budget(540, 255), env=env).checked_stdout()
+            # Build backends may write build/ and *.egg-info into the project.
+            # Native hook trust hashes the installed plugin payload, so even a
+            # noneditable build must operate outside that published payload.
+            project = release / "build"
+            if project.exists():
+                shutil.rmtree(project)
+            project.mkdir()
+            try:
+                for path in package_files(source):
+                    target = project / path.relative_to(source)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(path, target)
+                run([sys.executable, "-I", "-B", "-c", redirect, log, uv, "sync",
+                     "--project", str(project), "--locked", "--no-editable", "--no-dev",
+                     "--python", sys.executable], "", timeout=budget(540, 255), env=env).checked_stdout()
+            finally:
+                shutil.rmtree(project)
             Path(log).unlink()
         with preparing("installed-readback"):
             scripts = readback(python, source)

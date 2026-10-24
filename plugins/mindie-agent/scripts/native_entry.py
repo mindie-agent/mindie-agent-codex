@@ -10,7 +10,7 @@ UserPromptSubmit, Stop, Interrupt and the MCP servers.
 - `Interrupt` dispatches `mindie_interrupt` with exact `thread_id`/`turn_id` to both MCP servers (`timeout=3s`).
 
 [Timeouts & Locks]
-- MCP `startup_timeout_sec=1000` covers first-use `uv` sync and shared preparation lock without altering tool-call deadlines.
+- MCP `startup_timeout_sec=1080` covers first-use `uv` sync and shared preparation lock without altering tool-call deadlines.
 
 [Side-Effect Policy]
 - Importing this module is side-effect free; `write_manifests(root)` updates `hooks/hooks.json` and `.mcp.json`.
@@ -28,7 +28,7 @@ def launcher_code(version, *, name="mindie-agent", marketplace="mindie-agent"):
 def command_args(version, role, **names):
     return ["uv", "--native-tls", "run", "--no-project",
             *(["--offline", "--no-python-downloads"] if role == "stop" else []),
-            "--python", "3.13", "python",
+            "--python", "3.13", "python", "-B",
             "-c", launcher_code(version, **names), role]
 
 
@@ -113,7 +113,7 @@ def neutral_hook_commands(argv, *, failure="MindIE Stop helper failed; capture c
 def hook_commands(role, **names):
     arguments = ["uv", "--native-tls", "run", "--no-project",
                  *(["--offline", "--no-python-downloads"] if role == "stop" else []),
-                 "--python", "3.13", "python", "-c", hook_launcher_code(**names), role]
+                 "--python", "3.13", "python", "-B", "-c", hook_launcher_code(**names), role]
     if role == "user-prompt-submit":
         # Preserve the hook's one JSON response: only an explicit entry may
         # attach knowledge context. Ordinary prompts emit exactly {}.

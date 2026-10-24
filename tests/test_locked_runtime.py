@@ -300,15 +300,16 @@ class RuntimeTests(unittest.TestCase):
 
             def synthetic_installer(command, payload, **kwargs):
                 calls.append(command)
-                self.assertEqual(command[1:3], ["-I", "-c"])
+                prefix_end = command.index("-c") + 3
                 key = bootstrap.runtime_key(SCRIPTS.parent)
                 runtime = data / "runtimes" / (key[:24] if os.name == "nt" else key)
                 self.assertEqual(kwargs["env"]["UV_PROJECT_ENVIRONMENT"], str(runtime))
                 self.assertEqual(kwargs["env"]["UV_NATIVE_TLS"], "true")
-                log = command[4]
+                log = Path(command[prefix_end - 1])
+                self.assertTrue(log.is_relative_to(data))
                 # Exercise the actual descriptor redirection and owned runner;
                 # replace only uv's executable/args with a no-network process.
-                actual = [*command[:5], sys.executable, "-c",
+                actual = [*command[:prefix_end], sys.executable, "-c",
                           "import sys;print('PRIVATE_INSTALL_DETAIL',file=sys.stderr);raise SystemExit(17)"]
                 return run(actual, payload, **kwargs)
 
@@ -324,7 +325,7 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(len(list(data.rglob("prepare-*.log"))), 1)
             self.assertIn("PRIVATE_INSTALL_DETAIL", next(data.rglob("prepare-*.log")).read_text())
             self.assertEqual(list(data.rglob("runtime.json")), [])
-            self.assertEqual(list(data.rglob("entry.py")), [])
+            self.assertEqual(list(data.glob("releases/*/entry.py")), [])
 
     @unittest.skipUnless(os.name == "posix", "POSIX signal owner-death contract")
     def test_bootstrap_owner_death_stops_installer_and_build_before_ready(self):
@@ -359,7 +360,7 @@ class RuntimeTests(unittest.TestCase):
                     f"sys.path.insert(0,{str(SCRIPTS)!r});import bootstrap;"
                     "owned=bootstrap.run;"
                     "bootstrap.shutil.which=lambda _:sys.executable;"
-                    f"bootstrap.run=lambda argv,payload,**kwargs:owned([*argv[:5],sys.executable,'-c',{installer!r}],payload,**kwargs);"
+                    f"bootstrap.run=lambda argv,payload,**kwargs:owned([*argv[:argv.index('-c')+3],sys.executable,'-c',{installer!r}],payload,**kwargs);"
                     f"bootstrap.ensure_runtime(Path({str(SCRIPTS.parent)!r}),Path({str(data)!r}))"
                 )
                 with owned_fixture_process(
@@ -388,7 +389,7 @@ class RuntimeTests(unittest.TestCase):
                                         self.fail("installer/build survived bootstrap owner death")
                                     time.sleep(.01)
                         self.assertEqual(list(data.rglob("runtime.json")), [])
-                        self.assertEqual(list(data.rglob("entry.py")), [])
+                        self.assertEqual(list(data.glob("releases/*/entry.py")), [])
                         self.assertEqual(len(list(data.rglob("prepare-*.log"))), 1)
                     finally:
                         # Only this fixture's owned group is eligible cleanup;

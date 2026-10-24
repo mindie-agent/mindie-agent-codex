@@ -212,7 +212,7 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
         result = None
         try:
             result = run(["uv", "run", "--no-project", "--python", "3.13", "python",
-                          "-I", "-c", code, str(source), str(data)], "", env=env, timeout=1800.0)
+                          "-I", "-B", "-c", code, str(source), str(data)], "", env=env, timeout=1800.0)
             runtime = json.loads(result.checked_stdout())
             if (not isinstance(runtime, dict) or set(runtime) != {"python", "scripts", "release"}
                     or any(not isinstance(value, str) or not Path(value).is_absolute()
