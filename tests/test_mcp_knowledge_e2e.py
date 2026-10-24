@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -118,7 +119,7 @@ class McpKnowledgeEndToEndTests(unittest.TestCase):
                 summary="Diagnose and resolve HCCL_CONNECT_TIMEOUT on Ascend 910B RoCEv2.",
                 content=(
                     "Verify HCCL_IF_IP and ranktable device NIC mappings with "
-                    "hccn_tool -i 0 -ip -g when HCCL ring initialization times out."
+                    "hccn_tool -i 0 -ip -g when HCCL ring initialization times out. 检查网卡映射。"
                 ),
                 conditions={"chip": "910b"},
             )
@@ -233,9 +234,17 @@ class McpKnowledgeEndToEndTests(unittest.TestCase):
         self.assertFalse(query["isError"], query)
         first = query["structuredContent"]["results"][0]
         self.assertEqual(first["entry_id"], self.seeded["entry_id"])
-        explain = invoke("knowledge_explain", {"ref": first["ref"]})
+        process = subprocess.run(
+            [sys.executable, str(SCRIPTS / "knowledge_cli.py"), "knowledge_explain"],
+            input=json.dumps({"ref": first["ref"]}).encode("utf-8"),
+            capture_output=True, timeout=15,
+            env=dict(os.environ, PYTHONIOENCODING="cp1252", PYTHONUTF8="0"),
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        explain = json.loads(process.stdout)
         self.assertFalse(explain["isError"], explain)
         self.assertIn("hccn_tool", explain["structuredContent"]["content"])
+        self.assertIn("检查网卡映射", explain["structuredContent"]["content"])
 
 
 if __name__ == "__main__":

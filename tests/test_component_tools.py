@@ -32,7 +32,7 @@ def component_gate(tmp_path, monkeypatch):
     config.write_text(json.dumps(dict(
         python=sys.executable, runtime_scripts=str(SCRIPTS),
         engine_config="/must-not-read/knowledge.json",
-        component_commands={name: [sys.executable, "-I", str(entry), paths, module]
+        component_commands={name: [sys.executable, "-I", "-X", "utf8", str(entry), paths, module]
                             for name, module in modules.items()},
     )))
     monkeypatch.setenv("MINDIE_AGENT_CONFIG", str(config))

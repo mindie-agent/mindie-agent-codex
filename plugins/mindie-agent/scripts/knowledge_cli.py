@@ -46,7 +46,8 @@ def main(argv=None):
         result = invoke(argv[0], arguments)
     except Exception as exc:
         result = call_failure(exc)
-    print(json.dumps(result, ensure_ascii=False))
+    sys.stdout.buffer.write((json.dumps(result, ensure_ascii=False) + "\n").encode("utf-8"))
+    sys.stdout.buffer.flush()
     return int(result.get("isError") is True)
 
 

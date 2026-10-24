@@ -46,7 +46,7 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 
 默认 MCP 工具目录不含 knowledge 的名称、描述和参数。手动入口启用当前聊天后，Skill 通过私有 `knowledge_cli.py` 加载 schema 并调用相同知识引擎；另一个聊天的启用不会改变共享工具目录。`npu-top` 是面向人的监控看板，不暴露为 Agent 工具。
 
-`mindie-tools` 复用组件现有 CLI，不复制解析与计算逻辑。profiler、sim 和 coordinator 是独立安装的组件，默认查找 PATH 上的对应 `mindie-*` 可执行程序；缺少组件时调用明确失败，不自动安装。若使用独立虚拟环境，可在适配器配置中设置 `component_commands`，例如 `"profiler": ["/absolute/venv/bin/python", "-I", "-m", "mindie_profiler"]`。本地 diagnostics 使用插件锁定的解释器。所有调用保留退出码和原始输出，大报告使用组件的 `--output` 参数写文件。
+`mindie-tools` 复用组件现有 CLI，不复制解析与计算逻辑。profiler、sim 和 coordinator 是独立安装的组件，默认查找 PATH 上的对应 `mindie-*` 可执行程序；缺少组件时调用明确失败，不自动安装。若使用独立虚拟环境，可在适配器配置中设置 `component_commands`，例如 `"profiler": ["/absolute/venv/bin/python", "-I", "-X", "utf8", "-m", "mindie_profiler"]`。本地 diagnostics 使用插件锁定的解释器。所有调用保留退出码和原始输出，大报告使用组件的 `--output` 参数写文件。
 
 ### 场景 1：输入 `/mindie-agent`（或 `$mindie-agent`）唤醒知识库与 Skill 辅助设计、开发与测试（手动触发）
 > **痛点**：在昇腾上设计新特性、开发 `AscendC` / `Triton` 算子或编写 `vLLM-Ascend` 测试时，在海量文档和 Issue 里翻找架构规范、算子约束与适用条件非常耗时。  

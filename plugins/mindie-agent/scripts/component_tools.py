@@ -91,7 +91,7 @@ def command(adapter, component):
             raise ValueError("component_commands must contain nonempty executable argv arrays")
         return configured
     if component == "diagnostics":
-        return [adapter["python"], "-I", "-m", "mindie_diagnostics.cli"]
+        return [adapter["python"], "-I", "-X", "utf8", "-m", "mindie_diagnostics.cli"]
     executable = shutil.which("mindie-" + component)
     if executable is None:
         raise FileNotFoundError(
