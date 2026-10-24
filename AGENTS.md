@@ -1,6 +1,6 @@
 # MindIE Agent — Codex Native Harness Plugin (`mindie-agent-codex`)
 
-This repository implements the **Codex Native Harness Plugin** (`plugins/mindie-agent/`) for MindIE Agent. It bridges the Codex CLI host lifecycle (Hooks, Skills, and stdio MCP server) to the shared runtime components (`mindie_knowledge`, `remote_dev`, `mindie_diagnostics`, `npu_top`, and `coordinator`) without duplicating core domain engines.
+This repository implements the **Codex Native Harness Plugin** (`plugins/mindie-agent/`) for MindIE Agent. It bridges the Codex CLI host lifecycle (Hooks, Skills, and stdio MCP server) to shared knowledge and deterministic remote-dev, diagnostics, profiler, sim and coordinator components without duplicating core domain engines. The human-facing `npu-top` dashboard is not an Agent tool.
 
 ---
 
@@ -16,7 +16,7 @@ All plugin scripts live under `plugins/mindie-agent/scripts/` and include standa
 | | `manual_entry.py` | Handles explicit `/mindie-agent` and `$mindie-agent` (`$mindie-agent:mindie-agent`) gestures on `UserPromptSubmit` for main sessions (`not event.get("agent_id")`), granting `Admission.activate` (`entry_enabled=1`) or revoking registered domain leases on `/mindie-agent deactivate`. |
 | | `bridge.py` | CLI & Hook dispatcher for `activate` (requires prior `UserPromptSubmit` `knowledge_lease`), `deactivate`, `status` (factual control-plane status without onboarding prompts), `config`, `history-import`, `recover`, `shutdown`, and `stop` capture. Returns `status="degraded"` when capture fails so active leases stay intact. |
 | | `session_gate.py` / `admission_ops.py` | Entry-bound task lease management backed by `mindie_knowledge.loop.activation.Admission` (`knowledge_lease` / `entry_enabled=1`) under `update_lock`. |
-| **MCP Server & Receipts** | `mcp_gate.py` / `remote_bridge.py` | Stdio JSON-RPC MCP server exposing knowledge and `remote_dev` tools (`mcp_catalog.json`), backed by SQLite WAL `RemoteReceipts`. |
+| **MCP Server & Receipts** | `mcp_gate.py` / `remote_bridge.py` / `component_tools.py` | Public stdio MCP discovery exposes remote-dev and deterministic components. Knowledge schemas stay private to `knowledge_cli.py` after manual entry. Remote calls use SQLite WAL `RemoteReceipts`. |
 | | `receipt_layout.py` | Resolves `<config>.remote-receipts.sqlite3` and cleans up legacy sidecar artifacts. |
 | | `runtime_call.py` | Verifies `Admission.knowledge_lease(session_id)` (`entry_enabled=1`, raising `KnowledgeInactive` when unactivated) and executes one authorized knowledge tool call inside the configured runtime without silent request replay. |
 | **Diagnostics & Transcript** | `agent_diagnostics.py` | Stdlib-only diagnostic event capture (`<config>.diagnostics/pending.sqlite3` with WAL + `busy_timeout=5000`). |
@@ -39,7 +39,7 @@ Codex Host Hook (SessionStart / UserPromptSubmit / Stop) ──► native_entry 
 Codex Host MCP Client (stdio JSON-RPC) ──► native_entry inline command
   └─► bootstrap.py ──► mcp_gate.py
         ├─► RemoteReceipts (<config>.remote-receipts.sqlite3, WAL + busy_timeout=5000)
-        ├─► runtime_call.py (knowledge tools; requires Admission.knowledge_lease)
+        ├─► component_tools.py (profiler, sim, coordinator and local diagnostics)
         └─► remote_dev.mcp.server (remote-dev tools; available without /mindie-agent)
 ```
 
@@ -49,6 +49,7 @@ Codex Host MCP Client (stdio JSON-RPC) ──► native_entry inline command
 
 1. **Passive Default (No Implicit Hijacking)**:
    - Mere plugin installation, `SessionStart`, saved contribution consent, or MCP `tools/list` discovery **never** activates a knowledge lease (`entry_enabled=1`), starts the background knowledge service, syncs feeds, or captures transcripts.
+   - Default MCP discovery contains no knowledge names, descriptions or schemas, even if another task has activated knowledge. Manual Skill entry uses `knowledge_cli.py`; execution still enforces the session grant.
    - Ordinary prompts without `/mindie-agent` or `$mindie-agent` short-circuit immediately on `UserPromptSubmit` (`entry.py` emits `{}` before resolving the profile).
    - `SessionStart` (`session_maintenance.py`) runs `diagnostic_maintenance` and returns `{"status": "inactive", "diagnostics": ...}` whenever `Admission.knowledge_lease(CODEX_THREAD_ID)` is `None`.
 2. **Explicit `/mindie-agent` Entry (`UserPromptSubmit` + `bridge activate`)**:
@@ -59,7 +60,7 @@ Codex Host MCP Client (stdio JSON-RPC) ──► native_entry inline command
    - If capture fails on an active session, `bridge.py` records a diagnostic reference and returns `status="degraded"` (keeping the session lease active).
 4. **MCP Tool Gating & Receipt Accounting (`mcp_gate.py`)**:
    - Deterministic `remote-dev` tools and factual `bridge.py status` checks remain available in ordinary sessions without `/mindie-agent`.
-   - All `knowledge_*` MCP tools (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`) check `Admission.knowledge_lease(session_id)` in `runtime_call.py` and fail with `KnowledgeInactive` (`code="knowledge_inactive"`) unless the current session was manually enabled via `/mindie-agent` or `$mindie-agent`.
+   - Private `knowledge_*` calls (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`) check `Admission.knowledge_lease(session_id)` in `runtime_call.py` and fail with `KnowledgeInactive` (`code="knowledge_inactive"`) unless the current session was manually enabled via `/mindie-agent` or `$mindie-agent`.
    - **Receipt Honesty Invariant**: Once a remote tool execution succeeds (`done=True`), if local SQLite receipt persistence (`finish()`) raises an `OSError`/`sqlite3.Error`, `mcp_gate.py` attaches `receipt_warning` + `diagnostic_ref` to `structuredContent` and **never** flips `isError=True` on the succeeded remote result.
 
 ---

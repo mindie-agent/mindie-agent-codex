@@ -223,6 +223,20 @@ class McpKnowledgeEndToEndTests(unittest.TestCase):
         self.assertTrue(denied["isError"])
         self.assertEqual(denied["structuredContent"]["code"], "knowledge_inactive")
 
+    def test_private_skill_entry_queries_and_reads_the_real_service(self):
+        from knowledge_cli import invoke
+        from manual_entry import authorize
+        authorize(json.loads(self.config.read_text()), dict(
+            hook_event_name="UserPromptSubmit", session_id="thread-e2e-1",
+            cwd=str(self.scope), prompt="/mindie-agent"))
+        query = invoke("knowledge_query", {"query": "HCCL ring initialization timeout", "limit": 5})
+        self.assertFalse(query["isError"], query)
+        first = query["structuredContent"]["results"][0]
+        self.assertEqual(first["entry_id"], self.seeded["entry_id"])
+        explain = invoke("knowledge_explain", {"ref": first["ref"]})
+        self.assertFalse(explain["isError"], explain)
+        self.assertIn("hccn_tool", explain["structuredContent"]["content"])
+
 
 if __name__ == "__main__":
     unittest.main()

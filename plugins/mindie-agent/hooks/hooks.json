@@ -42,7 +42,7 @@
         "hooks": [
           {
             "type": "mcp_tool",
-            "server": "mindie-knowledge",
+            "server": "mindie-remote-dev",
             "tool": "mindie_interrupt",
             "input": {
               "thread_id": "${session_id}",
@@ -53,7 +53,7 @@
           },
           {
             "type": "mcp_tool",
-            "server": "mindie-remote-dev",
+            "server": "mindie-tools",
             "tool": "mindie_interrupt",
             "input": {
               "thread_id": "${session_id}",

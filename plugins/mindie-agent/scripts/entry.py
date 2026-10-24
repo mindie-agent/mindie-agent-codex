@@ -1,7 +1,7 @@
 """Execute this installed release; no native mutation or current-generation selector.
 
 [Role]
-Fixed release entrypoint (`releases/<version>/entry.py`) that validates `runtime.json` and `codex.json`, initializes the default profile on first `session-start`/MCP launch, and dispatches `session-start`, `stop`, `knowledge-mcp`, `remote-mcp`, `sync`, `configure`, `status`, or `bridge`.
+Fixed release entrypoint (`releases/<version>/entry.py`) that validates `runtime.json` and `codex.json`, initializes the default profile on first `session-start`/MCP launch, and dispatches `session-start`, `stop`, `knowledge-mcp`, `remote-mcp`, `tools-mcp`, `sync`, `configure`, `status`, or `bridge`.
 
 [Invariants]
 - `stop` never prepares an unconfigured installation and snapshots the active `adapter` binding before reading stdin.
@@ -124,8 +124,9 @@ def dispatch(args, config, *, stop_adapter=None):
     else:
         target, arguments = {'stop': ('bridge.py', ['stop']),
                              'knowledge-mcp': ('bridge.py', ['mcp']),
+                             'tools-mcp': ('mcp_gate.py', ['components']),
                              'remote-mcp': ('remote_bridge.py', [])}[args.role]
-    if args.role in {"knowledge-mcp", "remote-mcp"} or (
+    if args.role in {"knowledge-mcp", "remote-mcp", "tools-mcp"} or (
             args.role == "bridge" and remaining[:1] == ["mcp"]):
         # This stable facade owns the native protocol. Each tools/call
         # dispatches the complete selected helper under the operation lock.
@@ -153,7 +154,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--release', type=Path, required=True)
     parser.add_argument('--source', type=Path)
-    parser.add_argument('role', choices=['session-start', 'user-prompt-submit', 'stop', 'knowledge-mcp', 'remote-mcp', 'sync', 'configure', 'status', 'bridge'])
+    parser.add_argument('role', choices=['session-start', 'user-prompt-submit', 'stop', 'knowledge-mcp', 'remote-mcp', 'tools-mcp', 'sync', 'configure', 'status', 'bridge'])
     parser.add_argument('arguments', nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.role == 'user-prompt-submit':

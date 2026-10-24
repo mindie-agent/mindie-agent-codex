@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.4-0F766E.svg" alt="Release v0.1.4"></a>
+  <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.7-0F766E.svg" alt="Release v0.1.7"></a>
   <a href="plugins/mindie-agent/harness-compatibility.json"><img src="https://img.shields.io/badge/Codex_CLI-0.153.4_%7C_0.162.0--alpha.17.2-10A37F.svg" alt="Codex CLI 0.153.4 | 0.162.0-alpha.17.2"></a>
   <a href="plugins/mindie-agent/pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
@@ -27,7 +27,7 @@
 
 ---
 
-**MindIE Agent for OpenAI Codex CLI** (`mindie-agent-codex`) is the native OpenAI Codex CLI plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release `v0.1.4` (paired with `mindie-agent 0.1.1`) delivers three core capabilities: **local and community knowledge base retrieval with privacy redaction** (focused on `vLLM-Ascend` feature development and `AscendC` / `Triton` kernel engineering), **remote SSH / Docker development and NPU inspection**, and **unified fault diagnostics with sanitized reporting**; additional Ascend software domains are tracked on the project roadmap.
+**MindIE Agent for OpenAI Codex CLI** (`mindie-agent-codex`) is the native OpenAI Codex CLI plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release `v0.1.7` (paired with `mindie-agent 0.1.1`) delivers three core capabilities: **local and community knowledge base retrieval with privacy redaction** (focused on `vLLM-Ascend` feature development and `AscendC` / `Triton` kernel engineering), **remote SSH / Docker development and NPU inspection**, and **unified fault diagnostics with sanitized reporting**; additional Ascend software domains are tracked on the project roadmap.
 
 Designed around the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md), **domain knowledge and the Skill system are invoked manually on demand via `/mindie-agent` (or `$mindie-agent`)** so they never interfere with unrelated tasks, while **`mindie-remote-dev` remote NPU development and testing tools trigger automatically by default** in everyday conversation—keeping all errors and uncertain external effects explicitly visible to the caller.
 
@@ -41,7 +41,12 @@ MindIE Agent combines **manual on-demand activation for domain knowledge & skill
 | :--- | :--- | :--- | :--- |
 | **Experience, Knowledge & Skill System**<br/>(`mindie-knowledge` + `mindie-agent` Skill) | **🎯 Manual Per-Session Trigger** | When designing Ascend AI Infra features, developing in `vLLM-Ascend`, writing `AscendC` / `Triton` kernels, authoring unit/accuracy tests, or tuning performance | Explicitly type **`/mindie-agent` (or `$mindie-agent`) + your task description** once in the current session to enable knowledge search, feedback, distillation, and sync across subsequent turns (`$mindie-agent` / `/mindie-agent deactivate` turns it off for the session) |
 | **Remote Ascend NPU Dev & Testing**<br/>(`mindie-remote-dev` MCP toolset + factual status) | **⚡ Default Auto-Trigger** | When syncing local code/tests to a remote Ascend server/container, running NPU builds/tests, checking `npu-smi`, or streaming long job logs | **No `/mindie-agent` command needed**—just describe the remote task in natural language |
+| **Profiling, simulation, resource coordination and local diagnostics**<br/>(`mindie-tools` MCP) | **Discoverable by default** | Use installed profiler, sim and coordinator components, inspect local diagnostics or export a support bundle | Call `profiler`, `sim`, `coordinator`, `diagnostics_status` or `diagnostics_bundle` without knowledge activation |
 | **Engineering Experience Loop**<br/>(`Stop` Auto-Capture + Gitleaks Redaction) | **🔄 Background Run in Enabled Sessions** | When contributing sanitized design, kernel development, testing, or tuning takeaways back to the open-source knowledge base | **Configure Consent Once, Active in `/mindie-agent` Sessions**—once contribution is enabled in setup, every `/mindie-agent`-enabled session is automatically redacted and packaged into a knowledge PR in the background; unactivated sessions perform zero `Stop` capture |
+
+Default MCP discovery excludes knowledge tool names, descriptions and schemas. After manual activation, the Skill loads them through private `knowledge_cli.py` and calls the same knowledge engine. One chat's activation never changes the shared tool catalog. The human-facing `npu-top` dashboard is not an Agent tool.
+
+`mindie-tools` delegates to existing component CLIs without duplicating their parsers or computations. Install profiler, sim and coordinator independently; their `mindie-*` executables are resolved on PATH. Missing components fail explicitly and are never installed automatically. For separate virtual environments, the adapter may provide `component_commands`, for example `"profiler": ["/absolute/venv/bin/python", "-I", "-m", "mindie_profiler"]`. Local diagnostics uses the plugin's pinned interpreter. Calls preserve exit codes and original output; write large reports with the component's `--output` option.
 
 ### Scenario 1: Type `/mindie-agent` (or `$mindie-agent`) for Feature Design, Kernel Development & Test Authoring (Manual Trigger)
 > **The Problem**: Designing new Ascend features, implementing `AscendC` / `Triton` operators, or writing `vLLM-Ascend` accuracy tests often requires domain-specific architecture conventions, kernel constraints, and verified test patterns.  
@@ -108,7 +113,7 @@ If you are an AI Agent asked by the user to install this plugin, execute the fol
 
 3. **Add the plugin marketplace and install `mindie-agent`**:
    ```sh
-   codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.1.4
+   codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.1.7
    codex plugin add mindie-agent@mindie-agent --json
    ```
 
@@ -116,8 +121,8 @@ If you are an AI Agent asked by the user to install this plugin, execute the fol
    ```sh
    codex plugin list --json
    ```
-   - Confirm `codex plugin list --json` shows `mindie-agent@mindie-agent` version `0.1.4` enabled in the active profile.
-   - Report the verified GitHub account (`$GH_USER`), and inform the user that starting a new native Codex session will trigger `SessionStart` and MCP initialization (building the isolated locked runtime under `PLUGIN_DATA` via `uv sync --locked --no-editable`, with an initial cold-start window of up to 10 minutes) and expose both `mindie-knowledge` and `mindie-remote-dev`.
+   - Confirm `codex plugin list --json` shows `mindie-agent@mindie-agent` version `0.1.7` enabled in the active profile.
+   - Report the verified GitHub account (`$GH_USER`), and inform the user that starting a new native Codex session will trigger `SessionStart` and MCP initialization (building the isolated locked runtime under `PLUGIN_DATA` via `uv sync --locked --no-editable`, with an initial cold-start window of up to 10 minutes) and expose `mindie-remote-dev` and `mindie-tools`; knowledge interfaces are loaded only by manual entry.
 
    Continue with step 5 after verification, then report the complete setup result.
 
@@ -134,7 +139,7 @@ To install manually from a macOS / Linux / WSL shell or native Windows PowerShel
 
 ```sh
 gh api --hostname github.com user --jq .login && gh auth setup-git --hostname github.com && \
-codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.1.4 && \
+codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.1.7 && \
 codex plugin add mindie-agent@mindie-agent --json && \
 codex plugin list --json
 ```
@@ -160,7 +165,7 @@ MindIE Agent routes interactive commands through **a single unified entrypoint: 
 
 ### Silent Updates, Uninstall & Known Limitations
 
-- **Silent Compatible Updates**: A background maintenance thread checks asynchronously for both the highest compatible plugin Release and formal GitHub Releases of shared runtime components from their official repositories (see [`docs/releases/mindie-agent-codex-0.1.4.en.md`](docs/releases/mindie-agent-codex-0.1.4.en.md)), builds a side-by-side locked `uv` runtime outside the operation lock, runs a model-free API probe, and retires the idle service before atomically publishing the binding (never starting a knowledge worker during updates and preserving your saved unified contribution setting and per-session manual `/mindie-agent` gate).
+- **Silent Compatible Updates**: A background maintenance thread checks asynchronously for both the highest compatible plugin Release and formal GitHub Releases of shared runtime components from their official repositories (see [`docs/releases/mindie-agent-codex-0.1.7.en.md`](docs/releases/mindie-agent-codex-0.1.7.en.md)), builds a side-by-side locked `uv` runtime outside the operation lock, runs a model-free API probe, and retires the idle service before atomically publishing the binding (never starting a knowledge worker during updates and preserving your saved unified contribution setting and per-session manual `/mindie-agent` gate).
 - **Safe Uninstall**: Close active sessions using the plugin and remove it via native Codex CLI:
   ```sh
   codex plugin remove mindie-agent@mindie-agent --json
@@ -204,7 +209,7 @@ uv run --project plugins/mindie-agent --no-sync python tests/preflight.py
 uv run --project plugins/mindie-agent --no-sync python -m unittest discover -s tests -p 'test_*.py'
 ```
 
-- **Release Microbenchmark**: Each `0.1.4` plugin release attaches `benchmark-results.json` and `benchmark-results.md` measuring the `public-transcript` public-message parsing and hidden-reasoning filtering workload ([`benchmarks/release.json`](benchmarks/release.json)) in `us/op`. This serves as a reproducible CPU microbenchmark baseline, distinct from live A2/A3 NPU acceptance and end-to-end Agent productivity evaluation.
+- **Release Microbenchmark**: Each `0.1.7` plugin release attaches `benchmark-results.json` and `benchmark-results.md` measuring the `public-transcript` public-message parsing and hidden-reasoning filtering workload ([`benchmarks/release.json`](benchmarks/release.json)) in `us/op`. This serves as a reproducible CPU microbenchmark baseline, distinct from live A2/A3 NPU acceptance and end-to-end Agent productivity evaluation.
 
 ---
 

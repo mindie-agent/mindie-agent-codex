@@ -1,12 +1,14 @@
 """Static discovery plus host-identity-bound, bounded, one-shot runtime calls.
 
 [Role]
-Implements the JSON-RPC MCP server gate (`Gate`, `serve`) for both `knowledge` and `remote` surfaces, including native `mindie_interrupt` cancellation and `RemoteReceipts` replay protection.
+Implements the JSON-RPC MCP server gate (`Gate`, `serve`) for public `remote`/`components` and private `knowledge` surfaces, including native `mindie_interrupt` cancellation and `RemoteReceipts` replay protection.
 
 [Invariants]
 - Remote tools are available to any native Codex task without a knowledge lease, scoped by `REMOTE_DEV_SESSION_ID`.
 - Every knowledge tool requires this task's explicit manual-entry grant;
   distillation additionally requires the selected target's capture lease.
+- Knowledge schemas are private to the manual Skill entry, never MCP discovery.
+- Deterministic component tools need native identity but no knowledge lease.
 - When a remote operation has already succeeded (`outcome == "succeeded"`), a local receipt-accounting failure NEVER overwrites the business result with `isError=True` (`receipt_unconfirmed=True` is attached instead).
 
 [Timeouts & Locks]
@@ -372,7 +374,11 @@ class Gate:
     def __init__(self, surface):
         self.surface = surface
         self.sessions = Sessions() if surface == "knowledge" else None
-        self.tools = json.loads(CATALOG.read_text(encoding='utf-8'))[surface]
+        if surface == "components":
+            from component_tools import catalog
+            self.tools = catalog()
+        else:
+            self.tools = json.loads(CATALOG.read_text(encoding='utf-8'))[surface]
         self.connection_id = uuid.uuid4().hex
         self._remote_receipts = {}
         self.config = config_path()
@@ -391,6 +397,10 @@ class Gate:
                 # Discovery creates no capture state. Task identity comes from
                 # the native metadata or the trusted CLI, never tool arguments.
                 session = native_identity(request) if cli_identity is None else cli_identity[0]
+                if self.surface == "components":
+                    from component_tools import execute
+                    name, arguments = self._tool_args(request)
+                    return execute(name, arguments, session, cancel=cancel, timeout=timeout)
                 return self._call(request, session, cancel, timeout=timeout)
         except Exception as exc:
             return call_failure(exc)
@@ -675,7 +685,9 @@ def serve(surface):
                 elif method == "ping":
                     respond(identifier, {})
                 elif method == "tools/list":
-                    respond(identifier, dict(tools=gate.tools))
+                    # A shared MCP connection cannot publish one chat's private
+                    # grant to all other chats. Manual entry uses knowledge_cli.
+                    respond(identifier, dict(tools=[] if surface == "knowledge" else gate.tools))
                 elif method == "tools/call":
                     if (message.get("params") or {}).get("name") == INTERRUPT_TOOL:
                         try:
@@ -730,3 +742,9 @@ def serve(surface):
             for event, _ in pending.values():
                 event.set()
         executor.shutdown(wait=True)
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] != ["components"]:
+        raise SystemExit("expected components MCP surface")
+    serve("components")
