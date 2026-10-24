@@ -1000,6 +1000,10 @@
           "full_path": {
             "type": "boolean",
             "description": "Match pattern against full relative path instead of filename (Antigravity FullPath habit)."
+          },
+          "hidden": {
+            "type": "boolean",
+            "description": "Include dotfiles and hidden directories (native Claude/Kimi Glob); VCS metadata directories remain caller-excluded."
           }
         },
         "required": [
@@ -1170,6 +1174,14 @@
             "minimum": 0,
             "maximum": 100000,
             "description": "Maximum lines/entries after offset. 0 means no match-count limit for native Kimi Grep."
+          },
+          "sort_by_mtime": {
+            "type": "boolean",
+            "description": "Sort files_with_matches by modification time descending before pagination (native Claude/Kimi Grep); canonical callers leave it unset."
+          },
+          "require_rg": {
+            "type": "boolean",
+            "description": "Fail explicitly when ripgrep is unavailable instead of using the grep fallback (native Claude/Kimi Grep semantics depend on rg ignore/hidden handling)."
           }
         },
         "required": [
