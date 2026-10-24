@@ -11,7 +11,7 @@ dependencies = ["mindie-knowledge", "remote-dev", "mindie-diagnostics"]
 
 [tool.uv.sources]
 mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "6e921b205c00d592c25f849653cbfb72b73fe318" }
-remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "fc52e1750b3216d4ec0b01e553e80125187351f7" }
+remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "4bf4dbd4d0bcf1c4a7453e369a814fd3f64f972d" }
 mindie-diagnostics = { git = "https://github.com/mindie-agent/diagnostics", rev = "1c465a18e4db59a0889557971b59d6233d8ae726" }
 
 [tool.uv]
