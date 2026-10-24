@@ -120,7 +120,10 @@
         "GITHUB_ENTERPRISE_TOKEN",
         "MINDIE_GIT_BIN",
         "GCM_INTERACTIVE"
-      ]
+      ],
+      "env": {
+        "REMOTE_DEV_HARNESS_PROFILE": "codex"
+      }
     }
   }
 }

@@ -298,6 +298,10 @@ def remote(payload):
 
     args = dict(payload["arguments"])
     shaped = None
+    # Trusted plugin binding for this MCP process. Tool arguments can never
+    # select or override the native profile; the launcher already injects the
+    # same literal value, and this in-process dispatch pins it independently.
+    os.environ["REMOTE_DEV_HARNESS_PROFILE"] = "codex"
     try:
         value = call_tool(name, args)
         result = value.get("result", {}) if isinstance(value, dict) else {}
