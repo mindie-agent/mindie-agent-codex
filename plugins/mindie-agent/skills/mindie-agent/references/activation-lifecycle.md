@@ -10,7 +10,7 @@ checks for an active manual-entry lease (`knowledge_lease`, `entry_enabled = 1`)
 before reading sharing settings or accessing the transcript; unactivated sessions
 return immediately without associating or scanning anything. When the session holds
 an active manual-entry lease and sharing is enabled, the named transcript's profile
-location, owner, project (`lease["project_root"] == source["project_root"]`), and
+location, owner, approved contribution scope, and
 task/fork creation boundary (`max(created_at, activated_at)`) are verified before
 capturing turns from activation onward. No directory or history scan runs.
 Explicit disable stays disabled, and re-enable never backfills the off period.

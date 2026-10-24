@@ -116,7 +116,8 @@ def test_generated_native_hook_grants_once_and_keeps_ordinary_turns_context_free
     environment = dict(os.environ, MINDIE_AGENT_CONFIG=str(config), PLUGIN_DATA=str(tmp_path / "data"),
                        PLUGIN_ROOT=str(SCRIPTS.parent))
     authority = Admission(tmp_path / "admission.sqlite3")
-    command = native_entry.hook_commands("user-prompt-submit")["command"]
+    commands = native_entry.hook_commands("user-prompt-submit")
+    command = commands["commandWindows" if os.name == "nt" else "command"]
     token = None
     for prompt in ("Download Kimi", "/mindie-agent tune KDA", "Continue tuning"):
         event = dict(hook_event_name="UserPromptSubmit", session_id="native-session",
