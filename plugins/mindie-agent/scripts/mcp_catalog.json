@@ -398,7 +398,7 @@
           "limit": {
             "type": "integer",
             "default": 200,
-            "maximum": 20000
+            "maximum": 100000
           },
           "max_chars": {
             "type": "integer",
@@ -413,6 +413,10 @@
           "pages": {
             "type": "string",
             "description": "PDF page range (native Claude Read pages). Remote-dev does not render PDF pages; a PDF read returns an explicit pdf_unsupported error."
+          },
+          "strict_offset": {
+            "type": "boolean",
+            "description": "Fail when offset is past EOF instead of returning an empty page (native DSH read)."
           },
           "line_offset": {
             "type": "integer",
@@ -625,6 +629,10 @@
           },
           "replace_all": {
             "type": "boolean"
+          },
+          "normalize_crlf": {
+            "type": "boolean",
+            "description": "Match a pure-CRLF file through its native LF view and restore CRLF on write (Claude/Kimi/DSH Edit)."
           },
           "start_line": {
             "type": "integer",
@@ -2161,9 +2169,6 @@
               "require_escalated"
             ]
           },
-          "additional_permissions": {
-            "type": "object"
-          },
           "justification": {
             "type": "string"
           },
@@ -2313,14 +2318,6 @@
             "type": "string",
             "minLength": 1,
             "description": "Local filesystem path to an image file."
-          },
-          "detail": {
-            "type": "string",
-            "enum": [
-              "high",
-              "original"
-            ],
-            "description": "Image detail level. Defaults to high."
           }
         },
         "required": [
