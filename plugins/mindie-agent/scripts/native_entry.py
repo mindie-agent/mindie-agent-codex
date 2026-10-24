@@ -167,6 +167,8 @@ def write_manifests(root):
             # (the same RawMcpServerConfig used by `codex mcp add --env`). This
             # is a trusted launcher value, not an `env_vars` pass-through.
             server["env"] = {"REMOTE_DEV_HARNESS_PROFILE": "codex"}
+            # 600s native Bash poll + 60s helper grace + bounded cleanup.
+            server["tool_timeout_sec"] = 720
         if role == "tools-mcp":
             # 300s maximum component deadline + owned-process cleanup grace.
             server["tool_timeout_sec"] = 330

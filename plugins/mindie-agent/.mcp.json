@@ -62,7 +62,8 @@
       ],
       "env": {
         "REMOTE_DEV_HARNESS_PROFILE": "codex"
-      }
+      },
+      "tool_timeout_sec": 720
     },
     "mindie-tools": {
       "command": "uv",
