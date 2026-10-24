@@ -8,7 +8,9 @@ UserPromptSubmit, Stop, Interrupt and the MCP servers.
 - Hook commands use a version-independent facade reading `~/.config/mindie-agent/codex.json` so running app-servers remain valid across plugin cache updates.
 - The remote-dev MCP launcher carries the literal `REMOTE_DEV_HARNESS_PROFILE=codex` env value; the native profile is never read from tool arguments.
 - `Stop` never bootstraps an unprepared runtime and always returns neutral `{}` stdout to the host.
-- `Interrupt` dispatches `mindie_interrupt` with exact `thread_id`/`turn_id` to both MCP servers (`timeout=3s`).
+- `Interrupt` dispatches `mindie_interrupt` with exact `thread_id`/`turn_id` to the remote and deterministic-component MCP servers (`timeout=3s`).
+
+- Knowledge is private to the manual Skill; its server is absent from the default MCP manifest.
 
 [Timeouts & Locks]
 - MCP `startup_timeout_sec=1080` covers first-use `uv` sync and shared preparation lock without altering tool-call deadlines.
@@ -144,13 +146,13 @@ def write_manifests(root):
         dict(type="mcp_tool", server=server, tool="mindie_interrupt",
              input=dict(thread_id="${session_id}", turn_id="${turn_id}"),
              timeout=3, statusMessage="MindIE cancellation")
-        for server in ("mindie-knowledge", "mindie-remote-dev")
+        for server in ("mindie-remote-dev", "mindie-tools")
     ]}]
     (root / "hooks/hooks.json").write_text(json.dumps({"hooks": hooks}, indent=2) + "\n",
                                          encoding='utf-8', newline='\n')
     servers = {}
-    for name, role in (("mindie-knowledge", "knowledge-mcp"),
-                       ("mindie-remote-dev", "remote-mcp")):
+    for name, role in (("mindie-remote-dev", "remote-mcp"),
+                       ("mindie-tools", "tools-mcp")):
         arguments = command_args(version, role)
         server = dict(command=arguments[0], args=arguments[1:],
                       # The native startup window includes first-use uv
@@ -165,7 +167,11 @@ def write_manifests(root):
             # (the same RawMcpServerConfig used by `codex mcp add --env`). This
             # is a trusted launcher value, not an `env_vars` pass-through.
             server["env"] = {"REMOTE_DEV_HARNESS_PROFILE": "codex"}
+        if role == "tools-mcp":
+            # 300s maximum component deadline + owned-process cleanup grace.
+            server["tool_timeout_sec"] = 330
         servers[name] = server
+
     (root / ".mcp.json").write_text(json.dumps({"mcpServers": servers}, indent=2) + "\n",
                                  encoding='utf-8', newline='\n')
 

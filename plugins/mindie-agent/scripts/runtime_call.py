@@ -358,7 +358,7 @@ def remote(payload):
     # same literal value, and this in-process dispatch pins it independently.
     os.environ["REMOTE_DEV_HARNESS_PROFILE"] = "codex"
     try:
-        value = call_tool(codex_dispatch_name(name), args)
+        value = call_tool(name, args)
         result = value.get("result", {}) if isinstance(value, dict) else {}
         # Job authorization stays inside remote-dev's task-local store. The
         # model controls jobs by opaque job_id and must not receive IPC tokens.

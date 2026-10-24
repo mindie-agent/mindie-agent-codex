@@ -63,11 +63,11 @@ class NativeHookEntryTests(unittest.TestCase):
                          {"REMOTE_DEV_HARNESS_PROFILE": "codex"})
         self.assertNotIn("REMOTE_DEV_HARNESS_PROFILE",
                          servers["mindie-remote-dev"]["env_vars"])
-        self.assertNotIn("env", servers["mindie-knowledge"])
+        self.assertNotIn("env", servers["mindie-tools"])
         self.assertIn("--offline", native_entry.hook_commands("stop")["command"])
         self.assertIn("--no-python-downloads", native_entry.hook_commands("stop")["command"])
 
-    def test_interrupt_hooks_target_both_existing_connections_with_exact_identity(self):
+    def test_interrupt_hooks_target_public_connections_with_exact_identity(self):
         from mcp_gate import INTERRUPT_TOOL
         (self.source / ".codex-plugin").mkdir(parents=True)
         (self.source / "hooks").mkdir()
@@ -78,7 +78,7 @@ class NativeHookEntryTests(unittest.TestCase):
             dict(type="mcp_tool", server=server, tool=INTERRUPT_TOOL,
                  input=dict(thread_id="${session_id}", turn_id="${turn_id}"),
                  timeout=3, statusMessage="MindIE cancellation")
-            for server in ("mindie-knowledge", "mindie-remote-dev")
+            for server in ("mindie-remote-dev", "mindie-tools")
         ]}])
 
     def test_same_loaded_command_uses_exact_active_prepared_entry_without_native_cache(self):

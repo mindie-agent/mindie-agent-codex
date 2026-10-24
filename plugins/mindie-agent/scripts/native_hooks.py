@@ -205,13 +205,16 @@ def _own_handler(hook, source):
     if event == "Interrupt":
         if hook.get("handlerType") != "mcpTool":
             return False
-        if len(commands) != 1 or len(commands[0].get("hooks", [])) != 2:
+        if len(commands) != 1:
             raise ValueError("selected plugin interrupt envelope is ambiguous")
-        for index, server in enumerate(("mindie-knowledge", "mindie-remote-dev")):
+        servers = read_json(Path(source) / ".mcp.json")[0]["mcpServers"]
+        # The verified release owns its MCP topology. Prior approvals identify
+        # handlers by native key; new keys still require user approval.
+        for index, value in enumerate(commands[0].get("hooks", [])):
             if hook.get("key") != f"{PLUGIN}:hooks/hooks.json:interrupt:0:{index}":
                 continue
-            value = commands[0]["hooks"][index]
-            if (value.get("type") != "mcp_tool" or value.get("server") != server
+            server = value.get("server")
+            if (value.get("type") != "mcp_tool" or server not in servers
                     or value.get("tool") != "mindie_interrupt"
                     or value.get("input") != dict(thread_id="${session_id}", turn_id="${turn_id}")
                     or hook.get("server") != server or hook.get("tool") != value["tool"]

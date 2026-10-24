@@ -98,7 +98,7 @@ def adapter_check(source):
         dict(type="mcp_tool", server=server, tool="mindie_interrupt",
              input=dict(thread_id="${session_id}", turn_id="${turn_id}"),
              timeout=3, statusMessage="MindIE cancellation")
-        for server in ("mindie-knowledge", "mindie-remote-dev")
+        for server in ("mindie-remote-dev", "mindie-tools")
     ]
     if hooks["Interrupt"][0]["hooks"] != expected_interrupt:
         raise ValueError("Interrupt must target both exact native MCP turn controls")
@@ -121,6 +121,8 @@ def adapter_check(source):
         "capture_config.py",
         "entry.py",
         "manual_entry.py",
+        "knowledge_cli.py",
+        "component_tools.py",
         "bootstrap.py",
         "component_update.py",
         "bridge.py",

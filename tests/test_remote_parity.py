@@ -183,7 +183,7 @@ class RemoteContentAndOutcomeTests(unittest.TestCase):
         self.assertFalse(result['isError'])
         self.assertEqual(result['structuredContent']['execution_outcome'], 'success')
 
-    def test_canonical_alias_dispatches_through_dotted_wire(self):
+    def test_canonical_alias_is_forwarded_for_core_dispatch(self):
         seen = []
         value = {'text': 'page', 'result': {'outcome': 'success', 'status': 'ok'}}
 
@@ -196,7 +196,7 @@ class RemoteContentAndOutcomeTests(unittest.TestCase):
                 patch('remote_dev.core.rpc_transport.close_connections'):
             runtime_call.call({'surface': 'remote', 'remote_session_id': 'task-A',
                                'name': 'remote_read', 'arguments': {'file_path': '/tmp/x'}})
-        self.assertEqual(seen, ['remote.read'])
+        self.assertEqual(seen, ['remote_read'])
 
 
 class RemoteBudgetTests(unittest.TestCase):
