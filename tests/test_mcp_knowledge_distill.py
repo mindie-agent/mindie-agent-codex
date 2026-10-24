@@ -43,6 +43,58 @@ EVIDENCE = [dict(kind='hardware_spec', outcome='verified',
                  evidence_refs=['ref-1'])]
 
 
+def real_explore_result(method="query"):
+    """One real `mode="explore"` payload from the installed knowledge engine.
+
+    Explore stripping, foundation promotion and the subagent fact pack are the
+    engine's contract; adapter tests assert against its actual output rather
+    than a hand-written response that could drift from the real schema.
+    """
+    from mindie_knowledge.graded.index import RoutingIndex
+    from mindie_knowledge.graded.units import GradedUnit
+
+    observed = {"soc": "Ascend910B"}
+
+    def graded_unit(ident, tier, category, body, parents=(), strength="single_observation"):
+        return GradedUnit.from_parts(
+            {
+                "schema": "mindie-graded-unit/1", "id": ident, "tier": tier,
+                "category": category, "evidence_strength": strength,
+                "domain_path": "serving/graph", "inherits_from": list(parents),
+                "title": f"{ident} probe",
+                "triggers": {"error_signatures": [], "keywords": ["rmsnorm"]},
+                "conditions": {"soc": ["Ascend910B"]},
+                "provenance": {"source_type": "session_distill",
+                               "source_locator": "fixture@abc:probe.txt",
+                               "source_digest": "0" * 64,
+                               "evidence_refs": ["fixture"], "supersedes": []},
+            },
+            body,
+            f"serving/graph/{ident}.md",
+        )
+
+    units = [
+        graded_unit("unit-l1-foundation", "L1", "axiom", "Keep 32B UB alignment.",
+                    strength="hardware_spec"),
+        graded_unit("unit-l3-workflow", "L3", "workflow", "Old rmsnorm workflow steps.",
+                    parents=["unit-l1-foundation"]),
+        graded_unit("unit-l4-mutator", "L4", "mutator", "Fuse the rmsnorm epilogue."),
+    ]
+    index = RoutingIndex(units)
+    options = dict(
+        conditions=observed, mode="explore", token_budget=16000,
+        native_subcontext=True, goal="Fuse RMSNorm epilogue",
+        ledger_entries=[{"run_id": "r1", "verdict": "refuted", "hypothesis": "tile=64",
+                         "conditions": observed, "axes": {"evidence_validity": "valid"}}],
+    )
+    if method == "explain":
+        return index.explain_closure(
+            ["mindie://mindie/units/unit-l3-workflow", "mindie://mindie/units/unit-l4-mutator"],
+            domain="mindie", **options)
+    return index.query("rmsnorm", **options)
+
+
+
 @unittest.skipIf(GradedUnit is None, 'joint 0.0.3 knowledge source is required')
 class ServiceCase(unittest.TestCase):
     domain = 'mindie'
@@ -515,17 +567,7 @@ class ExploreModeTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def test_query_explore_strips_l3_retains_l1_and_returns_pack(self):
-        l1 = {
-            'id': 'unit-l1-foundation', 'tier': 'L1', 'category': 'axiom',
-            'revision': 1, 'title': 'L1 hard limit', 'body': 'DP must stay <= 8.',
-            'ref': 'mindie://mindie/units/unit-l1-foundation@1',
-        }
-        l3 = {
-            'id': 'unit-l3-workflow', 'tier': 'L3', 'category': 'workflow',
-            'revision': 1, 'title': 'Old workflow', 'body': 'Replay the old L3 path.',
-            'ref': 'mindie://mindie/units/unit-l3-workflow@1',
-        }
+    def test_query_explore_forwards_rsi_arguments_and_delivers_the_engine_result(self):
         payload = dict(
             surface='knowledge', name='knowledge_query',
             arguments={
@@ -542,38 +584,83 @@ class ExploreModeTests(unittest.TestCase):
             mindie_session_id='thread-explore-1',
             native_session_verified=True,
         )
-        result = {'results': [l3, l1], 'cards': [l3], 'foundation_cards': [l1]}
+        # Explore stripping and the fact pack are the knowledge engine's
+        # contract, so this asserts against its real output, and that the
+        # adapter delivers it verbatim instead of reshaping it a second time.
+        engine_result = real_explore_result()
+        served = json.loads(json.dumps(engine_result))
         with patch.object(runtime_call, 'config_path', return_value=self.config), \
-                patch('service_client.select_engine', return_value={'domain': 'mindie'}), \
                 patch('service_client.connect', return_value={}), \
-                patch('mindie_knowledge.loop.transport.rpc', return_value=result) as rpc:
+                patch('mindie_knowledge.loop.transport.rpc', return_value=served) as rpc:
             shaped = runtime_call.call(payload)
         self.assertFalse(shaped['isError'], shaped)
         forwarded = rpc.call_args.args[2]
         self.assertEqual(forwarded['mode'], 'explore')
         self.assertTrue(forwarded['native_subcontext'])
         self.assertEqual(forwarded['goal'], 'remove the HCCL stall')
+
         value = shaped['structuredContent']
-        self.assertEqual([item['id'] for item in value['results']],
-                         ['unit-l1-foundation'])
+        self.assertEqual(value, engine_result)
+        self.assertEqual(value['stripped_l3_ids'], ['unit-l3-workflow'])
+        self.assertNotIn('unit-l3-workflow', [item['id'] for item in value['results']])
         context = value['exploration_context']
         self.assertEqual(context['mode'], 'explore')
-        self.assertEqual(context['stripped_l3_ids'], ['unit-l3-workflow'])
         self.assertEqual([item['id'] for item in context['mounted_units']],
-                         ['unit-l1-foundation'])
+                         ['unit-l1-foundation', 'unit-l4-mutator'])
         pack = context['subagent_fact_pack']
         self.assertEqual(pack['schema_version'], 'mindie-rsi-subagent-pack/1')
         self.assertTrue(pack['isolation_required'])
         self.assertEqual(pack['isolation_mode'], 'native_subcontext')
         self.assertIn('unit-l1-foundation', pack['l1_foundation_ids'])
-        self.assertNotIn('Old workflow', pack['prompt_brief'])
+        self.assertNotIn('Old rmsnorm workflow', pack['prompt_brief'])
         self.assertIn('Do not replay', pack['prompt_brief'])
+        # The engine's own conditional-avoid record keeps all of its fields.
+        self.assertIn('avoid', context['conditional_avoid'][0])
 
-    def test_explore_surfaces_error_when_runtime_builder_is_missing(self):
-        import rsi_explore
-        with patch.object(rsi_explore, '_load_builder', return_value=None):
-            with self.assertRaisesRegex(RuntimeError, 'lacks the exploration builder'):
-                rsi_explore.attach({'results': []}, {'mode': 'explore'})
+    def test_explain_explore_forwards_rsi_arguments_and_delivers_the_engine_result(self):
+        payload = dict(
+            surface='knowledge', name='knowledge_explain',
+            arguments={
+                'mode': 'explore', 'native_subcontext': True,
+                'conditions': {'soc': 'Ascend910B'},
+                'refs': ["mindie://mindie/units/unit-l3-workflow", "mindie://mindie/units/unit-l4-mutator"],
+                'ledger_entries': [{
+                    'run_id': 'run-1', 'verdict': 'refuted',
+                    'axes': {'evidence_validity': 'valid'},
+                    'conditions': {'soc': 'Ascend910B'},
+                    'mutation_summary': 'increase buffer size',
+                }],
+                'bottleneck_summary': {'pipe': 'HCCL ring wait'},
+                'goal': 'remove the HCCL stall',
+            },
+            mindie_session_id='thread-explore-1',
+            native_session_verified=True,
+        )
+        # Explain dropped the same host-side reshaping as query, so the engine
+        # result must reach the caller verbatim through the explain method too.
+        engine_result = real_explore_result("explain")
+        served = json.loads(json.dumps(engine_result))
+        with patch.object(runtime_call, 'config_path', return_value=self.config), \
+                patch('service_client.connect', return_value={}), \
+                patch('mindie_knowledge.loop.transport.rpc', return_value=served) as rpc:
+            shaped = runtime_call.call(payload)
+        self.assertFalse(shaped['isError'], shaped)
+        self.assertEqual(rpc.call_args.args[1], 'explain')
+        forwarded = rpc.call_args.args[2]
+        self.assertEqual(forwarded['mode'], 'explore')
+        self.assertTrue(forwarded['native_subcontext'])
+        self.assertEqual(forwarded['goal'], 'remove the HCCL stall')
+        value = shaped['structuredContent']
+        self.assertEqual(value, engine_result)
+        # conditional_avoid (including its `avoid` field) and the usage estimate
+        # reach the caller exactly as the engine produced them.
+        self.assertEqual(value['exploration_context']['conditional_avoid'],
+                         engine_result['exploration_context']['conditional_avoid'])
+        self.assertIn('avoid', value['exploration_context']['conditional_avoid'][0])
+        self.assertEqual(value['usage'], engine_result['usage'])
+
+
+
 
 
 if __name__ == '__main__':
