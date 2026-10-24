@@ -1,0 +1,43 @@
+{
+  "source": "Codex 0.164.0-alpha.11.1 hooks/list on macOS, mindie-agent-codex 0.1.7; only sourcePath anonymized",
+  "hooks": [
+    {
+      "key": "mindie-agent@mindie-agent:hooks/hooks.json:interrupt:0:0",
+      "eventName": "interrupt",
+      "handlerType": "mcpTool",
+      "server": "mindie-remote-dev",
+      "tool": "mindie_interrupt",
+      "matcher": null,
+      "timeoutSec": 3,
+      "statusMessage": "MindIE cancellation",
+      "additionalContextLimit": null,
+      "sourcePath": "<PLUGIN_ROOT>/hooks/hooks.json",
+      "source": "plugin",
+      "pluginId": "mindie-agent@mindie-agent",
+      "displayOrder": 9,
+      "enabled": true,
+      "isManaged": false,
+      "currentHash": "sha256:daf2c947e7d43d55ba972561452d1f8791f945656b0f8821e5cbe08ab8f0c7be/sha256:ead03f04fdedd99cbe52f941aec5003a9211f52f4155722da65e43bf4dae0a42",
+      "trustStatus": "modified"
+    },
+    {
+      "key": "mindie-agent@mindie-agent:hooks/hooks.json:interrupt:0:1",
+      "eventName": "interrupt",
+      "handlerType": "mcpTool",
+      "server": "mindie-tools",
+      "tool": "mindie_interrupt",
+      "matcher": null,
+      "timeoutSec": 3,
+      "statusMessage": "MindIE cancellation",
+      "additionalContextLimit": null,
+      "sourcePath": "<PLUGIN_ROOT>/hooks/hooks.json",
+      "source": "plugin",
+      "pluginId": "mindie-agent@mindie-agent",
+      "displayOrder": 10,
+      "enabled": true,
+      "isManaged": false,
+      "currentHash": "sha256:11c0fffa5bc86d5726716b4faf1fa77e3b93acf299fb43b6c3a6ca1d397cb2b2/sha256:ead03f04fdedd99cbe52f941aec5003a9211f52f4155722da65e43bf4dae0a42",
+      "trustStatus": "modified"
+    }
+  ]
+}

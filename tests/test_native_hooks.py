@@ -98,6 +98,8 @@ class HookTests(unittest.TestCase):
             input=dict(thread_id="${session_id}", turn_id="${turn_id}"))
             for server in ("mindie-knowledge", "mindie-remote-dev")]}]
         path.write_text(json.dumps(value))
+        (self.root / ".mcp.json").write_text(json.dumps(dict(mcpServers={
+            name: {} for name in ("mindie-knowledge", "mindie-remote-dev")})))
         self.rows = [dict(
             pluginId=native_hooks.PLUGIN,
             key=f"{native_hooks.PLUGIN}:hooks/hooks.json:interrupt:0:{index}",
@@ -121,6 +123,19 @@ class HookTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     native_hooks.snapshot("/native", {}, self.root)
                 self.rows[0][field] = original
+
+    def test_native_capture_preserves_approved_interrupts_after_mcp_topology_change(self):
+        capture = Path(__file__).parent / "fixtures/native-hooks/codex-0.164.0-interrupt.json"
+        self.rows = json.loads(capture.read_text(encoding="utf-8"))["hooks"]
+        for row in self.rows:
+            row["sourcePath"] = str(SCRIPTS.parent / "hooks/hooks.json")
+        # These keys were approved with the previous release's server mapping.
+        approved = [dict(key=row["key"], event=row["eventName"], hash="prior-approved")
+                    for row in self.rows]
+        result = native_hooks.preserve("/native", {}, SCRIPTS.parent, approved)
+        self.assertEqual(result, dict(status="complete", trusted=2, user_choices_preserved=0))
+        self.assertEqual(self.writes, [(row["key"], "prior-approved") for row in self.rows])
+        self.assertEqual(len(native_hooks.snapshot("/native", {}, SCRIPTS.parent)), 2)
 
     def test_explicit_disable_or_revoked_trust_is_preserved(self):
         self.rows[0]["enabled"] = False
