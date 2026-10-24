@@ -195,6 +195,23 @@ class HookTests(unittest.TestCase):
                 api.select_catalog(target)
         call.assert_called_once()
 
+    def test_split_trust_hashes_match_prior_approval_and_preserve_content_changes(self):
+        api = object.__new__(NativeHooks)
+        api.home = self.root
+        command_hash, content_hash = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+        previous = command_hash + "/" + content_hash
+        state = dict(enabled=True, trusted_hash=command_hash, trusted_content_hash=content_hash)
+        result = dict(config=dict(hooks=dict(state={self.rows[0]["key"]: state})), layers=[
+            dict(name=dict(type="user", file=str(self.root / "config.toml")), version="observed-version")])
+        with patch.object(api, "call", side_effect=[result, {}]) as call:
+            self.assertTrue(api.write_trust(self.rows[0], previous))
+        self.assertEqual(call.call_args.args[1]["expectedVersion"], "observed-version")
+        self.assertEqual(call.call_args.args[1]["value"], self.rows[0]["currentHash"])
+        state["trusted_content_hash"] = "sha256:" + "c" * 64
+        with patch.object(api, "call", return_value=result) as call:
+            self.assertFalse(api.write_trust(self.rows[0], previous))
+        call.assert_called_once()
+
     def test_catalog_lost_response_reads_exact_result_without_repeating_write(self):
         api = object.__new__(NativeHooks)
         api.home = self.root
