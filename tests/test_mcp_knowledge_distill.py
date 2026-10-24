@@ -529,11 +529,11 @@ class QueryParameterTests(ServiceCase):
         self._activate()
         gate = mcp_gate.Gate('knowledge')
         result = gate.call(self._request(20, 'knowledge_query', {
-            'query': 'HCCL', 'domain_path': 'ops/ascendc', 'token_budget': 200,
+            'query': 'HCCL', 'domain_path': 'ops/ascendc', 'token_budget': 1024,
             'include_unknown': True}))
         self.assertFalse(result['isError'], result)
         value = result['structuredContent']
-        self.assertEqual(value['token_budget'], 200)
+        self.assertEqual(value['token_budget'], 1024)
         self.assertTrue(value['results'])
         self.assertEqual(value['results'][0]['domain_path'], 'ops/ascendc')
         self.assertEqual(value['results'][0]['route'], 'preferred_domain')
