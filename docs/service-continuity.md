@@ -10,15 +10,15 @@
 
 - **Why Fixed Entries Matter**: When Codex refreshes a marketplace plugin, it can evict the previous cache directory while the running `app-server` still holds existing hook and MCP references. Placing the prepared release entry and `uv` runtime under persistent `PLUGIN_DATA` ensures active sessions never break mid-flight.
 - **Single Canonical Binding**: The user adapter configuration file is the single source of truth for the active runtime binding. Loaded entrypoints read that canonical profile and dispatch the complete interpreter + helper pair together, never mixing modules across versions.
-- **Stable Hook Trust Hashes**: Keeping hook command declarations stable across versions allows `app-server` to preserve user hook trust approvals across updates without silently dropping `SessionStart`, `UserPromptSubmit`, `Stop`, or `Interrupt` execution.
+- **Stable Hook Trust Hashes & Immutable Native Payload**: Keeping hook command declarations stable across versions—while launching source Python entrypoints with `-B` and running baseline `uv sync` against a short-lived project copy under `PLUGIN_DATA/releases/<version>/build` so `.pyc`, `build/`, and `*.egg-info` artifacts never touch the native plugin cache—allows `app-server` to preserve user hook trust approvals across cold startup and updates without dropping `SessionStart`, `UserPromptSubmit`, `Stop`, or `Interrupt` execution.
 
 ---
 
 ## 2. Shared Operation Locking & Atomic Idle Cutover
 
 - **Shared Lock for Active Requests**: Long-lived MCP processes read the active runtime binding under a shared operation lock before each request, ensuring in-flight calls run to completion on a consistent runtime.
-- **Background Candidate Preparation**: Compatible update candidates are built in isolation without holding the operation lock.
-- **Exclusive Switch Only When Idle**: Activating a new runtime acquires the exclusive lock only when the service is idle, retires the exact previous service owner, verifies the new owner's readiness, and updates the canonical binding atomically. If the service is busy, activation is deferred without interrupting user work.
+- **Background Candidate Preparation**: A cancellable `300s` (`CHECK_INTERVAL = 300`) check loop inside the existing MCP server process (`update_trigger.py`) checks for both compatible plugin-release updates and independent shared-component Release updates (discovered directly from official component repositories) without spawning a separate knowledge worker or daemon. Candidate `uv` runtimes are built side by side in isolation without holding the operation lock, preserving the installed component version floor across plugin upgrades and validating candidates via isolated package inventory checks and a model-free API probe without starting a knowledge worker.
+- **Exclusive Switch Only When Idle**: Activating a new runtime acquires the exclusive lock only when the service is idle, retires the previous service owner, and updates the canonical binding (`codex.json`, ~`10ms` for the binding cutover stage / `unavailable_seconds`, excluding prior runtime build); the background knowledge worker starts only on a subsequent authorized manual knowledge call. If the service is busy, activation is deferred without interrupting user work.
 
 ---
 

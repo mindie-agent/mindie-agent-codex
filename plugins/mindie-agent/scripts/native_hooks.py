@@ -109,16 +109,17 @@ class NativeHooks:
 
     def user_config(self):
         config = self.call("config/read", dict(includeLayers=True, cwd=str(self.home)))
-        target = self.home / "config.toml"
+        target = (self.home / "config.toml").resolve()
         layers = [row for row in config["layers"]
-                  if row["name"].get("type") == "user" and row["name"].get("file") == str(target)]
+                  if row["name"].get("type") == "user"
+                  and Path(row["name"].get("file", "")).resolve() == target]
         if len(layers) != 1:
             raise ValueError("native user configuration layer is ambiguous")
         return config, layers[0], target
 
     def write_trust(self, hook, previous_hash):
         config, layer, target = self.user_config()
-        state = config.get("config", {}).get("hooks", {}).get("state", {}).get(hook["key"], {})
+        state = ((config.get("config", {}).get("hooks") or {}).get("state") or {}).get(hook["key"]) or {}
         if state.get("enabled") is False or state.get("trusted_hash") != previous_hash:
             return False
         self.call("config/value/write", dict(

@@ -163,7 +163,7 @@ class ActivationTests(unittest.TestCase):
         result = self.run_activation(["absent", "ready"])
         self.assertEqual(result["status"], "active")
         self.retire_service.assert_called_once()
-        self.prepare_service.assert_called_once()
+        self.prepare_service.assert_not_called()
         self.assertEqual(json.loads(self.config.read_text()), self.new)
 
     def test_busy_leaves_old_binding_and_never_starts(self):
@@ -202,12 +202,12 @@ class ActivationTests(unittest.TestCase):
         self.prepare_service.assert_not_called()
         self.assertEqual(self.config.read_bytes(), self.original)
 
-    def test_retired_absent_reconciles_old_cleanup_before_start(self):
+    def test_retired_absent_publishes_without_starting_knowledge(self):
         self.inspect_retirement.return_value = {"status": "retired"}
         result = self.run_activation(["absent", "absent", "ready"])
         self.assertEqual(result["status"], "active")
         self.retire_service.assert_called_once()
-        self.prepare_service.assert_called_once()
+        self.prepare_service.assert_not_called()
 
     def test_ready_after_write_failure_only_finishes_publication(self):
         self.inspect_retirement.return_value = {"status": "retired"}

@@ -14,29 +14,30 @@ Provides a stdlib-only blocking exclusive file lock (`exclusive_lock(path)`) use
 """
 from contextlib import contextmanager
 import os
+import time
 
 
 @contextmanager
-def exclusive_lock(path):
+def exclusive_lock(path, *, timeout=825):
     descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    deadline = time.monotonic() + timeout
     try:
-        if os.name == "nt":
-            import msvcrt
-            # LockFileEx's runtime lock and this bootstrap lock use byte zero.
-            # LK_LOCK has an implicit ten-retry limit. Poll the same byte-range
-            # lock until the other bootstrap releases it; no new lock authority.
-            import time
-            while True:
-                try:
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
                     msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
-                    break
-                except OSError as exc:
-                    if exc.errno not in (13, 36):
-                        raise
-                    time.sleep(.05)
-        else:
-            import fcntl
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+                else:
+                    import fcntl
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as exc:
+                if exc.errno not in (11, 13, 36):
+                    raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('runtime preparation lock is busy')
+            time.sleep(min(.05, remaining))
         yield
     finally:
         os.close(descriptor)

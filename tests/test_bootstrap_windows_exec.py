@@ -63,7 +63,9 @@ class BootstrapExecTests(unittest.TestCase):
             )
 
             def installer(argv, payload, **options):
-                return run([*argv[:5], sys.executable, "-c", code], payload,
+                prefix = argv[:argv.index("-c") + 3]
+                assert Path(prefix[-1]).is_relative_to(root / "data")
+                return run([*prefix, sys.executable, "-c", code], payload,
                            cancel=cancel, **options)
 
             def prepare():

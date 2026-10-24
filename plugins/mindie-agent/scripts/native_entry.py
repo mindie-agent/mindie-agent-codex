@@ -10,7 +10,7 @@ UserPromptSubmit, Stop, Interrupt and the MCP servers.
 - `Interrupt` dispatches `mindie_interrupt` with exact `thread_id`/`turn_id` to both MCP servers (`timeout=3s`).
 
 [Timeouts & Locks]
-- MCP `startup_timeout_sec=600` covers first-use `uv` sync and shared preparation lock without altering tool-call deadlines.
+- MCP `startup_timeout_sec=1080` covers first-use `uv` sync and shared preparation lock without altering tool-call deadlines.
 
 [Side-Effect Policy]
 - Importing this module is side-effect free; `write_manifests(root)` updates `hooks/hooks.json` and `.mcp.json`.
@@ -22,31 +22,17 @@ import shlex
 
 
 def launcher_code(version, *, name="mindie-agent", marketplace="mindie-agent"):
-    return (
-        "import os,sys,runpy;from pathlib import Path;"
-        "home=Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex')));"
-        f"data=Path(os.environ.get('PLUGIN_DATA',str(home/'plugins/data'/{(name + '-' + marketplace)!r})));"
-        f"source=Path(os.environ.get('PLUGIN_ROOT',str(home/'plugins/cache'/{marketplace!r}/{name!r}/{version!r})));"
-        f"fixed=data/'releases'/{version!r}/'entry.py';"
-        "prepared=fixed.is_file();"
-        "entry=fixed if prepared else source/'scripts/bootstrap.py';"
-        "args=sys.argv[1:];"
-        "exec(\"if not prepared and args[:1]==['stop']:\\n raise RuntimeError('MindIE runtime is not prepared; start a new native session')\\n"
-        "if not entry.is_file():\\n raise RuntimeError('MindIE release entry unavailable; native cache and prepared runtime are absent')\");"
-        "sys.path.insert(0,str(entry.parent));"
-        "sys.argv=[str(entry),*([str(data)] if not prepared else []),'--source',str(source),*args];"
-        "runpy.run_path(str(entry),run_name='__main__')"
-    )
+    return hook_launcher_code(name=name, marketplace=marketplace, seed_version=version)
 
 
 def command_args(version, role, **names):
     return ["uv", "--native-tls", "run", "--no-project",
             *(["--offline", "--no-python-downloads"] if role == "stop" else []),
-            "--python", "3.13", "python",
+            "--python", "3.13", "python", "-B",
             "-c", launcher_code(version, **names), role]
 
 
-def hook_launcher_code(*, name="mindie-agent", marketplace="mindie-agent"):
+def hook_launcher_code(*, name="mindie-agent", marketplace="mindie-agent", seed_version=None):
     """Select only the prepared entry named by the canonical installed binding."""
     return (
         "import os,sys,json,re,runpy\nfrom pathlib import Path\n"
@@ -65,11 +51,16 @@ def hook_launcher_code(*, name="mindie-agent", marketplace="mindie-agent"):
         "if config.exists():\n"
         " adapter=read(config);validation=adapter['product_validation'];version=validation['native_version']\n"
         " if not isinstance(version,str) or not re.fullmatch('[0-9A-Za-z][0-9A-Za-z.+!-]{0,79}',version):raise ValueError('MindIE release identity is invalid')\n"
-        " release=data/'releases'/version;receipt=read(release/'runtime.json');entry=release/'entry.py'\n"
+        " release=Path(adapter['component_release']) if adapter.get('component_release') else data/'releases'/version\n"
+        " receipt=read(release/'runtime.json');entry=release/'entry.py'\n"
         " if receipt['python']!=adapter['python'] or receipt['validation']!=validation or validation.get('status')!='validated' or validation.get('schema')!='mindie-candidate-check/1':raise ValueError('MindIE installed runtime receipt differs')\n"
         "else:\n"
-        " if args[:1]==['stop']:raise RuntimeError('MindIE runtime is not prepared; start a new native session')\n"
-        " source=Path(os.environ['PLUGIN_ROOT']);entry=source/'scripts/bootstrap.py';args=[str(data),'--source',str(source),*args]\n"
+        f" seed={seed_version!r};fixed=data/'releases'/seed/'entry.py' if seed else None\n"
+        " if fixed is not None and fixed.is_file():entry=fixed\n"
+        " else:\n"
+        "  if args[:1]==['stop']:raise RuntimeError('MindIE runtime is not prepared; start a new native session')\n"
+        f"  source=Path(os.environ.get('PLUGIN_ROOT',str(home/'plugins/cache'/{marketplace!r}/{name!r}/(seed or 'unprepared'))))\n"
+        "  entry=source/'scripts/bootstrap.py';args=[str(data),'--source',str(source),*args]\n"
         "if not entry.is_file():raise RuntimeError('MindIE installed entry is unavailable')\n"
         "sys.path.insert(0,str(entry.parent));sys.argv=[str(entry),*args]\n"
         "runpy.run_path(str(entry),run_name='__main__')"
@@ -122,7 +113,7 @@ def neutral_hook_commands(argv, *, failure="MindIE Stop helper failed; capture c
 def hook_commands(role, **names):
     arguments = ["uv", "--native-tls", "run", "--no-project",
                  *(["--offline", "--no-python-downloads"] if role == "stop" else []),
-                 "--python", "3.13", "python", "-c", hook_launcher_code(**names), role]
+                 "--python", "3.13", "python", "-B", "-c", hook_launcher_code(**names), role]
     if role == "user-prompt-submit":
         # Preserve the hook's one JSON response: only an explicit entry may
         # attach knowledge context. Ordinary prompts emit exactly {}.
@@ -133,7 +124,7 @@ def hook_commands(role, **names):
                     + base64.b64encode(body.encode("utf-16le")).decode("ascii"),
                     # Cold preparation (540s), maintenance (300s), admission
                     # and process cleanup fit inside this native deadline.
-                    timeout=900, statusMessage="MindIE Agent")
+                    timeout=1380, statusMessage="MindIE Agent")
     if role == "stop":
         return neutral_hook_commands(arguments)
     return neutral_hook_commands(arguments, keep_stderr=True,
@@ -154,7 +145,8 @@ def write_manifests(root):
              timeout=3, statusMessage="MindIE cancellation")
         for server in ("mindie-knowledge", "mindie-remote-dev")
     ]}]
-    (root / "hooks/hooks.json").write_text(json.dumps({"hooks": hooks}, indent=2) + "\n")
+    (root / "hooks/hooks.json").write_text(json.dumps({"hooks": hooks}, indent=2) + "\n",
+                                         encoding='utf-8', newline='\n')
     servers = {}
     for name, role in (("mindie-knowledge", "knowledge-mcp"),
                        ("mindie-remote-dev", "remote-mcp")):
@@ -163,11 +155,12 @@ def write_manifests(root):
                              # The native startup window includes first-use uv
                              # download/build and the shared preparation lock.
                              # It does not change business tool-call deadlines.
-                             startup_timeout_sec=600,
+                             startup_timeout_sec=1080,
                              env_vars=["CODEX_HOME", "MINDIE_AGENT_CONFIG",
                                        "MINDIE_CODEX_BIN", "MINDIE_DIAGNOSTICS_CONFIG",
                                        "MINDIE_DIAGNOSTICS_ROOT", *TRANSPORT_ENV])
-    (root / ".mcp.json").write_text(json.dumps({"mcpServers": servers}, indent=2) + "\n")
+    (root / ".mcp.json").write_text(json.dumps({"mcpServers": servers}, indent=2) + "\n",
+                                 encoding='utf-8', newline='\n')
 
 
 if __name__ == "__main__":

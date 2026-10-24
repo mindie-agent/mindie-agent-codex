@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.1-0F766E.svg" alt="Release v0.1.1"></a>
+  <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.2-0F766E.svg" alt="Release v0.1.2"></a>
   <a href="plugins/mindie-agent/harness-compatibility.json"><img src="https://img.shields.io/badge/Codex_CLI-0.153.4_%7C_0.162.0--alpha.17.2-10A37F.svg" alt="Codex CLI 0.153.4 | 0.162.0-alpha.17.2"></a>
   <a href="plugins/mindie-agent/pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
@@ -27,7 +27,7 @@
 
 ---
 
-**MindIE Agent for OpenAI Codex CLI** (`mindie-agent-codex`) is the native OpenAI Codex CLI plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release `v0.1.1` delivers three core capabilities: **local and community knowledge base retrieval with privacy redaction** (focused on `vLLM-Ascend` feature development and `AscendC` / `Triton` kernel engineering), **remote SSH / Docker development and NPU inspection**, and **unified fault diagnostics with sanitized reporting**; additional Ascend software domains are tracked on the project roadmap.
+**MindIE Agent for OpenAI Codex CLI** (`mindie-agent-codex`) is the native OpenAI Codex CLI plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release `v0.1.2` (paired with `mindie-agent 0.1.1`) delivers three core capabilities: **local and community knowledge base retrieval with privacy redaction** (focused on `vLLM-Ascend` feature development and `AscendC` / `Triton` kernel engineering), **remote SSH / Docker development and NPU inspection**, and **unified fault diagnostics with sanitized reporting**; additional Ascend software domains are tracked on the project roadmap.
 
 Designed around the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md), **domain knowledge and the Skill system are invoked manually on demand via `/mindie-agent` (or `$mindie-agent`)** so they never interfere with unrelated tasks, while **`mindie-remote-dev` remote NPU development and testing tools trigger automatically by default** in everyday conversation—keeping all errors and uncertain external effects explicitly visible to the caller.
 
@@ -99,7 +99,7 @@ If you are an AI Agent asked by the user to install this plugin, execute the fol
    ```
    - **Hard Gate (Never skip or silently ignore)**: If `gh` is missing, assist the user in installing it first (macOS: `brew install gh`; Windows: `winget install --id GitHub.cli`; Ubuntu / WSL: `sudo apt update && sudo apt install -y gh`). Reuse a working account. Otherwise follow [GitHub Sign-In](plugins/mindie-agent/skills/mindie-agent/references/github-authentication.md): browser login on ordinary networks, or token login on enterprise networks / blocked browser authorization. Use an existing token in the hidden `gh` prompt (or a supplied private file), or guide token creation. Verify the account, Git and credential reuse before continuing; fix transport/certificate failures before retrying authentication.
    - Verify `codex --version` matches a host version recorded in the compatibility declaration (declared in [`plugins/mindie-agent/harness-compatibility.json`](plugins/mindie-agent/harness-compatibility.json)):
-     - macOS: `codex-cli 0.162.0-alpha.17.2`
+     - macOS: `codex-cli 0.162.0-alpha.17.2` or `0.164.0-alpha.11.1`
      - Native Windows / Windows WSL: `codex-cli 0.153.4`
    - On **Linux or Windows WSL**, if the background knowledge service will be used, also run `systemctl --user show --property=Version` to verify `systemd >= 254` with unified cgroup v2 is reachable (inside WSL, use Linux-native `codex`, `git`, `uv`, and `gh` rather than Windows binaries across `/mnt/c`).
 
@@ -108,7 +108,7 @@ If you are an AI Agent asked by the user to install this plugin, execute the fol
 
 3. **Add the plugin marketplace and install `mindie-agent`**:
    ```sh
-   codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.1.1
+   codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.1.2
    codex plugin add mindie-agent@mindie-agent --json
    ```
 
@@ -116,7 +116,7 @@ If you are an AI Agent asked by the user to install this plugin, execute the fol
    ```sh
    codex plugin list --json
    ```
-   - Confirm `codex plugin list --json` shows `mindie-agent@mindie-agent` version `0.1.1` enabled in the active profile.
+   - Confirm `codex plugin list --json` shows `mindie-agent@mindie-agent` version `0.1.2` enabled in the active profile.
    - Report the verified GitHub account (`$GH_USER`), and inform the user that starting a new native Codex session will trigger `SessionStart` and MCP initialization (building the isolated locked runtime under `PLUGIN_DATA` via `uv sync --locked --no-editable`, with an initial cold-start window of up to 10 minutes) and expose both `mindie-knowledge` and `mindie-remote-dev`.
 
    Continue with step 5 after verification, then report the complete setup result.
@@ -134,7 +134,7 @@ To install manually from a macOS / Linux / WSL shell or native Windows PowerShel
 
 ```sh
 gh api --hostname github.com user --jq .login && gh auth setup-git --hostname github.com && \
-codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.1.1 && \
+codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.1.2 && \
 codex plugin add mindie-agent@mindie-agent --json && \
 codex plugin list --json
 ```
@@ -160,7 +160,7 @@ MindIE Agent routes interactive commands through **a single unified entrypoint: 
 
 ### Silent Updates, Uninstall & Known Limitations
 
-- **Silent Compatible Updates**: More than 24 hours after the last successful check, the next natural MCP tool call triggers an asynchronous background check for the highest compatible Release, builds the locked runtime outside the operation lock, and switches atomically when idle while preserving your saved unified contribution setting.
+- **Silent Compatible Updates**: A background maintenance thread checks asynchronously for both the highest compatible plugin Release and formal GitHub Releases of shared runtime components from their official repositories (see [`docs/releases/mindie-agent-codex-0.1.2.en.md`](docs/releases/mindie-agent-codex-0.1.2.en.md)), builds a side-by-side locked `uv` runtime outside the operation lock, runs a model-free API probe, and retires the idle service before atomically publishing the binding (never starting a knowledge worker during updates and preserving your saved unified contribution setting and per-session manual `/mindie-agent` gate).
 - **Safe Uninstall**: Close active sessions using the plugin and remove it via native Codex CLI:
   ```sh
   codex plugin remove mindie-agent@mindie-agent --json
@@ -204,7 +204,7 @@ uv run --project plugins/mindie-agent --no-sync python tests/preflight.py
 uv run --project plugins/mindie-agent --no-sync python -m unittest discover -s tests -p 'test_*.py'
 ```
 
-- **Release Microbenchmark**: Each `0.1.1` plugin release attaches `benchmark-results.json` and `benchmark-results.md` measuring the `public-transcript` public-message parsing and hidden-reasoning filtering workload ([`benchmarks/release.json`](benchmarks/release.json)) in `us/op`. This serves as a reproducible CPU microbenchmark baseline, distinct from live A2/A3 NPU acceptance and end-to-end Agent productivity evaluation.
+- **Release Microbenchmark**: Each `0.1.2` plugin release attaches `benchmark-results.json` and `benchmark-results.md` measuring the `public-transcript` public-message parsing and hidden-reasoning filtering workload ([`benchmarks/release.json`](benchmarks/release.json)) in `us/op`. This serves as a reproducible CPU microbenchmark baseline, distinct from live A2/A3 NPU acceptance and end-to-end Agent productivity evaluation.
 
 ---
 

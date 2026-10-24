@@ -263,17 +263,21 @@ def package_files(source):
             and path.suffix != ".pyc" and path.is_file()]
 
 
-def identity(source, revision=None):
+def identity(source, revision=None, *, components=None):
     declaration, product_digest = product(source)
     pins, requirement_digest = requirements(source)
     source_digest = source_identity(source)
     if revision is not None and not HEX40.fullmatch(revision):
         raise ValueError("candidate revision must be an immutable commit")
-    return dict(schema=RECEIPT_SCHEMA, candidate_revision=revision,
+    baseline = dict(schema=RECEIPT_SCHEMA, candidate_revision=revision,
                 native_version=native_version(source),
                 source_sha256=source_digest, product_sha256=product_digest,
                 requirements_sha256=requirement_digest, runtime=pins,
                 publication=declaration["publication"])
+    if components is None:
+        return baseline
+    from mindie_knowledge.component_releases import runtime_identity
+    return runtime_identity(baseline, components)
 
 
 def validate_receipt(output, expected):
@@ -283,10 +287,10 @@ def validate_receipt(output, expected):
     return value
 
 
-def probe(python, scripts, command, *, revision=None, verified_receipt=None):
+def probe(python, scripts, command, *, revision=None, verified_receipt=None, components=None):
     scripts = Path(scripts).resolve()
     source = source_root(scripts)
-    expected = identity(source, revision)
+    expected = identity(source, revision, components=components)
     argv = [str(python), "-I", "-B", str(scripts / "candidate_validate.py"),
             "--source", str(source), "--identity", json.dumps(expected, sort_keys=True)]
     if verified_receipt is not None:
@@ -297,7 +301,7 @@ def probe(python, scripts, command, *, revision=None, verified_receipt=None):
     output = command(argv, timeout=180.0, max_output=65536,
                      on_failure=lambda output, code: failure_receipt(output, expected, code))
     receipt = validate_receipt(output, expected)
-    if identity(source, revision) != expected:
+    if identity(source, revision, components=components) != expected:
         raise ValueError("candidate source changed during validation")
     return receipt
 
