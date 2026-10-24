@@ -79,10 +79,13 @@ class PublicationFailureTests(unittest.TestCase):
 
         def run(args, data, **kwargs):
             calls.append(args)
+            self.assertEqual(kwargs["env"]["GIT_CONFIG_GLOBAL"], "enterprise.gitconfig")
+            self.assertEqual(kwargs["env"]["GIT_CONFIG_NOSYSTEM"], "0")
             output = publication["verified_commit"] + "\n" if len(calls) == 3 else ""
             return self.completed(kwargs, output)
 
-        with patch.object(self.runner, "run", side_effect=run), \
+        with patch.dict(os.environ, GIT_CONFIG_GLOBAL="enterprise.gitconfig", GIT_CONFIG_NOSYSTEM="0"), \
+                patch.object(self.runner, "run", side_effect=run), \
                 patch("mindie_knowledge.publication_contract.read_git_contract", return_value={"ok": True}) as read:
             self.assertEqual(candidate.publication_contract(publication), {"ok": True})
         self.assertEqual(len(calls), 3)
