@@ -1953,7 +1953,7 @@ dependencies = [
 requires-dist = [
     { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=1c465a18e4db59a0889557971b59d6233d8ae726" },
     { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=6e921b205c00d592c25f849653cbfb72b73fe318" },
-    { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=cc1bb7d288aba339491f1160c3a67aa07fe98a91" },
+    { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=f3cd68970365304600c928ba37d6586926d88326" },
 ]
 
 [[package]]
@@ -3382,7 +3382,7 @@ as = [
 [[package]]
 name = "remote-dev"
 version = "0.10.7"
-source = { git = "https://github.com/mindie-agent/remote-dev?rev=cc1bb7d288aba339491f1160c3a67aa07fe98a91#cc1bb7d288aba339491f1160c3a67aa07fe98a91" }
+source = { git = "https://github.com/mindie-agent/remote-dev?rev=f3cd68970365304600c928ba37d6586926d88326#f3cd68970365304600c928ba37d6586926d88326" }
 dependencies = [
     { name = "mindie-diagnostics" },
 ]
