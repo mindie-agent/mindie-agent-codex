@@ -1141,6 +1141,10 @@
             "type": "integer",
             "description": "Alias of limit (Kimi/Claude native Grep habit)."
           },
+          "hidden": {
+            "type": "boolean",
+            "description": "Search hidden dotfiles even when include_ignored is false (native Kimi Grep default)."
+          },
           "include_ignored": {
             "type": "boolean",
             "description": "Also search hidden paths and paths ignored by .gitignore (rg --no-ignore --hidden). The grep fallback cannot evaluate .gitignore rules; there it only lifts the default hidden/.git directory excludes and reports a warning."
@@ -1148,7 +1152,7 @@
           "limit": {
             "type": "integer",
             "minimum": 0,
-            "maximum": 5000,
+            "maximum": 100000,
             "description": "Maximum lines/entries after offset. 0 means no match-count limit for native Kimi Grep."
           }
         },
