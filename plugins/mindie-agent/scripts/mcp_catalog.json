@@ -1308,7 +1308,6 @@
           },
           "patch": {
             "type": "string",
-            "minLength": 1,
             "description": "Raw *** Begin Patch ... *** End Patch text."
           }
         },
@@ -2145,7 +2144,6 @@
           },
           "cmd": {
             "type": "string",
-            "minLength": 1,
             "description": "Shell command to execute."
           },
           "workdir": {
@@ -2154,17 +2152,14 @@
           },
           "tty": {
             "type": "boolean",
-            "default": false,
             "description": "True allocates a PTY; false or omitted uses plain pipes."
           },
           "yield_time_ms": {
             "type": "number",
-            "default": 10000,
             "description": "Wait before yielding output. Defaults to 10000 ms; effective range 250-30000 ms."
           },
           "max_output_tokens": {
             "type": "number",
-            "default": 10000,
             "description": "Output token budget. Defaults to 10000 tokens."
           },
           "shell": {
@@ -2173,7 +2168,6 @@
           },
           "login": {
             "type": "boolean",
-            "default": true,
             "description": "Run the selected remote shell with -l; native default true."
           },
           "environment_id": {
@@ -2185,8 +2179,7 @@
             "enum": [
               "use_default",
               "require_escalated"
-            ],
-            "default": "use_default"
+            ]
           },
           "justification": {
             "type": "string"
@@ -2335,7 +2328,6 @@
           },
           "path": {
             "type": "string",
-            "minLength": 1,
             "description": "Local filesystem path to an image file."
           }
         },
