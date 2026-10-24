@@ -331,13 +331,14 @@ def check(config, *, first_install=False, force=False):
                     env = runtime_env(config)
                     env.update(environment(adapter))
             native = env["MINDIE_CODEX_BIN"]
-            version = harness_version(native, env)
             status_path = root / "status.json"
             previous = read_optional(status_path) or {}
             status = dict(checked_at=time.time(),
                           last_successful_check=previous.get("last_successful_check", 0))
-            stage = "installed_readback"
+            stage = "harness_readback"
             try:
+                version = harness_version(native, env)
+                stage = "installed_readback"
                 before = installed(native, env)
                 if before is not None and before["enabled"] is False:
                     status.update(status="disabled")
@@ -447,6 +448,9 @@ def check(config, *, first_install=False, force=False):
                 _atomic(status_path, status)
                 return status
             except Exception as exc:
+                from diagnostic_support import failure
+                status["diagnostic"] = failure("release.update", stage, "update", exception=exc,
+                    exit_code=getattr(getattr(exc, "process_result", None), "returncode", None))
                 status.update(status="failed", stage=stage, error_type=type(exc).__name__,
                               code=getattr(exc, "code", None))
                 if getattr(exc, "native_effect", None) is not None:

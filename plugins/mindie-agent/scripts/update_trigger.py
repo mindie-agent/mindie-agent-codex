@@ -120,6 +120,13 @@ class Maintenance:
                 raise RuntimeError("update helper could not save its status")
         except Exception as exc:
             failed = True
+            if not self.cancel.is_set():
+                from diagnostic_support import failure, reference
+                diagnostic = reference(outcome) if isinstance(outcome, dict) else None
+                if diagnostic is None:
+                    diagnostic = failure("release.update", "maintenance-process", "update", exception=exc)
+            else:
+                diagnostic = None
             # The owned helper emits its safe failure status. A failure before
             # it can do so is retained locally without becoming model context.
             from release_activation import _atomic
@@ -128,6 +135,8 @@ class Maintenance:
                 root.mkdir(mode=0o700, parents=True, exist_ok=True)
                 self.last_failure = dict(stage="maintenance-process", status="failed",
                                          checked_at=time.time(), error_type=type(exc).__name__)
+                if diagnostic is not None:
+                    self.last_failure["diagnostic"] = diagnostic
                 if isinstance(outcome, dict):
                     self.last_failure["helper_result"] = outcome
                 _atomic(root / "trigger-failure.json", self.last_failure)

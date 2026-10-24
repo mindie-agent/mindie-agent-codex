@@ -20,6 +20,66 @@ from bounded_process import ProcessResult, ProcessCleanupError
 
 
 class UpdateTests(unittest.TestCase):
+    def test_owned_update_fault_is_recorded_and_ingested_with_failed_receipt(self):
+        from mindie_diagnostics.integration import configure_reporting
+        from mindie_diagnostics.ingestion import ingest
+        from mindie_diagnostics.outbox import Outbox
+        policy = Path(os.environ['MINDIE_DIAGNOSTICS_CONFIG'])
+        logs = Path(os.environ['MINDIE_DIAGNOSTICS_ROOT'])
+        configure_reporting(True, config=policy, roots=[str(logs)])
+        self.installed.side_effect = ModuleNotFoundError('PRIVATE-MODULE')
+        result = update.check(self.config)
+        self.assertEqual(result['status'], 'failed')
+        self.assertTrue(result['diagnostic']['recorded'])
+        self.assertEqual(json.loads((self.state / 'status.json').read_text())['diagnostic'], result['diagnostic'])
+        queue = Outbox(self.root / 'queue.db')
+        self.assertEqual(ingest(logs, queue, config=policy)['enqueued'], 1)
+        self.assertEqual(queue.rows()[0]['incident_ids'], [result['diagnostic']['incident_id']])
+
+    def test_helper_dies_before_status_receipt_still_produces_diagnostic(self):
+        from bounded_process import run
+        try:
+            run([sys.executable, '-I', '-c', 'import missing_mindie_helper_dependency'], '', timeout=5)
+        except RuntimeError as error:
+            primary = error
+        self.config.write_text(json.dumps({'python': sys.executable}))
+        maintenance = update_trigger.Maintenance(self.config)
+        with patch.object(update_trigger, 'runtime_scripts', return_value=str(SCRIPTS)), \
+                patch.object(update_trigger, 'runtime_env', return_value={}), \
+                patch.object(update_trigger, 'run', side_effect=primary):
+            maintenance._run()
+        self.assertTrue(maintenance.last_failure['diagnostic']['recorded'])
+        self.assertEqual(maintenance.last_failure['status'], 'failed')
+        self.assertGreater(maintenance.next_attempt, time.time())
+
+    def test_component_inheritance_crash_keeps_one_incident_through_outer_boundary(self):
+        import bootstrap
+        import diagnostic_support
+        active, helper = self.root / 'active', self.root / 'helper'
+        active.mkdir()
+        helper.mkdir()
+        (active / 'runtime.json').write_text(json.dumps({'validation': {'source_sha256': 'old'}}))
+        # Unmodified entry point with a missing committed dependency: the real
+        # isolated child fails before it can emit a structured response.
+        (helper / 'component_update.py').write_bytes((SCRIPTS / 'component_update.py').read_bytes())
+        self.config.write_text(json.dumps({'component_release': str(active), 'python': sys.executable}))
+        with patch('session_gate.config_path', return_value=self.config), \
+                patch.object(bootstrap, 'source_identity', return_value='new'), \
+                patch.object(bootstrap, '_baseline_runtime', return_value=(Path(sys.executable), helper, active)):
+            with self.assertRaises(RuntimeError) as caught:
+                with bootstrap.preparing('outer'):
+                    bootstrap.ensure_runtime(SCRIPTS.parent, self.root)
+        ref = caught.exception.mindie_diagnostic
+        self.assertTrue(ref['recorded'])
+        outer = diagnostic_support.failure('release.update', 'activation', 'update', exception=caught.exception)
+        self.assertEqual(outer['incident_id'], ref['incident_id'])
+        self.assertFalse(outer['logging_failed'])
+        root = Path(os.environ['MINDIE_DIAGNOSTICS_ROOT'])
+        events = [json.loads(line) for path in root.glob('events/*/*.jsonl')
+                  for line in path.read_text().splitlines()]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]['attributes']['stage'], 'component-inheritance')
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
