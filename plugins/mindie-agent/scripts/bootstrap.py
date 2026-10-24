@@ -41,8 +41,9 @@ def preparing(stage):
         if getattr(exc, "_mindie_prepare_reported", False):
             raise
         from diagnostic_support import failure
-        diagnostic = failure("runtime.prepare", stage, "prerequisite", exception=exc,
-                             exit_code=getattr(exc, "returncode", None), reportable=False)
+        diagnostic = failure("runtime.prepare", stage, "update", exception=exc,
+                             exit_code=getattr(getattr(exc, "process_result", None), "returncode", None))
+        exc.mindie_diagnostic = diagnostic
         detail = f"MindIE runtime preparation failed at {stage}: {type(exc).__name__}"
         from product_contract import CandidateValidationError
         if isinstance(exc, CandidateValidationError):
@@ -98,10 +99,11 @@ def ensure_runtime(source, data):
     if active:
         # A newer plugin may carry older component pins. Build its adapter with
         # the installed floor before publishing any binding for the new plugin.
-        result = run([str(python), "-I", "-B", str(scripts / "component_update.py"),
-                      str(source), str(python), str(data), current["python"]],
-                     "", timeout=830).checked_stdout()
-        effective = json.loads(result)
+        with preparing("component-inheritance"):
+            result = run([str(python), "-I", "-B", str(scripts / "component_update.py"),
+                          str(source), str(python), str(data), current["python"]],
+                         "", timeout=830).checked_stdout()
+            effective = json.loads(result)
         if effective:
             return Path(effective["python"]), Path(effective["scripts"]), Path(effective["release"])
     return python, scripts, release
