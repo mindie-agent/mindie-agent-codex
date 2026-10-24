@@ -310,7 +310,7 @@ def effective_reporting(view, saved):
         return dict(view, enabled=False, status="unavailable", consent=saved)
     if not saved.get("choice_revision"):
         return dict(view, enabled=False, status="needs_choice", consent=saved,
-                    detail="Choose contribution again to authorize knowledge sharing and sanitized fault Issues together.")
+                    detail="The saved choice does not authorize sanitized fault reporting.")
     if saved.get("choice") != "contribute":
         return dict(view, enabled=False, status="disabled", consent=saved)
     return dict(view, consent=saved)

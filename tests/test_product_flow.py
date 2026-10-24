@@ -3,6 +3,7 @@
 Only the external service attachment is fault-injected. Real configuration,
 consent, native-task binding and status paths run; this is not native E2E proof.
 """
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -52,6 +53,10 @@ class ProductFlowTests(SharingFixture):
         self.assertIsNone(consent.load()['choice'])
 
     def enter(self):
+        from manual_entry import authorize
+        authorize(json.loads(self.config.read_text()), dict(
+            hook_event_name="UserPromptSubmit", session_id=os.environ["CODEX_THREAD_ID"],
+            cwd=str(self.scope), prompt="/mindie-agent"))
         with patch.object(Path, "cwd", return_value=self.scope):
             return bridge.activate("activate")
 

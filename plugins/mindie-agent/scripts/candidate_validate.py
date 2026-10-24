@@ -62,14 +62,16 @@ def adapter_check(source):
         > 16 * 1024 * 1024
     ):
         raise ValueError("plugin package exceeds 16 MiB")
-    if (
-        "allow_implicit_invocation: true"
-        not in (plugin / "skills/mindie-agent/agents/openai.yaml").read_text(encoding='utf-8')
-    ):
-        raise ValueError("informational skill must be available on demand")
+    import yaml
+    skill = yaml.safe_load((plugin / "skills/mindie-agent/agents/openai.yaml").read_text(encoding='utf-8'))
+    if skill.get("policy", {}).get("allow_implicit_invocation") is not False:
+        raise ValueError("knowledge skill requires explicit user invocation")
     hooks = read_json(plugin / "hooks/hooks.json")[0]["hooks"]
-    if set(hooks) != {"SessionStart", "Stop", "Interrupt"} or any(len(v) != 1 for v in hooks.values()):
-        raise ValueError("one SessionStart, Stop and Interrupt hook group is required")
+    if set(hooks) != {"SessionStart", "UserPromptSubmit", "Stop", "Interrupt"} or any(len(v) != 1 for v in hooks.values()):
+        raise ValueError("one SessionStart, UserPromptSubmit, Stop and Interrupt hook group is required")
+    prompt = hooks["UserPromptSubmit"][0]["hooks"]
+    if len(prompt) != 1 or prompt[0].get("type") != "command":
+        raise ValueError("one native manual-entry command is required")
     entries = hooks["Stop"][0]["hooks"]
     if len(entries) != 1 or "timeout" in entries[0]:
         raise ValueError("Stop must not impose an execution deadline")
@@ -99,6 +101,7 @@ def adapter_check(source):
         "organizer_distill.py",
         "capture_config.py",
         "entry.py",
+        "manual_entry.py",
         "bootstrap.py",
         "bridge.py",
         "bridge_commands.py",

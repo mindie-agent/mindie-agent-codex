@@ -57,6 +57,11 @@ class ServiceEntryLifetimeTests(SharingFixture):
         )
 
     def bridge(self, operation, *, event=None):
+        if operation == "activate":
+            from manual_entry import authorize
+            authorize(json.loads(self.config.read_text()), dict(
+                hook_event_name="UserPromptSubmit", session_id="manual-A",
+                cwd=str(self.scope), prompt="/mindie-agent"))
         completed = run_owned_fixture(
             [sys.executable, str(SCRIPTS / "bridge.py"), "--config", str(self.config), operation],
             input=json.dumps(event) if event else "",

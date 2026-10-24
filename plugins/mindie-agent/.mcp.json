@@ -10,7 +10,7 @@
         "3.13",
         "python",
         "-c",
-        "import os,sys,runpy;from pathlib import Path;home=Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex')));data=Path(os.environ.get('PLUGIN_DATA',str(home/'plugins/data'/'mindie-agent-mindie-agent')));source=Path(os.environ.get('PLUGIN_ROOT',str(home/'plugins/cache'/'mindie-agent'/'mindie-agent'/'0.1.0')));fixed=data/'releases'/'0.1.0'/'entry.py';prepared=fixed.is_file();entry=fixed if prepared else source/'scripts/bootstrap.py';args=sys.argv[1:];exec(\"if not prepared and args[:1]==['stop']:\\n raise RuntimeError('MindIE runtime is not prepared; start a new native session')\\nif not entry.is_file():\\n raise RuntimeError('MindIE release entry unavailable; native cache and prepared runtime are absent')\");sys.path.insert(0,str(entry.parent));sys.argv=[str(entry),*([str(data)] if not prepared else []),'--source',str(source),*args];runpy.run_path(str(entry),run_name='__main__')",
+        "import os,sys,runpy;from pathlib import Path;home=Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex')));data=Path(os.environ.get('PLUGIN_DATA',str(home/'plugins/data'/'mindie-agent-mindie-agent')));source=Path(os.environ.get('PLUGIN_ROOT',str(home/'plugins/cache'/'mindie-agent'/'mindie-agent'/'0.1.1')));fixed=data/'releases'/'0.1.1'/'entry.py';prepared=fixed.is_file();entry=fixed if prepared else source/'scripts/bootstrap.py';args=sys.argv[1:];exec(\"if not prepared and args[:1]==['stop']:\\n raise RuntimeError('MindIE runtime is not prepared; start a new native session')\\nif not entry.is_file():\\n raise RuntimeError('MindIE release entry unavailable; native cache and prepared runtime are absent')\");sys.path.insert(0,str(entry.parent));sys.argv=[str(entry),*([str(data)] if not prepared else []),'--source',str(source),*args];runpy.run_path(str(entry),run_name='__main__')",
         "knowledge-mcp"
       ],
       "startup_timeout_sec": 600,
@@ -55,7 +55,9 @@
         "GH_TOKEN",
         "GITHUB_TOKEN",
         "GH_ENTERPRISE_TOKEN",
-        "GITHUB_ENTERPRISE_TOKEN"
+        "GITHUB_ENTERPRISE_TOKEN",
+        "MINDIE_GIT_BIN",
+        "GCM_INTERACTIVE"
       ]
     },
     "mindie-remote-dev": {
@@ -68,7 +70,7 @@
         "3.13",
         "python",
         "-c",
-        "import os,sys,runpy;from pathlib import Path;home=Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex')));data=Path(os.environ.get('PLUGIN_DATA',str(home/'plugins/data'/'mindie-agent-mindie-agent')));source=Path(os.environ.get('PLUGIN_ROOT',str(home/'plugins/cache'/'mindie-agent'/'mindie-agent'/'0.1.0')));fixed=data/'releases'/'0.1.0'/'entry.py';prepared=fixed.is_file();entry=fixed if prepared else source/'scripts/bootstrap.py';args=sys.argv[1:];exec(\"if not prepared and args[:1]==['stop']:\\n raise RuntimeError('MindIE runtime is not prepared; start a new native session')\\nif not entry.is_file():\\n raise RuntimeError('MindIE release entry unavailable; native cache and prepared runtime are absent')\");sys.path.insert(0,str(entry.parent));sys.argv=[str(entry),*([str(data)] if not prepared else []),'--source',str(source),*args];runpy.run_path(str(entry),run_name='__main__')",
+        "import os,sys,runpy;from pathlib import Path;home=Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex')));data=Path(os.environ.get('PLUGIN_DATA',str(home/'plugins/data'/'mindie-agent-mindie-agent')));source=Path(os.environ.get('PLUGIN_ROOT',str(home/'plugins/cache'/'mindie-agent'/'mindie-agent'/'0.1.1')));fixed=data/'releases'/'0.1.1'/'entry.py';prepared=fixed.is_file();entry=fixed if prepared else source/'scripts/bootstrap.py';args=sys.argv[1:];exec(\"if not prepared and args[:1]==['stop']:\\n raise RuntimeError('MindIE runtime is not prepared; start a new native session')\\nif not entry.is_file():\\n raise RuntimeError('MindIE release entry unavailable; native cache and prepared runtime are absent')\");sys.path.insert(0,str(entry.parent));sys.argv=[str(entry),*([str(data)] if not prepared else []),'--source',str(source),*args];runpy.run_path(str(entry),run_name='__main__')",
         "remote-mcp"
       ],
       "startup_timeout_sec": 600,
@@ -113,7 +115,9 @@
         "GH_TOKEN",
         "GITHUB_TOKEN",
         "GH_ENTERPRISE_TOKEN",
-        "GITHUB_ENTERPRISE_TOKEN"
+        "GITHUB_ENTERPRISE_TOKEN",
+        "MINDIE_GIT_BIN",
+        "GCM_INTERACTIVE"
       ]
     }
   }

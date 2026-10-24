@@ -294,6 +294,8 @@ class MultiDomainEntryTests(ServiceCase):
                 mindie_session_id=SESSION, native_session_verified=True))
 
     def test_default_uri_reads_through_the_default_engine_without_the_new_helper(self):
+        self._activate()
+        before = Path(self.admission).read_bytes()
         payload = dict(
             surface="knowledge", name="knowledge_explain",
             arguments={"ref": f"mindie://{self.domain}/units/{UNIT_ID}"},
@@ -308,7 +310,7 @@ class MultiDomainEntryTests(ServiceCase):
         self.assertEqual(result["structuredContent"]["domain"], self.domain)
         connect.assert_called_once_with(str(self.engine))
         self.assertEqual(rpc.call_args.args[1], "explain")
-        self.assertFalse(Path(self.admission).exists())
+        self.assertEqual(Path(self.admission).read_bytes(), before)
 
         with patch.dict(sys.modules, {"mindie_knowledge.loop.domain_routes": None}), \
                 self.assertRaisesRegex(service_client.DomainRouteError, "does not provide"):

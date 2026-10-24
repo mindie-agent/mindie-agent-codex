@@ -1,17 +1,26 @@
 # Capture and operation lifecycle
 
-The installation's saved sharing choice and project scope govern capture.
-Normal use needs no activation command, status check or closing action.
-The Stop event identifies one current native task. Its named transcript's
-profile location, owner, project and task/fork creation boundary are checked
-before the adapter associates it internally. No directory or history scan runs.
-Association time is not an authorization boundary: the first authorized turn
-is retained. Explicit disable stays disabled, and re-enable never backfills the
-off period. Explicitly revoked task associations are not recreated automatically.
+The user must explicitly invoke `/mindie-agent` or `$mindie-agent` once in the
+current session before any knowledge operation or background capture. This
+grant persists across subsequent turns until deactivation. Saved sharing
+consent and project scope are additional capture conditions, not activation.
+Inactive sessions receive no knowledge instructions or activation reminder.
+The Stop event identifies one current native task (`CODEX_THREAD_ID`). It first
+checks for an active manual-entry lease (`knowledge_lease`, `entry_enabled = 1`)
+before reading sharing settings or accessing the transcript; unactivated sessions
+return immediately without associating or scanning anything. When the session holds
+an active manual-entry lease and sharing is enabled, the named transcript's profile
+location, owner, project (`lease["project_root"] == source["project_root"]`), and
+task/fork creation boundary (`max(created_at, activated_at)`) are verified before
+capturing turns from activation onward. No directory or history scan runs.
+Explicit disable stays disabled, and re-enable never backfills the off period.
+Explicitly revoked task leases are not recreated automatically.
 
-Knowledge reads are independent of capture. Feedback uses verified host task
-identity and the observed reference; it stays local without an eligible capture
-scope. The model supplies neither task identity nor an activation token.
+Knowledge reads, feedback, distillation, sync and capture require the session's
+manual-entry grant. Feedback additionally uses verified host task identity and
+the observed reference; it stays local without an eligible sharing scope. The
+model supplies neither task identity nor an activation token. Remote-dev stays
+available independently of the grant.
 
 An operation has no default execution deadline. Process exit, closed protocol
 pipes, connection errors, owner exit and explicit cancellation are observed;
@@ -44,7 +53,11 @@ durable jobs retain their existing identity and independent lifecycle.
 
 For explicitly requested configuration or diagnosis, use the installed
 `PLUGIN_DATA/releases/0.0.2/entry.py bridge` in the active profile. The native shell supplies
-`CODEX_THREAD_ID`; never fabricate it. Existing optional operator commands remain
+`CODEX_THREAD_ID`; never fabricate it. `entry.py bridge activate` requires an active
+manual-entry lease already granted by the native `UserPromptSubmit` hook (`manual_entry.py`),
+while `entry.py bridge status` is a factual read-only status check (`configured`,
+`knowledge_enabled`, `this_session`) that never emits onboarding prompt fields
+(`first_use`, `next`, `recovery`). Existing optional operator commands remain
 available internally, but users only need `/mindie-agent` (or `$mindie-agent`).
 
 - **Unified Contribution & Fault-Reporting Switch**:

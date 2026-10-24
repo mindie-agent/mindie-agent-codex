@@ -1,7 +1,8 @@
 """Build native launchers for MCP and lifecycle hooks.
 
 [Role]
-Generates `.mcp.json` and `hooks/hooks.json` manifest definitions for the Codex plugin (`SessionStart`, `Stop`, `Interrupt`, and MCP servers).
+Generates `.mcp.json` and `hooks/hooks.json` definitions for SessionStart,
+UserPromptSubmit, Stop, Interrupt and the MCP servers.
 
 [Invariants]
 - Hook commands use a version-independent facade reading `~/.config/mindie-agent/codex.json` so running app-servers remain valid across plugin cache updates.
@@ -122,6 +123,17 @@ def hook_commands(role, **names):
     arguments = ["uv", "--native-tls", "run", "--no-project",
                  *(["--offline", "--no-python-downloads"] if role == "stop" else []),
                  "--python", "3.13", "python", "-c", hook_launcher_code(**names), role]
+    if role == "user-prompt-submit":
+        # Preserve the hook's one JSON response: only an explicit entry may
+        # attach knowledge context. Ordinary prompts emit exactly {}.
+        body = "& " + " ".join("'" + str(arg).replace("'", "''") + "'" for arg in arguments)
+        body += "; exit $LASTEXITCODE"
+        return dict(command=shlex.join(arguments), commandWindows=
+                    "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "
+                    + base64.b64encode(body.encode("utf-16le")).decode("ascii"),
+                    # Cold preparation (540s), maintenance (300s), admission
+                    # and process cleanup fit inside this native deadline.
+                    timeout=900, statusMessage="MindIE Agent")
     if role == "stop":
         return neutral_hook_commands(arguments)
     return neutral_hook_commands(arguments, keep_stderr=True,
@@ -134,7 +146,8 @@ def write_manifests(root):
     version = json.loads((root / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
     hooks = {name: [{"hooks": [{"type": "command", "statusMessage": "MindIE Agent",
                                **hook_commands(role)}]}]
-             for name, role in (("SessionStart", "session-start"), ("Stop", "stop"))}
+             for name, role in (("SessionStart", "session-start"),
+                                ("UserPromptSubmit", "user-prompt-submit"), ("Stop", "stop"))}
     hooks["Interrupt"] = [{"hooks": [
         dict(type="mcp_tool", server=server, tool="mindie_interrupt",
              input=dict(thread_id="${session_id}", turn_id="${turn_id}"),

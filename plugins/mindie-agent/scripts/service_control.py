@@ -7,7 +7,7 @@ Implements deterministic offline `status` inspection and explicit operator
 [Invariants]
 - `status` inspects local files and at most one short RPC if the service is
   already running; it never starts a service, model, or database.
-- Appends actionable recovery hints for sharing state and recoverable batches.
+- Returns component facts without knowledge setup or flywheel guidance.
 
 [Timeouts & Locks]
 - Uses bounded non-starting status probes via `mindie_knowledge.loop.cli`.
@@ -29,28 +29,6 @@ OPERATIONS = {"status", "shutdown"}
 RECOVERABLE_BATCH = {"failed", "unknown", "needs_review", "unavailable"}
 
 
-def _hints(sharing_view, view):
-    hints = list(view["hints"])
-    state = sharing_view.get("state")
-    if sharing_view.get("first_use"):
-        hints.append(sharing.CHOICES.replace("\n", " | "))
-    elif state in {"off", "unconfigured"}:
-        hints.append(sharing.CHOICES)
-    elif state == "disabled":
-        hints.append("Experience capture is explicitly disabled; the saved setting is preserved.")
-    elif state == "malformed":
-        hints.append("Experience capture is unavailable because its saved configuration is damaged.")
-    for row in view["contributions"]:
-        if row.get("status") in RECOVERABLE_BATCH:
-            hints.append(
-                f"contribution {row.get('batch_id')} is {row.get('status')}; "
-                "the worker handles eligible transient recovery automatically. "
-                "Inspect the listed record only for an actionable fault; "
-                "never blindly repeat an uncertain write"
-            )
-    return hints
-
-
 def status():
     # The bootstrap selected this complete runtime under its profile lock.
     # Core imports belong here, never in the stdlib bootstrap or Stop path.
@@ -63,8 +41,7 @@ def status():
     # One consent authority read feeds the sharing view and the reporting view.
     saved_consent = consent.load()
     sharing_view = sharing.status(saved=saved_consent)
-    if sharing_view.get("state") in {"malformed", "unconfigured"}:
-        sharing_view["detail"] = "Inspect the configured community settings; capture remains disabled."
+    sharing_view.pop("first_use", None)
     try:
         session = native_session()
     except ValueError:
@@ -92,7 +69,6 @@ def status():
 
     commands["reporting_status"] = bridge + ["reporting-status"]
     diagnostics = dict(reporting=reporting_status())
-    first_use = sharing_view.get("first_use")
     result = dict(
         experience=("needs-configuration" if sharing_view.get("state") in {"off", "unconfigured"}
                     else "disabled" if sharing_view.get("state") == "disabled"
@@ -112,41 +88,9 @@ def status():
         captures=view["captures"],
         summaries=view["summaries"],
         contributions=view["contributions"],
-        recovery=_hints(sharing_view, view),
         commands=commands,
-        first_use=first_use,
         diagnostics=diagnostics,
     )
-    if sharing_view.get("state") in {"off", "unconfigured"}:
-        result["next"] = sharing.CHOICES
-    elif sharing_view.get("state") == "disabled":
-        result["next"] = "Experience capture is explicitly disabled. Task binding does not enable it."
-    elif (sharing_view.get("state") == "malformed"
-          or view["configuration"].get("status") != "ok"
-          or view["startup"].get("status") in {"failed", "unavailable"}
-          or view["store"].get("status") == "unavailable"
-          or view["admission"].get("status") == "unavailable"):
-        result["next"] = (
-            "Inspect the reported configuration/component stage and error class, "
-            "then run the listed status command. Native shell/SSH or independent "
-            "remote-dev remains available; no reactivation or reinstall is implied."
-        )
-    elif view["admission"].get("status") == "active":
-        result["next"] = (
-            "This native task remains admitted. Inspect any reported component "
-            "failure before recovery; native shell/SSH or independent remote-dev "
-            "work remains available."
-        )
-    elif session is None:
-        result["next"] = (
-            "Task records are omitted without native CODEX_THREAD_ID. Run status "
-            "inside the original native task; no activation was inferred."
-        )
-    else:
-        result["next"] = (
-            "The next eligible native Stop associates this task automatically "
-            "using the saved contribution choice and project scope."
-        )
     return result
 
 

@@ -1,7 +1,7 @@
 """Schema and knowledge-page wire. No native host turn metadata is attached.
 
-Identity is the adapter resolve_lease seam: a missing or mismatched session
-fails before a service starts. The page is a local Store.explain fixture from the installed
+Identity uses real Admission leases: missing manual authorization or a
+mismatched token fails before a service starts. The page is a local Store.explain fixture from the installed
 mindie_knowledge dependency, returned through runtime_call's real JSON shape,
 including adjacent block references and current task navigation.
 """
@@ -56,13 +56,6 @@ def rpc(connection, method, args, timeout=5):
 
 service_client.connect = ensure_service
 transport.rpc = rpc
-if mode == "page":
-    runtime_call.resolve_lease = lambda config, token: {"session": os.environ["SESSION"]}
-    runtime_call.finish_outcome = lambda *args, **kwargs: None
-elif mode == "mismatch":
-    runtime_call.resolve_lease = lambda config, token: {"session": os.environ["SESSION"]}
-    runtime_call.finish_outcome = lambda *args, **kwargs: None
-
 payload = json.loads(sys.stdin.read())
 if mode == "page":
     # Match runtime_call's UTF-8 wire, independent of the fixture's console
@@ -207,8 +200,8 @@ class KnowledgePageTests(unittest.TestCase):
         page = self.tmp / "empty.json"
         page.write_text("{}", encoding="utf-8")
         missing = json.loads(self._run("unbound", "mindie://vllm-ascend/none", 0, page, session="nobody"))
-        self.assertEqual(missing["seam"], "ValueError")
-        self.assertIn("activation", missing["message"])
+        self.assertEqual(missing["seam"], "KnowledgeInactive")
+        self.assertIn("/mindie-agent", missing["message"])
         self.assertIs(missing["service_started"], False)
         mismatched = json.loads(self._run("mismatch", "mindie://vllm-ascend/none", 0, page, session="other-session"))
         self.assertEqual(mismatched["seam"], "ValueError")
@@ -255,8 +248,16 @@ class KnowledgePageTests(unittest.TestCase):
             "name": "knowledge_explain",
             "arguments": {"ref": ref},
             "mindie_session_id": session,
-            "mindie_activation": "component-token",
         }
+        if mode in {"page", "mismatch"}:
+            from mindie_knowledge.loop.activation import Admission
+            admission = Admission(self.admission)
+            lease = admission.activate(SESSION, project_root=str(self.tmp))
+            payload["mindie_activation"] = lease["token"]
+            if mode == "mismatch":
+                admission.activate(session, project_root=str(self.tmp))
+        else:
+            payload["native_session_verified"] = True
         env = os.environ.copy()
         # The joint source supplies explicit domain routing in this checkout;
         # the helper still runs the exact configured interpreter and scripts.

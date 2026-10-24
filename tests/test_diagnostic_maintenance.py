@@ -16,9 +16,14 @@ import diagnostic_maintenance
 class DiagnosticMaintenanceTests(unittest.TestCase):
     def test_session_receipt_does_not_claim_ready_when_reporter_is_degraded(self):
         import session_maintenance
+        self.enterContext(patch.dict(os.environ, CODEX_THREAD_ID="maintenance-session"))
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "codex.json"
-            config.write_text(json.dumps({"engine_config": str(config.with_suffix(".engine.json"))}))
+            admission = config.with_suffix(".admission.sqlite3")
+            from mindie_knowledge.loop.activation import Admission
+            Admission(admission).activate("maintenance-session", project_root=directory)
+            config.write_text(json.dumps({"engine_config": str(config.with_suffix(".engine.json")),
+                                          "admission_path": str(admission)}))
             output = io.StringIO()
             with patch.object(session_maintenance, "bind_explicit_config"), \
                     patch.object(diagnostic_maintenance, "maintain",
@@ -32,9 +37,14 @@ class DiagnosticMaintenanceTests(unittest.TestCase):
 
     def test_knowledge_startup_failure_does_not_skip_authorized_reporter(self):
         import session_maintenance
+        self.enterContext(patch.dict(os.environ, CODEX_THREAD_ID="maintenance-session"))
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "codex.json"
-            config.write_text(json.dumps({"engine_config": str(config.with_suffix(".engine.json"))}))
+            admission = config.with_suffix(".admission.sqlite3")
+            from mindie_knowledge.loop.activation import Admission
+            Admission(admission).activate("maintenance-session", project_root=directory)
+            config.write_text(json.dumps({"engine_config": str(config.with_suffix(".engine.json")),
+                                          "admission_path": str(admission)}))
             stages = []
 
             def connect(_engine):

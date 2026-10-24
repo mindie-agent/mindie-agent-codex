@@ -39,6 +39,17 @@ class GeneralRemoteTests(unittest.TestCase):
     def request(self, identity=1, turn='turn-1', session='task-A'):
         return {'id': identity, 'params': {'name': 'remote_bash', 'arguments': {'command': 'true', 'host': 'example.invalid'}, '_meta': {'threadId': session, 'x-codex-turn-metadata': {'thread_id': session, 'session_id': session, 'turn_id': turn}}}}
 
+    def knowledge_request(self):
+        from mindie_knowledge.loop.activation import Admission
+        path = self.root / 'admission.sqlite3'
+        config = json.loads(self.config.read_text())
+        config['admission_path'] = str(path)
+        self.config.write_text(json.dumps(config))
+        lease = Admission(path).activate('task-A', project_root=str(self.root))
+        return {'surface': 'knowledge', 'mindie_activation': lease['token'],
+                'mindie_session_id': 'task-A', 'arguments': {'ref': 'x'},
+                'name': 'knowledge_explain'}
+
     def test_no_activation_no_engine_and_persisted_request_identity(self):
         with patch.object(mcp_gate, 'run', return_value=ProcessResult("completed", '{"content":[], "isError":false}', 0)) as dispatch:
             gate = mcp_gate.Gate('remote')
@@ -276,13 +287,10 @@ class GeneralRemoteTests(unittest.TestCase):
             close.assert_called_once()
 
     def test_knowledge_reference_and_continuation_codes_survive_the_adapter(self):
-        payload = {'surface': 'knowledge', 'mindie_activation': 'test-token',
-                   'mindie_session_id': 'task-A', 'arguments': {'ref': 'x'},
-                   'name': 'knowledge_explain'}
+        payload = self.knowledge_request()
         for code in ('reference_invalid', 'withdrawn', 'removed_or_superseded',
                      'continuation_invalid', 'continuation_expired'):
             with self.subTest(code=code), \
-                 patch.object(runtime_call, 'resolve_lease', return_value={'session': 'task-A'}), \
                  patch.object(runtime_call, 'finish_outcome'), \
                  patch('service_client.connect', return_value={}), \
                  patch('mindie_knowledge.loop.transport.rpc', side_effect=RequestRejected(
@@ -295,12 +303,9 @@ class GeneralRemoteTests(unittest.TestCase):
             self.assertFalse(result['structuredContent']['automatic_retry'])
 
     def test_knowledge_read_rejection_keeps_reason_without_retrying_mutations(self):
-        payload = {'surface': 'knowledge', 'mindie_activation': 'test-token',
-                   'mindie_session_id': 'task-A', 'arguments': {'ref': 'x'},
-                   'name': 'knowledge_explain'}
+        payload = self.knowledge_request()
         finished = []
-        with patch.object(runtime_call, 'resolve_lease', return_value={'session': 'task-A'}), \
-             patch.object(runtime_call, 'finish_outcome', side_effect=lambda *a, **k: finished.append(a[-1])), \
+        with patch.object(runtime_call, 'finish_outcome', side_effect=lambda *a, **k: finished.append(a[-1])), \
              patch('service_client.connect', return_value={}), \
              patch('mindie_knowledge.loop.transport.rpc', side_effect=RequestRejected('ambiguous reference')) as rpc:
             result = runtime_call.call(payload)
@@ -318,12 +323,9 @@ class GeneralRemoteTests(unittest.TestCase):
 
 
     def test_wire_failure_is_not_an_input_rejection(self):
-        payload = {'surface': 'knowledge', 'mindie_activation': 'test-token',
-                   'mindie_session_id': 'task-A', 'arguments': {'ref': 'x'},
-                   'name': 'knowledge_explain'}
+        payload = self.knowledge_request()
         finished = []
-        with patch.object(runtime_call, 'resolve_lease', return_value={'session': 'task-A'}), \
-             patch.object(runtime_call, 'finish_outcome', side_effect=lambda *a, **k: finished.append(a[-1])), \
+        with patch.object(runtime_call, 'finish_outcome', side_effect=lambda *a, **k: finished.append(a[-1])), \
              patch('service_client.connect', return_value={}), \
              patch('mindie_knowledge.loop.transport.rpc', side_effect=ValueError('response exceeds limit')):
             with self.assertRaisesRegex(ValueError, 'response exceeds'):
