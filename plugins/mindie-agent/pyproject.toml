@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mindie-agent-codex"
-version = "0.1.2"
+version = "0.1.3"
 description = "Codex adapter for MindIE Agent"
 requires-python = ">=3.11"
 dependencies = ["mindie-knowledge", "remote-dev", "mindie-diagnostics"]
 
 [tool.uv.sources]
-mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "38a42f6f778cfa555d8918fdcacd12cee4a181f5" }
+mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "6e921b205c00d592c25f849653cbfb72b73fe318" }
 remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "0463a13fce9618ec9a51904869d61acb0cdb8538" }
 mindie-diagnostics = { git = "https://github.com/mindie-agent/diagnostics", rev = "801a01b2789aed7f58e971a909205a7d40b61077" }
 
