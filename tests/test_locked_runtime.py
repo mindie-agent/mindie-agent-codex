@@ -93,11 +93,17 @@ class RuntimeTests(unittest.TestCase):
                     exec(native_entry.launcher_code('0.0.1'))
             self.assertEqual(list(Path(directory).iterdir()),[])
 
-    def test_native_startup_window_covers_installation_without_changing_tool_timeouts(self):
+    def test_native_startup_and_component_call_windows_cover_inner_budgets(self):
         servers = json.loads((SCRIPTS.parent / ".mcp.json").read_text())["mcpServers"]
-        for server in servers.values():
+        from component_tools import catalog
+        for name, server in servers.items():
             self.assertEqual(server["startup_timeout_sec"], 1080)
-            self.assertNotIn("tool_timeout_sec", server)
+            if name == "mindie-tools":
+                maximum = max(tool["inputSchema"]["properties"]["timeout_ms"]["maximum"]
+                              for tool in catalog()) / 1000
+                self.assertGreaterEqual(server["tool_timeout_sec"], maximum + 6)
+            else:
+                self.assertNotIn("tool_timeout_sec", server)
 
     def test_fixed_entry_prefers_prepared_release_after_cache_eviction(self):
         with tempfile.TemporaryDirectory() as directory:

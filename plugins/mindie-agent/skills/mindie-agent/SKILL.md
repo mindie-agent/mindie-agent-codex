@@ -15,6 +15,15 @@ This reuses the native grant and prepares eligible capture. Check the returned
 activation result before querying. Reuse that task's grant
 until explicit deactivation; new chats, forks and subagents need their own entry.
 
+Knowledge tools are absent from default MCP discovery. After activation, run
+the configured `python -I <runtime_scripts>/knowledge_cli.py describe` to load
+their schemas. Execute a knowledge operation with
+`python -I <runtime_scripts>/knowledge_cli.py <tool_name>`, passing its JSON
+arguments on stdin. This uses the same domain engine and native session grant;
+it does not register knowledge tools in a shared MCP connection. Preserve the
+returned `isError` and nonzero exit status. Ordinary tasks must not load this
+private catalog.
+
 The manual entry gates the entire knowledge flywheel: query, explain, feedback,
 distillation, knowledge sync and background `Stop` capture. Capture additionally
 requires the saved contribution choice and approved project scope. Installation,
@@ -22,14 +31,14 @@ consent, discovery and ordinary prompts never activate knowledge or capture.
 Reuse saved contribution choices without asking again.
 
 The manual grant controls knowledge and experience context only. Configured
-deterministic tools, including resource probes/leases, monitoring, profiling,
+deterministic tools, including resource probes/leases, profiling,
 simulation calculations, local diagnostics and factual status checks, remain
 available independently. Call their ordinary tool/CLI interfaces directly;
 they do not require loading this knowledge skill.
 
 ## Core Tools in Everyday Tasks
 
-- **Domain Knowledge (`mindie-knowledge` MCP — Graded `L1–L4`, Multi-Domain Routing & Three-Valued `conditions`)**:
+- **Domain Knowledge (private manual entry — Graded `L1–L4`, Multi-Domain Routing & Three-Valued `conditions`)**:
   - `knowledge_query`: search the default or explicitly selected `domain` (`query`, optional `domain`, `limit` 1–20, `continuation`, plus graded parameters `domain_path`, `token_budget` 1–16000, `include_unknown`, `include_archived`). Returns bounded navigation `cards`, deduplicated `foundation_cards`, and `usage`; unknown conditions stay `match_status="condition_unknown"` with `ready_to_apply=false`, and archived/superseded units are excluded unless `include_archived=true`.
   - `knowledge_explain(ref=... | refs=[...], conditions=..., known_refs=..., token_budget=4096)`: read query's readable `ref` (`mindie://<domain>/units/<id>@<integer revision>`) or `unit_ref` for a `graded_unit` (which also returns `feedback_ref`), or a task/block `ref` for legacy block navigation. Batch `refs` assembles the dependency closure (`units` + `requires`) minus exact `known_refs`, expanding each shared premise once and never truncating a body; `unresolved` reports `condition_unknown`, `condition_mismatch`, `budget_excluded`, `removed_or_superseded`, and `not_found`. Routing uses the `mindie://<domain>/...` URI authority (for graded units `ref` and `feedback_ref` share the same revision-bound URI value, whereas legacy material keeps `ref` and `feedback_ref` distinct; never pass a bare `id`; a batch must not mix domain authorities).
   - `knowledge_feedback`: optionally record `up` or `down` by copying the exact returned `feedback_ref` (`mindie://<domain>/...`, routed by URI authority domain, including revision-bound `/units/<id>@<integer revision>` for graded units; never pass a bare `id`). In the same call, or as an event-only call, record the four-stage usage flywheel with optional `event_type` (`discovered` | `loaded` | `applied` | `evaluated`), `run_id`, `step_id`, and, for `evaluated`, `outcome` (`supported` | `refuted` | `inconclusive`).

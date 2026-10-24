@@ -259,7 +259,8 @@ class SessionGateTests(unittest.TestCase):
             dict(jsonrpc="2.0", id=2, method="tools/list"),
         ]
         for script, argv, count in [
-            ("bridge.py", ["mcp"], 4),
+            ("bridge.py", ["mcp"], 0),
+            ("mcp_gate.py", ["components"], 5),
             ("remote_bridge.py", [], 11),
         ]:
             result = subprocess.run(

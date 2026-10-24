@@ -159,7 +159,7 @@
         "scripts/native_entry.py:write_manifests"
       ],
       "test_ids": [
-        "tests/test_locked_runtime.py::RuntimeTests.test_native_startup_window_covers_installation_without_changing_tool_timeouts"
+        "tests/test_locked_runtime.py::RuntimeTests.test_native_startup_and_component_call_windows_cover_inner_budgets"
       ],
       "evidence_refs": [
         "docs/harness-interfaces.md#native-turn-interruption",
@@ -402,7 +402,7 @@
       "test_ids": [
         "tests/test_native_interrupt.py::NativeInterruptTests.test_hidden_control_bypasses_full_capacity_and_preserves_standard_cancel",
         "tests/test_native_interrupt.py::NativeInterruptTests.test_invalid_or_contradictory_control_never_cancels",
-        "tests/test_native_hook_entry.py::NativeHookEntryTests.test_interrupt_hooks_target_both_existing_connections_with_exact_identity",
+        "tests/test_native_hook_entry.py::NativeHookEntryTests.test_interrupt_hooks_target_public_connections_with_exact_identity",
         "tests/test_native_hooks.py::HookTests.test_interrupt_trust_is_limited_to_exact_previously_approved_handlers"
       ],
       "evidence_refs": [
