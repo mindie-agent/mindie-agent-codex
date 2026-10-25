@@ -93,11 +93,19 @@ class RemoteContentAndOutcomeTests(unittest.TestCase):
 
     def test_real_bounded_process_keeps_page_above_old_256k_cap(self):
         page = text_page(300 * 1024)
-        script = 'import sys; sys.stdout.write(' + repr(page) + ')'
-        result = bounded_process.run(
-            [sys.executable, '-c', script], '', timeout=10,
-            max_output=mcp_gate.REMOTE_MAX_OUTPUT,
+        # Generate the payload inside the child; a 300 KiB literal in argv hits
+        # Windows WinError 206 / Linux E2BIG before the transport is exercised.
+        script = (
+            "import sys\n"
+            "sys.stdout.write(''.join(chr(ord('a') + i % 26) for i in range(300 * 1024)))\n"
         )
+        with tempfile.TemporaryDirectory() as directory:
+            script_path = Path(directory) / 'generate_page.py'
+            script_path.write_text(script, encoding='utf-8')
+            result = bounded_process.run(
+                [sys.executable, str(script_path)], '', timeout=10,
+                max_output=mcp_gate.REMOTE_MAX_OUTPUT,
+            )
         output = result.checked_stdout()
         self.assertEqual(result.execution, 'completed')
         self.assertEqual(output, page)
