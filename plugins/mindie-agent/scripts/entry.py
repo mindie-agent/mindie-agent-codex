@@ -9,6 +9,7 @@ Fixed release entrypoint (`releases/<version>/entry.py`) that validates `runtime
 
 [Timeouts & Locks]
 - Acquires `update_lock(config)` (`blocking=True` except on `stop`) around profile validation and initialization.
+- Every long-lived MCP role, including `tools-mcp`, releases that shared lock before serve dispatch; `Gate.call` acquires it again only for an actual tool call.
 - Session maintenance has a 300-second execution budget for reporter, feed,
   and knowledge readiness, followed by bounded owned-process cleanup.
 - Release dispatch to helper scripts is bounded at 120.0s.
@@ -186,7 +187,7 @@ def main():
             _installed_profile(config, read(args.release / "runtime.json"))
             bind_explicit_config(config)
             os.environ.update(runtime_env(config))
-            mcp = args.role in {'knowledge-mcp', 'remote-mcp'} or (
+            mcp = args.role in {'knowledge-mcp', 'remote-mcp', 'tools-mcp'} or (
                 args.role == 'bridge' and args.arguments[:1] == ['mcp'])
             if not mcp:
                 return dispatch(args, config)

@@ -3,9 +3,11 @@ import json
 import io
 import os
 from pathlib import Path
+import queue
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import ExitStack, redirect_stderr
@@ -258,6 +260,166 @@ class RuntimeTests(unittest.TestCase):
                 stdout, stderr = process.communicate(timeout=10)
                 self.assertEqual(process.returncode, 0, stdout + stderr)
                 self.assertTrue(dispatched.exists())
+
+    @staticmethod
+    def _exclusive_lock_probe_source():
+        """A separate interpreter requests the activation lock without waiting."""
+        return (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "from update_lock import update_lock\n"
+            "try:\n"
+            "    with update_lock(Path(sys.argv[2]), exclusive=True):\n"
+            "        print('acquired')\n"
+            "except BlockingIOError:\n"
+            "    print('blocked')\n"
+        )
+
+    def _exclusive_lock_probe(self, config):
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", self._exclusive_lock_probe_source(),
+             str(SCRIPTS), str(config)],
+            capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            raise AssertionError(result.stderr)
+        return result.stdout.strip()
+
+    @staticmethod
+    def _readline(process, timeout=10):
+        messages = queue.Queue()
+        threading.Thread(
+            target=lambda: messages.put(process.stdout.readline()), daemon=True
+        ).start()
+        try:
+            return messages.get(timeout=timeout)
+        except queue.Empty:
+            raise AssertionError("Gate process did not reply") from None
+
+    def test_each_mcp_entry_releases_lock_before_idle_dispatch(self):
+        """Run the real entry in a separate process and probe its OS lock.
+
+        Only the long-lived serve dispatch is replaced: at that point an
+        independent interpreter requests the exclusive activation lock. All
+        three MCP roles must reach dispatch without holding the shared lock.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = root / "release"
+            release.mkdir()
+            config, engine = root / "adapter.json", root / "engine.json"
+            adapter = dict(
+                python=sys.executable, runtime_scripts=str(SCRIPTS),
+                engine_config=str(engine), product_validation={})
+            config.write_text(json.dumps(adapter))
+            engine.write_text(json.dumps(dict(
+                transcript_adapter=str(SCRIPTS / "codex_transcript.py"),
+                product_validation={})))
+            (release / "runtime.json").write_text(json.dumps(
+                dict(key="fixture", python=sys.executable, validation={})))
+            environment = dict(
+                os.environ, MINDIE_AGENT_CONFIG=str(config),
+                MINDIE_DIAGNOSTICS_ROOT=str(root / "diagnostics"),
+                MINDIE_DIAGNOSTICS_CONFIG=str(root / "diagnostics.json"))
+            probe = self._exclusive_lock_probe_source()
+            entry_code = (
+                "import subprocess,sys\n"
+                f"scripts={str(SCRIPTS)!r}\n"
+                f"probe={probe!r}\n"
+                "sys.path.insert(0,scripts)\n"
+                "import entry,session_gate\n"
+                "role=sys.argv[1]\n"
+                "def dispatch(args,config,**kwargs):\n"
+                " result=subprocess.run([sys.executable,'-I','-c',probe,\n"
+                "  scripts,str(config)],capture_output=True,text=True,\n"
+                "  timeout=10,check=True)\n"
+                " print(result.stdout.strip())\n"
+                "entry.dispatch=dispatch\n"
+                "session_gate.runtime_env=lambda _:{}\n"
+                f"sys.argv=['entry','--release',{str(release)!r},role]\n"
+                "entry.main()\n"
+            )
+            for role in ("knowledge-mcp", "remote-mcp", "tools-mcp"):
+                with self.subTest(role=role):
+                    result = subprocess.run(
+                        [sys.executable, "-I", "-c", entry_code, role],
+                        capture_output=True, text=True, timeout=20,
+                        env=environment)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(
+                        result.stdout.strip(), "acquired",
+                        f"{role} idle dispatch still holds the shared update lock")
+
+    def test_component_gate_call_holds_lock_only_while_executing(self):
+        """A real component call must prevent activation only while it runs."""
+        from tests.process_fixtures import owned_fixture_process
+
+        component_code = (
+            "import sys,time;from pathlib import Path\n"
+            "Path(sys.argv[1]).write_text('started')\n"
+            "deadline=time.monotonic()+10\n"
+            "while not Path(sys.argv[2]).exists():\n"
+            " if time.monotonic()>deadline:raise SystemExit(3)\n"
+            " time.sleep(.01)\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config, engine = root / "adapter.json", root / "engine.json"
+            adapter = dict(
+                python=sys.executable, runtime_scripts=str(SCRIPTS),
+                engine_config=str(engine), product_validation={},
+                component_commands={"profiler": [
+                    sys.executable, "-I", "-c", component_code]})
+            config.write_text(json.dumps(adapter))
+            engine.write_text(json.dumps(dict(
+                transcript_adapter=str(SCRIPTS / "codex_transcript.py"),
+                product_validation={})))
+            environment = dict(
+                os.environ, MINDIE_AGENT_CONFIG=str(config),
+                MINDIE_DIAGNOSTICS_ROOT=str(root / "diagnostics"),
+                MINDIE_DIAGNOSTICS_CONFIG=str(root / "diagnostics.json"))
+            marker = root / "component-started"
+            release_file = root / "component-release"
+            request = dict(
+                id=1, params=dict(
+                    name="profiler",
+                    arguments=dict(
+                        argv=[str(marker), str(release_file)], timeout_ms=15000),
+                    _meta=dict(
+                        threadId="idle-lock-task",
+                        **{"x-codex-turn-metadata": dict(
+                            thread_id="idle-lock-task", session_id="idle-lock-task",
+                            turn_id="turn-1")}),
+                ))
+            gate_code = (
+                "import json,sys\n"
+                f"sys.path.insert(0,{str(SCRIPTS)!r})\n"
+                "from mcp_gate import Gate\n"
+                f"request={request!r}\n"
+                "print(json.dumps(Gate('components').call(request)), flush=True)\n"
+            )
+            with owned_fixture_process(
+                    [sys.executable, "-I", "-c", gate_code],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, bufsize=1, env=environment) as process:
+                until = time.monotonic() + 10
+                while not marker.exists() and time.monotonic() < until:
+                    if process.poll() is not None:
+                        break
+                    time.sleep(.01)
+                self.assertTrue(marker.exists(), "component child did not start")
+                self.assertEqual(
+                    self._exclusive_lock_probe(config), "blocked",
+                    "Gate.call did not hold the shared update lock")
+                release_file.write_text("release")
+                result = json.loads(self._readline(process))
+                self.assertFalse(result.get("isError"), result)
+                self.assertEqual(result["structuredContent"]["exit_code"], 0)
+                self.assertEqual(
+                    self._exclusive_lock_probe(config), "acquired",
+                    "Gate.call did not release the shared update lock")
+                stdout, stderr = process.communicate(timeout=10)
+                self.assertEqual(process.returncode, 0, stdout + stderr)
 
     def test_warm_stop_checks_exact_profile_without_source_hash(self):
         with tempfile.TemporaryDirectory() as directory:
