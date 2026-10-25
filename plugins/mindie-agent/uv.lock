@@ -14,7 +14,7 @@ resolution-markers = [
 ]
 
 [manifest]
-overrides = [{ name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=1c465a18e4db59a0889557971b59d6233d8ae726" }]
+overrides = [{ name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=5ae643e19223f2181ecdbaa3edaf464137c4805e" }]
 
 [[package]]
 name = "agentscope"
@@ -1951,15 +1951,15 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=1c465a18e4db59a0889557971b59d6233d8ae726" },
+    { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=5ae643e19223f2181ecdbaa3edaf464137c4805e" },
     { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=6e921b205c00d592c25f849653cbfb72b73fe318" },
-    { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=2bd3a9e7c89a49cb9d495405a87316f5ea3064ec" },
+    { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=4c40cb5d302ddb8400ff6abb7dc47873b931eaa9" },
 ]
 
 [[package]]
 name = "mindie-diagnostics"
-version = "0.5.3"
-source = { git = "https://github.com/mindie-agent/diagnostics?rev=1c465a18e4db59a0889557971b59d6233d8ae726#1c465a18e4db59a0889557971b59d6233d8ae726" }
+version = "0.5.4"
+source = { git = "https://github.com/mindie-agent/diagnostics?rev=5ae643e19223f2181ecdbaa3edaf464137c4805e#5ae643e19223f2181ecdbaa3edaf464137c4805e" }
 
 [[package]]
 name = "mindie-knowledge"
@@ -3382,7 +3382,7 @@ as = [
 [[package]]
 name = "remote-dev"
 version = "0.10.7"
-source = { git = "https://github.com/mindie-agent/remote-dev?rev=2bd3a9e7c89a49cb9d495405a87316f5ea3064ec#2bd3a9e7c89a49cb9d495405a87316f5ea3064ec" }
+source = { git = "https://github.com/mindie-agent/remote-dev?rev=4c40cb5d302ddb8400ff6abb7dc47873b931eaa9#4c40cb5d302ddb8400ff6abb7dc47873b931eaa9" }
 dependencies = [
     { name = "mindie-diagnostics" },
 ]
