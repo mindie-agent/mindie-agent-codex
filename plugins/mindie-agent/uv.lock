@@ -14,7 +14,7 @@ resolution-markers = [
 ]
 
 [manifest]
-overrides = [{ name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=1c465a18e4db59a0889557971b59d6233d8ae726" }]
+overrides = [{ name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=5ae643e19223f2181ecdbaa3edaf464137c4805e" }]
 
 [[package]]
 name = "agentscope"
@@ -1941,7 +1941,7 @@ wheels = [
 
 [[package]]
 name = "mindie-agent-codex"
-version = "0.1.8"
+version = "0.1.9"
 source = { editable = "." }
 dependencies = [
     { name = "mindie-diagnostics" },
@@ -1951,15 +1951,15 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=1c465a18e4db59a0889557971b59d6233d8ae726" },
+    { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=5ae643e19223f2181ecdbaa3edaf464137c4805e" },
     { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=6e921b205c00d592c25f849653cbfb72b73fe318" },
-    { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=0463a13fce9618ec9a51904869d61acb0cdb8538" },
+    { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=4c40cb5d302ddb8400ff6abb7dc47873b931eaa9" },
 ]
 
 [[package]]
 name = "mindie-diagnostics"
-version = "0.5.3"
-source = { git = "https://github.com/mindie-agent/diagnostics?rev=1c465a18e4db59a0889557971b59d6233d8ae726#1c465a18e4db59a0889557971b59d6233d8ae726" }
+version = "0.5.4"
+source = { git = "https://github.com/mindie-agent/diagnostics?rev=5ae643e19223f2181ecdbaa3edaf464137c4805e#5ae643e19223f2181ecdbaa3edaf464137c4805e" }
 
 [[package]]
 name = "mindie-knowledge"
@@ -3381,8 +3381,8 @@ as = [
 
 [[package]]
 name = "remote-dev"
-version = "0.10.6"
-source = { git = "https://github.com/mindie-agent/remote-dev?rev=0463a13fce9618ec9a51904869d61acb0cdb8538#0463a13fce9618ec9a51904869d61acb0cdb8538" }
+version = "0.10.7"
+source = { git = "https://github.com/mindie-agent/remote-dev?rev=4c40cb5d302ddb8400ff6abb7dc47873b931eaa9#4c40cb5d302ddb8400ff6abb7dc47873b931eaa9" }
 dependencies = [
     { name = "mindie-diagnostics" },
 ]

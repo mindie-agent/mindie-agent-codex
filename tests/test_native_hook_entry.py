@@ -58,6 +58,12 @@ class NativeHookEntryTests(unittest.TestCase):
                               (self.source / ".mcp.json").read_bytes()))
         self.assertEqual(manifests[0][0], manifests[1][0])
         self.assertNotEqual(manifests[0][1], manifests[1][1])
+        servers = json.loads((self.source / ".mcp.json").read_text())["mcpServers"]
+        self.assertEqual(servers["mindie-remote-dev"]["env"],
+                         {"REMOTE_DEV_HARNESS_PROFILE": "codex"})
+        self.assertNotIn("REMOTE_DEV_HARNESS_PROFILE",
+                         servers["mindie-remote-dev"]["env_vars"])
+        self.assertNotIn("env", servers["mindie-tools"])
         self.assertIn("--offline", native_entry.hook_commands("stop")["command"])
         self.assertIn("--no-python-downloads", native_entry.hook_commands("stop")["command"])
 

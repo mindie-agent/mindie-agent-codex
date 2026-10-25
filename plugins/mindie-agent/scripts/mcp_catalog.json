@@ -398,7 +398,33 @@
           "limit": {
             "type": "integer",
             "default": 200,
-            "maximum": 500
+            "maximum": 1000000
+          },
+          "max_chars": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional character budget for the returned text, including line-number prefixes. Native Kimi Read advertises 100000 by default and 500000 maximum; canonical calls leave it unset."
+          },
+          "column_offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Zero-based character offset within the first selected line of a forward read, excluding the line-number prefix."
+          },
+          "pages": {
+            "type": "string",
+            "description": "PDF page range (native Claude Read pages). Remote-dev does not render PDF pages; a PDF read returns an explicit pdf_unsupported error."
+          },
+          "strict_offset": {
+            "type": "boolean",
+            "description": "Fail when offset is past EOF instead of returning an empty page (native DSH read)."
+          },
+          "utf16_units": {
+            "type": "boolean",
+            "description": "Measure column_offset/max_chars/line lengths in JavaScript UTF-16 code units (native Kimi Read)."
+          },
+          "utf8_only": {
+            "type": "boolean",
+            "description": "Do not auto-detect UTF-16; native Claude/DSH Read are UTF-8 only."
           },
           "line_offset": {
             "type": "integer",
@@ -549,6 +575,208 @@
       }
     },
     {
+      "name": "remote_edit",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Edit a remote file with exact string replacement and optional read-ledger concurrency checks.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "user": {
+            "type": "string",
+            "default": "root"
+          },
+          "container": {
+            "type": "string",
+            "description": "Existing Docker container name or ID on the SSH host. All tools operate inside it; results return a full ID for reuse without another name lookup. No provisioning or managed allocation."
+          },
+          "root": {
+            "type": "string",
+            "default": "/"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "runtime_env": {
+            "type": "boolean",
+            "default": true
+          },
+          "identity_file": {
+            "type": "string"
+          },
+          "connect_timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
+          },
+          "runtime_env_file": {
+            "type": "string",
+            "description": "Remote profile script sourced before commands when runtime_env is true."
+          },
+          "alias": {
+            "type": "string",
+            "description": "Name from the endpoint alias files."
+          },
+          "file_path": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "description": "Alias of file_path."
+          },
+          "old_string": {
+            "type": "string"
+          },
+          "new_string": {
+            "type": "string"
+          },
+          "replace_all": {
+            "type": "boolean"
+          },
+          "normalize_crlf": {
+            "type": "boolean",
+            "description": "Match a pure-CRLF file through its native LF view and restore CRLF on write (Claude/Kimi/DSH Edit)."
+          },
+          "start_line": {
+            "type": "integer",
+            "description": "Optional 1-based inclusive start line scoping the replacement (Antigravity StartLine habit)."
+          },
+          "end_line": {
+            "type": "integer",
+            "description": "Optional 1-based inclusive end line scoping the replacement (Antigravity EndLine habit)."
+          },
+          "instruction": {
+            "type": "string",
+            "description": "Optional edit instruction (Antigravity replace_file_content habit)."
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional edit description (Antigravity replace_file_content habit)."
+          },
+          "client_context_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "old_string",
+          "new_string"
+        ],
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; the alias path / TargetFile is also accepted. Enforced by the server so alias-only calls pass provider schema validation."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "remote_multi_edit",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Apply multiple exact edits atomically to one remote file.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "user": {
+            "type": "string",
+            "default": "root"
+          },
+          "container": {
+            "type": "string",
+            "description": "Existing Docker container name or ID on the SSH host. All tools operate inside it; results return a full ID for reuse without another name lookup. No provisioning or managed allocation."
+          },
+          "root": {
+            "type": "string",
+            "default": "/"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "runtime_env": {
+            "type": "boolean",
+            "default": true
+          },
+          "identity_file": {
+            "type": "string"
+          },
+          "connect_timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
+          },
+          "runtime_env_file": {
+            "type": "string",
+            "description": "Remote profile script sourced before commands when runtime_env is true."
+          },
+          "alias": {
+            "type": "string",
+            "description": "Name from the endpoint alias files."
+          },
+          "file_path": {
+            "type": "string"
+          },
+          "edits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "old_string": {
+                  "type": "string"
+                },
+                "new_string": {
+                  "type": "string",
+                  "default": ""
+                },
+                "replace_all": {
+                  "type": "boolean",
+                  "default": false
+                }
+              },
+              "required": [
+                "old_string"
+              ]
+            }
+          },
+          "path": {
+            "type": "string",
+            "description": "Alias of file_path."
+          },
+          "instruction": {
+            "type": "string",
+            "description": "Optional edit instruction (Antigravity multi_replace_file_content habit)."
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional edit description (Antigravity multi_replace_file_content habit)."
+          },
+          "client_context_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "edits"
+        ],
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; the alias path / TargetFile is also accepted. Enforced by the server so alias-only calls pass provider schema validation."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
       "name": "remote_bash",
       "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Run a remote shell command with Bash-like semantics, logs, preview, and automatic yield, writable stdin and optional PTY.",
       "inputSchema": {
@@ -628,7 +856,7 @@
           "yield_time_ms": {
             "type": "integer",
             "minimum": 0,
-            "maximum": 300000,
+            "maximum": 600000,
             "default": 10000,
             "description": "Remote wait for output/completion after connection and preparation. Returns session_id when running or unread output remains."
           },
@@ -646,10 +874,142 @@
             "additionalProperties": {
               "type": "string"
             }
+          },
+          "job_id": {
+            "type": "string",
+            "description": "Optional caller-assigned job id. Native Codex session ids are numeric; the profile generates a numeric id and returns it as session_id."
+          },
+          "shell": {
+            "type": "string",
+            "description": "Shell binary for this command. Defaults to the remote user's bash."
+          },
+          "login": {
+            "type": "boolean",
+            "description": "Run the selected shell with login semantics (-l); native Codex default is true."
           }
         },
         "required": [],
         "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. command is required; the alias cmd / CommandLine is also accepted (Codex / Antigravity habit). Enforced by the server so alias-only calls pass provider schema validation."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "remote_glob",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Find remote paths with ** glob semantics.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "user": {
+            "type": "string",
+            "default": "root"
+          },
+          "container": {
+            "type": "string",
+            "description": "Existing Docker container name or ID on the SSH host. All tools operate inside it; results return a full ID for reuse without another name lookup. No provisioning or managed allocation."
+          },
+          "root": {
+            "type": "string",
+            "default": "/"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "runtime_env": {
+            "type": "boolean",
+            "default": true
+          },
+          "identity_file": {
+            "type": "string"
+          },
+          "connect_timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
+          },
+          "runtime_env_file": {
+            "type": "string",
+            "description": "Remote profile script sourced before commands when runtime_env is true."
+          },
+          "alias": {
+            "type": "string",
+            "description": "Name from the endpoint alias files."
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Maximum paths after offset. 0 means no match-count limit for native Kimi Glob; canonical callers normally use a positive page size."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of matching paths to skip before the limit."
+          },
+          "respect_gitignore": {
+            "type": "boolean",
+            "description": "Omit paths ignored by .gitignore. Uses git check-ignore when the remote tree is a git worktree; otherwise applies .gitignore rules in-process."
+          },
+          "include_ignored": {
+            "type": "boolean",
+            "description": "Include paths excluded by ignore files; inverse of respect_gitignore, provided for native Kimi/Claude habits."
+          },
+          "extensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional file extensions filter without leading dot (Antigravity find_by_name Extensions habit)."
+          },
+          "excludes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional glob patterns to exclude (Antigravity Excludes / Cursor exclude_pattern habit)."
+          },
+          "entry_type": {
+            "type": "string",
+            "enum": [
+              "file",
+              "directory",
+              "any"
+            ],
+            "description": "Filter by entry type: file, directory, or any (Antigravity find_by_name Type habit)."
+          },
+          "max_depth": {
+            "type": "integer",
+            "description": "Maximum directory traversal depth (Antigravity MaxDepth / Codex depth habit)."
+          },
+          "full_path": {
+            "type": "boolean",
+            "description": "Match pattern against full relative path instead of filename (Antigravity FullPath habit)."
+          },
+          "hidden": {
+            "type": "boolean",
+            "description": "Include dotfiles and hidden directories (native Claude/Kimi Glob); VCS metadata directories remain caller-excluded."
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
       },
       "annotations": {
         "readOnlyHint": false,
@@ -749,6 +1109,10 @@
             "type": "boolean",
             "description": "Treat pattern as a literal string instead of a regular expression (rg -F / grep -F; Antigravity IsRegex=false habit)."
           },
+          "only_matching": {
+            "type": "boolean",
+            "description": "Print only the matched non-empty parts, one per output line (rg -o; Claude Code Grep -o habit). Only applies to output_mode=content."
+          },
           "case_insensitive": {
             "type": "boolean",
             "description": "Case-insensitive matching (rg -i / grep -i). Alias: -i."
@@ -797,13 +1161,27 @@
             "type": "integer",
             "description": "Alias of limit (Kimi/Claude native Grep habit)."
           },
+          "hidden": {
+            "type": "boolean",
+            "description": "Search hidden dotfiles even when include_ignored is false (native Kimi Grep default)."
+          },
           "include_ignored": {
             "type": "boolean",
             "description": "Also search hidden paths and paths ignored by .gitignore (rg --no-ignore --hidden). The grep fallback cannot evaluate .gitignore rules; there it only lifts the default hidden/.git directory excludes and reports a warning."
           },
           "limit": {
             "type": "integer",
-            "maximum": 500
+            "minimum": 0,
+            "maximum": 100000,
+            "description": "Maximum lines/entries after offset. 0 means no match-count limit for native Kimi Grep."
+          },
+          "sort_by_mtime": {
+            "type": "boolean",
+            "description": "Sort files_with_matches by modification time descending before pagination (native Claude/Kimi Grep); canonical callers leave it unset."
+          },
+          "require_rg": {
+            "type": "boolean",
+            "description": "Fail explicitly when ripgrep is unavailable instead of using the grep fallback (native Claude/Kimi Grep semantics depend on rg ignore/hidden handling)."
           }
         },
         "required": [
@@ -819,8 +1197,8 @@
       }
     },
     {
-      "name": "remote_apply_patch",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Apply a Codex apply_patch payload or unified diff on a remote endpoint.",
+      "name": "remote_ls",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. List a remote directory without reading file contents.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -866,22 +1244,93 @@
             "type": "string",
             "description": "Name from the endpoint alias files."
           },
-          "patch": {
-            "type": "string",
-            "description": "Codex apply_patch payload or unified diff. Prefer this field."
+          "path": {
+            "type": "string"
           },
-          "command": {
-            "type": "string",
-            "description": "Legacy alias for the patch payload, not a shell command."
+          "limit": {
+            "type": "integer"
           },
-          "timeout_ms": {
+          "all": {
+            "type": "boolean"
+          },
+          "max_depth": {
             "type": "integer",
-            "minimum": 1,
-            "description": "Optional explicit execution limit in milliseconds. Omit to wait for completion, failure or cancellation."
+            "description": "Maximum directory traversal depth (default 1; Codex/DSH depth habit)."
+          },
+          "ignore_globs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional glob patterns to omit from directory listing (Cursor ignore_globs habit)."
           }
         },
         "required": [],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. Provide a non-empty patch or command. If both are provided, patch takes precedence. Missing patch content is rejected by the server."
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "remote_apply_patch",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Apply a Codex apply_patch payload. Native apply_patch is freeform; over MCP the raw patch text is passed in `patch`.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "user": {
+            "type": "string",
+            "default": "root"
+          },
+          "container": {
+            "type": "string",
+            "description": "Existing Docker container name or ID on the SSH host. All tools operate inside it; results return a full ID for reuse without another name lookup. No provisioning or managed allocation."
+          },
+          "root": {
+            "type": "string",
+            "default": "/"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "runtime_env": {
+            "type": "boolean",
+            "default": true
+          },
+          "identity_file": {
+            "type": "string"
+          },
+          "connect_timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
+          },
+          "runtime_env_file": {
+            "type": "string",
+            "description": "Remote profile script sourced before commands when runtime_env is true."
+          },
+          "alias": {
+            "type": "string",
+            "description": "Name from the endpoint alias files."
+          },
+          "patch": {
+            "type": "string",
+            "description": "Raw *** Begin Patch ... *** End Patch text."
+          }
+        },
+        "required": [
+          "patch"
+        ],
+        "additionalProperties": false
       },
       "annotations": {
         "readOnlyHint": false,
@@ -1072,6 +1521,96 @@
       }
     },
     {
+      "name": "remote_job_output",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Read remote background job output through the shared process supervisor.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "user": {
+            "type": "string",
+            "default": "root"
+          },
+          "container": {
+            "type": "string",
+            "description": "Existing Docker container name or ID on the SSH host. All tools operate inside it; results return a full ID for reuse without another name lookup. No provisioning or managed allocation."
+          },
+          "root": {
+            "type": "string",
+            "default": "/"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "runtime_env": {
+            "type": "boolean",
+            "default": true
+          },
+          "identity_file": {
+            "type": "string"
+          },
+          "connect_timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
+          },
+          "runtime_env_file": {
+            "type": "string",
+            "description": "Remote profile script sourced before commands when runtime_env is true."
+          },
+          "alias": {
+            "type": "string",
+            "description": "Name from the endpoint alias files."
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "lines": {
+            "type": "integer",
+            "maximum": 500
+          },
+          "stream": {
+            "type": "string",
+            "enum": [
+              "stdout",
+              "stderr",
+              "both"
+            ]
+          },
+          "yield_time_ms": {
+            "type": "integer",
+            "description": "Optional poll wait in milliseconds (DSH/Codex job_output/write_stdin habit)."
+          },
+          "max_output_tokens": {
+            "type": "integer",
+            "description": "Optional output token cap (DSH/Codex habit)."
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "description": "Optional timeout in milliseconds."
+          },
+          "session_id": {
+            "type": "string",
+            "description": "Alias of job_id returned by remote.bash."
+          }
+        },
+        "required": [],
+        "description": "job_id or session_id is required; checked by the server."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
       "name": "remote_job_stop",
       "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Stop a remote background job through the shared process supervisor.",
       "inputSchema": {
@@ -1214,6 +1753,70 @@
         },
         "required": [],
         "description": "job_id or session_id is required; checked by the server."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "remote_artifact_manifest",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Build a remote artifact sha256 manifest.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "user": {
+            "type": "string",
+            "default": "root"
+          },
+          "container": {
+            "type": "string",
+            "description": "Existing Docker container name or ID on the SSH host. All tools operate inside it; results return a full ID for reuse without another name lookup. No provisioning or managed allocation."
+          },
+          "root": {
+            "type": "string",
+            "default": "/"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "runtime_env": {
+            "type": "boolean",
+            "default": true
+          },
+          "identity_file": {
+            "type": "string"
+          },
+          "connect_timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
+          },
+          "runtime_env_file": {
+            "type": "string",
+            "description": "Remote profile script sourced before commands when runtime_env is true."
+          },
+          "alias": {
+            "type": "string",
+            "description": "Name from the endpoint alias files."
+          },
+          "remote_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "remote_path"
+        ],
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
       },
       "annotations": {
         "readOnlyHint": false,
@@ -1371,6 +1974,388 @@
         "readOnlyHint": false,
         "destructiveHint": true,
         "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "remote_context_snapshot",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Write a compact endpoint context snapshot.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "user": {
+            "type": "string",
+            "default": "root"
+          },
+          "container": {
+            "type": "string",
+            "description": "Existing Docker container name or ID on the SSH host. All tools operate inside it; results return a full ID for reuse without another name lookup. No provisioning or managed allocation."
+          },
+          "root": {
+            "type": "string",
+            "default": "/"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "runtime_env": {
+            "type": "boolean",
+            "default": true
+          },
+          "identity_file": {
+            "type": "string"
+          },
+          "connect_timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
+          },
+          "runtime_env_file": {
+            "type": "string",
+            "description": "Remote profile script sourced before commands when runtime_env is true."
+          },
+          "alias": {
+            "type": "string",
+            "description": "Name from the endpoint alias files."
+          },
+          "live_probe": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [],
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "remote_probe",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Probe basic endpoint facts.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "user": {
+            "type": "string",
+            "default": "root"
+          },
+          "container": {
+            "type": "string",
+            "description": "Existing Docker container name or ID on the SSH host. All tools operate inside it; results return a full ID for reuse without another name lookup. No provisioning or managed allocation."
+          },
+          "root": {
+            "type": "string",
+            "default": "/"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "runtime_env": {
+            "type": "boolean",
+            "default": true
+          },
+          "identity_file": {
+            "type": "string"
+          },
+          "connect_timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
+          },
+          "runtime_env_file": {
+            "type": "string",
+            "description": "Remote profile script sourced before commands when runtime_env is true."
+          },
+          "alias": {
+            "type": "string",
+            "description": "Name from the endpoint alias files."
+          },
+          "modules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Explicit module imports to check; default empty."
+          },
+          "diagnose_connection": {
+            "type": "boolean",
+            "default": false,
+            "description": "Compare SSH connections with a fixed read-only probe; never replays a business command."
+          }
+        },
+        "required": [],
+        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "remote_exec_command",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Runs a command in a PTY, returning output or a session ID for ongoing interaction (Codex exec_command).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "user": {
+            "type": "string",
+            "default": "root"
+          },
+          "container": {
+            "type": "string",
+            "description": "Existing Docker container name or ID on the SSH host. All tools operate inside it; results return a full ID for reuse without another name lookup. No provisioning or managed allocation."
+          },
+          "root": {
+            "type": "string",
+            "default": "/"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "runtime_env": {
+            "type": "boolean",
+            "default": true
+          },
+          "identity_file": {
+            "type": "string"
+          },
+          "connect_timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
+          },
+          "runtime_env_file": {
+            "type": "string",
+            "description": "Remote profile script sourced before commands when runtime_env is true."
+          },
+          "alias": {
+            "type": "string",
+            "description": "Name from the endpoint alias files."
+          },
+          "cmd": {
+            "type": "string",
+            "description": "Shell command to execute."
+          },
+          "workdir": {
+            "type": "string",
+            "description": "Working directory for the command. Defaults to the turn cwd."
+          },
+          "tty": {
+            "type": "boolean",
+            "description": "True allocates a PTY; false or omitted uses plain pipes."
+          },
+          "yield_time_ms": {
+            "type": "number",
+            "description": "Wait before yielding output. Defaults to 10000 ms; effective range 250-30000 ms."
+          },
+          "max_output_tokens": {
+            "type": "number",
+            "description": "Output token budget. Defaults to 10000 tokens."
+          },
+          "shell": {
+            "type": "string",
+            "description": "Shell binary executed on the remote endpoint; omitted uses bash."
+          },
+          "login": {
+            "type": "boolean",
+            "description": "Run the selected remote shell with -l; native default true."
+          },
+          "environment_id": {
+            "type": "string",
+            "description": "Environment id; remote-dev supports only the primary environment."
+          },
+          "sandbox_permissions": {
+            "type": "string",
+            "enum": [
+              "use_default",
+              "require_escalated"
+            ]
+          },
+          "justification": {
+            "type": "string"
+          },
+          "prefix_rule": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "cmd"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "remote_write_stdin",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Writes characters to an existing unified exec session and returns recent output (Codex write_stdin).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "user": {
+            "type": "string",
+            "default": "root"
+          },
+          "container": {
+            "type": "string",
+            "description": "Existing Docker container name or ID on the SSH host. All tools operate inside it; results return a full ID for reuse without another name lookup. No provisioning or managed allocation."
+          },
+          "root": {
+            "type": "string",
+            "default": "/"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "runtime_env": {
+            "type": "boolean",
+            "default": true
+          },
+          "identity_file": {
+            "type": "string"
+          },
+          "connect_timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
+          },
+          "runtime_env_file": {
+            "type": "string",
+            "description": "Remote profile script sourced before commands when runtime_env is true."
+          },
+          "alias": {
+            "type": "string",
+            "description": "Name from the endpoint alias files."
+          },
+          "session_id": {
+            "type": "number",
+            "description": "Identifier of the running unified exec session."
+          },
+          "chars": {
+            "type": "string",
+            "description": "Bytes to write to stdin. Defaults to empty, which polls without writing."
+          },
+          "yield_time_ms": {
+            "type": "number",
+            "description": "Wait before yielding output. Non-empty writes default to 250 ms and cap at 30000 ms; empty polls wait 5000-300000 ms by default."
+          },
+          "max_output_tokens": {
+            "type": "number",
+            "description": "Output token budget. Defaults to 10000 tokens."
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "remote_view_image",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. View a local image file from the filesystem when visual inspection is needed (Codex view_image).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "user": {
+            "type": "string",
+            "default": "root"
+          },
+          "container": {
+            "type": "string",
+            "description": "Existing Docker container name or ID on the SSH host. All tools operate inside it; results return a full ID for reuse without another name lookup. No provisioning or managed allocation."
+          },
+          "root": {
+            "type": "string",
+            "default": "/"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "runtime_env": {
+            "type": "boolean",
+            "default": true
+          },
+          "identity_file": {
+            "type": "string"
+          },
+          "connect_timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional caller connection limit in milliseconds; omitted by default."
+          },
+          "runtime_env_file": {
+            "type": "string",
+            "description": "Remote profile script sourced before commands when runtime_env is true."
+          },
+          "alias": {
+            "type": "string",
+            "description": "Name from the endpoint alias files."
+          },
+          "path": {
+            "type": "string",
+            "description": "Local filesystem path to an image file."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": true
       }
     }

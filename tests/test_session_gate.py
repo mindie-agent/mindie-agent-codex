@@ -261,7 +261,8 @@ class SessionGateTests(unittest.TestCase):
         for script, argv, count in [
             ("bridge.py", ["mcp"], 0),
             ("mcp_gate.py", ["components"], 5),
-            ("remote_bridge.py", [], 11),
+            ("remote_bridge.py", [], 22),
+
         ]:
             result = subprocess.run(
                 [sys.executable, str(SCRIPTS / script), *argv],
@@ -396,7 +397,7 @@ class SessionGateTests(unittest.TestCase):
             payload = json.loads(run.call_args.args[1])
             self.assertEqual(payload["arguments"]["session_id"], "remote-job-7")
             self.assertEqual(payload["remote_session_id"], "manual-A")
-            self.assertEqual(run.call_args.kwargs["timeout"], 120.0)
+            self.assertEqual(run.call_args.kwargs["timeout"], 180.0)
         self.assertFalse(self.sessions.path.exists())
 
     def test_rejected_reads_do_not_consume_the_failure_circuit(self):

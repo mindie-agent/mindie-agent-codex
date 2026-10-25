@@ -36,6 +36,52 @@ class CatalogTests(unittest.TestCase):
                     tool["name"],
                 )
 
+    def test_remote_catalog_binds_the_codex_profile_native_tools(self):
+        from remote_dev.mcp.schemas import ALIASES
+        names = [tool["name"] for tool in self.generated["remote"]]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertTrue(set(ALIASES) <= set(names))
+        self.assertTrue(
+            {"remote_exec_command", "remote_write_stdin", "remote_view_image"}
+            <= set(names)
+        )
+        apply_patch = next(
+            tool for tool in self.generated["remote"]
+            if tool["name"] == "remote_apply_patch"
+        )
+        self.assertEqual(apply_patch["inputSchema"]["required"], ["patch"])
+        self.assertEqual(
+            apply_patch["inputSchema"]["properties"]["patch"]["type"], "string"
+        )
+
+    def test_gate_accepts_every_advertised_name_and_rejects_bad_keys(self):
+        from mcp_gate import Gate, InvalidToolArguments
+        gate = Gate("remote")
+        for tool in self.generated["remote"]:
+            args = (
+                {"patch": "*** Begin Patch\n*** End Patch"}
+                if tool["name"] == "remote_apply_patch" else {}
+            )
+            try:
+                gate._tool_args(
+                    {"params": {"name": tool["name"], "arguments": args}}
+                )
+            except InvalidToolArguments as exc:
+                self.assertNotIn("Unknown MindIE tool", str(exc), tool["name"])
+                self.assertIn("missing keys", str(exc), tool["name"])
+        with self.assertRaisesRegex(InvalidToolArguments, "unknown keys"):
+            gate._tool_args({"params": {
+                "name": "remote_apply_patch",
+                "arguments": {
+                    "patch": "*** Begin Patch\n*** End Patch",
+                    "undeclared": True,
+                },
+            }})
+        with self.assertRaisesRegex(InvalidToolArguments, "missing keys"):
+            gate._tool_args({"params": {
+                "name": "remote_apply_patch", "arguments": {},
+            }})
+
     def test_custom_resolver_boilerplate_is_not_advertised(self):
         for tool in self.generated["remote"]:
             text = json.dumps(tool)

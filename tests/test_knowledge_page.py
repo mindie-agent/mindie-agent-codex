@@ -322,7 +322,8 @@ class KnowledgePageTests(unittest.TestCase):
         with patch("mcp_gate.run", fake_run):
             remote_result = remote._remote_call(remote_request, None, None, (SESSION, "unused"))
         self.assertIs(remote_result["isError"], False)
-        self.assertNotIn("max_output", seen[-1])
+        self.assertEqual(seen[-1]["max_output"], mcp_gate.REMOTE_MAX_OUTPUT)
+        self.assertGreaterEqual(seen[-1]["max_output"], 32 * 1024 * 1024)
 
     def test_knowledge_bound_accepts_output_past_512kib(self):
         self.assertEqual(mcp_gate.KNOWLEDGE_MAX_OUTPUT, 1024 * 1024)

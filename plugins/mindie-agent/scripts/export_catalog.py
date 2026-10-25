@@ -1,9 +1,10 @@
 """Build-time schema snapshot; discovery must not import the business runtime.
 
 [Role]
-Generates `mcp_catalog.json` containing the static `knowledge` (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`) and `remote` tool schemas for `mcp_gate.py`.
+Generates `mcp_catalog.json` containing the static `knowledge` (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`) and the exact Codex-profile `remote` tool set returned by `remote_dev.mcp.schemas.harness_catalog("codex")` for `mcp_gate.py`.
 
 [Invariants]
+- The remote set is not a hand-maintained whitelist; it is the same `harness_catalog` payload the MCP server serves, so discovery cannot drift from dispatch.
 - Enforces `additionalProperties: false` on all exported tool input schemas so `mcp_gate.py` can reject undeclared arguments before runtime dispatch.
 - Never advertises internal operations (`knowledge_attach`) or retired tools (`knowledge_use`, `knowledge_judge`).
 
@@ -19,20 +20,6 @@ import json
 from pathlib import Path
 
 from rsi_explore import schema_properties
-
-REMOTE_TOOLS = {
-    "remote_bash",
-    "remote_read",
-    "remote_write",
-    "remote_grep",
-    "remote_apply_patch",
-    "remote_job_status",
-    "remote_job_tail",
-    "remote_job_stdin",
-    "remote_job_stop",
-    "remote_artifact_pull",
-    "remote_artifact_push",
-}
 
 RESOLVER_BOILERPLATE = (
     "A consumer-registered resolver may claim additional keys; "
@@ -62,7 +49,11 @@ REMOTE_MUTATION = dict(
 REMOTE_READ = dict(
     readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
 )
-REMOTE_READ_TOOLS = {"remote_read", "remote_grep", "remote_job_status", "remote_job_tail"}
+REMOTE_READ_TOOLS = {
+    "remote_read", "remote_grep", "remote_job_status", "remote_job_tail",
+    # Native Codex `view_image` is a read-only local-image observation.
+    "remote_view_image",
+}
 
 STRING = {"type": "string"}
 DOMAIN_PATTERN = "^[a-z][a-z0-9-]{0,63}$"
@@ -235,20 +226,28 @@ KNOWLEDGE_TOOLS = [
 
 
 def catalog():
-    from remote_dev.mcp.tools import (
+    from remote_dev.mcp.schemas import (
         ALIASES,
         PARAM_ALIASES,
         TOOL_SCHEMAS,
-        list_tools,
-        selector_fields,
+        harness_catalog,
     )
+    from remote_dev.mcp.tools import selector_fields
 
+    remote = copy.deepcopy(harness_catalog("codex"))
+    names = [tool["name"] for tool in remote]
+    if len(names) != len(set(names)):
+        raise ValueError("Codex harness catalog contains duplicate wire names")
     result = dict(
         knowledge=copy.deepcopy(KNOWLEDGE_TOOLS),
-        remote=[copy.deepcopy(t) for t in list_tools() if t["name"] in REMOTE_TOOLS],
+        remote=remote,
     )
     for tool in result["remote"]:
         schema_ = tool["inputSchema"]
+        if tool["name"] not in ALIASES:
+            # Native profile tools own exact schemas from harness_catalog;
+            # there is no second hand-maintained name or property list here.
+            continue
         # Preserve call-supported keys the advertised schema may omit.
         canonical = ALIASES[tool["name"]]
         call_properties = TOOL_SCHEMAS[canonical]["properties"]

@@ -103,7 +103,12 @@ class RuntimeTests(unittest.TestCase):
                               for tool in catalog()) / 1000
                 self.assertGreaterEqual(server["tool_timeout_sec"], maximum + 6)
             else:
-                self.assertNotIn("tool_timeout_sec", server)
+                # The host default (60s) cannot cover the 600s native Bash
+                # poll plus helper grace and bounded cleanup.
+                import mcp_gate
+                required = (mcp_gate.remote_timeout("remote_bash", {})
+                            + mcp_gate.REMOTE_GRACE_SECONDS)
+                self.assertGreaterEqual(server["tool_timeout_sec"], required)
 
     def test_fixed_entry_prefers_prepared_release_after_cache_eviction(self):
         with tempfile.TemporaryDirectory() as directory:

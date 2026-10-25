@@ -255,6 +255,26 @@ class GeneralRemoteTests(unittest.TestCase):
         self.assertNotIn('local-test-secret', json.dumps(result))
         self.assertEqual(result['structuredContent']['job']['job_id'], 'job-own-1')
 
+    def test_remote_runtime_binds_codex_profile_not_ambient_or_arguments(self):
+        seen = []
+        value = {'text': 'running', 'result': {'outcome': 'success'}}
+
+        def dispatch(name, args):
+            seen.append((name, os.environ.get('REMOTE_DEV_HARNESS_PROFILE'), dict(args)))
+            return value
+
+        with patch.dict(os.environ, {'REMOTE_DEV_HARNESS_PROFILE': 'claude'}), \
+                patch('remote_dev.mcp.tools.call_tool', side_effect=dispatch), \
+                patch('remote_dev.core.rpc_transport.close_connections'):
+            result = runtime_call.call({
+                'surface': 'remote', 'remote_session_id': 'task-A',
+                'name': 'remote_job_status',
+                'arguments': {'job_id': 'job-own-1', 'profile': 'dsh'},
+            })
+        self.assertFalse(result['isError'])
+        self.assertEqual(seen, [('remote_job_status', 'codex',
+                                 {'job_id': 'job-own-1', 'profile': 'dsh'})])
+
     def test_remote_exception_preserves_safe_transport_certainty(self):
         from remote_dev.core.errors import RemoteExecutionError
         cases = [

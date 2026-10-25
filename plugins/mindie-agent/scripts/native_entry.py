@@ -6,6 +6,7 @@ UserPromptSubmit, Stop, Interrupt and the MCP servers.
 
 [Invariants]
 - Hook commands use a version-independent facade reading `~/.config/mindie-agent/codex.json` so running app-servers remain valid across plugin cache updates.
+- The remote-dev MCP launcher carries the literal `REMOTE_DEV_HARNESS_PROFILE=codex` env value; the native profile is never read from tool arguments.
 - `Stop` never bootstraps an unprepared runtime and always returns neutral `{}` stdout to the host.
 - `Interrupt` dispatches `mindie_interrupt` with exact `thread_id`/`turn_id` to the remote and deterministic-component MCP servers (`timeout=3s`).
 
@@ -153,17 +154,26 @@ def write_manifests(root):
     for name, role in (("mindie-remote-dev", "remote-mcp"),
                        ("mindie-tools", "tools-mcp")):
         arguments = command_args(version, role)
-        servers[name] = dict(command=arguments[0], args=arguments[1:],
-                             # The native startup window includes first-use uv
-                             # download/build and the shared preparation lock.
-                             # It does not change business tool-call deadlines.
-                             startup_timeout_sec=1080,
-                             env_vars=["CODEX_HOME", "MINDIE_AGENT_CONFIG",
-                                       "MINDIE_CODEX_BIN", "MINDIE_DIAGNOSTICS_CONFIG",
-                                       "MINDIE_DIAGNOSTICS_ROOT", *TRANSPORT_ENV])
+        server = dict(command=arguments[0], args=arguments[1:],
+                      # The native startup window includes first-use uv
+                      # download/build and the shared preparation lock.
+                      # It does not change business tool-call deadlines.
+                      startup_timeout_sec=1080,
+                      env_vars=["CODEX_HOME", "MINDIE_AGENT_CONFIG",
+                                "MINDIE_CODEX_BIN", "MINDIE_DIAGNOSTICS_CONFIG",
+                                "MINDIE_DIAGNOSTICS_ROOT", *TRANSPORT_ENV])
+        if name == "mindie-remote-dev":
+            # Codex 0.153.4 plugin `.mcp.json` accepts a literal `env` object
+            # (the same RawMcpServerConfig used by `codex mcp add --env`). This
+            # is a trusted launcher value, not an `env_vars` pass-through.
+            server["env"] = {"REMOTE_DEV_HARNESS_PROFILE": "codex"}
+            # 600s native Bash poll + 60s helper grace + bounded cleanup.
+            server["tool_timeout_sec"] = 720
         if role == "tools-mcp":
             # 300s maximum component deadline + owned-process cleanup grace.
-            servers[name]["tool_timeout_sec"] = 330
+            server["tool_timeout_sec"] = 330
+        servers[name] = server
+
     (root / ".mcp.json").write_text(json.dumps({"mcpServers": servers}, indent=2) + "\n",
                                  encoding='utf-8', newline='\n')
 
