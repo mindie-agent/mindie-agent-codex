@@ -886,11 +886,6 @@
           "login": {
             "type": "boolean",
             "description": "Run the selected shell with login semantics (-l); native Codex default is true."
-          },
-          "foreground": {
-            "type": "boolean",
-            "default": false,
-            "description": "Internal native foreground summary flag; not a background toggle. Native adapters set it for non-background commands so a completed log can be summarized from bounded remote head/tail edges."
           }
         },
         "required": [],
