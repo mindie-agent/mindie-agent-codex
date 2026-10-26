@@ -12,7 +12,7 @@ jobs:
     uses: mindie-agent/mindie-bench/.github/workflows/publish-release.yml@484b80621aaf9293c559786d0ef2174c79a0dbb4
     with:
       benchmark-ref: 484b80621aaf9293c559786d0ef2174c79a0dbb4
-      release-notes-path: docs/releases/mindie-agent-codex-0.1.9.md
+      release-notes-path: docs/releases/mindie-agent-codex-0.1.10.md
       version-files: |
         plugins/mindie-agent/pyproject.toml
         plugins/mindie-agent/.codex-plugin/plugin.json
@@ -24,6 +24,12 @@ jobs:
         knowledge_sha=$(.venv/bin/python -c 'import importlib.metadata as m,json; print(json.loads(m.distribution("mindie-knowledge").read_text("direct_url.json"))["vcs_info"]["commit_id"])')
         git clone --no-checkout --filter=blob:none https://github.com/mindie-agent/knowledge "$MINDIE_CORE_REPO"
         git -C "$MINDIE_CORE_REPO" checkout --detach "$knowledge_sha"
+        # The legacy-module regression archives these already-published tags.
+        # The shared candidate checkout is shallow, so fetch only these exact
+        # tag refs at depth 1 before tests run.
+        git fetch --no-tags --depth=1 origin \
+          refs/tags/v0.1.8:refs/tags/v0.1.8 \
+          refs/tags/v0.1.9:refs/tags/v0.1.9
         .venv/bin/python tests/preflight.py
         .venv/bin/python -m pytest tests -q -m "not live_npu"
       build-command: |

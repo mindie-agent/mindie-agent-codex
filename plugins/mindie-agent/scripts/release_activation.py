@@ -5,10 +5,11 @@ Activates a newly validated plugin release (`activate`) by preparing the target 
 
 [Invariants]
 - Never overwrites an active installation if `update_lock` is busy (`status="deferred_busy"`) or if the knowledge service is actively serving a task.
+- The activation child receives an immutable bounded stdin attempt snapshot; it refuses to prepare against a newer canonical binding and never rereads the replaceable pending receipt. The persisted copy is only parent recovery evidence; `activate` remains an idempotent canonical readback.
 - Restores the previous `engine.json` if `codex.json` publication fails (`_publish_pair`).
 
 [Timeouts & Locks]
-- Uses non-blocking `update_lock(config, exclusive=True, blocking=False)` for atomic handoff and `timeout=30.0s` for `idle-stop`.
+- Uses non-blocking `update_lock(config, exclusive=True, blocking=False)` for atomic handoff and `timeout=30.0s` for `idle-stop`. Preparation accepts a caller startup deadline; the attempt snapshot is bounded to 64 KiB stdin.
 
 [Side-Effect Policy]
 - Atomically replaces `engine.json` and `codex.json` via `os.replace()` and removes obsolete runtime directories after activation.
@@ -31,6 +32,11 @@ from session_gate import runtime_binding
 from update_lock import update_lock
 
 CONTROL_SECONDS = 30.0
+ATTEMPT_SCHEMA = "mindie-activation-attempt/1"
+
+
+class InstallationChanged(ValueError):
+    """The canonical binding is no longer the expected pre-activation binding."""
 
 
 def _atomic(path, value):
@@ -45,8 +51,13 @@ def _atomic(path, value):
         Path(temporary).unlink(missing_ok=True)
 
 
-def prepare(config, release):
-    """No running service or canonical configuration is changed here."""
+def prepare(config, release, *, blocking=True, expected_binding=None, deadline=None):
+    """No running service or canonical configuration is changed here.
+
+    expected_binding is the immutable attempt snapshot supplied by the parent.
+    A delayed child therefore cannot prepare against a newer canonical binding
+    and later downgrade it, even if the parent's persisted receipt is replaced.
+    """
     from capture_config import prepare as capture_prepare
     from native_context import service_launch_context
     from mindie_knowledge.loop.cli import config_at
@@ -56,12 +67,17 @@ def prepare(config, release):
     from summary_provider import required_environment
 
     config, release = Path(config).absolute(), Path(release).absolute()
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError("activation preparation deadline expired")
     receipt = read_json(release / "runtime.json")[0]
     if receipt["python"] != sys.executable:
         raise ValueError("candidate preparation must run in its exact installed runtime")
     scripts = Path(__file__).resolve().parent
-    with update_lock(config, blocking=True):
+    with update_lock(config, blocking=blocking):
         old = read_json(config)[0]
+        current_binding = runtime_binding(old)
+        if expected_binding is not None and current_binding != expected_binding:
+            raise InstallationChanged("installation binding changed before activation")
         old_engine = config_at(old["engine_config"])
     digest = hashlib.sha256(os.fsencode(str(config))).hexdigest()
     path = release / ("profile-" + digest + ".engine.json")
@@ -90,7 +106,28 @@ def prepare(config, release):
     else:
         from setup import write_private
         write_private(path, engine)
-    return dict(adapter=adapter, expected_binding=runtime_binding(old))
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError("activation preparation deadline expired")
+    return dict(adapter=adapter, expected_binding=current_binding)
+
+
+def binding_matches_release(config, release, receipt, *, scripts=None):
+    """True only when canonical already carries this exact prepared release."""
+    config, release = Path(config).absolute(), Path(release).absolute()
+    scripts = Path(__file__).resolve().parent if scripts is None else Path(scripts).absolute()
+    adapter = read_json(config)[0]
+    validation = receipt.get("validation")
+    if not isinstance(validation, dict) or receipt.get("python") != sys.executable:
+        return False
+    digest = hashlib.sha256(os.fsencode(str(config))).hexdigest()
+    expected_engine = release / ("profile-" + digest + ".engine.json")
+    expected_component = str(release) if "component_updates" in validation else None
+    return (adapter.get("python") == sys.executable
+            and adapter.get("runtime_scripts") == str(scripts)
+            and adapter.get("engine_config") == str(expected_engine)
+            and adapter.get("product_validation") == validation
+            and adapter.get("component_release") == expected_component
+            and Path(expected_engine).is_file())
 
 
 def activate(config, prepared, *, control_seconds=CONTROL_SECONDS):
@@ -180,6 +217,44 @@ def activate(config, prepared, *, control_seconds=CONTROL_SECONDS):
         return incomplete(error_type=type(exc).__name__)
 
 
+def _attempt_expected(stream=None):
+    stream = sys.stdin.buffer if stream is None else stream
+    raw = stream.read(65537)
+    if not raw or len(raw) > 65536:
+        raise ValueError("activation attempt input is missing or oversized")
+    value = json.loads(raw)
+    if (not isinstance(value, dict) or value.get("schema") != ATTEMPT_SCHEMA
+            or not isinstance(value.get("expected_binding"), dict)):
+        raise ValueError("activation attempt input is invalid")
+    return value["expected_binding"]
+
+
+def _reconcile_published_target(config, release, receipt):
+    if binding_matches_release(config, release, receipt):
+        current = read_json(config)[0]
+        return activate(config, dict(adapter=current,
+                                     expected_binding=runtime_binding(current)))
+    return dict(status="deferred", reason="installation_changed", execution="not_started")
+
+
+def main(argv=None, stdin=None):
+    argv = list(sys.argv if argv is None else argv)
+    config, release = Path(argv[1]), Path(argv[2])
+    extra = argv[3:]
+    if extra and extra != ["--attempt"]:
+        raise ValueError("activation requires the --attempt snapshot input")
+    attempt = extra == ["--attempt"]
+    expected = _attempt_expected(stdin) if attempt else None
+    blocking = not attempt
+    receipt = read_json(release / "runtime.json")[0]
+    try:
+        prepared = prepare(config, release, blocking=blocking, expected_binding=expected)
+    except InstallationChanged:
+        return _reconcile_published_target(config, release, receipt)
+    except BlockingIOError:
+        return dict(status="deferred", reason="operation_busy", execution="not_started")
+    return activate(config, prepared)
+
+
 if __name__ == "__main__":
-    config, release = Path(sys.argv[1]), Path(sys.argv[2])
-    print(json.dumps(activate(config, prepare(config, release)), sort_keys=True))
+    print(json.dumps(main(), sort_keys=True))

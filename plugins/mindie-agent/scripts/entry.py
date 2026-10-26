@@ -1,14 +1,15 @@
 """Execute this installed release; no native mutation or current-generation selector.
 
 [Role]
-Fixed release entrypoint (`releases/<version>/entry.py`) that validates `runtime.json` and `codex.json`, initializes the default profile on first `session-start`/MCP launch, and dispatches `session-start`, `stop`, `knowledge-mcp`, `remote-mcp`, `tools-mcp`, `sync`, `configure`, `status`, or `bridge`.
+Fixed release entrypoint (`releases/<version>/entry.py`) that validates `runtime.json` and `codex.json`, initializes the default profile on first `session-start`/MCP launch, and dispatches `session-start`, `stop`, `knowledge-mcp`, `remote-mcp`, `tools-mcp`, `sync`, `configure`, `status`, or `bridge`. The hidden `migrate` role activates a newer installed seed before dispatching an MCP role; hooks and Stop never migrate.
 
 [Invariants]
 - `stop` never prepares an unconfigured installation and snapshots the active `adapter` binding before reading stdin.
-- Verifies `receipt["python"] == sys.executable` and `product_validation` consistency before dispatching.
+- Verifies `receipt["python"] == sys.executable`, `product_validation` consistency, and that the canonical `runtime_scripts` are this entry's scripts before dispatching.
 
 [Timeouts & Locks]
 - Acquires `update_lock(config)` (`blocking=True` except on `stop`) around profile validation and initialization.
+- Every long-lived MCP role, including `tools-mcp`, releases that shared lock before serve dispatch; `Gate.call` acquires it again only for an actual tool call.
 - Session maintenance has a 300-second execution budget for reporter, feed,
   and knowledge readiness, followed by bounded owned-process cleanup.
 - Release dispatch to helper scripts is bounded at 120.0s.
@@ -154,9 +155,23 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--release', type=Path, required=True)
     parser.add_argument('--source', type=Path)
-    parser.add_argument('role', choices=['session-start', 'user-prompt-submit', 'stop', 'knowledge-mcp', 'remote-mcp', 'tools-mcp', 'sync', 'configure', 'status', 'bridge'])
+    parser.add_argument('role', choices=['session-start', 'user-prompt-submit', 'stop', 'knowledge-mcp', 'remote-mcp', 'tools-mcp', 'sync', 'configure', 'status', 'bridge', 'migrate'])
     parser.add_argument('arguments', nargs=argparse.REMAINDER)
     args = parser.parse_args()
+    if args.role == 'migrate':
+        if not args.arguments:
+            raise ValueError("migration role requires the original role")
+        role, arguments = args.arguments[0], args.arguments[1:]
+        if role not in {'knowledge-mcp', 'remote-mcp', 'tools-mcp', 'bridge'}:
+            raise ValueError("migration cannot dispatch this role")
+        if role == 'bridge' and arguments[:1] != ['mcp']:
+            raise ValueError("migration cannot dispatch this bridge command")
+        from release_migration import run as migrate
+        outcome = migrate(args.release, role, arguments)
+        if outcome.get("status") != "ready":
+            print(json.dumps(outcome, sort_keys=True), file=sys.stderr)
+            return 1
+        args.role, args.arguments = role, arguments
     if args.role == 'user-prompt-submit':
         from manual_entry import read_event, requested
         args.prompt_event = read_event(sys.stdin.buffer)
@@ -184,9 +199,13 @@ def main():
             # Bind before any helper side effect. MCP keeps this identity in
             # memory and reacquires the same lock for each request.
             _installed_profile(config, read(args.release / "runtime.json"))
+            adapter = read(config)
+            if (Path(adapter.get("python", "")).absolute() != Path(sys.executable).absolute()
+                    or Path(runtime_scripts(adapter)).resolve() != SCRIPTS.resolve()):
+                raise ProfileUnavailable("installed profile points at another runtime")
             bind_explicit_config(config)
             os.environ.update(runtime_env(config))
-            mcp = args.role in {'knowledge-mcp', 'remote-mcp'} or (
+            mcp = args.role in {'knowledge-mcp', 'remote-mcp', 'tools-mcp'} or (
                 args.role == 'bridge' and args.arguments[:1] == ['mcp'])
             if not mcp:
                 return dispatch(args, config)
