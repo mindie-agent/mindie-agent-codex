@@ -98,8 +98,13 @@ class RuntimeTests(unittest.TestCase):
     def test_native_startup_and_component_call_windows_cover_inner_budgets(self):
         servers = json.loads((SCRIPTS.parent / ".mcp.json").read_text())["mcpServers"]
         from component_tools import catalog
+        # 900 baseline + 830 component inheritance + 900 migration
+        # (720 call drain + 15 capture + 90 domains + 30 activation + 45
+        # reserve) + 130 process/cleanup reserve.
+        self.assertGreaterEqual(native_entry.MCP_STARTUP_SECONDS,
+                                900 + 830 + 900 + 130)
         for name, server in servers.items():
-            self.assertEqual(server["startup_timeout_sec"], 1080)
+            self.assertEqual(server["startup_timeout_sec"], native_entry.MCP_STARTUP_SECONDS)
             if name == "mindie-tools":
                 maximum = max(tool["inputSchema"]["properties"]["timeout_ms"]["maximum"]
                               for tool in catalog()) / 1000
@@ -500,6 +505,55 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(list(data.rglob("runtime.json")), [])
             self.assertEqual(list(data.glob("releases/*/entry.py")), [])
 
+    def test_bootstrap_lock_waits_for_cross_process_release_and_honors_timeout(self):
+        import bootstrap_lock
+
+        child_code = (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "from bootstrap_lock import exclusive_lock\n"
+            "Path(sys.argv[2]).write_text('started')\n"
+            "try:\n"
+            " with exclusive_lock(Path(sys.argv[3]), timeout=float(sys.argv[4])):\n"
+            "  Path(sys.argv[5]).write_text('acquired')\n"
+            "except TimeoutError:\n"
+            " print('timeout')\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lock, started, acquired = root / "prepare.lock", root / "started", root / "acquired"
+            with bootstrap_lock.exclusive_lock(lock, timeout=2):
+                child = subprocess.Popen(
+                    [sys.executable, "-I", "-c", child_code, str(SCRIPTS),
+                     str(started), str(lock), "2", str(acquired)],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                try:
+                    until = time.monotonic() + 5
+                    while not started.exists() and time.monotonic() < until:
+                        if child.poll() is not None:
+                            self.fail(child.stderr.read())
+                        time.sleep(0.01)
+                    self.assertTrue(started.exists())
+                    time.sleep(0.25)
+                except BaseException:
+                    child.kill()
+                    child.wait(timeout=5)
+                    raise
+            self.assertEqual(child.wait(timeout=5), 0, child.stderr.read())
+            self.assertTrue(acquired.is_file())
+            child.stdout.close()
+            child.stderr.close()
+
+            with bootstrap_lock.exclusive_lock(lock, timeout=2):
+                timeout_child = subprocess.run(
+                    [sys.executable, "-I", "-c", child_code, str(SCRIPTS),
+                     str(started), str(lock), ".2", str(root / "not-acquired")],
+                    capture_output=True, text=True, timeout=5)
+            self.assertEqual(timeout_child.returncode, 0, timeout_child.stderr)
+            self.assertEqual(timeout_child.stdout.strip(), "timeout")
+            self.assertFalse((root / "not-acquired").exists())
+
     @unittest.skipUnless(os.name == "posix", "POSIX signal owner-death contract")
     def test_bootstrap_owner_death_stops_installer_and_build_before_ready(self):
         import signal
@@ -620,6 +674,61 @@ class RuntimeTests(unittest.TestCase):
                 with patch.object(gate, "_remote_call", return_value={"isError": False}) as dispatch:
                     self.assertEqual(gate.call({}), {"isError": False})
                     dispatch.assert_called_once()
+
+    def test_entry_rejects_distinct_venv_paths_with_same_base_interpreter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "venv-a/bin/python"
+            second = root / "venv-b/bin/python"
+            first.parent.mkdir(parents=True)
+            second.parent.mkdir(parents=True)
+            try:
+                os.symlink(sys.executable, first)
+                os.symlink(sys.executable, second)
+            except OSError as exc:
+                self.skipTest(f"symlink fixture unavailable: {type(exc).__name__}")
+            release = root / "release"
+            release.mkdir()
+            (release / "runtime.json").write_text(json.dumps(
+                dict(python=str(first), validation={})))
+            engine = root / "engine.json"
+            engine.write_text(json.dumps(dict(
+                transcript_adapter=str(SCRIPTS / "codex_transcript.py"),
+                product_validation={})))
+            config = root / "codex.json"
+            config.write_text(json.dumps(dict(
+                python=str(second), runtime_scripts=str(SCRIPTS),
+                engine_config=str(engine), product_validation={})))
+            with patch.dict(os.environ, {"MINDIE_AGENT_CONFIG": str(config)}), \
+                    patch.object(entry.sys, "executable", str(first)), \
+                    patch.object(sys, "argv", ["entry", "--release", str(release),
+                                               "tools-mcp"]):
+                with self.assertRaisesRegex(ValueError, "another runtime"):
+                    entry.main()
+
+    def test_entry_rejects_canonical_scripts_from_another_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = root / "release"
+            release.mkdir()
+            (release / "runtime.json").write_text(json.dumps(
+                dict(python=sys.executable, validation={})))
+            other = root / "other"
+            other.mkdir()
+            (other / "codex_transcript.py").write_text("")
+            engine = root / "engine.json"
+            engine.write_text(json.dumps(dict(
+                transcript_adapter=str(other / "codex_transcript.py"),
+                product_validation={})))
+            config = root / "codex.json"
+            config.write_text(json.dumps(dict(
+                python=sys.executable, runtime_scripts=str(other),
+                engine_config=str(engine), product_validation={})))
+            with patch.dict(os.environ, {"MINDIE_AGENT_CONFIG": str(config)}), \
+                    patch.object(sys, "argv", ["entry", "--release", str(release),
+                                               "tools-mcp"]):
+                with self.assertRaisesRegex(ValueError, "another runtime"):
+                    entry.main()
 
     def test_switch_gate_rejects_before_remote_receipt_or_dispatch(self):
         import mcp_gate

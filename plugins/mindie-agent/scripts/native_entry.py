@@ -7,13 +7,13 @@ UserPromptSubmit, Stop, Interrupt and the MCP servers.
 [Invariants]
 - Hook commands use a version-independent facade reading `~/.config/mindie-agent/codex.json` so running app-servers remain valid across plugin cache updates.
 - The remote-dev MCP launcher carries the literal `REMOTE_DEV_HARNESS_PROFILE=codex` env value; the native profile is never read from tool arguments.
-- `Stop` never bootstraps an unprepared runtime and always returns neutral `{}` stdout to the host.
+- `Stop` and every hook remain stable canonical facades and never start migration; only MCP startup may route to the newer seed controller.
 - `Interrupt` dispatches `mindie_interrupt` with exact `thread_id`/`turn_id` to the remote and deterministic-component MCP servers (`timeout=3s`).
 
 - Knowledge is private to the manual Skill; its server is absent from the default MCP manifest.
 
 [Timeouts & Locks]
-- MCP `startup_timeout_sec=1080` covers first-use `uv` sync and shared preparation lock without altering tool-call deadlines.
+- MCP `startup_timeout_sec=2760` covers baseline preparation, component inheritance, the bounded 900s migration/lock-drain window, and cleanup without altering tool-call deadlines.
 
 [Side-Effect Policy]
 - Importing this module is side-effect free; `write_manifests(root)` updates `hooks/hooks.json` and `.mcp.json`.
@@ -22,6 +22,12 @@ import base64
 import json
 from pathlib import Path
 import shlex
+
+
+# 900 baseline runtime + 830 component inheritance + 900 migration (720 max
+# native call drain + 15 capture + 90 domain preparation + 30 activation + 45
+# reserve) + 130 process/cleanup reserve.
+MCP_STARTUP_SECONDS = 2760
 
 
 def launcher_code(version, *, name="mindie-agent", marketplace="mindie-agent"):
@@ -35,7 +41,7 @@ def command_args(version, role, **names):
             "-c", launcher_code(version, **names), role]
 
 
-def hook_launcher_code(*, name="mindie-agent", marketplace="mindie-agent", seed_version=None):
+def _stable_hook_launcher_code(*, name="mindie-agent", marketplace="mindie-agent", seed_version=None):
     """Select only the prepared entry named by the canonical installed binding."""
     return (
         "import os,sys,json,re,runpy\nfrom pathlib import Path\n"
@@ -68,6 +74,75 @@ def hook_launcher_code(*, name="mindie-agent", marketplace="mindie-agent", seed_
         "sys.path.insert(0,str(entry.parent));sys.argv=[str(entry),*args]\n"
         "runpy.run_path(str(entry),run_name='__main__')"
     )
+
+
+
+def _migration_launcher_code(*, name="mindie-agent", marketplace="mindie-agent", seed_version=None):
+    """Select only the prepared entry named by the canonical installed binding.
+
+    A newer installed seed may first migrate the canonical binding, but only on
+    startup/MCP roles. Stop and ordinary prompt hooks stay on the stable old
+    facade. Once migration is chosen, the old canonical entry is never a
+    fallback.
+    """
+    return (
+        "import os,sys,json,re,runpy\nfrom pathlib import Path\n"
+        "def read(p):\n"
+        " if not p.is_file():raise ValueError('MindIE metadata must be regular')\n"
+        " with p.open('rb') as f:\n"
+        "  raw=f.read(65537)\n"
+        " if len(raw)>65536:raise ValueError('MindIE metadata exceeds its byte bound')\n"
+        " value=json.loads(raw)\n"
+        " if not isinstance(value,dict):raise ValueError('MindIE metadata must be an object')\n"
+        " return value\n"
+        "home=Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex')))\n"
+        f"data=Path(os.environ.get('PLUGIN_DATA',str(home/'plugins/data'/{(name + '-' + marketplace)!r})))\n"
+        "config=Path(os.environ.get('MINDIE_AGENT_CONFIG',str(Path.home()/'.config/mindie-agent/codex.json'))).expanduser().absolute()\n"
+        "args=sys.argv[1:]\n"
+        f"seed={seed_version!r}\n"
+        "role=args[0] if args else ''\n"
+        "def vkey(v):\n"
+        " m=re.fullmatch(r'[0-9]+(?:\\.[0-9]+)*',v)\n"
+        " return tuple(int(x) for x in m.group(0).split('.')) if m else None\n"
+        "migrate=False\n"
+        "if config.exists():\n"
+        " adapter=read(config);validation=adapter['product_validation'];version=validation['native_version']\n"
+        " if not isinstance(version,str) or not re.fullmatch('[0-9A-Za-z][0-9A-Za-z.+!-]{0,79}',version):raise ValueError('MindIE release identity is invalid')\n"
+        " if seed and (role in ('remote-mcp','tools-mcp','knowledge-mcp') or (role=='bridge' and args[1:2]==['mcp'])):\n"
+        "  a,b=vkey(version),vkey(seed)\n"
+        "  migrate=a is not None and b is not None and b>a\n"
+        " if migrate:\n"
+        f"  source=Path(os.environ.get('PLUGIN_ROOT',str(home/'plugins/cache'/{marketplace!r}/{name!r}/seed)))\n"
+        "  bootstrap=source/'scripts/bootstrap.py'\n"
+        "  if bootstrap.is_file():entry=bootstrap;args=[str(data),'--source',str(source),'migrate',*args]\n"
+        "  else:\n"
+        "   entry=data/'releases'/seed/'entry.py'\n"
+        "   if not entry.is_file():raise RuntimeError('MindIE migration source is unavailable')\n"
+        "   args=['migrate',*args]\n"
+        " else:\n"
+        "  release=Path(adapter['component_release']) if adapter.get('component_release') else data/'releases'/version\n"
+        "  receipt=read(release/'runtime.json');entry=release/'entry.py'\n"
+        "  if receipt['python']!=adapter['python'] or receipt['validation']!=validation or validation.get('status')!='validated' or validation.get('schema')!='mindie-candidate-check/1':raise ValueError('MindIE installed runtime receipt differs')\n"
+        "else:\n"
+        f" seed={seed_version!r};fixed=data/'releases'/seed/'entry.py' if seed else None\n"
+        " if fixed is not None and fixed.is_file():entry=fixed\n"
+        " else:\n"
+        "  if args[:1]==['stop']:raise RuntimeError('MindIE runtime is not prepared; start a new native session')\n"
+        f"  source=Path(os.environ.get('PLUGIN_ROOT',str(home/'plugins/cache'/{marketplace!r}/{name!r}/(seed or 'unprepared'))))\n"
+        "  entry=source/'scripts/bootstrap.py';args=[str(data),'--source',str(source),*args]\n"
+        "if not entry.is_file():raise RuntimeError('MindIE installed entry is unavailable')\n"
+        "sys.path.insert(0,str(entry.parent));sys.argv=[str(entry),*args]\n"
+        "runpy.run_path(str(entry),run_name='__main__')"
+    )
+
+
+
+def hook_launcher_code(*, name="mindie-agent", marketplace="mindie-agent", seed_version=None):
+    """Use the byte-stable hook facade unless this is a seeded MCP launcher."""
+    if seed_version is None:
+        return _stable_hook_launcher_code(name=name, marketplace=marketplace)
+    return _migration_launcher_code(name=name, marketplace=marketplace,
+                                    seed_version=seed_version)
 
 
 def neutral_hook_commands(argv, *, failure="MindIE Stop helper failed; capture completion is unconfirmed; no automatic retry.",
@@ -155,10 +230,10 @@ def write_manifests(root):
                        ("mindie-tools", "tools-mcp")):
         arguments = command_args(version, role)
         server = dict(command=arguments[0], args=arguments[1:],
-                      # The native startup window includes first-use uv
-                      # download/build and the shared preparation lock.
-                      # It does not change business tool-call deadlines.
-                      startup_timeout_sec=1080,
+                      # Covers baseline preparation, component inheritance,
+                      # migration drain/activation, and owned cleanup; it
+                      # does not change business tool-call deadlines.
+                      startup_timeout_sec=MCP_STARTUP_SECONDS,
                       env_vars=["CODEX_HOME", "MINDIE_AGENT_CONFIG",
                                 "MINDIE_CODEX_BIN", "MINDIE_DIAGNOSTICS_CONFIG",
                                 "MINDIE_DIAGNOSTICS_ROOT", *TRANSPORT_ENV])

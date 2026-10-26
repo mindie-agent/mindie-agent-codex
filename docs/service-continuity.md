@@ -27,3 +27,11 @@
 - Community knowledge sharing and automatic tool fault reporting share a single unified contribution switch in `<profile>/.mindie/mindie-consent.json`, stored alongside approved project roots as persistent user data decoupled from code versions.
 - Explicitly enabling (`contribute` with the current unified consent revision) configures knowledge sharing and starts the background reporter, keeping three states distinct: (1) local consent configuration saved, (2) background reporter worker running, and (3) external GitHub Issue/PR created.
 - Updating or reloading the plugin never re-prompts for consent, modifies saved `disabled` / `later` / `read-only` choices, or silently upgrades legacy knowledge-only `contribute` records lacking the unified consent revision (`needs_choice`).
+
+## 4. First Migration from 0.1.8 / 0.1.9
+
+When the installed MCP seed is newer than the canonical binding, the 0.1.10 launcher enters its new migration controller, waits for old operations to release the operation lock, and publishes the complete binding through the existing atomic activation path. Concurrent MCP startup shares bounded waits, including macOS file-lock contention. Hook commands remain stable, and Stop never starts migration.
+
+Already-running 0.1.8 / 0.1.9 code cannot acquire this fix by itself. If its updater is stuck on an activation receipt, the first recovery requires the native installer to select the exact source of the formal 0.1.10 Release, followed by a host-supported MCP refresh or natural reload. Repeating `plugin add` against a marketplace still pinned to an old candidate installs that old version again. Editing the canonical version, removing lock files, or overwriting runtime files is not a migration.
+
+Native installation, runtime preparation, canonical activation, and host loading of new tools are separate verification points. Completed obsolete candidates can be retired from their receipts after native cache eviction. Interrupted local activation uses an immutable attempt snapshot and canonical readback rather than a permanent old `unknown` block. Unconfirmed native installation or marketplace writes remain unreplayed.

@@ -1,13 +1,35 @@
 # mindie-agent-codex 0.1.10
 
-This release fixes only the Codex idle-entry lock defect. Component pins are unchanged: remote-dev `4c40cb5d302ddb8400ff6abb7dc47873b931eaa9`, mindie-diagnostics `5ae643e19223f2181ecdbaa3edaf464137c4805e`, and mindie-knowledge `6e921b205c00d592c25f849653cbfb72b73fe318`.
+This release repairs idle upgrades from existing installations. An idle `tools-mcp` no longer holds the update lock; a newly installed MCP launcher can migrate a canonical binding still on 0.1.8 / 0.1.9; interrupted local activation and obsolete candidates whose native cache was evicted no longer permanently block update checks.
 
-The MCP check in `entry.py` previously covered only `knowledge-mcp` and `remote-mcp` (plus `bridge mcp`), omitting `tools-mcp`. As a result, `tools-mcp` started its long-lived serve inside the entry's shared `update_lock` scope: even when idle, it kept the shared lock, so candidate activation could not obtain the exclusive lock and repeatedly returned `status=deferred, reason=operation_busy`. Release 0.1.10 puts `tools-mcp` on the same startup path as the other MCP entries: after profile validation and binding, the entry releases the shared lock before starting serve, so an idle serve holds no update lock. A real component tool call still holds the shared lock through `Gate.call` only while the call is executing and releases it when the call returns.
+## Changes
 
-Verification uses a real `entry.py` subprocess, an isolated profile fixture that follows the installation contract, and real OS file locks. At the idle-dispatch point, only the actual long-lived serve is replaced by an independent process requesting the exclusive lock; `knowledge-mcp`, `remote-mcp`, and `tools-mcp` can all acquire the exclusive activation lock there. A real `Gate.call` component execution blocks the exclusive lock and releases it when the call returns. The regression writes no user configuration and starts no model or server.
+- The entry releases the shared lock after profile validation and before serving MCP. Actual tool calls retain the lock for their execution and release it on completion.
+- A newer installed MCP seed enters its new migration controller, waits for old operations and services to become idle, and publishes the complete interpreter, scripts, and configuration binding through the existing atomic activation path. Hook commands remain stable; Stop never starts migration.
+- Activation children receive an immutable attempt snapshot through stdin. Replacing a pending receipt cannot let a delayed old child downgrade a newer canonical binding. Interrupted local activation uses canonical readback; unconfirmed native installation or marketplace writes remain unreplayed.
+- Completed prepared candidates can be retired after native cache eviction. Portable errno handling fixes concurrent startup failure caused by macOS file-lock contention.
+- The 2760-second MCP startup budget covers baseline preparation, component inheritance, old-call drain, and migration. Native tool-call budgets remain 720 seconds for remote tools and 330 seconds for components, with the existing environment passthrough contract.
 
-The upgrade boundary must remain explicit: this fix takes effect only when the new 0.1.10 entry code is loaded. `tools-mcp` processes already started by 0.1.8/0.1.9 keep running the old code and continue to hold the shared lock; a source fix cannot make an already-loaded old process release that lock, and it cannot be hot-patched. Those old processes must exit naturally before a `tools-mcp` started by the new entry can provide this fix. A native install and a prepared runtime mean only that installation and preparation completed; they are not a successful activation and are not `active`. This release does not claim a zero-reload hot fix for existing machines.
+## Verification Scope
 
-Existing-installation migration remains open. With isolated copies of the current 0.1.8 configuration and receipt, the new launcher still selects the canonical binding's 0.1.8 entry even when its seed is 0.1.10. The old updater also continues trying its existing prepared 0.1.9 candidate. A natural restart alone is therefore not a verified recovery. This patch fixes the new entry's lock scope but does not yet solve automatic migration from that old binding.
+Final local contracts passed 598 tests and 493 subtests, with 26 skipped and 2 live NPU tests deselected. macOS, Linux, and Windows CI run the component contracts against the same commit. The formal release workflow separately validates dependency Releases, runs contracts and microbenchmarks, and attaches reports and checksums.
 
-This candidate remains unpublished. Release assets, tags, and final activation must wait for acceptance of the old-binding migration; these notes do not rewrite an installed or prepared state as active.
+A private configuration on actual macOS Codex Desktop `0.164.0-alpha.11.1` started with the real published 0.1.8 runtime and a natively installed 0.1.9 candidate. Native installation of the candidate source and refresh of the same chat completed migration in about 47 seconds: both MCPs loaded 0.1.10, exposing 22 remote tools and 5 component tools; the complete canonical binding switched; the idle exclusive lock was available; user fields and contribution consent were preserved. The normal background loop retired the old candidate and continued Release discovery. Before candidate publication, selection correctly reported no higher compatible formal Release.
+
+This pre-release check uses isolated candidate source and does not prove post-publication background discovery. The administrative `mcpServer/tool/call` API carries no real turn identity; the check confirms rejection without injecting an identity to fake a business call. A non-destructive runtime component CLI status check passed. Real user-turn tool execution and actual user-host loading are separate post-publication checks. Another actual-host probe confirmed that refresh allows an old in-flight call to complete before retiring its connection.
+
+## First Upgrade Boundary
+
+Already-running 0.1.8 / 0.1.9 updaters cannot load the fix themselves. If an updater is stuck on an old activation receipt, first recovery requires the native installer to select this formal Release's exact source, followed by a host-supported MCP refresh or natural reload. Repeating `plugin add` while the marketplace still points to an old candidate installs the old version again. Do not substitute manual version edits, lock deletion, or runtime overwrites for migration.
+
+Read back native installation, runtime preparation, canonical activation, and host loading of new tools separately. The first two do not prove that the upgrade is active. Saved user consent is preserved; knowledge remains gated per session by manual `/mindie-agent` invocation.
+
+## Runtime Dependencies
+
+Pins are unchanged from 0.1.9 and reuse formal component Releases:
+
+| Package | Version | Commit |
+| --- | --- | --- |
+| remote-dev | 0.10.7 | `4c40cb5d302ddb8400ff6abb7dc47873b931eaa9` |
+| mindie-diagnostics | 0.5.4 | `5ae643e19223f2181ecdbaa3edaf464137c4805e` |
+| mindie-knowledge | 0.13.4 | `6e921b205c00d592c25f849653cbfb72b73fe318` |
