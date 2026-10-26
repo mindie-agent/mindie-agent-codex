@@ -1,4 +1,5 @@
 """Idle switching preserves exact service facts, without a model or native install."""
+import io
 import json
 from pathlib import Path
 import sys
@@ -233,6 +234,73 @@ class ActivationTests(unittest.TestCase):
         self.retire_service.assert_not_called()
         self.prepare_service.assert_not_called()
         self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_delayed_writer_cannot_prepare_against_a_newer_binding(self):
+        release = self.root / "candidate"
+        (release / "runtime.json").parent.mkdir(exist_ok=True)
+        (release / "runtime.json").write_text(json.dumps(
+            dict(python=sys.executable, validation=VALIDATION)), encoding="utf-8")
+        expected = dict(runtime_binding(self.old), engine_config=str(self.root / "newer.json"))
+        with self.assertRaises(release_activation.InstallationChanged):
+            release_activation.prepare(self.config, release, expected_binding=expected)
+        self.assertEqual(self.config.read_bytes(), self.original)
+        digest = __import__("hashlib").sha256(
+            str(self.config.absolute()).encode()).hexdigest()
+        self.assertFalse((release / ("profile-" + digest + ".engine.json")).exists())
+
+    def test_persisted_intent_reconciles_already_published_target_without_rewrite(self):
+        release = self.root / "candidate"
+        release.mkdir()
+        (release / "runtime.json").write_text(json.dumps(
+            dict(python=sys.executable, validation=VALIDATION)), encoding="utf-8")
+        digest = __import__("hashlib").sha256(
+            str(self.config.absolute()).encode()).hexdigest()
+        engine = release / ("profile-" + digest + ".engine.json")
+        engine.write_text("{}", encoding="utf-8")
+        target = dict(self.old, python=sys.executable,
+                      runtime_scripts=str(SCRIPTS), engine_config=str(engine),
+                      product_validation=VALIDATION, component_release=None)
+        self.config.write_text(json.dumps(target), encoding="utf-8")
+        before = self.config.read_bytes()
+        attempt = io.BytesIO(json.dumps({
+            "schema": release_activation.ATTEMPT_SCHEMA,
+            "expected_binding": runtime_binding(self.old)}).encode())
+        with patch("mindie_knowledge.loop.handoff._probe", return_value="absent"):
+            result = release_activation.main(
+                ["release_activation.py", str(self.config), str(release), "--attempt"],
+                stdin=attempt)
+        self.assertEqual(result["status"], "active")
+        self.assertEqual(self.config.read_bytes(), before)
+        self.retire_service.assert_not_called()
+        self.prepare_service.assert_not_called()
+
+    def test_untagged_legacy_path_argument_is_rejected(self):
+        release = self.root / "candidate"
+        release.mkdir()
+        (release / "runtime.json").write_text(json.dumps(
+            dict(python=sys.executable, validation=VALIDATION)), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "--attempt"):
+            release_activation.main(
+                ["release_activation.py", str(self.config), str(release),
+                 str(self.root / "native.json")])
+
+    def test_persisted_intent_refuses_a_third_canonical_binding(self):
+        release = self.root / "candidate"
+        release.mkdir()
+        (release / "runtime.json").write_text(json.dumps(
+            dict(python=sys.executable, validation=VALIDATION)), encoding="utf-8")
+        third = dict(self.old, python="/third/python")
+        self.config.write_text(json.dumps(third), encoding="utf-8")
+        before = self.config.read_bytes()
+        attempt = io.BytesIO(json.dumps({
+            "schema": release_activation.ATTEMPT_SCHEMA,
+            "expected_binding": runtime_binding(self.old)}).encode())
+        result = release_activation.main(
+            ["release_activation.py", str(self.config), str(release), "--attempt"],
+            stdin=attempt)
+        self.assertEqual(result["status"], "deferred")
+        self.assertEqual(result["reason"], "installation_changed")
+        self.assertEqual(self.config.read_bytes(), before)
 
     def test_competing_binding_never_retires_or_overwrites(self):
         self.config.write_text(json.dumps(dict(self.old, python="/third/python")))

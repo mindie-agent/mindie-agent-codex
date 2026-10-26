@@ -5,6 +5,8 @@ Validates compatibility with the installed `codex --version` (`harness_version`)
 
 [Invariants]
 - Never installs a release whose `harness-compatibility.json` does not cover the actual host `codex --version`.
+- Persists an exact expected pre-activation binding for recovery and sends an immutable bounded stdin attempt snapshot to the activation child; local interrupted activation is reconciled by canonical readback under the existing lock, while native plugin/catalog unknowns stay unreplayed.
+- Retires only a settled prepared candidate older than the verified installed native version; it never suppresses an unconfirmed native external write.
 - Carries forward only previously user-approved hook trust entries via compare-and-swap (`NativeHooks`).
 
 [Timeouts & Locks]
@@ -28,9 +30,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bounded_process import ProcessResult, run
 from native_context import capture, environment
 from product_contract import native_version, read_json
-from release_activation import _atomic
+from release_activation import ATTEMPT_SCHEMA, _atomic
 from release_metadata import REPOSITORY
-from session_gate import runtime_env
+from session_gate import runtime_binding, runtime_env
 from update_lock import file_lock, update_lock
 from update_trigger import directory, due, read_optional
 
@@ -79,6 +81,60 @@ def _process_fact(result):
         return dict(execution="unknown", returncode=None, cleanup_failed=None)
     return dict(execution=result.execution, returncode=result.returncode,
                 cleanup_failed=bool(result.cleanup))
+
+
+def _version_key(value):
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", value)
+    return tuple(int(part) for part in match.group(0).split(".")) if match else None
+
+
+# Immutable activation attempts are the declared contract at this release
+# floor. Earlier validated native releases predate the protocol and must never
+# be executed through the new attempt path.
+IMMUTABLE_ACTIVATION_FLOOR = (0, 1, 10)
+
+
+def _activation_snapshot(expected):
+    return json.dumps(dict(schema=ATTEMPT_SCHEMA, expected_binding=expected),
+                      sort_keys=True)
+
+
+def _activation_result(value, result, expected):
+    activation = dict(value or {"status": "unknown"}, process=_process_fact(result))
+    if expected is not None:
+        activation["expected_binding"] = expected
+    return activation
+
+
+def _store_activation(root, pending, value, result, expected):
+    pending["activation"] = _activation_result(value, result, expected)
+    try:
+        _atomic(root / "native.json", pending)
+    except TimeoutError:
+        raise
+    except (OSError, ValueError) as exc:
+        exc.native_effect = dict(stage="runtime_activation", activation=pending["activation"])
+        exc.receipt_error_type = type(exc).__name__
+        raise
+    return pending["activation"]
+
+
+def _first_install_readback(config, runtime):
+    adapter = read_json(config)[0]
+    receipt = read_json(Path(runtime["release"]) / "runtime.json")[0]
+    scripts = Path(runtime["scripts"])
+    python, installed_scripts = adapter.get("python"), adapter.get("runtime_scripts")
+    if (not isinstance(python, str) or not isinstance(installed_scripts, str)
+            or Path(python).absolute() != Path(runtime["python"]).absolute()
+            or Path(installed_scripts).resolve() != scripts.resolve()
+            or adapter.get("product_validation") != receipt["validation"]):
+        return None
+    engine = read_json(Path(adapter["engine_config"]))[0]
+    if engine.get("transcript_adapter") != str(scripts / "codex_transcript.py"):
+        return None
+    return {"status": "active"}
 
 
 def _native_mutation(path, pending, action, argv, env):
@@ -188,13 +244,6 @@ def _native_install(native, env, root, metadata, before):
 
 
 def _prepare_and_activate(config, pending, env, root, *, first_install=False):
-    previous_activation = pending.get("activation")
-    if (isinstance(previous_activation, dict)
-            and (previous_activation.get("status") == "unknown"
-                 or "process" in previous_activation)
-            and (previous_activation.get("process") or {}).get("cleanup_failed") is not False):
-        return dict(status="unknown", stage="activation_writer",
-                    activation=previous_activation)
     source = Path(pending["source"])
     if (native_version(source) != pending["metadata"]["version"]
             or read_json(source / "harness-compatibility.json")[0] != pending["metadata"]["compatibility"]):
@@ -256,24 +305,84 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
         _atomic(root / "native.json", pending)
     runtime = pending["runtime"]
     if first_install:
-        argv = [runtime["python"], "-I", str(Path(runtime["scripts"]) / "entry.py"),
-                "--release", runtime["release"], "session-start"]
-    else:
-        argv = [runtime["python"], "-I", str(Path(runtime["scripts"]) / "release_activation.py"),
-                str(config), runtime["release"]]
-    pending["activation"] = dict(status="unknown", process=None)
+        pending["activation"] = dict(status="unconfirmed")
+        _atomic(root / "native.json", pending)
+        result, value = None, None
+        try:
+            result = run([runtime["python"], "-I", str(Path(runtime["scripts"]) / "entry.py"),
+                          "--release", runtime["release"], "session-start"],
+                         "", env=env, allow_service=True, timeout=330.0)
+            result.checked_stdout()
+            value = _first_install_readback(config, runtime)
+            if value is None:
+                raise ValueError("first-install canonical binding is not visible")
+        except Exception as exc:
+            result = getattr(exc, "process_result", result)
+            pending["activation"] = _activation_result(value, result, None)
+            exc.native_effect = dict(stage="runtime_activation", activation=pending["activation"])
+            try:
+                _atomic(root / "native.json", pending)
+            except TimeoutError:
+                raise
+            except (OSError, ValueError) as record_error:
+                exc.receipt_error_type = type(record_error).__name__
+            raise
+        _store_activation(root, pending, value, result, None)
+        return value
+
+    if ((_version_key(pending["metadata"].get("version")) or (0,)) < IMMUTABLE_ACTIVATION_FLOOR):
+        return dict(status="deferred", stage="activation_writer",
+                    reason="legacy_activation_helper", execution="not_started")
+    previous = pending.get("activation")
+    expected = previous.get("expected_binding") if isinstance(previous, dict) else None
+    if not isinstance(expected, dict):
+        expected = None
+    try:
+        with update_lock(config, blocking=False):
+            adapter = read_json(config)[0]
+            current_binding = runtime_binding(adapter)
+            current_version = adapter.get("product_validation", {}).get("native_version")
+    except BlockingIOError:
+        return dict(status="deferred", stage="activation_writer",
+                    reason="operation_busy", execution="not_started")
+    if expected is None:
+        expected = current_binding
+    current_key = _version_key(current_version)
+    pending_key = _version_key(pending["metadata"]["version"])
+    if current_key is not None and pending_key is not None and current_key > pending_key:
+        return dict(status="deferred", stage="activation_writer",
+                    reason="installation_changed", execution="not_started")
+
+    # The intent is persisted before any child exists.  A child delayed before
+    # its exclusive lock still receives this exact pre-activation binding and
+    # must fail its CAS rather than prepare against a newer canonical.
+    pending["activation"] = dict(status="unconfirmed", expected_binding=expected)
     _atomic(root / "native.json", pending)
+    deadline = time.monotonic() + 2.0
+    while True:
+        try:
+            with update_lock(config, exclusive=True):
+                break
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                return dict(status="deferred", stage="activation_writer",
+                            reason="operation_busy", execution="not_started")
+            time.sleep(0.2)
+
+    argv = [runtime["python"], "-I",
+            str(Path(runtime["scripts"]) / "release_activation.py"),
+            str(config), runtime["release"], "--attempt"]
     result, value = None, None
     try:
-        result = run(argv, "", env=env, allow_service=True, timeout=330.0)
-        value = dict(status="active") if first_install else json.loads(result.stdout)
+        result = run(argv, _activation_snapshot(expected), env=env,
+                     allow_service=True, timeout=330.0)
+        value = json.loads(result.stdout)
         if not isinstance(value, dict):
             raise ValueError("activation control response is invalid")
         result.checked_stdout()
     except Exception as exc:
         result = getattr(exc, "process_result", result)
-        pending["activation"] = dict(value or {"status": "unknown"},
-                                     process=_process_fact(result))
+        pending["activation"] = _activation_result(value, result, expected)
         exc.native_effect = dict(stage="runtime_activation", activation=pending["activation"])
         try:
             _atomic(root / "native.json", pending)
@@ -282,16 +391,51 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
         except (OSError, ValueError) as record_error:
             exc.receipt_error_type = type(record_error).__name__
         raise
-    pending["activation"] = dict(value, process=_process_fact(result))
+    _store_activation(root, pending, value, result, expected)
+    return value
+
+
+def _native_settled(pending):
+    """True only when native installation and local preparation are settled."""
+    process = pending.get("process")
+    if process != dict(execution="completed", returncode=0, cleanup_failed=False):
+        return False
+    if pending.get("stage") not in {"installed", "prepared"}:
+        return False
+    preparation = pending.get("preparation")
+    if not isinstance(preparation, dict) or preparation.get("cleanup_failed") is not False:
+        return False
+    trust = pending.get("hook_trust")
+    if not isinstance(trust, dict) or trust.get("status") not in {"complete", "unchanged"}:
+        return False
+    metadata = pending.get("metadata")
+    source = pending.get("source")
+    if not isinstance(metadata, dict) or not isinstance(source, str):
+        return False
+    native_output = pending.get("native_output")
+    if not isinstance(native_output, dict):
+        return False
+    if (native_output.get("pluginId") != PLUGIN
+            or native_output.get("version") != metadata.get("version")):
+        return False
+    source_path = Path(source)
+    if not source_path.exists():
+        # Native plugin installation evicts the obsolete payload after a
+        # newer native version is installed. A settled prepared receipt may
+        # therefore outlive its source cache; the recorded metadata, completed
+        # native output, preparation, and trust remain the retirement evidence.
+        # Installed-stage receipts still require their source.
+        return pending.get("stage") == "prepared"
     try:
-        _atomic(root / "native.json", pending)
+        if native_version(source) != metadata.get("version"):
+            return False
+        if read_json(source_path / "harness-compatibility.json")[0] != metadata.get("compatibility"):
+            return False
     except TimeoutError:
         raise
-    except (OSError, ValueError) as exc:
-        exc.native_effect = dict(stage="runtime_activation", activation=pending["activation"])
-        exc.receipt_error_type = type(exc).__name__
-        raise
-    return value
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 def _can_supersede(pending):
@@ -346,6 +490,39 @@ def check(config, *, first_install=False, force=False):
                     pending = read_optional(root / "native.json")
                     if pending is not None and pending.get("stage") in {"active", "superseded"}:
                         pending = None
+                    if pending is not None and before is not None:
+                        pending_version = _version_key(pending.get("metadata", {}).get("version"))
+                        installed_version = _version_key(before.get("version"))
+                        if (pending_version is not None and installed_version is not None
+                                and pending_version < installed_version):
+                            if not _native_settled(pending):
+                                status.update(status="unknown", stage=pending.get("stage"),
+                                              process=pending.get("process"))
+                                _atomic(status_path, status)
+                                return status
+                            try:
+                                validate_release_metadata(
+                                    pending["metadata"], repository=REPOSITORY,
+                                    harness_name="codex")
+                            except TimeoutError:
+                                raise
+                            except Exception:
+                                # A malformed obsolete receipt falls through to the
+                                # normal validation failure; it is not retired blindly.
+                                pass
+                            else:
+                                try:
+                                    with update_lock(config, exclusive=True):
+                                        _atomic(root / ("superseded-" + str(time.time_ns()) + ".json"),
+                                                pending)
+                                        retired = dict(pending, stage="superseded")
+                                        _atomic(root / "native.json", retired)
+                                except BlockingIOError:
+                                    status.update(status="deferred", stage="stale_candidate",
+                                                  reason="operation_busy", execution="not_started")
+                                    _atomic(status_path, status)
+                                    return status
+                                pending = None
                     if pending is not None:
                         if (pending.get("stage") == "installed"
                                 and pending.get("preparation", {}).get("cleanup_failed") is True):

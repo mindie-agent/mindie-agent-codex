@@ -13,8 +13,17 @@ Provides a stdlib-only blocking exclusive file lock (`exclusive_lock(path)`) use
 - Opens/creates the lock file with mode `0o600` and releases the lock on context exit.
 """
 from contextlib import contextmanager
+import errno
 import os
 import time
+
+
+# fcntl.flock reports EAGAIN/EWOULDBLOCK on macOS and Linux; Windows
+# msvcrt.locking reports EACCES/EDEADLK. Use symbols because the numeric
+# values differ by platform.
+_LOCK_CONTENTION = frozenset((
+    errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK, errno.EDEADLK,
+))
 
 
 @contextmanager
@@ -32,7 +41,7 @@ def exclusive_lock(path, *, timeout=825):
                     fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except OSError as exc:
-                if exc.errno not in (11, 13, 36):
+                if exc.errno not in _LOCK_CONTENTION:
                     raise
             remaining = deadline - time.monotonic()
             if remaining <= 0:

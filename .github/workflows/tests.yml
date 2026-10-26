@@ -19,6 +19,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The legacy-module regression uses `git archive v0.1.8`/`v0.1.9`.
+          # A shallow checkout does not fetch those tags.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'

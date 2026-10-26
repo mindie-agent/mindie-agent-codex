@@ -47,6 +47,16 @@ class NativeHookEntryTests(unittest.TestCase):
             exec(native_entry.hook_launcher_code(), {})
         return calls
 
+    def test_hook_facade_has_no_migration_routing_but_mcp_does(self):
+        stable = native_entry.hook_launcher_code(seed_version=None)
+        seeded = native_entry.hook_launcher_code(seed_version="0.1.10")
+        self.assertNotIn("migrate", stable)
+        self.assertNotIn("vkey", stable)
+        self.assertIn("migrate", seeded)
+        self.assertIn("vkey", seeded)
+        self.assertNotIn("migrate", native_entry.hook_commands("session-start")["command"])
+        self.assertIn("migrate", native_entry.command_args("0.1.10", "tools-mcp")[-2])
+
     def test_hook_commands_do_not_change_with_release_but_mcp_keeps_fixed_entry(self):
         (self.source / ".codex-plugin").mkdir(parents=True)
         (self.source / "hooks").mkdir()

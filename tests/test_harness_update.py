@@ -17,6 +17,7 @@ import native_hooks
 import release_metadata
 import update_trigger
 from bounded_process import ProcessResult, ProcessCleanupError
+from update_lock import file_lock
 
 
 class UpdateTests(unittest.TestCase):
@@ -286,18 +287,60 @@ class UpdateTests(unittest.TestCase):
                     hook_trust=dict(status="complete"),
                     activation=dict(status="not_started"))
 
-    def test_activation_unknown_writer_never_starts_another_control(self):
-        for activation in (
-            dict(status="unknown", process=None),
-            dict(status="unknown", process=dict(execution="unknown", returncode=None,
-                                               cleanup_failed=True)),
-        ):
-            with self.subTest(activation=activation), patch.object(update, "run") as run:
-                pending = dict(source="/not-read", activation=activation)
-                value = update._prepare_and_activate(self.config, pending, self.env, self.state)
-                self.assertEqual(value["status"], "unknown")
-                self.assertEqual(value["activation"], activation)
-                run.assert_not_called()
+    def test_activation_unknown_writer_retries_with_immutable_attempt_snapshot(self):
+        pending = self.prepared_candidate()
+        pending["activation"] = dict(status="unknown", process=None)
+        seen = []
+
+        def child(argv, payload, **kwargs):
+            seen.append(json.loads(payload))
+            return ProcessResult("completed", '{"status":"deferred","reason":"operation_busy"}', 0)
+
+        with patch.object(update, "run", side_effect=child) as run:
+            value = update._prepare_and_activate(self.config, pending, self.env, self.state)
+        self.assertEqual(value["status"], "deferred")
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(seen[0]["schema"], "mindie-activation-attempt/1")
+        self.assertIn("expected_binding", seen[0])
+        saved = json.loads((self.state / "native.json").read_text())
+        self.assertEqual(saved["activation"]["status"], "deferred")
+        self.assertIn("expected_binding", saved["activation"])
+
+    def test_busy_old_update_lock_defers_without_spawning_or_unknown(self):
+        pending = self.prepared_candidate()
+        with file_lock(self.config.with_suffix(".update.lock")):
+            with patch.object(update, "run") as run:
+                value = update._prepare_and_activate(
+                    self.config, pending, self.env, self.state)
+        self.assertEqual(value["status"], "deferred")
+        self.assertEqual(value["reason"], "operation_busy")
+        run.assert_not_called()
+        saved = json.loads((self.state / "native.json").read_text())
+        self.assertEqual(saved["activation"]["status"], "unconfirmed")
+        self.assertIn("expected_binding", saved["activation"])
+
+    def test_legacy_candidate_activation_version_floor_never_invokes_helper(self):
+        pending = self.prepared_candidate()
+        pending["metadata"]["version"] = "0.1.9"
+        with patch.object(update, "native_version", return_value="0.1.9"), \
+                patch.object(update, "run") as run:
+            value = update._prepare_and_activate(
+                self.config, pending, self.env, self.state)
+        self.assertEqual(value["status"], "deferred")
+        self.assertEqual(value["reason"], "legacy_activation_helper")
+        run.assert_not_called()
+        self.assertFalse((self.state / "native.json").exists())
+
+    def test_activation_cleanup_failure_is_retried_not_a_permanent_prison(self):
+        pending = self.prepared_candidate()
+        pending["activation"] = dict(
+            status="unknown",
+            process=dict(execution="unknown", returncode=None, cleanup_failed=True))
+        with patch.object(update, "run", return_value=ProcessResult(
+                "completed", '{"status":"active"}', 0)) as run:
+            value = update._prepare_and_activate(self.config, pending, self.env, self.state)
+        self.assertEqual(value["status"], "active")
+        run.assert_called_once()
 
     def test_activation_result_and_cleanup_failure_are_both_retained(self):
         pending = self.prepared_candidate()
@@ -310,10 +353,11 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(saved["activation"]["status"], "active")
         self.assertIs(saved["activation"]["process"]["cleanup_failed"], True)
         self.assertEqual(caught.exception.native_effect["activation"], saved["activation"])
-        with patch.object(update, "run") as run:
+        with patch.object(update, "run", return_value=ProcessResult(
+                "completed", '{"status":"active"}', 0)) as run:
             value = update._prepare_and_activate(self.config, saved, self.env, self.state)
-        self.assertEqual(value["status"], "unknown")
-        run.assert_not_called()
+        self.assertEqual(value["status"], "active")
+        run.assert_called_once()
 
     def test_settled_activation_reconciliation_preserves_result_if_recording_fails(self):
         pending = self.prepared_candidate()
@@ -325,9 +369,154 @@ class UpdateTests(unittest.TestCase):
             with self.assertRaises(OSError) as caught:
                 update._prepare_and_activate(self.config, pending, self.env, self.state)
         run.assert_called_once()
+        expected_binding = dict(python=None, runtime_scripts=None, engine_config=None,
+                                product_validation=None)
         self.assertEqual(caught.exception.native_effect["activation"], dict(
-            status="active", process=dict(execution="completed", returncode=0, cleanup_failed=False)))
+            status="active", process=dict(execution="completed", returncode=0, cleanup_failed=False),
+            expected_binding=expected_binding))
         self.assertEqual(caught.exception.receipt_error_type, "OSError")
+
+    def stale_candidate(self):
+        pending = self.prepared_candidate()
+        pending.update(
+            process=dict(execution="completed", returncode=0, cleanup_failed=False),
+            preparation=dict(execution="completed", returncode=0, cleanup_failed=False),
+            native_output=dict(pluginId=update.PLUGIN, version=self.version))
+        return pending
+
+    def test_stale_prepared_candidate_is_retired_before_compatibility_or_selection(self):
+        pending = self.stale_candidate()
+        (self.state / "native.json").write_text(json.dumps(pending))
+        self.installed.return_value = dict(self.before, version="0.1.11")
+        with patch("mindie_knowledge.releases_io.fetch_releases", return_value=[]) as fetch, \
+                patch.object(update, "_native_install") as install:
+            value = update.check(self.config)
+        self.assertEqual(value["status"], "no_compatible_release")
+        fetch.assert_called_once()
+        install.assert_not_called()
+        archived = list(self.state.glob("superseded-*.json"))
+        self.assertEqual(len(archived), 1)
+        self.assertEqual(json.loads(archived[0].read_text()), pending)
+        self.assertEqual(json.loads((self.state / "native.json").read_text())["stage"], "superseded")
+
+    def test_stale_prepared_candidate_with_evicted_native_source_is_retired(self):
+        pending = self.stale_candidate()
+        Path(pending["source"]).rename(self.root / "evicted-source")
+        self.assertFalse(Path(pending["source"]).exists())
+        (self.state / "native.json").write_text(json.dumps(pending))
+        self.installed.return_value = dict(self.before, version="0.1.11")
+        with patch("mindie_knowledge.releases_io.fetch_releases", return_value=[]) as fetch, \
+                patch.object(update, "_native_install") as install:
+            value = update.check(self.config)
+        self.assertEqual(value["status"], "no_compatible_release")
+        fetch.assert_called_once()
+        install.assert_not_called()
+        archived = list(self.state.glob("superseded-*.json"))
+        self.assertEqual(len(archived), 1)
+        self.assertEqual(json.loads(archived[0].read_text()), pending)
+        self.assertEqual(json.loads((self.state / "native.json").read_text())["stage"], "superseded")
+
+    def test_stale_installed_candidate_with_evicted_source_is_not_retired(self):
+        pending = dict(self.stale_candidate(), stage="installed")
+        Path(pending["source"]).rename(self.root / "evicted-installed-source")
+        (self.state / "native.json").write_text(json.dumps(pending))
+        self.installed.return_value = dict(self.before, version="0.1.11")
+        with patch("mindie_knowledge.releases_io.fetch_releases") as fetch, \
+                patch.object(update, "_native_install") as install:
+            value = update.check(self.config)
+        self.assertEqual(value["status"], "unknown")
+        self.assertEqual(value["stage"], "installed")
+        fetch.assert_not_called()
+        install.assert_not_called()
+        self.assertEqual(json.loads((self.state / "native.json").read_text()), pending)
+        self.assertFalse(list(self.state.glob("superseded-*.json")))
+
+    def test_stale_candidate_with_unsettled_native_writer_is_not_retired(self):
+        pending = dict(self.prepared_candidate(),
+                       process=dict(execution="unknown", returncode=None, cleanup_failed=False),
+                       preparation=dict(execution="completed", returncode=0, cleanup_failed=False),
+                       native_output=dict(pluginId=update.PLUGIN, version=self.version))
+        (self.state / "native.json").write_text(json.dumps(pending))
+        self.installed.return_value = dict(self.before, version="0.1.11")
+        with patch("mindie_knowledge.releases_io.fetch_releases") as fetch, \
+                patch.object(update, "_native_install") as install:
+            value = update.check(self.config)
+        self.assertEqual(value["status"], "unknown")
+        self.assertEqual(value["stage"], "prepared")
+        fetch.assert_not_called()
+        install.assert_not_called()
+        self.assertEqual(json.loads((self.state / "native.json").read_text()), pending)
+        self.assertFalse(list(self.state.glob("superseded-*.json")))
+
+    def test_first_install_does_not_synthesize_active_without_canonical_readback(self):
+        pending = self.prepared_candidate()
+        with patch.object(update, "run", return_value=ProcessResult(
+                "completed", "", 0)) as run:
+            with self.assertRaises(ValueError):
+                update._prepare_and_activate(
+                    self.config, pending, self.env, self.state, first_install=True)
+        run.assert_called_once()
+        self.assertEqual(
+            json.loads((self.state / "native.json").read_text())["activation"]["status"],
+            "unknown")
+
+    def test_first_install_readback_reports_active_only_for_exact_binding(self):
+        pending = self.prepared_candidate()
+        validation = dict(version="fixture", status="validated")
+        release = self.root / "first-release"
+        release.mkdir()
+        (release / "runtime.json").write_text(json.dumps(
+            dict(python=sys.executable, validation=validation)))
+        engine = self.root / "first-engine.json"
+        engine.write_text(json.dumps(dict(
+            transcript_adapter=str(Path(pending["runtime"]["scripts"]) / "codex_transcript.py"))))
+        self.config.write_text(json.dumps(dict(
+            python=sys.executable, runtime_scripts=pending["runtime"]["scripts"],
+            engine_config=str(engine), product_validation=validation)))
+        pending["runtime"] = dict(python=sys.executable,
+                                  scripts=pending["runtime"]["scripts"],
+                                  release=str(release))
+        with patch.object(update, "run", return_value=ProcessResult(
+                "completed", "", 0)):
+            value = update._prepare_and_activate(
+                self.config, pending, self.env, self.state, first_install=True)
+        self.assertEqual(value, {"status": "active"})
+        self.assertEqual(
+            json.loads((self.state / "native.json").read_text())["activation"]["status"],
+            "active")
+
+    def test_first_install_readback_rejects_distinct_venv_paths_with_same_base(self):
+        pending = self.prepared_candidate()
+        first = self.root / "venv-a/bin/python"
+        second = self.root / "venv-b/bin/python"
+        first.parent.mkdir(parents=True)
+        second.parent.mkdir(parents=True)
+        try:
+            os.symlink(sys.executable, first)
+            os.symlink(sys.executable, second)
+        except OSError as exc:
+            self.skipTest(f"symlink fixture unavailable: {type(exc).__name__}")
+        self.assertEqual(first.resolve(), second.resolve())
+        validation = dict(version="fixture", status="validated")
+        release = self.root / "first-release"
+        release.mkdir()
+        (release / "runtime.json").write_text(json.dumps(
+            dict(python=str(first), validation=validation)))
+        engine = self.root / "first-engine.json"
+        engine.write_text(json.dumps(dict(
+            transcript_adapter=str(Path(pending["runtime"]["scripts"]) / "codex_transcript.py"))))
+        self.config.write_text(json.dumps(dict(
+            python=str(second), runtime_scripts=pending["runtime"]["scripts"],
+            engine_config=str(engine), product_validation=validation)))
+        pending["runtime"] = dict(python=str(first), scripts=pending["runtime"]["scripts"],
+                                  release=str(release))
+        self.assertIsNone(update._first_install_readback(self.config, pending["runtime"]))
+
+    def test_native_settled_re_raises_timeout(self):
+        pending = self.stale_candidate()
+        with patch.object(update, "native_version", side_effect=TimeoutError("busy")):
+            with self.assertRaises(TimeoutError):
+                update._native_settled(pending)
 
     def test_prepared_retries_activation_without_network_or_install(self):
         (self.state / "native.json").write_text(json.dumps(dict(
