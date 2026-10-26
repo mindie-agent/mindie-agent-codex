@@ -590,6 +590,7 @@ class RuntimeTests(unittest.TestCase):
                     f"bootstrap.run=lambda argv,payload,**kwargs:owned([*argv[:argv.index('-c')+3],sys.executable,'-c',{installer!r}],payload,**kwargs);"
                     f"bootstrap.ensure_runtime(Path({str(SCRIPTS.parent)!r}),Path({str(data)!r}))"
                 )
+                writers_released = False
                 with owned_fixture_process(
                     [sys.executable, "-c", owner], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 ) as process:
@@ -615,13 +616,12 @@ class RuntimeTests(unittest.TestCase):
                                     if time.monotonic() >= until:
                                         self.fail("installer/build survived bootstrap owner death")
                                     time.sleep(.01)
+                        writers_released = True
                         self.assertEqual(list(data.rglob("runtime.json")), [])
                         self.assertEqual(list(data.glob("releases/*/entry.py")), [])
                         self.assertEqual(len(list(data.rglob("prepare-*.log"))), 1)
                     finally:
-                        # Only this fixture's owned group is eligible cleanup;
-                        # the assertions above ran before this safety cleanup.
-                        if ready.exists():
+                        if not writers_released and ready.exists():
                             group = json.loads(ready.read_text())["group"]
                             try:
                                 os.killpg(group, signal.SIGKILL)
