@@ -74,3 +74,32 @@ jobs:
           MINDIE_CORE_REPO: ${{ github.workspace }}/.ci/core
           MINDIE_KIMI_REPO: ${{ github.workspace }}/.ci/kimi
         run: uv run --project plugins/mindie-agent --no-sync python tests/run_ci.py
+
+  native-harness:
+    # Model-free native management and MCP discovery; no account or NPU needed.
+    strategy:
+      fail-fast: false
+      matrix:
+        codex: ["0.162.1", "0.164.0"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install the exact native host and locked runtime
+        run: |
+          npm install -g "@openai/codex@${{ matrix.codex }}"
+          python -m pip install uv
+          echo "UV_PROJECT_ENVIRONMENT=$RUNNER_TEMP/mindie-native-runtime" >> "$GITHUB_ENV"
+          echo "UV_CACHE_DIR=$RUNNER_TEMP/uv-cache" >> "$GITHUB_ENV"
+          echo "MINDIE_TEST_CODEX_BIN=$(command -v codex)" >> "$GITHUB_ENV"
+      - name: Prepare locked component dependencies
+        run: |
+          uv sync --project plugins/mindie-agent --locked --no-editable
+          uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" pytest==9.1.1
+      - name: Native plugin, hook trust, SessionStart and MCP acceptance
+        run: '"$UV_PROJECT_ENVIRONMENT/bin/python" -m pytest -q -s tests/test_native_harness_acceptance.py'

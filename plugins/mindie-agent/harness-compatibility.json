@@ -19,6 +19,18 @@
       "maximum": "0.164.0-alpha.11.1",
       "maximum_inclusive": true,
       "include_prerelease": true
+    },
+    {
+      "minimum": "0.162.1",
+      "maximum": "0.162.1",
+      "maximum_inclusive": true,
+      "include_prerelease": false
+    },
+    {
+      "minimum": "0.164.0",
+      "maximum": "0.164.0",
+      "maximum_inclusive": true,
+      "include_prerelease": false
     }
   ],
   "used_interfaces": [
@@ -55,6 +67,18 @@
           "maximum": "0.164.0-alpha.11.1",
           "maximum_inclusive": true,
           "include_prerelease": true
+        },
+        {
+          "minimum": "0.162.1",
+          "maximum": "0.162.1",
+          "maximum_inclusive": true,
+          "include_prerelease": false
+        },
+        {
+          "minimum": "0.164.0",
+          "maximum": "0.164.0",
+          "maximum_inclusive": true,
+          "include_prerelease": false
         }
       ],
       "code_paths": [
@@ -89,6 +113,18 @@
           "maximum": "0.164.0-alpha.11.1",
           "maximum_inclusive": true,
           "include_prerelease": true
+        },
+        {
+          "minimum": "0.162.1",
+          "maximum": "0.162.1",
+          "maximum_inclusive": true,
+          "include_prerelease": false
+        },
+        {
+          "minimum": "0.164.0",
+          "maximum": "0.164.0",
+          "maximum_inclusive": true,
+          "include_prerelease": false
         }
       ],
       "code_paths": [
@@ -121,6 +157,18 @@
           "maximum": "0.164.0-alpha.11.1",
           "maximum_inclusive": true,
           "include_prerelease": true
+        },
+        {
+          "minimum": "0.162.1",
+          "maximum": "0.162.1",
+          "maximum_inclusive": true,
+          "include_prerelease": false
+        },
+        {
+          "minimum": "0.164.0",
+          "maximum": "0.164.0",
+          "maximum_inclusive": true,
+          "include_prerelease": false
         }
       ],
       "code_paths": [
@@ -153,6 +201,18 @@
           "maximum": "0.164.0-alpha.11.1",
           "maximum_inclusive": true,
           "include_prerelease": true
+        },
+        {
+          "minimum": "0.162.1",
+          "maximum": "0.162.1",
+          "maximum_inclusive": true,
+          "include_prerelease": false
+        },
+        {
+          "minimum": "0.164.0",
+          "maximum": "0.164.0",
+          "maximum_inclusive": true,
+          "include_prerelease": false
         }
       ],
       "code_paths": [
@@ -186,6 +246,18 @@
           "maximum": "0.164.0-alpha.11.1",
           "maximum_inclusive": true,
           "include_prerelease": true
+        },
+        {
+          "minimum": "0.162.1",
+          "maximum": "0.162.1",
+          "maximum_inclusive": true,
+          "include_prerelease": false
+        },
+        {
+          "minimum": "0.164.0",
+          "maximum": "0.164.0",
+          "maximum_inclusive": true,
+          "include_prerelease": false
         }
       ],
       "code_paths": [
@@ -223,6 +295,18 @@
           "maximum": "0.164.0-alpha.11.1",
           "maximum_inclusive": true,
           "include_prerelease": true
+        },
+        {
+          "minimum": "0.162.1",
+          "maximum": "0.162.1",
+          "maximum_inclusive": true,
+          "include_prerelease": false
+        },
+        {
+          "minimum": "0.164.0",
+          "maximum": "0.164.0",
+          "maximum_inclusive": true,
+          "include_prerelease": false
         }
       ],
       "code_paths": [
@@ -256,6 +340,18 @@
           "maximum": "0.164.0-alpha.11.1",
           "maximum_inclusive": true,
           "include_prerelease": true
+        },
+        {
+          "minimum": "0.162.1",
+          "maximum": "0.162.1",
+          "maximum_inclusive": true,
+          "include_prerelease": false
+        },
+        {
+          "minimum": "0.164.0",
+          "maximum": "0.164.0",
+          "maximum_inclusive": true,
+          "include_prerelease": false
         }
       ],
       "code_paths": [
@@ -288,6 +384,18 @@
           "maximum": "0.164.0-alpha.11.1",
           "maximum_inclusive": true,
           "include_prerelease": true
+        },
+        {
+          "minimum": "0.162.1",
+          "maximum": "0.162.1",
+          "maximum_inclusive": true,
+          "include_prerelease": false
+        },
+        {
+          "minimum": "0.164.0",
+          "maximum": "0.164.0",
+          "maximum_inclusive": true,
+          "include_prerelease": false
         }
       ],
       "code_paths": [
@@ -321,6 +429,18 @@
           "maximum": "0.164.0-alpha.11.1",
           "maximum_inclusive": true,
           "include_prerelease": true
+        },
+        {
+          "minimum": "0.162.1",
+          "maximum": "0.162.1",
+          "maximum_inclusive": true,
+          "include_prerelease": false
+        },
+        {
+          "minimum": "0.164.0",
+          "maximum": "0.164.0",
+          "maximum_inclusive": true,
+          "include_prerelease": false
         }
       ],
       "code_paths": [
@@ -354,6 +474,18 @@
           "maximum": "0.164.0-alpha.11.1",
           "maximum_inclusive": true,
           "include_prerelease": true
+        },
+        {
+          "minimum": "0.162.1",
+          "maximum": "0.162.1",
+          "maximum_inclusive": true,
+          "include_prerelease": false
+        },
+        {
+          "minimum": "0.164.0",
+          "maximum": "0.164.0",
+          "maximum_inclusive": true,
+          "include_prerelease": false
         }
       ],
       "code_paths": [
@@ -391,6 +523,18 @@
           "maximum": "0.164.0-alpha.11.1",
           "maximum_inclusive": true,
           "include_prerelease": true
+        },
+        {
+          "minimum": "0.162.1",
+          "maximum": "0.162.1",
+          "maximum_inclusive": true,
+          "include_prerelease": false
+        },
+        {
+          "minimum": "0.164.0",
+          "maximum": "0.164.0",
+          "maximum_inclusive": true,
+          "include_prerelease": false
         }
       ],
       "code_paths": [
@@ -432,6 +576,18 @@
           "maximum": "0.164.0-alpha.11.1",
           "maximum_inclusive": true,
           "include_prerelease": true
+        },
+        {
+          "minimum": "0.162.1",
+          "maximum": "0.162.1",
+          "maximum_inclusive": true,
+          "include_prerelease": false
+        },
+        {
+          "minimum": "0.164.0",
+          "maximum": "0.164.0",
+          "maximum_inclusive": true,
+          "include_prerelease": false
         }
       ],
       "code_paths": [

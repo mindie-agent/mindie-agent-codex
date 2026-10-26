@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.10-0F766E.svg" alt="Release v0.1.10"></a>
-  <a href="plugins/mindie-agent/harness-compatibility.json"><img src="https://img.shields.io/badge/Codex_CLI-0.153.4_%7C_0.162.0--alpha.17.2-10A37F.svg" alt="Codex CLI 0.153.4 | 0.162.0-alpha.17.2"></a>
+  <a href="plugins/mindie-agent/harness-compatibility.json"><img src="https://img.shields.io/badge/Codex_CLI-0.162.1_%7C_0.164.0-10A37F.svg" alt="Codex CLI 0.162.1 | 0.164.0"></a>
   <a href="plugins/mindie-agent/pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
 </p>
@@ -105,7 +105,8 @@ If you are an AI Agent asked by the user to install this plugin, execute the fol
    - **Hard Gate (Never skip or silently ignore)**: If `gh` is missing, assist the user in installing it first (macOS: `brew install gh`; Windows: `winget install --id GitHub.cli`; Ubuntu / WSL: `sudo apt update && sudo apt install -y gh`). Reuse a working account. Otherwise follow [GitHub Sign-In](plugins/mindie-agent/skills/mindie-agent/references/github-authentication.md): browser login on ordinary networks, or token login on enterprise networks / blocked browser authorization. Use an existing token in the hidden `gh` prompt (or a supplied private file), or guide token creation. Verify the account, Git and credential reuse before continuing; fix transport/certificate failures before retrying authentication.
    - Verify `codex --version` matches a host version recorded in the compatibility declaration (declared in [`plugins/mindie-agent/harness-compatibility.json`](plugins/mindie-agent/harness-compatibility.json)):
      - macOS: `codex-cli 0.162.0-alpha.17.2` or `0.164.0-alpha.11.1`
-     - Native Windows / Windows WSL: `codex-cli 0.153.4`
+     - Native Windows: `codex-cli 0.153.4`
+     - Linux / Windows WSL: `codex-cli 0.153.4`, `0.162.1` or `0.164.0` (see [interface evidence](docs/harness-interfaces.md) for the new model-free acceptance scope)
    - On **Linux or Windows WSL**, if the background knowledge service will be used, also run `systemctl --user show --property=Version` to verify `systemd >= 254` with unified cgroup v2 is reachable (inside WSL, use Linux-native `codex`, `git`, `uv`, and `gh` rather than Windows binaries across `/mnt/c`).
 
 2. **Optional project support and contribution setup**:

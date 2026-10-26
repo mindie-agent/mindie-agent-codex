@@ -2,9 +2,11 @@
 
 <a href="harness-interfaces.zh.md">中文</a> | <b>English</b> · <a href="README.en.md">Documentation Index</a>
 
-[`plugins/mindie-agent/harness-compatibility.json`](../plugins/mindie-agent/harness-compatibility.json) is the machine-checked registry of OpenAI Codex CLI interfaces used by `mindie-agent-codex`. Release `0.0.2` declares support for two exact verified Codex versions:
-- **`0.153.4`** (official upstream commit `3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`)
-- **`0.162.0-alpha.17.2`** (official upstream commit `740e5af33c71225640e0c1c1555c514c2c93ab74`)
+[`plugins/mindie-agent/harness-compatibility.json`](../plugins/mindie-agent/harness-compatibility.json) is the machine-checked registry of OpenAI Codex CLI interfaces used by `mindie-agent-codex`. The registry includes the previously verified hosts and two additional stable versions, `0.162.1` and `0.164.0` (the latest official stable release checked on 2026-10-26). Each is an exact version; untested patch releases and prereleases remain excluded.
+
+On WSL Linux, both added versions pass `tests/test_native_harness_acceptance.py` against the real executable: local marketplace installation and readback, all five bundled hooks, config compare-and-swap, preservation of trusted and explicitly disabled handlers, locked runtime preparation, a native SessionStart, and discovery of 22 remote tools and 5 component tools without enabling knowledge capture. CI repeats these model-free checks on Ubuntu for both versions. This evidence does not claim paid model-turn, remote NPU, or Windows/macOS acceptance for the newly added hosts.
+
+The official source for [0.162.1](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/mcp_tool_call.rs) and [0.164.0](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/mcp_tool_call.rs) retains the native thread and turn metadata used by the adapter. Existing protocol tests continue to cover identity rejection and targeted cancellation.
 
 In CI, `plugins/mindie-agent/scripts/release_metadata.py` verifies that every registered production symbol and contract test exists and validates the declared version intervals against all consumed interfaces.
 
