@@ -53,6 +53,15 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(
             apply_patch["inputSchema"]["properties"]["patch"]["type"], "string"
         )
+        write_stdin = next(
+            tool for tool in self.generated["remote"]
+            if tool["name"] == "remote_write_stdin"
+        )
+        self.assertEqual(write_stdin["inputSchema"]["required"], ["session_id"])
+        self.assertIn(
+            "session_id", write_stdin["inputSchema"]["properties"]
+        )
+        self.assertNotIn("restored from job_id", write_stdin["description"])
 
     def test_gate_accepts_every_advertised_name_and_rejects_bad_keys(self):
         from mcp_gate import Gate, InvalidToolArguments
@@ -81,6 +90,23 @@ class CatalogTests(unittest.TestCase):
             gate._tool_args({"params": {
                 "name": "remote_apply_patch", "arguments": {},
             }})
+
+    def test_remote_endpoint_contract_is_model_visible(self):
+        for name in ("remote_bash", "remote_exec_command"):
+            tool = next(
+                item for item in self.generated["remote"]
+                if item["name"] == name
+            )
+            self.assertIn("host and port together", tool["description"])
+            self.assertIn("22", tool["description"])
+            self.assertIn("no implicit default", tool["description"].lower())
+            host = tool["inputSchema"]["properties"]["host"]["description"]
+            port = tool["inputSchema"]["properties"]["port"]["description"]
+            self.assertIn("host and port", host)
+            self.assertIn("22", port)
+            self.assertIn("no implicit default", port.lower())
+            self.assertNotIn("host", tool["inputSchema"]["required"])
+            self.assertNotIn("port", tool["inputSchema"]["required"])
 
     def test_custom_resolver_boilerplate_is_not_advertised(self):
         for tool in self.generated["remote"]:
