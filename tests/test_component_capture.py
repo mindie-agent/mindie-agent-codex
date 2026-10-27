@@ -465,3 +465,20 @@ def test_invalid_utf8_preview_stays_within_declared_byte_budget(tmp_path):
     assert capture.receipt()["stdout"]["preview_truncated"]
     assert capture.receipt()["stderr"]["preview_truncated"]
     assert Path(capture.receipt()["stdout"]["path"]).read_bytes() == b"\xff\xff\xff"
+
+
+def test_native_components_script_keeps_argument_error_identity(gate):
+    import subprocess
+    request = dict(jsonrpc="2.0", id=1, method="tools/call", params=dict(
+        name="diagnostics_bundle", arguments=dict(root=42), _meta={
+            "threadId": "t", "x-codex-turn-metadata": dict(
+                thread_id="t", session_id="t", turn_id="turn-1")}))
+    result = subprocess.run([sys.executable, str(SCRIPTS / "mcp_gate.py"), "components"],
+                            input=json.dumps(request) + "\n", text=True,
+                            capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    reply = next(json.loads(line) for line in result.stdout.splitlines()
+                 if json.loads(line).get("id") == 1)
+    detail = reply["result"]["structuredContent"]
+    assert detail["code"] == "invalid_arguments"
+    assert detail["execution"] == "not_started" and detail["field"] == "root"

@@ -856,4 +856,7 @@ def serve(surface):
 if __name__ == "__main__":
     if sys.argv[1:] != ["components"]:
         raise SystemExit("expected components MCP surface")
-    serve("components")
+    # Component validation imports mcp_gate.InvalidToolArguments. Serve from
+    # that same module so script launch keeps one exception class identity.
+    from mcp_gate import serve as serve_components
+    serve_components("components")
