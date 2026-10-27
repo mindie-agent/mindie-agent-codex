@@ -8,6 +8,7 @@ Runs a child subprocess (`run(command, payload, timeout=..., max_output=..., can
 - Kills the entire owned process tree (`owned_process.py` process group on POSIX; suspended Job object on Windows) upon timeout, output overflow, or cancellation.
 
 [Timeouts & Locks]
+- An opt-in `capture` (capture_spool.Capture) streams output to bounded local files instead of the in-memory `max_output` guard; without it the strict guard is unchanged.
 - Enforces caller-supplied `timeout` (monotonic deadline) and `max_output` (`default 1 MiB` bytes), plus a 2.0s reader-join grace on Windows.
 
 [Side-Effect Policy]
@@ -49,6 +50,7 @@ class ProcessResult:
     returncode: int | None = None
     stderr: str = ""
     cleanup: list = field(default_factory=list)
+    capture: dict | None = None
 
     def checked_stdout(self):
         if self.cleanup:
@@ -156,6 +158,13 @@ def _kill_tree(process):
         process._mindie_tree_terminated = True
         return
     windows_process.close_tree(process)
+
+
+def _settle_capture(result, capture):
+    capture.freeze()
+    result.stdout = capture.stdout()
+    result.stderr = capture.stderr()
+    result.capture = capture.receipt()
 
 
 class _Cap:
@@ -310,7 +319,7 @@ def _attach_transport(exc, stdout, stderr, *, timed_out):
         exc.category = "temporary_network"
 
 
-def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), transport=False, on_failure=None, output_encoding="utf-8"):
+def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), transport=False, on_failure=None, output_encoding="utf-8", capture=None):
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ, "out")
     selector.register(process.stderr, selectors.EVENT_READ, "err")
@@ -346,6 +355,9 @@ def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), t
                 if not chunk:
                     selector.unregister(key.fileobj)
                     continue
+                if capture is not None:
+                    capture.add(key.data, chunk)
+                    continue
                 cap.add(chunk)
                 if key.data == "out":
                     output.extend(chunk)
@@ -356,8 +368,11 @@ def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), t
         process.wait()
         result.execution = "completed"
         result.returncode = process.returncode
-        result.stdout = output.decode(output_encoding)
-        result.stderr = errors.decode(output_encoding, errors="replace")
+        if capture is not None:
+            _settle_capture(result, capture)
+        else:
+            result.stdout = output.decode(output_encoding)
+            result.stderr = errors.decode(output_encoding, errors="replace")
         if allowed_returncodes is not None and process.returncode not in allowed_returncodes:
             # A protocol owner may map bounded stdout to a safe error. Raw
             # stderr never leaves this runner, and a nonzero exit still raises.
@@ -371,7 +386,9 @@ def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), t
         return result
     except BaseException as exc:
         result.returncode = process.poll()
-        if not result.stdout:
+        if capture is not None:
+            _settle_capture(result, capture)
+        elif not result.stdout:
             result.stdout = output.decode(output_encoding, errors="replace")
         exc.process_result = result
         raise
@@ -379,7 +396,7 @@ def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), t
         _cleanup(process, result, selector=selector)
 
 
-def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,), transport=False, on_failure=None, output_encoding="utf-8"):
+def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,), transport=False, on_failure=None, output_encoding="utf-8", capture=None):
     # Windows (unverified on real hardware): reader threads replace selectors.
     deadline = None if timeout is None else time.monotonic() + timeout
     output = bytearray()
@@ -395,6 +412,9 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
                 if not chunk:
                     return
                 with lock:
+                    if capture is not None:
+                        capture.add("out" if dest is output else "err", chunk)
+                        continue
                     cap.add(chunk)
                     if dest is not None:
                         dest.extend(chunk)
@@ -433,8 +453,11 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
         process.wait()
         result.execution = "completed"
         result.returncode = process.returncode
-        result.stdout = bytes(output).decode(output_encoding)
-        result.stderr = bytes(errors).decode(output_encoding, errors="replace")
+        if capture is not None:
+            _settle_capture(result, capture)
+        else:
+            result.stdout = bytes(output).decode(output_encoding)
+            result.stderr = bytes(errors).decode(output_encoding, errors="replace")
         if allowed_returncodes is not None and process.returncode not in allowed_returncodes:
             # A protocol owner may map bounded stdout to a safe error. Raw
             # stderr never leaves this runner, and a nonzero exit still raises.
@@ -448,7 +471,9 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
         return result
     except BaseException as exc:
         result.returncode = process.poll()
-        if not result.stdout:
+        if capture is not None:
+            _settle_capture(result, capture)
+        elif not result.stdout:
             result.stdout = bytes(output).decode(output_encoding, errors="replace")
         exc.process_result = result
         raise
@@ -456,7 +481,7 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
         _cleanup(process, result, threads=threads)
 
 
-def run(command, data, *, timeout=None, max_output=1024 * 1024, cancel=None, env=None, allowed_returncodes=(0,), transport=False, allow_service=False, on_failure=None, output_encoding="utf-8"):
+def run(command, data, *, timeout=None, max_output=1024 * 1024, cancel=None, env=None, allowed_returncodes=(0,), transport=False, allow_service=False, on_failure=None, output_encoding="utf-8", capture=None):
     codecs.lookup(output_encoding)
     if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
                                 or not math.isfinite(timeout) or timeout <= 0):
@@ -474,8 +499,8 @@ def run(command, data, *, timeout=None, max_output=1024 * 1024, cancel=None, env
             raise
         if POSIX:
             return _run_posix(
-                process, timeout, max_output, cancel, allowed_returncodes, transport, on_failure, output_encoding
+                process, timeout, max_output, cancel, allowed_returncodes, transport, on_failure, output_encoding, capture
             )
         return _run_windows(
-            process, timeout, max_output, cancel, allowed_returncodes, transport, on_failure, output_encoding
+            process, timeout, max_output, cancel, allowed_returncodes, transport, on_failure, output_encoding, capture
         )
