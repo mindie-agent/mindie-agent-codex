@@ -1438,7 +1438,7 @@
           },
           "max_output_tokens": {
             "type": "integer",
-            "description": "Output token cap for action='tail'; the preview keeps the newest max(4, min(32768, 2 * tokens)) UTF-8 bytes. Omitted means no truncation."
+            "description": "Output token cap for action='tail'; the preview keeps the newest max(4, min(32768, 2 * tokens)) UTF-8 bytes. Omitted means the global text preview limit applies."
           },
           "stream": {
             "type": "string",
@@ -1535,7 +1535,7 @@
           },
           "max_output_tokens": {
             "type": "integer",
-            "description": "Preview output token cap; the preview keeps the newest max(4, min(32768, 2 * tokens)) UTF-8 bytes. Log refs and metadata are outside this cap."
+            "description": "Preview output token cap; the preview keeps the newest max(4, min(32768, 2 * tokens)) UTF-8 bytes. Stream labels, log refs and metadata are outside this cap."
           },
           "timeout_ms": {
             "type": "integer",
@@ -1627,7 +1627,7 @@
           },
           "max_output_tokens": {
             "type": "integer",
-            "description": "Preview output token cap; the preview keeps the newest max(4, min(32768, 2 * tokens)) UTF-8 bytes. Log refs and metadata are outside this cap."
+            "description": "Preview output token cap; the preview keeps the newest max(4, min(32768, 2 * tokens)) UTF-8 bytes. Stream labels, log refs and metadata are outside this cap."
           },
           "timeout_ms": {
             "type": "integer",
