@@ -408,7 +408,10 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
     def reader(stream, dest):
         try:
             while True:
-                chunk = stream.read(8192)
+                if capture is not None and hasattr(stream, "read1"):
+                    chunk = stream.read1(8192)
+                else:
+                    chunk = stream.read(8192)
                 if not chunk:
                     return
                 with lock:

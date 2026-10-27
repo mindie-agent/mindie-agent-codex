@@ -319,6 +319,9 @@ def test_windows_failure_freezes_capture_before_settle(tmp_path, monkeypatch):
             self.late_sent = True
             return b"after-settle"
 
+        def read1(self, size=-1):
+            return self.read(size)
+
     process = Process()
     process.stderr = SlowReader(process.release)
     monkeypatch.setattr(bounded_process, "_kill_tree", lambda proc: None)
@@ -333,6 +336,40 @@ def test_windows_failure_freezes_capture_before_settle(tmp_path, monkeypatch):
     path = Path(result.capture["stderr"]["path"])
     assert path.read_bytes() == b"first"
     assert hashlib.sha256(b"first").hexdigest() == result.capture["stderr"]["sha256"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group cleanup is POSIX; Windows CI covers run()")
+@pytest.mark.parametrize("mode", ["timeout", "cancel"])
+def test_windows_reader_keeps_flushed_partial_pipe_output(tmp_path, mode):
+    import subprocess
+    import time
+    ready = tmp_path / "ready"
+    code = ("import time,sys,pathlib; print('partial-start', flush=True); "
+            "pathlib.Path(sys.argv[1]).write_text('x'); time.sleep(30)")
+    process = subprocess.Popen([sys.executable, "-c", code, str(ready)], stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, start_new_session=True)
+    cancel = threading.Event()
+
+    def trigger():
+        end = time.monotonic() + 10
+        while not ready.exists() and time.monotonic() < end:
+            time.sleep(0.01)
+        time.sleep(0.3)
+        cancel.set()
+
+    helper = threading.Thread(target=trigger, daemon=True)
+    helper.start()
+    capture = capture_spool.Capture(tmp_path / "spool", 1000)
+    timeout = 10 if mode == "cancel" else 1.5
+    expected = RuntimeError if mode == "cancel" else TimeoutError
+    with pytest.raises(expected) as caught:
+        bounded_process._run_windows(process, timeout, 1000, cancel if mode == "cancel" else None,
+                                     None, capture=capture)
+    helper.join(5)
+    result = caught.value.process_result
+    assert result.stdout == "partial-start\n"
+    assert result.capture["stdout"]["bytes"] == len("partial-start\n")
+    assert process.poll() is not None
 
 
 def _validate(schema_tool, arguments):
