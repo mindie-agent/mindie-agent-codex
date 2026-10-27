@@ -376,6 +376,10 @@ class UpdateTests(unittest.TestCase):
             expected_binding=expected_binding))
         self.assertEqual(caught.exception.receipt_error_type, "OSError")
 
+    def next_patch_version(self):
+        major, minor, patch = self.version.split(".")
+        return f"{major}.{minor}.{int(patch) + 1}"
+
     def stale_candidate(self):
         pending = self.prepared_candidate()
         pending.update(
@@ -387,7 +391,7 @@ class UpdateTests(unittest.TestCase):
     def test_stale_prepared_candidate_is_retired_before_compatibility_or_selection(self):
         pending = self.stale_candidate()
         (self.state / "native.json").write_text(json.dumps(pending))
-        self.installed.return_value = dict(self.before, version="0.1.11")
+        self.installed.return_value = dict(self.before, version=self.next_patch_version())
         with patch("mindie_knowledge.releases_io.fetch_releases", return_value=[]) as fetch, \
                 patch.object(update, "_native_install") as install:
             value = update.check(self.config)
@@ -404,7 +408,7 @@ class UpdateTests(unittest.TestCase):
         Path(pending["source"]).rename(self.root / "evicted-source")
         self.assertFalse(Path(pending["source"]).exists())
         (self.state / "native.json").write_text(json.dumps(pending))
-        self.installed.return_value = dict(self.before, version="0.1.11")
+        self.installed.return_value = dict(self.before, version=self.next_patch_version())
         with patch("mindie_knowledge.releases_io.fetch_releases", return_value=[]) as fetch, \
                 patch.object(update, "_native_install") as install:
             value = update.check(self.config)
@@ -420,7 +424,7 @@ class UpdateTests(unittest.TestCase):
         pending = dict(self.stale_candidate(), stage="installed")
         Path(pending["source"]).rename(self.root / "evicted-installed-source")
         (self.state / "native.json").write_text(json.dumps(pending))
-        self.installed.return_value = dict(self.before, version="0.1.11")
+        self.installed.return_value = dict(self.before, version=self.next_patch_version())
         with patch("mindie_knowledge.releases_io.fetch_releases") as fetch, \
                 patch.object(update, "_native_install") as install:
             value = update.check(self.config)
@@ -437,7 +441,7 @@ class UpdateTests(unittest.TestCase):
                        preparation=dict(execution="completed", returncode=0, cleanup_failed=False),
                        native_output=dict(pluginId=update.PLUGIN, version=self.version))
         (self.state / "native.json").write_text(json.dumps(pending))
-        self.installed.return_value = dict(self.before, version="0.1.11")
+        self.installed.return_value = dict(self.before, version=self.next_patch_version())
         with patch("mindie_knowledge.releases_io.fetch_releases") as fetch, \
                 patch.object(update, "_native_install") as install:
             value = update.check(self.config)

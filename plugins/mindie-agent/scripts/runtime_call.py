@@ -418,11 +418,27 @@ def remote(payload):
         delivery = delivery if delivery in ("not_sent", "acknowledged", "uncertain") else "unknown"
         details = dict(category=category, submission_state=delivery,
                        retryable=raw.get("retryable") is True)
+        repair = None
+        if category == "caller" and delivery == "not_sent":
+            candidate = raw.get("input_repair")
+            if isinstance(candidate, dict):
+                # error_details already bounded this trusted local-caller
+                # contract; do not duplicate its validator in the adapter.
+                repair = candidate
+                details["input_repair"] = repair
         result = dict(outcome="failed", error_details=details, automatic_retry=False)
         job = args.get("job_id")
         if isinstance(job, str) and JOB_ID_RE.fullmatch(job):
             result["job_id"] = job
         message = f"Remote {category}; submission={delivery}. No automatic retry."
+        if repair is not None:
+            missing = repair.get("missing")
+            if isinstance(missing, list) and missing:
+                message += " Missing input: " + ", ".join(
+                    item for item in missing if isinstance(item, str)) + "."
+            action = repair.get("action")
+            if isinstance(action, str) and action:
+                message += " " + action
         if "job_id" in result:
             message += f" Original job_id={job}; inspect this job before another submission."
         elif delivery != "not_sent":

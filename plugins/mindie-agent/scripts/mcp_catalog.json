@@ -328,16 +328,18 @@
   "remote": [
     {
       "name": "remote_read",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Read a remote file with native Read-like pagination and a read ledger.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Read a remote file with native Read-like pagination and a read ledger. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -468,7 +470,7 @@
           }
         },
         "required": [],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; aliases path / AbsolutePath / TargetFile / target_file are also accepted. Enforced by the server so alias-only calls pass provider schema validation."
+        "description": "Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias from the endpoint alias files, or a selector understood by a registered resolver. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default. The server validates the selector before connecting. file_path is required; aliases path / AbsolutePath / TargetFile / target_file are also accepted. Enforced by the server so alias-only calls pass provider schema validation."
       },
       "annotations": {
         "readOnlyHint": true,
@@ -479,16 +481,18 @@
     },
     {
       "name": "remote_write",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Write a remote file with overwrite support and optional read-ledger concurrency checks.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Write a remote file with overwrite support and optional read-ledger concurrency checks. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -565,7 +569,7 @@
         "required": [
           "content"
         ],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; the alias path / TargetFile is also accepted. Enforced by the server so alias-only calls pass provider schema validation."
+        "description": "Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias from the endpoint alias files, or a selector understood by a registered resolver. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default. The server validates the selector before connecting. file_path is required; the alias path / TargetFile is also accepted. Enforced by the server so alias-only calls pass provider schema validation."
       },
       "annotations": {
         "readOnlyHint": false,
@@ -576,16 +580,18 @@
     },
     {
       "name": "remote_edit",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Edit a remote file with exact string replacement and optional read-ledger concurrency checks.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Edit a remote file with exact string replacement and optional read-ledger concurrency checks. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -666,7 +672,7 @@
           "old_string",
           "new_string"
         ],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; the alias path / TargetFile is also accepted. Enforced by the server so alias-only calls pass provider schema validation."
+        "description": "Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias from the endpoint alias files, or a selector understood by a registered resolver. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default. The server validates the selector before connecting. file_path is required; the alias path / TargetFile is also accepted. Enforced by the server so alias-only calls pass provider schema validation."
       },
       "annotations": {
         "readOnlyHint": false,
@@ -677,16 +683,18 @@
     },
     {
       "name": "remote_multi_edit",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Apply multiple exact edits atomically to one remote file.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Apply multiple exact edits atomically to one remote file. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -767,7 +775,7 @@
         "required": [
           "edits"
         ],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. file_path is required; the alias path / TargetFile is also accepted. Enforced by the server so alias-only calls pass provider schema validation."
+        "description": "Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias from the endpoint alias files, or a selector understood by a registered resolver. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default. The server validates the selector before connecting. file_path is required; the alias path / TargetFile is also accepted. Enforced by the server so alias-only calls pass provider schema validation."
       },
       "annotations": {
         "readOnlyHint": false,
@@ -778,16 +786,18 @@
     },
     {
       "name": "remote_bash",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Run a remote shell command with Bash-like semantics, logs, preview, and automatic yield, writable stdin and optional PTY.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Run a remote shell command with Bash-like semantics, logs, preview, and automatic yield, writable stdin and optional PTY. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -889,7 +899,7 @@
           }
         },
         "required": [],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting. command is required; the alias cmd / CommandLine is also accepted (Codex / Antigravity habit). Enforced by the server so alias-only calls pass provider schema validation."
+        "description": "Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias from the endpoint alias files, or a selector understood by a registered resolver. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default. The server validates the selector before connecting. command is required; the alias cmd / CommandLine is also accepted (Codex / Antigravity habit). Enforced by the server so alias-only calls pass provider schema validation."
       },
       "annotations": {
         "readOnlyHint": false,
@@ -900,16 +910,18 @@
     },
     {
       "name": "remote_glob",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Find remote paths with ** glob semantics.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Find remote paths with ** glob semantics. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -1009,7 +1021,7 @@
         "required": [
           "pattern"
         ],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
+        "description": "Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias from the endpoint alias files, or a selector understood by a registered resolver. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default. The server validates the selector before connecting."
       },
       "annotations": {
         "readOnlyHint": false,
@@ -1020,16 +1032,18 @@
     },
     {
       "name": "remote_grep",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Search remote files with rg-compatible semantics and a grep -E (POSIX ERE) fallback.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Search remote files with rg-compatible semantics and a grep -E (POSIX ERE) fallback. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -1187,7 +1201,7 @@
         "required": [
           "pattern"
         ],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
+        "description": "Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias from the endpoint alias files, or a selector understood by a registered resolver. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default. The server validates the selector before connecting."
       },
       "annotations": {
         "readOnlyHint": true,
@@ -1198,16 +1212,18 @@
     },
     {
       "name": "remote_ls",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. List a remote directory without reading file contents.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. List a remote directory without reading file contents. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -1266,7 +1282,7 @@
           }
         },
         "required": [],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
+        "description": "Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias from the endpoint alias files, or a selector understood by a registered resolver. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default. The server validates the selector before connecting."
       },
       "annotations": {
         "readOnlyHint": false,
@@ -1277,15 +1293,17 @@
     },
     {
       "name": "remote_apply_patch",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Apply a Codex apply_patch payload. Native apply_patch is freeform; over MCP the raw patch text is passed in `patch`.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Apply a Codex apply_patch payload. Native apply_patch is freeform; over MCP the raw patch text is passed in `patch`. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -1347,10 +1365,12 @@
         "additionalProperties": false,
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -1438,10 +1458,12 @@
         "additionalProperties": false,
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -1528,10 +1550,12 @@
         "additionalProperties": false,
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -1618,10 +1642,12 @@
         "additionalProperties": false,
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -1687,10 +1713,12 @@
         "additionalProperties": false,
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -1763,16 +1791,18 @@
     },
     {
       "name": "remote_artifact_manifest",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Build a remote artifact sha256 manifest.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Build a remote artifact sha256 manifest. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -1816,7 +1846,7 @@
         "required": [
           "remote_path"
         ],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
+        "description": "Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias from the endpoint alias files, or a selector understood by a registered resolver. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default. The server validates the selector before connecting."
       },
       "annotations": {
         "readOnlyHint": false,
@@ -1827,16 +1857,18 @@
     },
     {
       "name": "remote_artifact_pull",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Pull a remote artifact through SSH streaming with hash verification; reject local overwrite by default.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Pull a remote artifact through SSH streaming with hash verification; reject local overwrite by default. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -1894,7 +1926,7 @@
         "required": [
           "remote_path"
         ],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
+        "description": "Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias from the endpoint alias files, or a selector understood by a registered resolver. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default. The server validates the selector before connecting."
       },
       "annotations": {
         "readOnlyHint": false,
@@ -1905,16 +1937,18 @@
     },
     {
       "name": "remote_artifact_push",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Push a local artifact through SSH streaming with hash verification.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Push a local artifact through SSH streaming with hash verification. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -1968,7 +2002,7 @@
           "local_path",
           "remote_path"
         ],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
+        "description": "Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias from the endpoint alias files, or a selector understood by a registered resolver. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default. The server validates the selector before connecting."
       },
       "annotations": {
         "readOnlyHint": false,
@@ -1979,16 +2013,18 @@
     },
     {
       "name": "remote_context_snapshot",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Write a compact endpoint context snapshot.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Write a compact endpoint context snapshot. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -2031,7 +2067,7 @@
           }
         },
         "required": [],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
+        "description": "Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias from the endpoint alias files, or a selector understood by a registered resolver. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default. The server validates the selector before connecting."
       },
       "annotations": {
         "readOnlyHint": false,
@@ -2042,16 +2078,18 @@
     },
     {
       "name": "remote_probe",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Probe basic endpoint facts.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Probe basic endpoint facts. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -2102,7 +2140,7 @@
           }
         },
         "required": [],
-        "description": "Provide at least one endpoint selector: host and port together, or an alias from the endpoint alias files. The server validates the selector before connecting."
+        "description": "Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias from the endpoint alias files, or a selector understood by a registered resolver. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default. The server validates the selector before connecting."
       },
       "annotations": {
         "readOnlyHint": false,
@@ -2113,15 +2151,17 @@
     },
     {
       "name": "remote_exec_command",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Runs a command in a PTY, returning output or a session ID for ongoing interaction (Codex exec_command).",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Runs a command in a PTY, returning output or a session ID for ongoing interaction (Codex exec_command). Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -2226,10 +2266,12 @@
         "type": "object",
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
@@ -2302,10 +2344,12 @@
         "type": "object",
         "properties": {
           "host": {
-            "type": "string"
+            "type": "string",
+            "description": "Remote SSH host. For a direct endpoint supply host and port together; alternatively use an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host selector does not use the default."
           },
           "port": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Remote SSH port for a direct endpoint, for example 22. Supply it together with host; there is no implicit default. An alias or resolver may provide the port instead, or omit endpoint selectors to use the configured default endpoint."
           },
           "user": {
             "type": "string",
