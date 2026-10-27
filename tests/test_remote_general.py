@@ -191,6 +191,7 @@ class GeneralRemoteTests(unittest.TestCase):
 
     def test_caller_input_repair_is_forwarded_and_a_corrected_call_is_allowed(self):
         """Real parser/call_tool chain; Gate fresh-call is checked separately."""
+        from mindie_diagnostics import get_recorder
         from remote_dev.mcp import tools
         from remote_dev.core.endpoint import EndpointError
 
@@ -220,7 +221,8 @@ class GeneralRemoteTests(unittest.TestCase):
               patch("remote_dev.mcp.tools.call_tool", side_effect=dispatch),
               patch.object(tools, "resolve_endpoint", side_effect=parse),
               patch.object(tools, "remote_bash", side_effect=remote_bash),
-              patch("remote_dev.core.rpc_transport.close_connections")):
+              patch("remote_dev.core.rpc_transport.close_connections"),
+              closing(get_recorder("remote-dev"))):
             first = runtime_call.call(dict(base, arguments={
                 "host": "192.0.2.10", "cmd": "true"}))
             second = runtime_call.call(dict(base, arguments={
