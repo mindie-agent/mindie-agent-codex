@@ -420,7 +420,7 @@ def remote(payload):
                        retryable=raw.get("retryable") is True)
         hint = None
         code = raw.get("error_code")
-        if category == "caller" and isinstance(code, str) and code in CALLER_ERROR_HINTS:
+        if category == "caller" and delivery == "not_sent" and isinstance(code, str) and code in CALLER_ERROR_HINTS:
             hint = CALLER_ERROR_HINTS[code]
             details["error_code"] = code
             public = next((tool["inputSchema"]["properties"] for tool in catalog["remote"]
@@ -428,12 +428,28 @@ def remote(payload):
             field = raw.get("field")
             if isinstance(field, str) and field in public:
                 details["field"] = field
+        repair = None
+        if category == "caller" and delivery == "not_sent":
+            candidate = raw.get("input_repair")
+            if isinstance(candidate, dict):
+                # error_details already bounded this trusted local-caller
+                # contract; do not duplicate its validator in the adapter.
+                repair = candidate
+                details["input_repair"] = repair
         result = dict(outcome="failed", error_details=details, automatic_retry=False)
         job = args.get("job_id")
         if isinstance(job, str) and JOB_ID_RE.fullmatch(job):
             result["job_id"] = job
         message = f"Remote {category}; submission={delivery}. No automatic retry."
-        if hint is not None:
+        if repair is not None:
+            missing = repair.get("missing")
+            if isinstance(missing, list) and missing:
+                message += " Missing input: " + ", ".join(
+                    item for item in missing if isinstance(item, str)) + "."
+            action = repair.get("action")
+            if isinstance(action, str) and action:
+                message += " " + action
+        elif hint is not None:
             message += " " + hint
         if "job_id" in result:
             message += f" Original job_id={job}; inspect this job before another submission."

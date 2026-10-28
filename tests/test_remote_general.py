@@ -189,6 +189,65 @@ class GeneralRemoteTests(unittest.TestCase):
         self.assertEqual({status for _identity, status in rows}, {'succeeded'})
         self.assertEqual(len({identity.split(':')[1] for identity, _status in rows}), 2)
 
+    def test_caller_input_repair_is_forwarded_and_a_corrected_call_is_allowed(self):
+        """Real parser/call_tool chain; Gate fresh-call is checked separately."""
+        from mindie_diagnostics import get_recorder
+        from remote_dev.mcp import tools
+        from remote_dev.core.endpoint import EndpointError
+
+        real_call, real_resolve = tools.call_tool, tools.resolve_endpoint
+        calls, endpoints = [], []
+
+        def parse(args):
+            try:
+                return real_resolve(args)
+            except EndpointError as exc:
+                exc.args = ("PRIVATE-ENDPOINT-DETAIL",)
+                raise
+
+        def dispatch(name, args):
+            calls.append(dict(args))
+            return real_call(name, args)
+
+        def remote_bash(endpoint, **kwargs):
+            endpoints.append((endpoint.port, kwargs))
+            return {"text": "ok", "result": {"outcome": "success"}}
+
+        base = {
+            "surface": "remote", "remote_session_id": "task-A",
+            "name": "remote_exec_command",
+        }
+        with (patch.dict(os.environ),
+              patch("remote_dev.mcp.tools.call_tool", side_effect=dispatch),
+              patch.object(tools, "resolve_endpoint", side_effect=parse),
+              patch.object(tools, "remote_bash", side_effect=remote_bash),
+              patch("remote_dev.core.rpc_transport.close_connections"),
+              closing(get_recorder("remote-dev"))):
+            first = runtime_call.call(dict(base, arguments={
+                "host": "192.0.2.10", "cmd": "true"}))
+            second = runtime_call.call(dict(base, arguments={
+                "host": "192.0.2.10", "port": 22, "cmd": "true"}))
+
+        self.assertTrue(first["isError"])
+        details = first["structuredContent"]["error_details"]
+        self.assertEqual(details["category"], "caller")
+        self.assertEqual(details["submission_state"], "not_sent")
+        self.assertIs(details["retryable"], False)
+        self.assertEqual(details["input_repair"]["missing"], ["port"])
+        self.assertEqual(details["error_code"], "endpoint_incomplete")
+        self.assertEqual(details["field"], "port")
+        self.assertFalse(first["structuredContent"]["automatic_retry"])
+        text = first["content"][0]["text"]
+        self.assertIn("Missing input: port.", text)
+        self.assertIn("Retry with host and port together", text)
+        self.assertNotIn("PRIVATE-ENDPOINT-DETAIL", json.dumps(first))
+        self.assertFalse(second["isError"])
+        self.assertEqual(second["structuredContent"]["outcome"], "success")
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("port", calls[0])
+        self.assertEqual(calls[1]["port"], 22)
+        self.assertEqual(endpoints[0][0], 22)
+
     def test_bad_arguments_are_rejected_before_runtime_and_can_be_corrected(self):
         request = self.request()
         request['params']['arguments']['invented_key'] = 'x'
@@ -304,6 +363,7 @@ class GeneralRemoteTests(unittest.TestCase):
             self.assertEqual(payload['error_details']['submission_state'],
                              'unknown' if delivery.startswith('PRIVATE_') else delivery)
             self.assertEqual(payload['error_details']['retryable'], retryable)
+            self.assertNotIn('input_repair', payload['error_details'])
             close.assert_called_once()
 
     def test_knowledge_reference_and_continuation_codes_survive_the_adapter(self):
