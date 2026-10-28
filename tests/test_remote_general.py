@@ -234,6 +234,8 @@ class GeneralRemoteTests(unittest.TestCase):
         self.assertEqual(details["submission_state"], "not_sent")
         self.assertIs(details["retryable"], False)
         self.assertEqual(details["input_repair"]["missing"], ["port"])
+        self.assertEqual(details["error_code"], "endpoint_incomplete")
+        self.assertEqual(details["field"], "port")
         self.assertFalse(first["structuredContent"]["automatic_retry"])
         text = first["content"][0]["text"]
         self.assertIn("Missing input: port.", text)

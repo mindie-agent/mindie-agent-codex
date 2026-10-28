@@ -1296,6 +1296,7 @@
       "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Apply a Codex apply_patch payload. Native apply_patch is freeform; over MCP the raw patch text is passed in `patch`. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
+        "description": "Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias from the endpoint alias files, or a selector understood by a registered resolver. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default. The server validates the selector before connecting.",
         "properties": {
           "host": {
             "type": "string",
@@ -1435,6 +1436,19 @@
             "maximum": 500,
             "description": "Line count when action='tail'."
           },
+          "max_output_tokens": {
+            "type": "integer",
+            "description": "Output token cap for action='tail'; the preview keeps the newest max(4, min(32768, 2 * tokens)) UTF-8 bytes. Omitted means the global text preview limit applies."
+          },
+          "stream": {
+            "type": "string",
+            "enum": [
+              "stdout",
+              "stderr",
+              "both"
+            ],
+            "description": "Log stream for action='tail'. Defaults to both."
+          },
           "session_id": {
             "type": "string",
             "description": "Alias of job_id returned by remote.bash."
@@ -1521,11 +1535,11 @@
           },
           "max_output_tokens": {
             "type": "integer",
-            "description": "Optional output token cap (DSH/Codex habit)."
+            "description": "Preview output token cap; the preview keeps the newest max(4, min(32768, 2 * tokens)) UTF-8 bytes. Stream labels, log refs and metadata are outside this cap."
           },
           "timeout_ms": {
             "type": "integer",
-            "description": "Optional timeout in milliseconds."
+            "description": "Absolute deadline in milliseconds for the whole read, including polling."
           },
           "session_id": {
             "type": "string",
@@ -1613,11 +1627,11 @@
           },
           "max_output_tokens": {
             "type": "integer",
-            "description": "Optional output token cap (DSH/Codex habit)."
+            "description": "Preview output token cap; the preview keeps the newest max(4, min(32768, 2 * tokens)) UTF-8 bytes. Stream labels, log refs and metadata are outside this cap."
           },
           "timeout_ms": {
             "type": "integer",
-            "description": "Optional timeout in milliseconds."
+            "description": "Absolute deadline in milliseconds for the whole read, including polling."
           },
           "session_id": {
             "type": "string",
@@ -2154,6 +2168,7 @@
       "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Runs a command in a PTY, returning output or a session ID for ongoing interaction (Codex exec_command). Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
+        "description": "Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias from the endpoint alias files, or a selector understood by a registered resolver. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default. The server validates the selector before connecting.",
         "properties": {
           "host": {
             "type": "string",
@@ -2204,7 +2219,7 @@
           },
           "workdir": {
             "type": "string",
-            "description": "Working directory for the command. Defaults to the turn cwd."
+            "description": "Working directory on the remote endpoint (not a local path). Defaults to the endpoint cwd/root."
           },
           "tty": {
             "type": "boolean",
@@ -2264,6 +2279,7 @@
       "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Writes characters to an existing unified exec session and returns recent output (Codex write_stdin).",
       "inputSchema": {
         "type": "object",
+        "description": "Endpoint selector fields are optional for this tool: the endpoint is recovered from the stored job record. Supply host and port together, or an alias, only to override or when no job record exists.",
         "properties": {
           "host": {
             "type": "string",
@@ -2310,7 +2326,7 @@
           },
           "session_id": {
             "type": "number",
-            "description": "Identifier of the running unified exec session."
+            "description": "Identifier of the running unified exec session (a JSON number up to 9007199254740991). A legacy larger numeric id cannot be sent here; use remote_job_status, remote_job_tail or remote_job_stdin with job_id or session_id as a string."
           },
           "chars": {
             "type": "string",
@@ -2339,9 +2355,10 @@
     },
     {
       "name": "remote_view_image",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. View a local image file from the filesystem when visual inspection is needed (Codex view_image).",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. View an image file on the remote endpoint when visual inspection is needed (Codex view_image).",
       "inputSchema": {
         "type": "object",
+        "description": "Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias from the endpoint alias files, or a selector understood by a registered resolver. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default. The server validates the selector before connecting.",
         "properties": {
           "host": {
             "type": "string",
@@ -2388,7 +2405,7 @@
           },
           "path": {
             "type": "string",
-            "description": "Local filesystem path to an image file."
+            "description": "Path to an image file on the remote endpoint (not a local path)."
           }
         },
         "required": [

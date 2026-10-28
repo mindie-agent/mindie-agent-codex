@@ -400,7 +400,7 @@ def remote(payload):
     except Exception as exc:
         # Preserve transport certainty inside the selected runtime. Exception
         # messages and arbitrary remote attributes are not public diagnostics.
-        from remote_dev.core.errors import error_details
+        from remote_dev.core.errors import CALLER_ERROR_HINTS, error_details
         from remote_dev.core.job_ops import JOB_ID_RE
 
         raw = error_details(exc)
@@ -418,6 +418,16 @@ def remote(payload):
         delivery = delivery if delivery in ("not_sent", "acknowledged", "uncertain") else "unknown"
         details = dict(category=category, submission_state=delivery,
                        retryable=raw.get("retryable") is True)
+        hint = None
+        code = raw.get("error_code")
+        if category == "caller" and delivery == "not_sent" and isinstance(code, str) and code in CALLER_ERROR_HINTS:
+            hint = CALLER_ERROR_HINTS[code]
+            details["error_code"] = code
+            public = next((tool["inputSchema"]["properties"] for tool in catalog["remote"]
+                           if tool["name"] == name), {})
+            field = raw.get("field")
+            if isinstance(field, str) and field in public:
+                details["field"] = field
         repair = None
         if category == "caller" and delivery == "not_sent":
             candidate = raw.get("input_repair")
@@ -439,6 +449,8 @@ def remote(payload):
             action = repair.get("action")
             if isinstance(action, str) and action:
                 message += " " + action
+        elif hint is not None:
+            message += " " + hint
         if "job_id" in result:
             message += f" Original job_id={job}; inspect this job before another submission."
         elif delivery != "not_sent":

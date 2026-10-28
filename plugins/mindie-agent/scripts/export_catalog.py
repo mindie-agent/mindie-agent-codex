@@ -51,7 +51,7 @@ REMOTE_READ = dict(
 )
 REMOTE_READ_TOOLS = {
     "remote_read", "remote_grep", "remote_job_status", "remote_job_tail",
-    # Native Codex `view_image` is a read-only local-image observation.
+    # The remote Codex `view_image` observes an image on the selected endpoint.
     "remote_view_image",
 }
 

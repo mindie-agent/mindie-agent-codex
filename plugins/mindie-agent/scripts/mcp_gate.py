@@ -77,6 +77,10 @@ def failure(message):
 class InvalidToolArguments(ValueError):
     """Rejected by the declared tool schema before any runtime dispatch."""
 
+    def __init__(self, message, field=None):
+        super().__init__(message)
+        self.field = field if isinstance(field, str) and field.isidentifier() else None
+
 
 class SwitchingRuntime(RuntimeError):
     """The operation lock was unavailable before any request admission."""
@@ -133,22 +137,75 @@ def knowledge_timeout(name, timeout):
     return minimum if timeout is None else timeout
 
 
+FAILURE_HINTS = {
+    "invalid_arguments": "Correct the arguments once using the tool schema; do not repeat unchanged arguments.",
+    "timeout": "The deadline expired and the outcome may be unknown; inspect side effects and any capture receipt before another attempt.",
+    "cancelled": "The call was cancelled and the outcome may be unknown; inspect side effects and any capture receipt before another attempt.",
+    "output_limit": "Output exceeded the hard cap; inspect any available partial capture receipt. Use an output-file option when supported for large results.",
+    "component_not_installed": "Install the mindie component or configure component_commands for it in the adapter; nothing was started.",
+    "cleanup_failed": "The process outcome is recorded but owned-process cleanup failed; do not repeat the operation.",
+    "duplicate_request": "This request id was already admitted; it was not executed again. Use a new request only for a new operation.",
+    "runtime_unavailable": "The runtime process could not be run; check the installation with the doctor tooling before retrying.",
+    "internal_error": "An unexpected local error occurred; inspect the operation state before another attempt.",
+}
+FAILURE_MESSAGES = {
+    "invalid_arguments": "Request rejected before execution (invalid_arguments)",
+    "timeout": "MindIE request deadline exceeded (timeout)",
+    "cancelled": "MindIE request was cancelled (cancelled)",
+    "output_limit": "MindIE response exceeded the output limit (output_limit)",
+    "component_not_installed": "Component is not installed (component_not_installed)",
+    "cleanup_failed": "Process cleanup failed (cleanup_failed)",
+    "duplicate_request": "Duplicate MCP request; not executed again (duplicate_request)",
+    "runtime_unavailable": "MindIE runtime failed (runtime_unavailable)",
+    "internal_error": "MindIE call failed (internal_error)",
+}
+
+
+def failure_code(exc):
+    """Closed classification; neither the exception text nor output is echoed."""
+    if isinstance(exc, InvalidToolArguments):
+        return "invalid_arguments"
+    name = type(exc).__name__
+    text = str(exc) if isinstance(exc, (RuntimeError, ValueError)) else ""
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if name == "OutputHardCap" or text.startswith("MindIE response exceeds output limit"):
+        return "output_limit"
+    if isinstance(exc, FileNotFoundError) and getattr(exc, "install_hint", False):
+        return "component_not_installed"
+    if name == "ProcessCleanupError":
+        return "cleanup_failed"
+    if text.startswith("MindIE request cancelled"):
+        return "cancelled"
+    if text.startswith("Duplicate MCP request"):
+        return "duplicate_request"
+    if isinstance(exc, OSError) and isinstance(getattr(exc, "process_result", None), ProcessResult):
+        return "runtime_unavailable"
+    return "internal_error"
+
+
 def call_failure(exc):
     if isinstance(exc, SwitchingRuntime):
         return dict(failure("MindIE is switching its idle runtime; this call has not started."),
                     structuredContent=dict(code="temporary_unavailable",
                                            execution="not_started", automatic_retry=False))
-    if isinstance(exc, InvalidToolArguments):
-        message = (f"Request rejected before execution: {str(exc)[:240]}. "
-                   "Correct the arguments once using the tool schema; "
-                   "do not repeat unchanged arguments. No automatic retry.")
-        return dict(failure(message), structuredContent=dict(
-            code="invalid_arguments", execution="not_started",
-            automatic_retry=False, message=message,
-        ))
-    result = failure(f"{type(exc).__name__}: {str(exc)[:240]}. No automatic retry.")
+    code = failure_code(exc)
     process = getattr(exc, "process_result", None)
-    if isinstance(process, ProcessResult):
+    process = process if isinstance(process, ProcessResult) else None
+    if code in ("invalid_arguments", "component_not_installed"):
+        execution = "not_started"
+    else:
+        execution = process.execution if process is not None else "unknown"
+    structured = dict(code=code, execution=execution, automatic_retry=False)
+    field = getattr(exc, "field", None)
+    if code == "invalid_arguments" and isinstance(field, str) and field.isidentifier():
+        structured["field"] = field
+    message = FAILURE_MESSAGES[code] + ". " + FAILURE_HINTS[code] + " No automatic retry."
+    result = dict(failure(message), structuredContent=structured)
+    partial = getattr(exc, "partial", None)
+    if isinstance(partial, dict):
+        structured["partial"] = partial
+    if process is not None:
         result["process"] = dict(execution=process.execution, returncode=process.returncode,
                                  cleanup=process.cleanup, automatic_retry=False)
     return result
@@ -799,4 +856,7 @@ def serve(surface):
 if __name__ == "__main__":
     if sys.argv[1:] != ["components"]:
         raise SystemExit("expected components MCP surface")
-    serve("components")
+    # Component validation imports mcp_gate.InvalidToolArguments. Serve from
+    # that same module so script launch keeps one exception class identity.
+    from mcp_gate import serve as serve_components
+    serve_components("components")

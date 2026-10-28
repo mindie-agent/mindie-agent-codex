@@ -108,6 +108,7 @@ def adapter_check(source):
         "receipt_layout.py",
         "update_lock.py",
         "bounded_process.py",
+        "capture_spool.py",
         "windows_process.py",
         "runtime_call.py",
         "candidate_validate.py",

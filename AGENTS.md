@@ -24,7 +24,7 @@ All plugin scripts live under `plugins/mindie-agent/scripts/` and include standa
 | | `codex_transcript.py` | Extracts redaction-ready transcript material (`identify`, `read_material`, `capture_source`, `history_source`) from Codex rollout files. |
 | **Configuration & Updates** | `setup.py` / `sharing.py` / `summary_provider.py` | Manages MindIE-owned adapter/engine configs, `mindie-community-config/1` consent state, and LLM summary provider credentials. |
 | | `update_lock.py` / `update_trigger.py` / `candidate_activate.py` / `candidate_validate.py` | Reentrant file locking (`flock`/`LockFileEx`), background MCP update checks, and transactional candidate validation/activation. |
-| **Subprocess & Service** | `bounded_process.py` / `windows_process.py` | Bounded subprocess execution with POSIX process-group and Windows Job Object (`CREATE_SUSPENDED`) tree termination. |
+| **Subprocess & Service** | `bounded_process.py` / `capture_spool.py` / `windows_process.py` | Bounded subprocess execution with POSIX process-group and Windows Job Object (`CREATE_SUSPENDED`) tree termination; component calls spool output to bounded private files with a hard cap and recoverable receipts. |
 | | `service_client.py` / `service_control.py` / `session_maintenance.py` / `feed_sync.py` | Cold-start service connection, offline `status` / `shutdown`, and session maintenance. |
 
 ### Call Graph
