@@ -30,14 +30,16 @@ environment, including installed `direct_url.json` identities and actual MCP
 `password` field. Coordinator and npu-top remain independently installed
 components; manual knowledge activation stays scoped to the native session.
 
-Real SSH acceptance passed on macOS (7 tests, 34.58 seconds), Windows Server
-2025 with PowerShell 7.6.7, Python 3.12.10 and Git OpenSSH 10.5p1 (4 tests,
-14.186 seconds), and WSL2 Ubuntu 24.04 with OpenSSH 9.6p1 (4 tests, 12.694
-seconds). [Platform run 40774308378](https://github.com/mindie-agent/remote-dev/actions/runs/40774308378)
-tested remote-dev candidate `a7564f49b1ff106e59f72961c851b7b11eb81130`;
-the 0.11.1 pin additionally fixes Git for Windows SSH discovery for the
-`ucrt64` and `usr/bin` installation layouts. Final 0.11.1 platform acceptance
-is recorded separately before publication.
+Real SSH acceptance passed all 19 cases with no failures or skips: macOS
+(7 tests, 35.190 seconds), Windows Server 2025 with PowerShell 7.6.7 and
+Python 3.12.10 (4 tests, 17.503 seconds), the same PowerShell runtime inheriting
+Git Bash PATH (4 tests, 16.485 seconds), and WSL2 Ubuntu 24.04 with OpenSSH
+9.6p1 (4 tests, 17.338 seconds). The Git Bash PATH case discovers
+`C:\Program Files\Git\ucrt64\bin\git.EXE` and selects that installation's
+`usr/bin/ssh.exe`. [Platform run 40777028005](https://github.com/mindie-agent/remote-dev/actions/runs/40777028005)
+tested remote-dev `f3592ffdef033aecb3d24b027dbd889204b65b28`, which has the
+same source tree as the pinned 0.11.1 commit
+(`8443a5d09f2b1a5d6f52d9637251b386af85846e`).
 
 Coverage includes managed-key installation, reuse across independent virtual
 environments, password-only authentication, revoked-key repair before one
@@ -48,3 +50,11 @@ These checks do not claim complete native-host end-to-end runs or that an
 existing host has loaded this release. All acceptance uses isolated state and
 the default credential-file provider. Formal tag workflows attach test and
 benchmark reports plus checksums from the exact released source.
+
+A separate model-free native Codex 0.153.4 cold-install check used the
+0.11.1 dependency lock in an isolated profile. Native marketplace/plugin
+installation, five hooks and trust CAS, locked runtime creation, native
+thread startup and MCP discovery passed: 23 remote tools including
+`remote_auth`, plus five component tools. Together with catalog and
+configuration-free discovery contracts, 12 tests passed in 29.95 seconds.
+No model turn or existing user installation was involved.
