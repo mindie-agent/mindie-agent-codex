@@ -1,6 +1,6 @@
 # mindie-agent-codex 0.1.12
 
-This release integrates persistent SSH authentication from remote-dev 0.11.0.
+This release integrates persistent SSH authentication from remote-dev 0.11.1.
 After a user supplies a password once, remote-dev verifies access and attempts
 to install and verify a managed public key. Password-only endpoints reuse the
 saved credential across new chats and independent plugin runtimes. A rejected
@@ -19,7 +19,7 @@ The active runtime pins are:
 
 | Component | Version / tag | Source commit |
 | --- | --- | --- |
-| remote-dev | 0.11.0 / v0.11.0 | `153813703a3cc64c695dd8e5f19e8a173e144dda` |
+| remote-dev | 0.11.1 / v0.11.1 | `2a750ec8c74d7f053410d48dd820aeb542e7d3b1` |
 | knowledge | 0.13.4 / v0.13.4 | `6e921b205c00d592c25f849653cbfb72b73fe318` |
 | diagnostics | 0.5.4 / v0.5.4 | `5ae643e19223f2181ecdbaa3edaf464137c4805e` |
 
@@ -35,7 +35,9 @@ Real SSH acceptance passed on macOS (7 tests, 34.58 seconds), Windows Server
 14.186 seconds), and WSL2 Ubuntu 24.04 with OpenSSH 9.6p1 (4 tests, 12.694
 seconds). [Platform run 40774308378](https://github.com/mindie-agent/remote-dev/actions/runs/40774308378)
 tested remote-dev candidate `a7564f49b1ff106e59f72961c851b7b11eb81130`;
-the final pinned commit changes only its release notes.
+the 0.11.1 pin additionally fixes Git for Windows SSH discovery for the
+`ucrt64` and `usr/bin` installation layouts. Final 0.11.1 platform acceptance
+is recorded separately before publication.
 
 Coverage includes managed-key installation, reuse across independent virtual
 environments, password-only authentication, revoked-key repair before one

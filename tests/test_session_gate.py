@@ -258,11 +258,14 @@ class SessionGateTests(unittest.TestCase):
             dict(jsonrpc="2.0", id=1, method="initialize"),
             dict(jsonrpc="2.0", id=2, method="tools/list"),
         ]
-        for script, argv, count in [
-            ("bridge.py", ["mcp"], 0),
-            ("mcp_gate.py", ["components"], 5),
-            ("remote_bridge.py", [], 22),
-
+        for script, argv, expected_names in [
+            ("bridge.py", ["mcp"], set()),
+            ("mcp_gate.py", ["components"], {
+                tool["name"] for tool in mcp_gate.Gate("components").tools
+            }),
+            ("remote_bridge.py", [], {
+                tool["name"] for tool in mcp_gate.Gate("remote").tools
+            }),
         ]:
             result = subprocess.run(
                 [sys.executable, str(SCRIPTS / script), *argv],
@@ -274,7 +277,10 @@ class SessionGateTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             replies = [json.loads(line) for line in result.stdout.splitlines()]
-            self.assertEqual(len(replies[1]["result"]["tools"]), count)
+            self.assertEqual(
+                {tool["name"] for tool in replies[1]["result"]["tools"]},
+                expected_names,
+            )
         self.assertFalse(absent.with_suffix(".sessions.sqlite3").exists())
         self.assertFalse((self.root / "data").exists())
 
