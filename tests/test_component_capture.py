@@ -444,6 +444,37 @@ def test_remote_caller_error_gets_static_hint_and_public_field(monkeypatch, tmp_
     assert "RAW-SECRET" not in json.dumps(shaped)
 
 
+def test_real_auth_failure_keeps_safe_recovery_hint(monkeypatch, tmp_path):
+    import runtime_call
+    from remote_dev.core.errors import AUTH_ERROR_HINTS
+
+    monkeypatch.setenv("REMOTE_DEV_AUTH_DIR", str(tmp_path / "auth"))
+    monkeypatch.delenv("PRIVATE_MISSING_SSH_PASSWORD", raising=False)
+    shaped = runtime_call.remote(dict(
+        remote_session_id="abcdef123456", name="remote_auth",
+        arguments=dict(host="192.0.2.10", port=22, user="fixture",
+                       password_env="PRIVATE_MISSING_SSH_PASSWORD")))
+    details = shaped["structuredContent"]["error_details"]
+    assert details["category"] == "credential_unavailable"
+    assert details["submission_state"] == "not_sent"
+    assert AUTH_ERROR_HINTS["credential_unavailable"] in shaped["content"][0]["text"]
+    assert "PRIVATE_MISSING_SSH_PASSWORD" not in json.dumps(shaped)
+
+
+def test_auth_maintenance_uncertainty_does_not_change_business_submission(monkeypatch, tmp_path):
+    from remote_dev.core.errors import RemoteExecutionError
+
+    error = RemoteExecutionError("PRIVATE_STDERR", category="connection_unavailable",
+                                 submission_state="not_sent")
+    error.bootstrap = dict(status="unknown", installation="unknown",
+                           key_verified=False, error="PRIVATE_STDERR")
+    shaped = _remote_failure(monkeypatch, tmp_path, error)
+    details = shaped["structuredContent"]["error_details"]
+    assert details["submission_state"] == "not_sent"
+    assert details["bootstrap"]["installation"] == "unknown"
+    assert "PRIVATE_STDERR" not in json.dumps(shaped)
+
+
 def test_remote_unknown_code_field_and_plain_errors_are_not_promoted(monkeypatch, tmp_path):
     from remote_dev.core.errors import CALLER_ERROR_HINTS, caller_error
     code = next(iter(CALLER_ERROR_HINTS))
