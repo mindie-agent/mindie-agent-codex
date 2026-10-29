@@ -6,13 +6,14 @@ Activates a newly validated plugin release (`activate`) by preparing the target 
 [Invariants]
 - Never overwrites an active installation if `update_lock` is busy (`status="deferred_busy"`) or if the knowledge service is actively serving a task.
 - The activation child receives an immutable bounded stdin attempt snapshot; it refuses to prepare against a newer canonical binding and never rereads the replaceable pending receipt. The persisted copy is only parent recovery evidence; `activate` remains an idempotent canonical readback.
-- Restores the previous `engine.json` if `codex.json` publication fails (`_publish_pair`).
+- Prepared engine files stay immutable; failed binding publication restores retired domain owners within the control budget.
 
 [Timeouts & Locks]
-- Uses non-blocking `update_lock(config, exclusive=True, blocking=False)` for atomic handoff and `timeout=30.0s` for `idle-stop`. Preparation accepts a caller startup deadline; the attempt snapshot is bounded to 64 KiB stdin.
+- Uses non-blocking `update_lock(config, exclusive=True, blocking=False)` for atomic handoff and `timeout=30.0s` for `idle-stop`. Legacy runtime metadata shares 15s. Preparation accepts a caller startup deadline; the attempt snapshot is bounded to 64 KiB stdin.
 
 [Side-Effect Policy]
-- Atomically replaces `engine.json` and `codex.json` via `os.replace()` and removes obsolete runtime directories after activation.
+- Publishes the prepared engine and atomically replaces the adapter binding via
+  `os.replace()`. Existing runtime directories remain available to loaded callers.
 """
 from __future__ import annotations
 
@@ -51,6 +52,22 @@ def _atomic(path, value):
         Path(temporary).unlink(missing_ok=True)
 
 
+def _validate_legacy_runtime_floor(adapter):
+    """An old parent snapshots after building; recheck its actual runtime floor."""
+    from mindie_knowledge.component_runtime import read_inventory, read_versions
+    from semantic_version import Version
+
+    deadline = time.monotonic() + 15
+    installed = read_inventory(adapter["python"], timeout=15)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("legacy runtime metadata budget exhausted")
+    candidate = read_versions(sys.executable, list(installed), timeout=remaining)
+    for name, component in installed.items():
+        if Version(candidate[name]) < Version(component["version"]):
+            raise ValueError(f"candidate runtime is below the current installed component: {name}")
+
+
 def prepare(config, release, *, blocking=True, expected_binding=None, deadline=None):
     """No running service or canonical configuration is changed here.
 
@@ -73,12 +90,20 @@ def prepare(config, release, *, blocking=True, expected_binding=None, deadline=N
     if receipt["python"] != sys.executable:
         raise ValueError("candidate preparation must run in its exact installed runtime")
     scripts = Path(__file__).resolve().parent
+    legacy = expected_binding is not None and "component_commands" not in expected_binding
     with update_lock(config, blocking=blocking):
         old = read_json(config)[0]
         current_binding = runtime_binding(old)
-        if expected_binding is not None and current_binding != expected_binding:
+        comparison = ({key: value for key, value in current_binding.items()
+                       if key != "component_commands"} if legacy else current_binding)
+        if expected_binding is not None and comparison != expected_binding:
             raise InstallationChanged("installation binding changed before activation")
         old_engine = config_at(old["engine_config"])
+    if legacy:
+        _validate_legacy_runtime_floor(old)
+    if "component_updates" in receipt["validation"]:
+        from mindie_knowledge.component_bindings import validate_command_floor
+        validate_command_floor(old, receipt["validation"]["component_updates"]["runtime"])
     digest = hashlib.sha256(os.fsencode(str(config))).hexdigest()
     path = release / ("profile-" + digest + ".engine.json")
     engine = dict(old_engine)
@@ -87,6 +112,10 @@ def prepare(config, release, *, blocking=True, expected_binding=None, deadline=N
                   product_validation=receipt["validation"])
     adapter = dict(old, python=sys.executable, runtime_scripts=str(scripts),
                    engine_config=str(path), product_validation=receipt["validation"])
+    if "component_commands" in old and "component_updates" in receipt["validation"]:
+        from mindie_knowledge.component_bindings import rebind_commands
+        adapter["component_commands"] = rebind_commands(
+            old, sys.executable, receipt["validation"].get("component_updates", {}).get("runtime", {}))
     adapter["component_release"] = (str(release) if "component_updates" in receipt["validation"] else None)
     engine["service_launch_context"] = service_launch_context(config, adapter)
     from capture_config import prepare_domains
@@ -122,12 +151,19 @@ def binding_matches_release(config, release, receipt, *, scripts=None):
     digest = hashlib.sha256(os.fsencode(str(config))).hexdigest()
     expected_engine = release / ("profile-" + digest + ".engine.json")
     expected_component = str(release) if "component_updates" in validation else None
-    return (adapter.get("python") == sys.executable
+    matches = (adapter.get("python") == sys.executable
             and adapter.get("runtime_scripts") == str(scripts)
             and adapter.get("engine_config") == str(expected_engine)
             and adapter.get("product_validation") == validation
             and adapter.get("component_release") == expected_component
             and Path(expected_engine).is_file())
+    if not matches or "component_updates" not in validation:
+        return matches
+    from mindie_knowledge.component_bindings import managed_commands, rebind_commands
+    components = validation["component_updates"]["runtime"]
+    if any(name not in components for name, _python, _module in managed_commands(adapter).values()):
+        return False
+    return adapter.get("component_commands", {}) == rebind_commands(adapter, sys.executable, components)
 
 
 def activate(config, prepared, *, control_seconds=CONTROL_SECONDS):

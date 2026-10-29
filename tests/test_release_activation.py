@@ -1,11 +1,14 @@
 """Idle switching preserves exact service facts, without a model or native install."""
 import io
 import json
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 import sys
+import sysconfig
 import subprocess
 import tempfile
 import unittest
+import venv
 from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
@@ -61,18 +64,95 @@ class OfficialFeedUpdateTests(unittest.TestCase):
         consent_store.record_choice(self.base / "mindie-consent.json", "disabled")
         return config, self.base / "mindie-consent.json"
 
-    def prepare(self, config, name="release-a"):
+    def prepare(self, config, name="release-a", validation=VALIDATION, expected_binding=None):
         release = self.base / name
         release.mkdir()
         (release / "runtime.json").write_text(json.dumps(dict(
-            python=sys.executable, validation=VALIDATION)), encoding="utf-8")
+            python=sys.executable, validation=validation)), encoding="utf-8")
         with patch("capture_config.prepare", return_value=dict(
                 capture_mode="public-transcript", redactor_executable=sys.executable,
                 summary_command=[sys.executable, str(self.scripts / "agent_worker.py")])), \
              patch("native_context.service_launch_context", return_value={
                  "paths": {"MINDIE_AGENT_CONFIG": str(config)}, "environment": []}), \
              patch("summary_provider.required_environment"):
-            return release_activation.prepare(config, release)
+            return release_activation.prepare(config, release, expected_binding=expected_binding)
+
+    def metadata_runtime(self, name, versions):
+        """Real isolated metadata reads, without installing or importing engines."""
+        from mindie_knowledge.runtime_inventory import COMPONENTS
+        root = self.base / name
+        builder = venv.EnvBuilder(with_pip=False, symlinks=True)
+        context = builder.ensure_directories(root)
+        builder.create(root)
+        library = Path(sysconfig.get_path("purelib", vars={"base": str(root), "platbase": str(root)}))
+        for distribution, selected in versions.items():
+            metadata = library / (distribution.replace("-", "_") + ".dist-info")
+            metadata.mkdir(parents=True)
+            (metadata / "METADATA").write_text(
+                f"Metadata-Version: 2.1\nName: {distribution}\nVersion: {selected}\n")
+            (metadata / "direct_url.json").write_text(json.dumps(dict(
+                url="https://github.com/" + COMPONENTS[distribution],
+                vcs_info=dict(vcs="git", commit_id="a" * 40))))
+        return context.env_exec_cmd
+
+    def test_legacy_parent_migrates_current_commands_then_uses_full_activation_cas(self):
+        from mindie_knowledge.runtime_inventory import COMPONENTS
+        config, _consent = self.profile(feeds=[])
+        versions = {name: version(name) for name in
+                    ("mindie-knowledge", "remote-dev", "mindie-diagnostics")}
+        previous_python = self.metadata_runtime("previous-runtime", versions)
+        old = json.loads(config.read_text())
+        old.update(python=previous_python, component_commands={
+            "diagnostics": [previous_python, "-I", "-m", "mindie_diagnostics.cli"],
+            "profiler": ["/custom/profiler", "--format", "site"],
+        })
+        config.write_text(json.dumps(old))
+        legacy = runtime_binding(old)
+        legacy.pop("component_commands")
+        components = {name: dict(repository=COMPONENTS[name], version=selected, revision="a" * 40)
+                      for name, selected in versions.items()}
+        prepared = self.prepare(config, expected_binding=legacy,
+                                validation=dict(VALIDATION, component_updates={"runtime": components}))
+        self.assertEqual(prepared["expected_binding"], runtime_binding(old))
+        self.assertEqual(prepared["adapter"]["component_commands"]["diagnostics"], [
+            sys.executable, "-I", "-X", "utf8", "-m", "mindie_diagnostics.cli"])
+        self.assertEqual(prepared["adapter"]["component_commands"]["profiler"],
+                         old["component_commands"]["profiler"])
+        with patch("mindie_knowledge.loop.lifecycle.inspect_retirement", return_value=None), \
+                patch("mindie_knowledge.loop.lifecycle.retire_service", return_value={"idle": True}), \
+                patch("mindie_knowledge.loop.handoff._probe", return_value="absent"):
+            result = release_activation.activate(config, prepared)
+        self.assertEqual(result["status"], "active")
+        self.assertEqual(json.loads(config.read_text())["component_commands"],
+                         prepared["adapter"]["component_commands"])
+
+    def test_legacy_parent_cannot_downgrade_or_omit_installed_runtime_components(self):
+        from semantic_version import Version
+        try:
+            optional_floor = str(Version(version("mindie-sim")).next_patch())
+            optional_error = ValueError
+            optional_message = "below the current installed component: mindie-sim"
+        except PackageNotFoundError:
+            optional_floor = "0.7.1"
+            optional_error = RuntimeError
+            optional_message = "maintenance agent exited 1;"
+        for name, versions, error, message in (
+            ("core", {"mindie-knowledge": str(Version(version("mindie-knowledge")).next_patch())},
+             ValueError, "below the current installed component: mindie-knowledge"),
+            ("optional", {"mindie-sim": optional_floor}, optional_error, optional_message),
+        ):
+            with self.subTest(component=name):
+                config, _consent = self.profile(feeds=[])
+                old = json.loads(config.read_text())
+                old["python"] = self.metadata_runtime("old-" + name, versions)
+                config.write_text(json.dumps(old))
+                before = config.read_bytes()
+                legacy = runtime_binding(old)
+                legacy.pop("component_commands")
+                with self.assertRaisesRegex(error, message):
+                    self.prepare(config, name="candidate-" + name, expected_binding=legacy)
+                self.assertEqual(config.read_bytes(), before)
+                self.assertFalse(list((self.base / ("candidate-" + name)).glob("profile-*.engine.json")))
 
     def test_update_adds_disabled_operators_route_on_main(self):
         config, consent = self.profile(feeds=[dict(OFFICIAL_VLLM)])
@@ -122,6 +202,31 @@ class OfficialFeedUpdateTests(unittest.TestCase):
         self.assertEqual(settings_path.read_bytes(), settings_before)
         self.assertEqual(consent.read_bytes(), before)
 
+    def test_component_candidate_prepares_new_commands_without_changing_the_live_profile(self):
+        config, consent = self.profile(feeds=[dict(OFFICIAL_VLLM)])
+        old = json.loads(config.read_text())
+        old["component_commands"] = {
+            "sim": ["/old/python", "-I", "-m", "mindie_sim"],
+            "profiler": ["/custom/profiler", "--format", "site"],
+        }
+        config.write_text(json.dumps(old))
+        before = config.read_bytes(), consent.read_bytes()
+        validation = dict(VALIDATION, component_updates={"runtime": {"mindie-sim": {
+            "repository": "mindie-agent/sim", "version": "0.7.1", "revision": "a" * 40}}})
+        with patch("mindie_knowledge.component_bindings.read_versions",
+                   return_value={"mindie-sim": "0.7.1"}):
+            prepared = self.prepare(config, validation=validation)
+        assert prepared["adapter"]["component_commands"]["sim"] == [
+            sys.executable, "-I", "-X", "utf8", "-m", "mindie_sim"]
+        assert prepared["adapter"]["component_commands"]["profiler"] == old["component_commands"]["profiler"]
+        assert prepared["expected_binding"]["component_commands"] == old["component_commands"]
+        assert (config.read_bytes(), consent.read_bytes()) == before
+        with patch("mindie_knowledge.component_bindings.read_versions",
+                   return_value={"mindie-sim": "0.8.0"}):
+            with self.assertRaisesRegex(ValueError, "below the current bound component"):
+                self.prepare(config, name="stale-candidate", validation=validation)
+        assert (config.read_bytes(), consent.read_bytes()) == before
+
 
 class ActivationTests(unittest.TestCase):
     def setUp(self):
@@ -131,7 +236,7 @@ class ActivationTests(unittest.TestCase):
         self.config = self.root / "codex.json"
         self.old = dict(python="/old/python", runtime_scripts="/old/scripts",
                         engine_config=str(self.root / "old.json"),
-                        product_validation={"old": True}, consent="preserved")
+                        product_validation={"old": True}, consent="preserved", component_commands={})
         self.new = dict(self.old, python="/new/python", runtime_scripts="/new/scripts",
                         engine_config=str(self.root / "new.json"),
                         product_validation={"new": True})
@@ -173,6 +278,36 @@ class ActivationTests(unittest.TestCase):
         self.assertEqual(result["status"], "deferred")
         self.assertEqual(self.config.read_bytes(), self.original)
         self.prepare_service.assert_not_called()
+
+    def test_component_commands_switch_only_after_idle_and_detect_concurrent_edits(self):
+        self.old["component_commands"] = {"sim": ["/old/python", "-m", "mindie_sim"]}
+        self.new["component_commands"] = {"sim": ["/new/python", "-m", "mindie_sim"]}
+        self.config.write_text(json.dumps(self.old))
+        self.prepared["expected_binding"] = runtime_binding(self.old)
+        self.retire_service.return_value = {"idle": False}
+        assert self.run_activation([])["status"] == "deferred"
+        assert json.loads(self.config.read_text()) == self.old
+        self.retire_service.return_value = {"idle": True}
+        assert self.run_activation(["absent"])["status"] == "active"
+        assert json.loads(self.config.read_text()) == self.new
+        changed = dict(self.old, component_commands={"sim": ["/user/new-wrapper"]})
+        self.config.write_text(json.dumps(changed))
+        assert self.run_activation([])["reason"] == "installation_changed"
+        assert json.loads(self.config.read_text()) == changed
+
+    def test_new_parent_snapshot_blocks_a_command_added_to_an_empty_binding(self):
+        original = dict(self.old)
+        original.pop("component_commands")
+        expected = runtime_binding(original)
+        changed = dict(original, component_commands={"sim": ["/user/python", "-m", "mindie_sim"]})
+        self.config.write_text(json.dumps(changed))
+        release = self.root / "candidate"
+        release.mkdir()
+        (release / "runtime.json").write_text(json.dumps(dict(
+            python=sys.executable, validation=VALIDATION)))
+        with self.assertRaises(release_activation.InstallationChanged):
+            release_activation.prepare(self.config, release, expected_binding=expected)
+        self.assertEqual(json.loads(self.config.read_text()), changed)
 
     def test_busy_secondary_domain_prevents_publication_until_its_owner_retires(self):
         self.old['domain_configs'] = {'operators': str(self.root / 'old-operators.json')}

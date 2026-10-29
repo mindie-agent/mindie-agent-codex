@@ -96,12 +96,13 @@ def ensure_runtime(source, data):
             python = Path(receipt["python"])
             return python, readback(python, source), Path(active)
     python, scripts, release = _baseline_runtime(source, data)
-    if active:
+    if active or current.get("component_commands"):
         # A newer plugin may carry older component pins. Build its adapter with
         # the installed floor before publishing any binding for the new plugin.
         with preparing("component-inheritance"):
             result = run([str(python), "-I", "-B", str(scripts / "component_update.py"),
-                          str(source), str(python), str(data), current["python"]],
+                          str(source), str(python), str(data), current["python"],
+                          "--config", str(config)],
                          "", timeout=830).checked_stdout()
             effective = json.loads(result)
         if effective:

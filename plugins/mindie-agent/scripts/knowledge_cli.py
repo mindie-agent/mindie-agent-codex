@@ -14,7 +14,10 @@
   knowledge engine's domain, contribution and capture checks.
 """
 import json
+from pathlib import Path
 import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from admission_ops import admission, native_session, read_config
 from mcp_gate import Gate, call_failure

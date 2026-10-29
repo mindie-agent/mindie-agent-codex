@@ -5,7 +5,7 @@ Validates compatibility with the installed `codex --version` (`harness_version`)
 
 [Invariants]
 - Never installs a release whose `harness-compatibility.json` does not cover the actual host `codex --version`.
-- Persists an exact expected pre-activation binding for recovery and sends an immutable bounded stdin attempt snapshot to the activation child; local interrupted activation is reconciled by canonical readback under the existing lock, while native plugin/catalog unknowns stay unreplayed.
+- Persists the binding before runtime preparation and sends that immutable bounded stdin snapshot to the activation child; local interrupted activation is reconciled by canonical readback under the existing lock, while native plugin/catalog unknowns stay unreplayed.
 - Retires only a settled prepared candidate older than the verified installed native version; it never suppresses an unconfirmed native external write.
 - Carries forward only previously user-approved hook trust entries via compare-and-swap (`NativeHooks`).
 
@@ -249,6 +249,29 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
             or read_json(source / "harness-compatibility.json")[0] != pending["metadata"]["compatibility"]):
         raise ValueError("installed candidate source declaration changed")
     data = Path(env["CODEX_HOME"]) / "plugins/data/mindie-agent-mindie-agent"
+    expected = None
+    if not first_install:
+        if ((_version_key(pending["metadata"].get("version")) or (0,)) < IMMUTABLE_ACTIVATION_FLOOR):
+            return dict(status="deferred", stage="activation_writer",
+                        reason="legacy_activation_helper", execution="not_started")
+        previous = pending.get("activation", {})
+        expected = previous.get("expected_binding")
+        if not isinstance(expected, dict):
+            if previous and previous != {"status": "not_started"}:
+                raise ValueError("activation attempt lacks its expected runtime binding")
+            # Older local preparation receipts lack the floor they built against.
+            # Reuse the installed native source, but prepare its runtime again.
+            pending.pop("runtime", None)
+            pending.pop("preparation", None)
+            pending["stage"] = "installed"
+            try:
+                with update_lock(config, blocking=False):
+                    expected = runtime_binding(read_json(config)[0])
+            except BlockingIOError:
+                return dict(status="deferred", stage="runtime_prepare",
+                            reason="operation_busy", execution="not_started")
+            pending["activation"] = dict(status="not_started", expected_binding=expected)
+            _atomic(root / "native.json", pending)
     if "runtime" not in pending:
         pending["preparation"] = dict(execution="unknown", cleanup_failed=None)
         _atomic(root / "native.json", pending)
@@ -283,7 +306,8 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
         pending["runtime"] = runtime
         pending["preparation"] = _process_fact(result)
         pending["stage"] = "prepared"
-        pending["activation"] = dict(status="not_started")
+        if first_install:
+            pending["activation"] = dict(status="not_started")
         _atomic(root / "native.json", pending)
     if "hook_trust" not in pending:
         from native_hooks import preserve
@@ -330,32 +354,20 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
         _store_activation(root, pending, value, result, None)
         return value
 
-    if ((_version_key(pending["metadata"].get("version")) or (0,)) < IMMUTABLE_ACTIVATION_FLOOR):
-        return dict(status="deferred", stage="activation_writer",
-                    reason="legacy_activation_helper", execution="not_started")
-    previous = pending.get("activation")
-    expected = previous.get("expected_binding") if isinstance(previous, dict) else None
-    if not isinstance(expected, dict):
-        expected = None
     try:
         with update_lock(config, blocking=False):
             adapter = read_json(config)[0]
-            current_binding = runtime_binding(adapter)
             current_version = adapter.get("product_validation", {}).get("native_version")
     except BlockingIOError:
         return dict(status="deferred", stage="activation_writer",
                     reason="operation_busy", execution="not_started")
-    if expected is None:
-        expected = current_binding
     current_key = _version_key(current_version)
     pending_key = _version_key(pending["metadata"]["version"])
     if current_key is not None and pending_key is not None and current_key > pending_key:
         return dict(status="deferred", stage="activation_writer",
                     reason="installation_changed", execution="not_started")
 
-    # The intent is persisted before any child exists.  A child delayed before
-    # its exclusive lock still receives this exact pre-activation binding and
-    # must fail its CAS rather than prepare against a newer canonical.
+    # Keep the preparation floor even when recovery observes a newer canonical.
     pending["activation"] = dict(status="unconfirmed", expected_binding=expected)
     _atomic(root / "native.json", pending)
     deadline = time.monotonic() + 2.0
@@ -448,7 +460,7 @@ def _can_supersede(pending):
     return settled and control_settled and (preparation is None or preparation.get("cleanup_failed") is not True) and (
         pending.get("stage") == "installed"
         or (pending.get("stage") == "prepared"
-            and (pending.get("activation") == {"status": "not_started"}
+            and (pending.get("activation", {}).get("status") == "not_started"
                  or pending.get("activation", {}).get("execution") == "not_started"))
     )
 

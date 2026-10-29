@@ -64,6 +64,7 @@ def runtime_binding(config):
         binding["component_release"] = config["component_release"]
     if "domain_configs" in config:
         binding["domain_configs"] = config["domain_configs"]
+    binding["component_commands"] = config.get("component_commands", {})
     return binding
 
 
