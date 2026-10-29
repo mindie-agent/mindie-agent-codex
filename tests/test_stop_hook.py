@@ -73,6 +73,8 @@ def run_owned_hook(argv, event, *, shell, env, timeout):
                 if stream is not None:
                     try:
                         stream.close()
+                    except TimeoutError:
+                        raise
                     except OSError as close_error:
                         if primary is None:
                             raise

@@ -175,8 +175,9 @@ def run_codex(command, prompt, *, timeout: float | None = 120.0, receipt=None, d
         def checked_reader(read):
             try:
                 read()
-            except TimeoutError:
-                raise
+            except TimeoutError as exc:
+                read_errors.append(exc)
+                lines.put(None)
             except (OSError, ValueError) as exc:
                 read_errors.append(exc)
                 lines.put(None)
@@ -241,6 +242,8 @@ def run_codex(command, prompt, *, timeout: float | None = 120.0, receipt=None, d
                 if owner is not None and os.getppid() != int(owner):
                     raise NativeFailure("maintenance owner exited", reason='native_owner_exited')
                 if read_errors:
+                    if isinstance(read_errors[0], TimeoutError):
+                        raise read_errors[0]
                     raise InvalidResultError("Codex output read failed") from read_errors[0]
                 if flooded or total[0] > MAX_OUTPUT:
                     raise OutputLimitExceeded("Codex maintenance output exceeds limit")
@@ -385,6 +388,8 @@ def run_codex(command, prompt, *, timeout: float | None = 120.0, receipt=None, d
         if read_errors:
             if receipt['turn_completed']:
                 receipt['cleanup_failed'] = True
+            elif isinstance(read_errors[0], TimeoutError):
+                raise read_errors[0]
             else:
                 raise InvalidResultError("Codex output read failed") from read_errors[0]
         return usage

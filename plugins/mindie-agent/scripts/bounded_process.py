@@ -161,7 +161,12 @@ def _kill_tree(process):
 
 
 def _settle_capture(result, capture):
-    capture.freeze()
+    try:
+        capture.freeze()
+    except TimeoutError as exc:
+        # Execution is already settled; a local spool timeout cannot revoke
+        # its exit status or replace the original execution exception.
+        result.cleanup.append(dict(stage="finalize_capture", error_type=type(exc).__name__))
     result.stdout = capture.stdout()
     result.stderr = capture.stderr()
     result.capture = capture.receipt()
@@ -421,8 +426,10 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
                     cap.add(chunk)
                     if dest is not None:
                         dest.extend(chunk)
-        except TimeoutError:
-            raise
+        except TimeoutError as exc:
+            # Reader threads cannot raise into their owner; forward the exact
+            # timeout so the waiting caller reaps the process and raises it.
+            failure.append(exc)
         except (OSError, ValueError) as exc:
             failure.append(exc)
 

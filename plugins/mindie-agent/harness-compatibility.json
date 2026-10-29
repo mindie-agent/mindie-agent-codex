@@ -409,7 +409,7 @@
         }
       ],
       "code_paths": [
-        "scripts/mcp_gate.py:native_identity"
+        "scripts/mcp_identity.py:native_identity"
       ],
       "test_ids": [
         "tests/test_session_gate.py::SessionGateTests.test_session_tree_does_not_own_the_child_thread"
@@ -621,8 +621,8 @@
       ],
       "code_paths": [
         "scripts/native_entry.py:write_manifests",
-        "scripts/mcp_gate.py:interrupt_turn",
-        "scripts/mcp_gate.py:native_turn_identity",
+        "scripts/mcp_identity.py:interrupt_turn",
+        "scripts/mcp_identity.py:native_turn_identity",
         "scripts/native_hooks.py:_own_handler"
       ],
       "test_ids": [

@@ -40,6 +40,8 @@ def exclusive_lock(path, *, timeout=825):
                     import fcntl
                     fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
+            except TimeoutError:
+                raise
             except OSError as exc:
                 if exc.errno not in _LOCK_CONTENTION:
                     raise

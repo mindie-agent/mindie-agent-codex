@@ -56,6 +56,25 @@ knowledge use; a self-contained repair can finish with zero knowledge calls.
   task's correctness, device and acceptance checks. Skipping a read needs no
   feedback call and does not revoke the grant or eligible background capture.
 
+## Finish the verified task
+
+Identify the requested behavior and its acceptance checks from the task and
+relevant callers. Once the change satisfies those invariants and the affected
+behavior checks pass, give the final response with the result, validation and
+any remaining limitation. Let the host emit its normal completion event.
+
+Extend the implementation or repeat validation only for a concrete failing
+case, a required acceptance check, or new evidence that challenges the result.
+Do not add optional parameter combinations, speculative compatibility paths or
+defensive fallbacks after success without that evidence. An offline parser or
+code repair does not require an invented hardware condition or an unrelated
+live NPU run. Keep any hardware checks the actual task requires.
+
+Knowledge feedback and background capture must not prolong a finished task.
+A passing check alone does not fabricate native completion or C6 admission;
+report unfinished requirements honestly if a budget or external dependency
+prevents completion.
+
 ## Core Tools in Everyday Tasks
 
 - **Domain Knowledge (private manual entry — Graded `L1–L4`, Multi-Domain Routing & Three-Valued `conditions`)**:

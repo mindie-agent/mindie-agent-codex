@@ -8,7 +8,8 @@ Streams child stdout/stderr to private local files and keeps only a bounded prev
 - A capture writes `<token>-<stream>.active` and renames it to `.spool` on close; only completed `.spool` files are ever pruned, so an active capture is never removed.
 - A path appears in a receipt only after its file was written and finalized; write/rename failures are reported in `spool_error` and never as a missing artifact claim.
 - After `freeze()`/`close()` no more bytes are accepted; late reader-thread chunks are ignored, so bytes, hash and preview stay consistent.
-- Retention failures (including files that vanish concurrently) never change a run outcome.
+- Filesystem timeouts propagate to the process owner. After execution completes,
+  finalization failures are separate cleanup warnings, never a changed exit code.
 
 [Timeouts & Locks]
 - One in-process lock serializes `add` against `freeze`. Retention runs when a capture completes (and at start): completed files older than 24h, beyond 64 files or beyond 128 MiB are removed oldest first, never the capture that just completed.
@@ -44,6 +45,8 @@ def prune(directory, *, now=None, keep=()):
     entries = []
     try:
         names = list(Path(directory).glob("*" + DONE_SUFFIX))
+    except TimeoutError:
+        raise
     except OSError as exc:
         return [type(exc).__name__]
     for path in names:
@@ -51,6 +54,8 @@ def prune(directory, *, now=None, keep=()):
             info = path.stat()
         except FileNotFoundError:
             continue
+        except TimeoutError:
+            raise
         except OSError as exc:
             errors.append(type(exc).__name__)
             continue
@@ -67,6 +72,8 @@ def prune(directory, *, now=None, keep=()):
             path.unlink()
         except FileNotFoundError:
             pass
+        except TimeoutError:
+            raise
         except OSError as exc:
             errors.append(type(exc).__name__)
             continue
@@ -93,6 +100,8 @@ class _Stream:
             descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             self.handle = os.fdopen(descriptor, "wb")
             self.path = str(path)
+        except TimeoutError:
+            raise
         except OSError as exc:
             self.error = type(exc).__name__
 
@@ -102,6 +111,10 @@ class _Stream:
                 self.handle.write(chunk)
                 self.size += len(chunk)
                 self.digest.update(chunk)
+            except TimeoutError:
+                self.error = "TimeoutError"
+                self._abandon()
+                raise
             except OSError as exc:
                 self.error = type(exc).__name__
                 self._abandon()
@@ -117,6 +130,8 @@ class _Stream:
         if handle is not None:
             try:
                 handle.close()
+            except TimeoutError:
+                raise
             except OSError:
                 pass
 
@@ -133,6 +148,10 @@ class _Stream:
             final = self.path[:-len(ACTIVE_SUFFIX)] + DONE_SUFFIX
             os.replace(self.path, final)
             self.path = final
+        except TimeoutError:
+            self.error = "TimeoutError"
+            self.path = None
+            raise
         except OSError as exc:
             self.error = type(exc).__name__
             self.path = None
@@ -165,6 +184,8 @@ class Capture:
             Path(directory).mkdir(parents=True, exist_ok=True, mode=0o700)
             os.chmod(directory, 0o700)
             self.retention_errors = prune(directory)
+        except TimeoutError:
+            raise
         except OSError as exc:
             self.spool_error = type(exc).__name__
         self.directory = directory
@@ -193,11 +214,19 @@ class Capture:
             if self.frozen:
                 return
             self.frozen = True
+            error = None
             for stream in self.streams.values():
-                stream.close()
+                try:
+                    stream.close()
+                except TimeoutError as exc:
+                    error = error or exc
+            if error is not None:
+                raise error
             keep = [stream.path for stream in self.streams.values() if stream.path]
             try:
                 self.retention_errors += prune(self.directory, keep=keep)
+            except TimeoutError:
+                raise
             except Exception as exc:
                 self.retention_errors.append(type(exc).__name__)
 
