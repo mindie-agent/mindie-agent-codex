@@ -400,7 +400,7 @@ def remote(payload):
     except Exception as exc:
         # Preserve transport certainty inside the selected runtime. Exception
         # messages and arbitrary remote attributes are not public diagnostics.
-        from remote_dev.core.errors import CALLER_ERROR_HINTS, error_details
+        from remote_dev.core.errors import AUTH_ERROR_HINTS, CALLER_ERROR_HINTS, error_details, safe_auth_error_details
         from remote_dev.core.job_ops import JOB_ID_RE
 
         raw = error_details(exc)
@@ -413,12 +413,15 @@ def remote(payload):
             "local_state", "stream_read", "stream_write",
         }
         category = raw.get("category")
-        category = category if isinstance(category, str) and category in categories else "internal"
+        category = category if isinstance(category, str) and category in categories | AUTH_ERROR_HINTS.keys() else "internal"
         delivery = raw.get("submission_state")
         delivery = delivery if delivery in ("not_sent", "acknowledged", "uncertain") else "unknown"
         details = dict(category=category, submission_state=delivery,
                        retryable=raw.get("retryable") is True)
-        hint = None
+        auth = safe_auth_error_details(raw)
+        if auth is not None:
+            details.update(auth)
+        hint = auth["hint"] if auth is not None else None
         code = raw.get("error_code")
         if category == "caller" and delivery == "not_sent" and isinstance(code, str) and code in CALLER_ERROR_HINTS:
             hint = CALLER_ERROR_HINTS[code]
