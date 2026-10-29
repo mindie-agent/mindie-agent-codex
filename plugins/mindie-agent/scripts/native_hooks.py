@@ -52,8 +52,8 @@ class NativeHooks:
                         raise ValueError("native management output exceeded its bound")
                     if stdout:
                         self.responses.put(json.loads(line))
-            except TimeoutError:
-                raise
+            except TimeoutError as exc:
+                self.responses.put(exc)
             except (OSError, ValueError) as exc:
                 self.responses.put(type(exc).__name__)
             finally:
@@ -92,6 +92,8 @@ class NativeHooks:
                 value = self.responses.get(timeout=max(.001, deadline - time.monotonic()))
             except queue.Empty:
                 raise TimeoutError("native hook management response is unavailable") from None
+            if isinstance(value, TimeoutError):
+                raise value
             if not isinstance(value, dict):
                 raise RuntimeError("native hook management stream ended")
             if value.get("id") == identity:
@@ -153,7 +155,10 @@ class NativeHooks:
                 keyPath="marketplaces." + json.dumps(MARKETPLACE),
                 value=value, mergeStrategy="replace",
                 expectedVersion=layer["version"], filePath=str(target)))
-        except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
+        except TimeoutError as exc:
+            # The write may have committed; only readback can confirm it.
+            error = exc
+        except (OSError, ValueError, RuntimeError) as exc:
             error = exc
         _, observed_layer, _ = self.user_config()
         actual = observed_layer.get("config", {}).get("marketplaces", {}).get(MARKETPLACE)

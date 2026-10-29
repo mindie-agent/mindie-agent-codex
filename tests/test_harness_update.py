@@ -599,6 +599,8 @@ class UpdateTests(unittest.TestCase):
         try:
             os.symlink(sys.executable, first)
             os.symlink(sys.executable, second)
+        except TimeoutError:
+            raise
         except OSError as exc:
             self.skipTest(f"symlink fixture unavailable: {type(exc).__name__}")
         self.assertEqual(first.resolve(), second.resolve())

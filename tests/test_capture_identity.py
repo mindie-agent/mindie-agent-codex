@@ -49,6 +49,8 @@ class CaptureIdentityTests(unittest.TestCase):
         link.parent.mkdir(parents=True)
         try:
             link.symlink_to(foreign)
+        except TimeoutError:
+            raise
         except OSError as exc:
             if os.name == "nt":
                 self.skipTest("file symlinks unavailable: " + type(exc).__name__)
@@ -62,6 +64,8 @@ class CaptureIdentityTests(unittest.TestCase):
         self.home.mkdir()
         try:
             (self.home / "sessions").symlink_to(foreign.parent, target_is_directory=True)
+        except TimeoutError:
+            raise
         except OSError as exc:
             if os.name == "nt":
                 self.skipTest("directory symlinks unavailable: " + type(exc).__name__)
