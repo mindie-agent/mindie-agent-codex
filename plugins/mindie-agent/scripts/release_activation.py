@@ -79,6 +79,9 @@ def prepare(config, release, *, blocking=True, expected_binding=None, deadline=N
         if expected_binding is not None and current_binding != expected_binding:
             raise InstallationChanged("installation binding changed before activation")
         old_engine = config_at(old["engine_config"])
+    if "component_updates" in receipt["validation"]:
+        from component_update import validate_command_floor
+        validate_command_floor(old, receipt["validation"]["component_updates"]["runtime"])
     digest = hashlib.sha256(os.fsencode(str(config))).hexdigest()
     path = release / ("profile-" + digest + ".engine.json")
     engine = dict(old_engine)
@@ -87,6 +90,10 @@ def prepare(config, release, *, blocking=True, expected_binding=None, deadline=N
                   product_validation=receipt["validation"])
     adapter = dict(old, python=sys.executable, runtime_scripts=str(scripts),
                    engine_config=str(path), product_validation=receipt["validation"])
+    if "component_commands" in old and "component_updates" in receipt["validation"]:
+        from component_update import rebind_commands
+        adapter["component_commands"] = rebind_commands(
+            old, sys.executable, receipt["validation"].get("component_updates", {}).get("runtime", {}))
     adapter["component_release"] = (str(release) if "component_updates" in receipt["validation"] else None)
     engine["service_launch_context"] = service_launch_context(config, adapter)
     from capture_config import prepare_domains
@@ -122,12 +129,19 @@ def binding_matches_release(config, release, receipt, *, scripts=None):
     digest = hashlib.sha256(os.fsencode(str(config))).hexdigest()
     expected_engine = release / ("profile-" + digest + ".engine.json")
     expected_component = str(release) if "component_updates" in validation else None
-    return (adapter.get("python") == sys.executable
+    matches = (adapter.get("python") == sys.executable
             and adapter.get("runtime_scripts") == str(scripts)
             and adapter.get("engine_config") == str(expected_engine)
             and adapter.get("product_validation") == validation
             and adapter.get("component_release") == expected_component
             and Path(expected_engine).is_file())
+    if not matches or "component_updates" not in validation:
+        return matches
+    from component_update import managed_commands, rebind_commands
+    components = validation["component_updates"]["runtime"]
+    if any(name not in components for name, _python, _module in managed_commands(adapter).values()):
+        return False
+    return adapter.get("component_commands", {}) == rebind_commands(adapter, sys.executable, components)
 
 
 def activate(config, prepared, *, control_seconds=CONTROL_SECONDS):

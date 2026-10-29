@@ -48,6 +48,8 @@ Default MCP discovery excludes knowledge tool names, descriptions and schemas. A
 
 `mindie-tools` delegates to existing component CLIs without duplicating their parsers or computations. Install profiler, sim and coordinator independently; their `mindie-*` executables are resolved on PATH. Missing components fail explicitly and are never installed automatically. For separate virtual environments, the adapter may provide `component_commands`, for example `"profiler": ["/absolute/venv/bin/python", "-I", "-X", "utf8", "-m", "mindie_profiler"]`. Local diagnostics uses the plugin's pinned interpreter. Calls preserve exit codes and original output; write large reports with the component's `--output` option.
 
+Automatic updates cover every official component installed in the managed runtime and adopt standard Python module bindings in `component_commands`. Their installed versions become minimum versions for verified formal releases; the existing idle transaction switches the interpreter and those commands together. The original external environment stays intact. Custom wrappers and commands found only on PATH remain owned by their installers. Missing components, lower candidate versions, or a binding changed during preparation prevent publication. Updating code preserves user knowledge, consent and work in flight, and failures remain visible.
+
 ### Scenario 1: Type `/mindie-agent` (or `$mindie-agent`) for Feature Design, Kernel Development & Test Authoring (Manual Trigger)
 > **The Problem**: Designing new Ascend features, implementing `AscendC` / `Triton` operators, or writing `vLLM-Ascend` accuracy tests often requires domain-specific architecture conventions, kernel constraints, and verified test patterns.  
 > **Copy-Paste Example**:

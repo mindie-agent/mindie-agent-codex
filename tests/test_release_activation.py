@@ -61,11 +61,11 @@ class OfficialFeedUpdateTests(unittest.TestCase):
         consent_store.record_choice(self.base / "mindie-consent.json", "disabled")
         return config, self.base / "mindie-consent.json"
 
-    def prepare(self, config, name="release-a"):
+    def prepare(self, config, name="release-a", validation=VALIDATION):
         release = self.base / name
         release.mkdir()
         (release / "runtime.json").write_text(json.dumps(dict(
-            python=sys.executable, validation=VALIDATION)), encoding="utf-8")
+            python=sys.executable, validation=validation)), encoding="utf-8")
         with patch("capture_config.prepare", return_value=dict(
                 capture_mode="public-transcript", redactor_executable=sys.executable,
                 summary_command=[sys.executable, str(self.scripts / "agent_worker.py")])), \
@@ -122,6 +122,31 @@ class OfficialFeedUpdateTests(unittest.TestCase):
         self.assertEqual(settings_path.read_bytes(), settings_before)
         self.assertEqual(consent.read_bytes(), before)
 
+    def test_component_candidate_prepares_new_commands_without_changing_the_live_profile(self):
+        config, consent = self.profile(feeds=[dict(OFFICIAL_VLLM)])
+        old = json.loads(config.read_text())
+        old["component_commands"] = {
+            "sim": ["/old/python", "-I", "-m", "mindie_sim"],
+            "profiler": ["/custom/profiler", "--format", "site"],
+        }
+        config.write_text(json.dumps(old))
+        before = config.read_bytes(), consent.read_bytes()
+        validation = dict(VALIDATION, component_updates={"runtime": {"mindie-sim": {
+            "repository": "mindie-agent/sim", "version": "0.7.1", "revision": "a" * 40}}})
+        with patch("mindie_knowledge.component_runtime.read_versions",
+                   return_value={"mindie-sim": "0.7.1"}):
+            prepared = self.prepare(config, validation=validation)
+        assert prepared["adapter"]["component_commands"]["sim"] == [
+            sys.executable, "-I", "-X", "utf8", "-m", "mindie_sim"]
+        assert prepared["adapter"]["component_commands"]["profiler"] == old["component_commands"]["profiler"]
+        assert prepared["expected_binding"]["component_commands"] == old["component_commands"]
+        assert (config.read_bytes(), consent.read_bytes()) == before
+        with patch("mindie_knowledge.component_runtime.read_versions",
+                   return_value={"mindie-sim": "0.8.0"}):
+            with self.assertRaisesRegex(ValueError, "below the current bound component"):
+                self.prepare(config, name="stale-candidate", validation=validation)
+        assert (config.read_bytes(), consent.read_bytes()) == before
+
 
 class ActivationTests(unittest.TestCase):
     def setUp(self):
@@ -173,6 +198,22 @@ class ActivationTests(unittest.TestCase):
         self.assertEqual(result["status"], "deferred")
         self.assertEqual(self.config.read_bytes(), self.original)
         self.prepare_service.assert_not_called()
+
+    def test_component_commands_switch_only_after_idle_and_detect_concurrent_edits(self):
+        self.old["component_commands"] = {"sim": ["/old/python", "-m", "mindie_sim"]}
+        self.new["component_commands"] = {"sim": ["/new/python", "-m", "mindie_sim"]}
+        self.config.write_text(json.dumps(self.old))
+        self.prepared["expected_binding"] = runtime_binding(self.old)
+        self.retire_service.return_value = {"idle": False}
+        assert self.run_activation([])["status"] == "deferred"
+        assert json.loads(self.config.read_text()) == self.old
+        self.retire_service.return_value = {"idle": True}
+        assert self.run_activation(["absent"])["status"] == "active"
+        assert json.loads(self.config.read_text()) == self.new
+        changed = dict(self.old, component_commands={"sim": ["/user/new-wrapper"]})
+        self.config.write_text(json.dumps(changed))
+        assert self.run_activation([])["reason"] == "installation_changed"
+        assert json.loads(self.config.read_text()) == changed
 
     def test_busy_secondary_domain_prevents_publication_until_its_owner_retires(self):
         self.old['domain_configs'] = {'operators': str(self.root / 'old-operators.json')}

@@ -53,7 +53,8 @@ def test_an_unchanged_independent_runtime_is_not_rebuilt(tmp_path):
             patch("mindie_knowledge.component_runtime.build") as build:
         assert component_update.prepare(SCRIPTS.parent, sys.executable, tmp_path,
                                         current_source=baseline["source_sha256"]) is None
-    discover.assert_called_once_with(sys.executable, baseline["runtime"], force=False)
+    discover.assert_called_once_with(sys.executable, baseline["runtime"], force=False,
+                                    required_components={})
     build.assert_not_called()
 
 
@@ -67,6 +68,68 @@ def test_candidate_build_failure_does_not_change_the_active_native_binding(tmp_p
             component_update.check(config, SCRIPTS.parent, tmp_path / "data")
     assert config.read_text() == original
     activate.assert_not_called()
+
+
+def test_bound_component_versions_are_read_once_per_interpreter_without_running_custom_commands():
+    adapter = dict(component_commands={
+        "profiler": ["/tools/python", "-I", "-X", "utf8", "-m", "mindie_profiler"],
+        "sim": ["/tools/python", "-m", "mindie_sim"],
+        "coordinator": ["/user/custom-wrapper", "--production"],
+    })
+    versions = {"mindie-profiler": "0.5.0", "mindie-sim": "0.7.1"}
+    with patch("mindie_knowledge.component_runtime.read_versions", return_value=versions) as read:
+        assert component_update.required_components(adapter) == versions
+    assert read.call_count == 1
+    assert read.call_args.args == ("/tools/python", ["mindie-profiler", "mindie-sim"])
+    assert 0 < read.call_args.kwargs["timeout"] <= 15
+    rebound = component_update.rebind_commands(adapter, "/candidate/python", versions)
+    assert rebound["profiler"] == ["/candidate/python", "-I", "-X", "utf8", "-m", "mindie_profiler"]
+    assert rebound["sim"] == ["/candidate/python", "-I", "-X", "utf8", "-m", "mindie_sim"]
+    assert rebound["coordinator"] == adapter["component_commands"]["coordinator"]
+    assert adapter["component_commands"]["profiler"][0] == "/tools/python"
+
+
+def test_bound_versions_reach_release_selection_before_candidate_build(tmp_path):
+    adapter = dict(component_commands={
+        "sim": ["/external/python", "-I", "-m", "mindie_sim"],
+    })
+    with patch("mindie_knowledge.component_runtime.read_versions",
+               return_value={"mindie-sim": "0.7.1"}), \
+            patch("mindie_knowledge.component_runtime.discover",
+                  side_effect=ValueError("formal release below bound version")) as discover, \
+            patch("mindie_knowledge.component_runtime.build") as build:
+        with pytest.raises(ValueError, match="below bound version"):
+            component_update.prepare(SCRIPTS.parent, sys.executable, tmp_path, adapter=adapter)
+    assert discover.call_args.kwargs["required_components"] == {"mindie-sim": "0.7.1"}
+    build.assert_not_called()
+
+
+def test_component_activation_carries_the_binding_used_for_release_selection(tmp_path):
+    config = tmp_path / "adapter.json"
+    original = dict(python=sys.executable, product_validation={"source_sha256": "source"},
+                    component_commands={"sim": ["/old/python", "-m", "mindie_sim"]})
+    config.write_text(json.dumps(original))
+    runtime = dict(python=sys.executable, scripts=str(SCRIPTS), release=str(tmp_path / "candidate"))
+
+    def prepare(*args, **kwargs):
+        changed = dict(original, component_commands={"sim": ["/newer/python", "-m", "mindie_sim"]})
+        config.write_text(json.dumps(changed))
+        return runtime
+
+    def activate(argv, stdin, **kwargs):
+        from bounded_process import ProcessResult
+        from session_gate import runtime_binding
+        assert argv[-1] == "--attempt"
+        attempt = json.loads(stdin)
+        assert attempt["expected_binding"] == runtime_binding(original)
+        assert attempt["expected_binding"] != runtime_binding(json.loads(config.read_text()))
+        return ProcessResult("completed", json.dumps(
+            {"status": "deferred", "reason": "installation_changed"}), 0)
+
+    with patch.object(component_update, "prepare", side_effect=prepare), \
+            patch.object(component_update, "run", side_effect=activate):
+        assert component_update.check(config, SCRIPTS.parent, tmp_path)["status"] == "deferred"
+    assert json.loads(config.read_text())["component_commands"]["sim"][0] == "/newer/python"
 
 
 def test_native_bootstrap_keeps_the_effective_component_release_on_reload(tmp_path, monkeypatch):

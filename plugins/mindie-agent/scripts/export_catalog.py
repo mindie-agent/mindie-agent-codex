@@ -91,7 +91,9 @@ KNOWLEDGE_TOOLS = [
     dict(
         name="knowledge_query",
         description=(
-            "Search graded rules and task material in the selected domain. Returns bounded navigation cards "
+            "Search for a missing contract, mechanism or method that could change the next action. "
+            "Skip retrieval when the code and current evidence already support a fix and verification; "
+            "probe missing environment facts first. Search graded rules and task material in the selected domain. Returns bounded navigation cards "
             "and deduplicated foundation_cards for progressive loading; each match identifies its source, "
             "has a readable ref, and returns feedback_ref for the exact observed revision. "
             "Pass known task conditions to filter graded rules; unknown conditions are excluded by default. "
@@ -129,7 +131,11 @@ KNOWLEDGE_TOOLS = [
     dict(
         name="knowledge_explain",
         description=(
-            "Read a returned graded-unit, task or block ref, or assemble a batch from refs. A graded-unit ref "
+            "Read only knowledge needed for the next action; an exact returned ref needs no new query. "
+            "For graded units, prefer refs even for one unit, with observed conditions, fully visible "
+            "known_refs and an explicit token_budget. Copy revision references exactly. Stop reading "
+            "once the next action and required premises are clear; new evidence can reopen retrieval. "
+            "Single ref reads preserve legacy task/block navigation. A graded-unit ref "
             "returns its exact current revision and conditions; a task ref returns navigation and first_block_ref; "
             "a block ref returns its immutable body and adjacent block refs. Batch refs assemble the dependency "
             "closure minus known_refs, returning complete bodies with shared premises expanded once. "

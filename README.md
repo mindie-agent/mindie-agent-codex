@@ -48,6 +48,8 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 
 `mindie-tools` 复用组件现有 CLI，不复制解析与计算逻辑。profiler、sim 和 coordinator 是独立安装的组件，默认查找 PATH 上的对应 `mindie-*` 可执行程序；缺少组件时调用明确失败，不自动安装。若使用独立虚拟环境，可在适配器配置中设置 `component_commands`，例如 `"profiler": ["/absolute/venv/bin/python", "-I", "-X", "utf8", "-m", "mindie_profiler"]`。本地 diagnostics 使用插件锁定的解释器。所有调用保留退出码和原始输出，大报告使用组件的 `--output` 参数写文件。
 
+自动更新覆盖受管运行时中已安装的全部官方组件，并接管 `component_commands` 中上述标准 Python 模块绑定：以当前安装版本为下限选择已验证正式 Release，构建候选后，在空闲切换时将标准命令与解释器一起更新。原独立环境不原地修改；自定义 wrapper 和仅通过 PATH 发现的命令仍由其安装者管理。候选缺少已绑定组件、版本较旧或构建期间绑定发生变化时，不覆盖当前配置。组件代码替换不删除用户知识、同意记录或在途任务；更新失败会明确报告。
+
 ### 场景 1：输入 `/mindie-agent`（或 `$mindie-agent`）唤醒知识库与 Skill 辅助设计、开发与测试（手动触发）
 > **痛点**：在昇腾上设计新特性、开发 `AscendC` / `Triton` 算子或编写 `vLLM-Ascend` 测试时，在海量文档和 Issue 里翻找架构规范、算子约束与适用条件非常耗时。  
 > **用法示例（直接复制发给 Codex）**：
