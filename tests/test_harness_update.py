@@ -360,8 +360,8 @@ class UpdateTests(unittest.TestCase):
     def test_legacy_local_preparation_is_rebuilt_before_adopting_a_current_binding(self):
         pending = self.prepared_candidate()
         pending["activation"] = {"status": "not_started"}
-        old_runtime = pending["runtime"]
-        rebuilt = dict(old_runtime, release="/candidate/rebuilt-release")
+        rebuilt = dict(python=sys.executable, scripts=str(SCRIPTS),
+                       release=str(self.root / "rebuilt-release"))
         expected = update.runtime_binding(json.loads(self.config.read_text()))
         seen = []
 

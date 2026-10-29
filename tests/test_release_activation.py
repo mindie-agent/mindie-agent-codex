@@ -82,8 +82,8 @@ class OfficialFeedUpdateTests(unittest.TestCase):
         from mindie_knowledge.runtime_inventory import COMPONENTS
         root = self.base / name
         builder = venv.EnvBuilder(with_pip=False, symlinks=True)
-        builder.create(root)
         context = builder.ensure_directories(root)
+        builder.create(root)
         library = Path(sysconfig.get_path("purelib", vars={"base": str(root), "platbase": str(root)}))
         for distribution, selected in versions.items():
             metadata = library / (distribution.replace("-", "_") + ".dist-info")
