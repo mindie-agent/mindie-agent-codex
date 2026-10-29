@@ -96,8 +96,7 @@ def ensure_runtime(source, data):
             python = Path(receipt["python"])
             return python, readback(python, source), Path(active)
     python, scripts, release = _baseline_runtime(source, data)
-    from component_update import managed_commands
-    if active or managed_commands(current):
+    if active or current.get("component_commands"):
         # A newer plugin may carry older component pins. Build its adapter with
         # the installed floor before publishing any binding for the new plugin.
         with preparing("component-inheritance"):

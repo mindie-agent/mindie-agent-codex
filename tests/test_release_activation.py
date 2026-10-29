@@ -133,7 +133,7 @@ class OfficialFeedUpdateTests(unittest.TestCase):
         before = config.read_bytes(), consent.read_bytes()
         validation = dict(VALIDATION, component_updates={"runtime": {"mindie-sim": {
             "repository": "mindie-agent/sim", "version": "0.7.1", "revision": "a" * 40}}})
-        with patch("mindie_knowledge.component_runtime.read_versions",
+        with patch("mindie_knowledge.component_bindings.read_versions",
                    return_value={"mindie-sim": "0.7.1"}):
             prepared = self.prepare(config, validation=validation)
         assert prepared["adapter"]["component_commands"]["sim"] == [
@@ -141,7 +141,7 @@ class OfficialFeedUpdateTests(unittest.TestCase):
         assert prepared["adapter"]["component_commands"]["profiler"] == old["component_commands"]["profiler"]
         assert prepared["expected_binding"]["component_commands"] == old["component_commands"]
         assert (config.read_bytes(), consent.read_bytes()) == before
-        with patch("mindie_knowledge.component_runtime.read_versions",
+        with patch("mindie_knowledge.component_bindings.read_versions",
                    return_value={"mindie-sim": "0.8.0"}):
             with self.assertRaisesRegex(ValueError, "below the current bound component"):
                 self.prepare(config, name="stale-candidate", validation=validation)

@@ -285,11 +285,12 @@ class UpdateTests(unittest.TestCase):
                     runtime=dict(python="/candidate/python", scripts="/candidate/scripts",
                                  release="/candidate/release"),
                     hook_trust=dict(status="complete"),
-                    activation=dict(status="not_started"))
+                    activation=dict(status="not_started", expected_binding=update.runtime_binding(
+                        json.loads(self.config.read_text()))))
 
     def test_activation_unknown_writer_retries_with_immutable_attempt_snapshot(self):
         pending = self.prepared_candidate()
-        pending["activation"] = dict(status="unknown", process=None)
+        pending["activation"].update(status="unknown", process=None)
         seen = []
 
         def child(argv, payload, **kwargs):
@@ -305,6 +306,106 @@ class UpdateTests(unittest.TestCase):
         saved = json.loads((self.state / "native.json").read_text())
         self.assertEqual(saved["activation"]["status"], "deferred")
         self.assertIn("expected_binding", saved["activation"])
+
+    def test_prepared_runtime_recovery_cannot_replace_newer_components_of_the_same_plugin(self):
+        original = dict(
+            python=sys.executable, runtime_scripts=str(SCRIPTS),
+            engine_config=str(self.root / "old.engine.json"),
+            product_validation=dict(native_version=self.version,
+                                    runtime={"mindie-knowledge": "a" * 40}),
+        )
+        self.config.write_text(json.dumps(original))
+        expected = update.runtime_binding(original)
+        pending = self.prepared_candidate()
+        for field in ("runtime", "activation", "hook_trust"):
+            pending.pop(field)
+        pending["stage"] = "installed"
+        release = self.root / "candidate-release"
+        release.mkdir()
+        (release / "runtime.json").write_text(json.dumps(dict(
+            python=sys.executable, validation=original["product_validation"])))
+        runtime = dict(python=sys.executable, scripts=str(SCRIPTS), release=str(release))
+
+        def prepare(argv, payload, **kwargs):
+            self.assertEqual(argv[0], "uv")
+            saved = json.loads((self.state / "native.json").read_text())
+            self.assertEqual(saved["activation"]["expected_binding"], expected)
+            return ProcessResult("completed", json.dumps(runtime), 0)
+
+        with patch.object(update, "run", side_effect=prepare), \
+                patch.object(native_hooks, "preserve", side_effect=RuntimeError("interrupted")):
+            with self.assertRaisesRegex(RuntimeError, "interrupted"):
+                update._prepare_and_activate(self.config, pending, self.env, self.state)
+        recovered = json.loads((self.state / "native.json").read_text())
+        self.assertEqual(recovered["stage"], "prepared")
+        self.assertEqual(recovered["activation"]["expected_binding"], expected)
+        advanced = dict(original, product_validation=dict(
+            native_version=self.version, runtime={"mindie-knowledge": "b" * 40}))
+        self.config.write_text(json.dumps(advanced))
+        before = self.config.read_bytes()
+        real_run = update.run
+
+        def activate(argv, payload, **kwargs):
+            self.assertEqual(Path(argv[2]).name, "release_activation.py")
+            self.assertEqual(json.loads(payload)["expected_binding"], expected)
+            return real_run(argv, payload, **kwargs)
+
+        with patch.object(update, "run", side_effect=activate), \
+                patch.object(native_hooks, "preserve", return_value={"status": "complete"}):
+            result = update._prepare_and_activate(self.config, recovered, self.env, self.state)
+        self.assertEqual(result["reason"], "installation_changed")
+        self.assertEqual(result["execution"], "not_started")
+        self.assertEqual(self.config.read_bytes(), before)
+
+    def test_legacy_local_preparation_is_rebuilt_before_adopting_a_current_binding(self):
+        pending = self.prepared_candidate()
+        pending["activation"] = {"status": "not_started"}
+        old_runtime = pending["runtime"]
+        rebuilt = dict(old_runtime, release="/candidate/rebuilt-release")
+        expected = update.runtime_binding(json.loads(self.config.read_text()))
+        seen = []
+
+        def child(argv, payload, **kwargs):
+            seen.append(argv)
+            if len(seen) == 1:
+                self.assertEqual(argv[0], "uv")
+                saved = json.loads((self.state / "native.json").read_text())
+                self.assertNotIn("runtime", saved)
+                self.assertEqual(saved["activation"]["expected_binding"], expected)
+                return ProcessResult("completed", json.dumps(rebuilt), 0)
+            self.assertEqual(argv[-2:], [rebuilt["release"], "--attempt"])
+            self.assertEqual(json.loads(payload)["expected_binding"], expected)
+            return ProcessResult("completed", '{"status":"deferred","reason":"operation_busy"}', 0)
+
+        with patch.object(update, "run", side_effect=child):
+            update._prepare_and_activate(self.config, pending, self.env, self.state)
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(pending["runtime"], rebuilt)
+
+    def test_running_and_completed_activation_recovery_keep_the_preparation_snapshot(self):
+        pending = self.prepared_candidate()
+        expected = pending["activation"]["expected_binding"]
+        self.config.write_text(json.dumps(dict(
+            product_validation={"native_version": self.version,
+                                "runtime": {"mindie-knowledge": "b" * 40}})))
+        for status, process in (
+            ("unconfirmed", None),
+            ("active", dict(execution="completed", returncode=0, cleanup_failed=False)),
+        ):
+            with self.subTest(status=status):
+                recovered = copy.deepcopy(pending)
+                recovered["activation"].update(status=status, process=process)
+
+                def child(argv, payload, **kwargs):
+                    self.assertEqual(Path(argv[2]).name, "release_activation.py")
+                    self.assertEqual(json.loads(payload)["expected_binding"], expected)
+                    return ProcessResult("completed", '{"status":"deferred","reason":"installation_changed"}', 0)
+
+                with patch.object(update, "run", side_effect=child) as run:
+                    update._prepare_and_activate(self.config, recovered, self.env, self.state)
+                run.assert_called_once()
+                saved = json.loads((self.state / "native.json").read_text())
+                self.assertEqual(saved["activation"]["expected_binding"], expected)
 
     def test_busy_old_update_lock_defers_without_spawning_or_unknown(self):
         pending = self.prepared_candidate()
@@ -333,7 +434,7 @@ class UpdateTests(unittest.TestCase):
 
     def test_activation_cleanup_failure_is_retried_not_a_permanent_prison(self):
         pending = self.prepared_candidate()
-        pending["activation"] = dict(
+        pending["activation"].update(
             status="unknown",
             process=dict(execution="unknown", returncode=None, cleanup_failed=True))
         with patch.object(update, "run", return_value=ProcessResult(
@@ -361,7 +462,7 @@ class UpdateTests(unittest.TestCase):
 
     def test_settled_activation_reconciliation_preserves_result_if_recording_fails(self):
         pending = self.prepared_candidate()
-        pending["activation"] = dict(status="unknown", process=dict(
+        pending["activation"].update(status="unknown", process=dict(
             execution="unknown", returncode=-9, cleanup_failed=False))
         with patch.object(update, "run", return_value=ProcessResult(
                 "completed", '{"status":"active"}', 0)) as run, \

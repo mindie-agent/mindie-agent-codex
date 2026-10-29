@@ -5,6 +5,7 @@ import sys
 import os
 import subprocess
 import shutil
+from importlib.metadata import version
 from unittest.mock import patch
 
 import pytest
@@ -70,30 +71,11 @@ def test_candidate_build_failure_does_not_change_the_active_native_binding(tmp_p
     activate.assert_not_called()
 
 
-def test_bound_component_versions_are_read_once_per_interpreter_without_running_custom_commands():
-    adapter = dict(component_commands={
-        "profiler": ["/tools/python", "-I", "-X", "utf8", "-m", "mindie_profiler"],
-        "sim": ["/tools/python", "-m", "mindie_sim"],
-        "coordinator": ["/user/custom-wrapper", "--production"],
-    })
-    versions = {"mindie-profiler": "0.5.0", "mindie-sim": "0.7.1"}
-    with patch("mindie_knowledge.component_runtime.read_versions", return_value=versions) as read:
-        assert component_update.required_components(adapter) == versions
-    assert read.call_count == 1
-    assert read.call_args.args == ("/tools/python", ["mindie-profiler", "mindie-sim"])
-    assert 0 < read.call_args.kwargs["timeout"] <= 15
-    rebound = component_update.rebind_commands(adapter, "/candidate/python", versions)
-    assert rebound["profiler"] == ["/candidate/python", "-I", "-X", "utf8", "-m", "mindie_profiler"]
-    assert rebound["sim"] == ["/candidate/python", "-I", "-X", "utf8", "-m", "mindie_sim"]
-    assert rebound["coordinator"] == adapter["component_commands"]["coordinator"]
-    assert adapter["component_commands"]["profiler"][0] == "/tools/python"
-
-
 def test_bound_versions_reach_release_selection_before_candidate_build(tmp_path):
     adapter = dict(component_commands={
         "sim": ["/external/python", "-I", "-m", "mindie_sim"],
     })
-    with patch("mindie_knowledge.component_runtime.read_versions",
+    with patch("mindie_knowledge.component_bindings.read_versions",
                return_value={"mindie-sim": "0.7.1"}), \
             patch("mindie_knowledge.component_runtime.discover",
                   side_effect=ValueError("formal release below bound version")) as discover, \
@@ -102,6 +84,34 @@ def test_bound_versions_reach_release_selection_before_candidate_build(tmp_path)
             component_update.prepare(SCRIPTS.parent, sys.executable, tmp_path, adapter=adapter)
     assert discover.call_args.kwargs["required_components"] == {"mindie-sim": "0.7.1"}
     build.assert_not_called()
+
+
+def test_plugin_upgrade_rebinds_a_core_component_even_when_pins_match_the_baseline(tmp_path):
+    baseline = identity(SCRIPTS.parent)
+    old_python, candidate_python = "/old/python", "/candidate/python"
+    adapter = dict(component_commands={
+        "diagnostics": [old_python, "-I", "-m", "mindie_diagnostics.cli"],
+    })
+    repositories = {
+        "mindie-knowledge": "mindie-agent/knowledge",
+        "remote-dev": "mindie-agent/remote-dev",
+        "mindie-diagnostics": "mindie-agent/diagnostics",
+    }
+    selected = {name: dict(revision=revision, version=version(name), repository=repositories[name])
+                for name, revision in baseline["runtime"].items()}
+    with patch("mindie_knowledge.component_bindings.read_versions",
+               return_value={"mindie-diagnostics": "0.5.4"}), \
+            patch("mindie_knowledge.component_runtime.discover",
+                  return_value=dict(changed=False, runtime=selected)), \
+            patch("mindie_knowledge.component_runtime.build",
+                  side_effect=RuntimeError("candidate build reached")) as build:
+        with pytest.raises(RuntimeError, match="candidate build reached"):
+            component_update.prepare(
+                SCRIPTS.parent, candidate_python, tmp_path,
+                current_python=old_python, adapter=adapter,
+            )
+    assert build.call_args.kwargs["python"] == candidate_python
+    assert build.call_args.args[3] == selected
 
 
 def test_component_activation_carries_the_binding_used_for_release_selection(tmp_path):
@@ -145,6 +155,34 @@ def test_native_bootstrap_keeps_the_effective_component_release_on_reload(tmp_pa
         python, scripts, selected = bootstrap.ensure_runtime(SCRIPTS.parent, tmp_path / "data")
     assert (python, scripts, selected) == (Path(sys.executable), SCRIPTS, release)
     baseline.assert_not_called()
+
+
+def test_stdlib_bootstrap_leaves_custom_only_bindings_to_the_installed_helper(tmp_path):
+    config = tmp_path / "adapter.json"
+    original = dict(python=sys.executable,
+                    component_commands={"sim": ["/user/custom-wrapper", "--production"]})
+    config.write_text(json.dumps(original))
+    data = tmp_path / "data"
+    code = """
+import json, sys
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[1])
+import bootstrap
+python, scripts, data = Path(sys.argv[2]), Path(sys.argv[1]), Path(sys.argv[3])
+baseline = (python, scripts, data / "release")
+with patch.object(bootstrap, "_baseline_runtime", return_value=baseline):
+    assert bootstrap.ensure_runtime(scripts.parent, data) == baseline
+assert "mindie_knowledge" not in sys.modules
+"""
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", code, str(SCRIPTS), sys.executable, str(data)],
+        env=dict(os.environ, MINDIE_AGENT_CONFIG=str(config)),
+        cwd=tmp_path, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(config.read_text()) == original
+    assert not data.exists()
 
 
 def test_native_cold_launcher_does_not_change_the_hook_trusted_source_payload(tmp_path):

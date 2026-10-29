@@ -13,7 +13,6 @@ import json
 import argparse
 from pathlib import Path
 import sys
-import time
 
 # Isolated Python omits the script directory; helpers belong to this candidate.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -21,58 +20,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bounded_process import run
 from product_contract import identity, package_files, probe, read_json
 
-
-COMPONENT_MODULES = {
-    "profiler": ("mindie-profiler", "mindie_profiler"),
-    "sim": ("mindie-sim", "mindie_sim"),
-    "coordinator": ("mindie-coordinator", "mindie_coordinator.cli"),
-    "diagnostics": ("mindie-diagnostics", "mindie_diagnostics.cli"),
-}
-
-
-def managed_commands(adapter):
-    """Only standard module bindings transfer ownership to the managed runtime."""
-    result = {}
-    for name, (distribution, module) in COMPONENT_MODULES.items():
-        argv = adapter.get("component_commands", {}).get(name)
-        if not isinstance(argv, list) or len(argv) < 3 or argv[-2:] != ["-m", module]:
-            continue
-        flags = argv[1:-2]
-        if flags not in ([], ["-I"], ["-I", "-X", "utf8"], ["-I", "-B", "-X", "utf8"]):
-            continue
-        result[name] = (distribution, argv[0], module)
-    return result
-
-
-def required_components(adapter):
-    from mindie_knowledge.component_runtime import read_versions
-    deadline = time.monotonic() + 15
-    interpreters = {}
-    for distribution, python, _module in managed_commands(adapter).values():
-        interpreters.setdefault(python, []).append(distribution)
-    versions = {}
-    for python, names in interpreters.items():
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("bound component metadata budget exhausted")
-        versions.update(read_versions(python, names, timeout=remaining))
-    return versions
-
-
-def validate_command_floor(adapter, components):
-    from semantic_version import Version
-    for name, version in required_components(adapter).items():
-        if name not in components or Version(components[name]["version"]) < Version(version):
-            raise ValueError(f"candidate runtime is below the current bound component: {name}")
-
-
-def rebind_commands(adapter, python, components):
-    commands = dict(adapter.get("component_commands", {}))
-    for name, (distribution, _old_python, module) in managed_commands(adapter).items():
-        if distribution not in components:
-            raise ValueError(f"candidate runtime omits bound component: {distribution}")
-        commands[name] = [str(python), "-I", "-X", "utf8", "-m", module]
-    return commands
+from mindie_knowledge.component_bindings import (
+    managed_commands,
+    required_components,
+)
 
 
 def prepare(source, python, data, *, current_python=None, force=False, current_source=None,
@@ -86,7 +37,7 @@ def prepare(source, python, data, *, current_python=None, force=False, current_s
     required = required_components(adapter) if adapter else {}
     selection = discover(current_python or python, baseline["runtime"], force=force,
                          required_components=required)
-    needs_binding = any(str(bound_python) != str(current_python or python)
+    needs_binding = any(str(bound_python) != str(python)
                         for _name, bound_python, _module in managed_commands(adapter or {}).values())
     if not selection["changed"] and current_source == baseline["source_sha256"] and not needs_binding:
         return None
@@ -134,9 +85,13 @@ def main():
     parser.add_argument("current_python")
     parser.add_argument("--config", type=Path)
     args = parser.parse_args()
+    adapter = read_json(args.config)[0] if args.config else None
+    if adapter is not None and not adapter.get("component_release") and not managed_commands(adapter):
+        print("null")
+        return
     print(json.dumps(prepare(args.source, args.python, args.data,
                              current_python=args.current_python,
-                             adapter=read_json(args.config)[0] if args.config else None),
+                             adapter=adapter),
                      sort_keys=True))
 
 

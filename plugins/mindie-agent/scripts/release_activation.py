@@ -12,7 +12,8 @@ Activates a newly validated plugin release (`activate`) by preparing the target 
 - Uses non-blocking `update_lock(config, exclusive=True, blocking=False)` for atomic handoff and `timeout=30.0s` for `idle-stop`. Preparation accepts a caller startup deadline; the attempt snapshot is bounded to 64 KiB stdin.
 
 [Side-Effect Policy]
-- Atomically replaces `engine.json` and `codex.json` via `os.replace()` and removes obsolete runtime directories after activation.
+- Publishes the prepared engine and atomically replaces the adapter binding via
+  `os.replace()`. Existing runtime directories remain available to loaded callers.
 """
 from __future__ import annotations
 
@@ -80,7 +81,7 @@ def prepare(config, release, *, blocking=True, expected_binding=None, deadline=N
             raise InstallationChanged("installation binding changed before activation")
         old_engine = config_at(old["engine_config"])
     if "component_updates" in receipt["validation"]:
-        from component_update import validate_command_floor
+        from mindie_knowledge.component_bindings import validate_command_floor
         validate_command_floor(old, receipt["validation"]["component_updates"]["runtime"])
     digest = hashlib.sha256(os.fsencode(str(config))).hexdigest()
     path = release / ("profile-" + digest + ".engine.json")
@@ -91,7 +92,7 @@ def prepare(config, release, *, blocking=True, expected_binding=None, deadline=N
     adapter = dict(old, python=sys.executable, runtime_scripts=str(scripts),
                    engine_config=str(path), product_validation=receipt["validation"])
     if "component_commands" in old and "component_updates" in receipt["validation"]:
-        from component_update import rebind_commands
+        from mindie_knowledge.component_bindings import rebind_commands
         adapter["component_commands"] = rebind_commands(
             old, sys.executable, receipt["validation"].get("component_updates", {}).get("runtime", {}))
     adapter["component_release"] = (str(release) if "component_updates" in receipt["validation"] else None)
@@ -137,7 +138,7 @@ def binding_matches_release(config, release, receipt, *, scripts=None):
             and Path(expected_engine).is_file())
     if not matches or "component_updates" not in validation:
         return matches
-    from component_update import managed_commands, rebind_commands
+    from mindie_knowledge.component_bindings import managed_commands, rebind_commands
     components = validation["component_updates"]["runtime"]
     if any(name not in components for name, _python, _module in managed_commands(adapter).values()):
         return False
