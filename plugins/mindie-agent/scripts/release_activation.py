@@ -6,10 +6,10 @@ Activates a newly validated plugin release (`activate`) by preparing the target 
 [Invariants]
 - Never overwrites an active installation if `update_lock` is busy (`status="deferred_busy"`) or if the knowledge service is actively serving a task.
 - The activation child receives an immutable bounded stdin attempt snapshot; it refuses to prepare against a newer canonical binding and never rereads the replaceable pending receipt. The persisted copy is only parent recovery evidence; `activate` remains an idempotent canonical readback.
-- Restores the previous `engine.json` if `codex.json` publication fails (`_publish_pair`).
+- Prepared engine files stay immutable; failed binding publication restores retired domain owners within the control budget.
 
 [Timeouts & Locks]
-- Uses non-blocking `update_lock(config, exclusive=True, blocking=False)` for atomic handoff and `timeout=30.0s` for `idle-stop`. Preparation accepts a caller startup deadline; the attempt snapshot is bounded to 64 KiB stdin.
+- Uses non-blocking `update_lock(config, exclusive=True, blocking=False)` for atomic handoff and `timeout=30.0s` for `idle-stop`. Legacy runtime metadata shares 15s. Preparation accepts a caller startup deadline; the attempt snapshot is bounded to 64 KiB stdin.
 
 [Side-Effect Policy]
 - Publishes the prepared engine and atomically replaces the adapter binding via
@@ -52,6 +52,22 @@ def _atomic(path, value):
         Path(temporary).unlink(missing_ok=True)
 
 
+def _validate_legacy_runtime_floor(adapter):
+    """An old parent snapshots after building; recheck its actual runtime floor."""
+    from mindie_knowledge.component_runtime import read_inventory, read_versions
+    from semantic_version import Version
+
+    deadline = time.monotonic() + 15
+    installed = read_inventory(adapter["python"], timeout=15)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("legacy runtime metadata budget exhausted")
+    candidate = read_versions(sys.executable, list(installed), timeout=remaining)
+    for name, component in installed.items():
+        if Version(candidate[name]) < Version(component["version"]):
+            raise ValueError(f"candidate runtime is below the current installed component: {name}")
+
+
 def prepare(config, release, *, blocking=True, expected_binding=None, deadline=None):
     """No running service or canonical configuration is changed here.
 
@@ -74,12 +90,17 @@ def prepare(config, release, *, blocking=True, expected_binding=None, deadline=N
     if receipt["python"] != sys.executable:
         raise ValueError("candidate preparation must run in its exact installed runtime")
     scripts = Path(__file__).resolve().parent
+    legacy = expected_binding is not None and "component_commands" not in expected_binding
     with update_lock(config, blocking=blocking):
         old = read_json(config)[0]
         current_binding = runtime_binding(old)
-        if expected_binding is not None and current_binding != expected_binding:
+        comparison = ({key: value for key, value in current_binding.items()
+                       if key != "component_commands"} if legacy else current_binding)
+        if expected_binding is not None and comparison != expected_binding:
             raise InstallationChanged("installation binding changed before activation")
         old_engine = config_at(old["engine_config"])
+    if legacy:
+        _validate_legacy_runtime_floor(old)
     if "component_updates" in receipt["validation"]:
         from mindie_knowledge.component_bindings import validate_command_floor
         validate_command_floor(old, receipt["validation"]["component_updates"]["runtime"])

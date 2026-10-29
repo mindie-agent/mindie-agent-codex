@@ -471,7 +471,7 @@ class UpdateTests(unittest.TestCase):
                 update._prepare_and_activate(self.config, pending, self.env, self.state)
         run.assert_called_once()
         expected_binding = dict(python=None, runtime_scripts=None, engine_config=None,
-                                product_validation=None)
+                                product_validation=None, component_commands={})
         self.assertEqual(caught.exception.native_effect["activation"], dict(
             status="active", process=dict(execution="completed", returncode=0, cleanup_failed=False),
             expected_binding=expected_binding))
