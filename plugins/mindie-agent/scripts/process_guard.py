@@ -364,7 +364,11 @@ def run_codex(command, prompt, *, timeout: float | None = 120.0, receipt=None, d
                     else:
                         raise
                 # A POSIX inherited group's descendants are closed by the outer
-                # core. Windows Job cleanup above closes every owned pipe holder.
+                # core. Owned POSIX groups and Windows Jobs have already killed
+                # every pipe holder, so join reader threads before closing pipes.
+                if not inherited:
+                    for thread in threads:
+                        thread.join(timeout=2.0)
                 if not threads[0].is_alive():
                     process.stdout.close()
                 if not threads[1].is_alive():
