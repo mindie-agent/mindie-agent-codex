@@ -51,7 +51,7 @@ def test_spool_finalization_timeout_preserves_real_completed_process(tmp_path, m
         timeout=5, allowed_returncodes=None,
     )
     assert result.execution == "completed" and result.returncode == 0
-    assert result.stdout == "completed\n"
+    assert result.stdout == f"completed{os.linesep}"
     assert result.cleanup == [{"stage": "finalize_capture", "error_type": "TimeoutError"}]
     assert result.capture["spool_error"] == ["TimeoutError"]
     assert "path" not in result.capture["stdout"]
