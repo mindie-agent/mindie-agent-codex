@@ -164,9 +164,22 @@ def _baseline_runtime(source, data):
             raise FileNotFoundError("uv is required to prepare MindIE's locked runtime")
         env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
         env.update(UV_PROJECT_ENVIRONMENT=str(runtime), UV_NO_PROGRESS="1",
-                   GIT_TERMINAL_PROMPT="0")
-        if "UV_SYSTEM_CERTS" not in env:
+                   GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never")
+        if "UV_SYSTEM_CERTS" not in env and "UV_NATIVE_TLS" not in env:
+            env["UV_SYSTEM_CERTS"] = "true"
+            env["UV_NATIVE_TLS"] = "true"
+        elif "UV_SYSTEM_CERTS" not in env:
             env.setdefault("UV_NATIVE_TLS", "true")
+        if "GIT_CONFIG_COUNT" not in env:
+            git_pairs = (
+                ("core.longpaths", "true"),
+                ("core.autocrlf", "false"),
+                ("credential.https://github.com.provider", "github"),
+            )
+            env["GIT_CONFIG_COUNT"] = str(len(git_pairs))
+            for idx, (k, v) in enumerate(git_pairs):
+                env[f"GIT_CONFIG_KEY_{idx}"] = k
+                env[f"GIT_CONFIG_VALUE_{idx}"] = v
         # uv locks its target environment. An interrupted, unpublished build
         # can be synced again; a completed runtime above is never repaired.
         with preparing("locked-sync"):
