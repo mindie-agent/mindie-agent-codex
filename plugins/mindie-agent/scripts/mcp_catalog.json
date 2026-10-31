@@ -1023,6 +1023,11 @@
           "login": {
             "type": "boolean",
             "description": "Run the selected shell with login semantics (-l); native Codex default is true."
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "Explicitly confirm execution of a dangerous host/device command (npu-smi reset, reboot, shutdown) after obtaining human approval."
           }
         },
         "required": [],
@@ -1616,6 +1621,11 @@
             ],
             "description": "Log stream for action='tail'. Defaults to both."
           },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "Explicitly confirm dangerous stdin commands when action='send_input'."
+          },
           "session_id": {
             "type": "string",
             "description": "Alias of job_id returned by remote.bash."
@@ -1986,6 +1996,11 @@
           "max_output_tokens": {
             "type": "integer",
             "description": "Cap the new output returned by this call, counted as four UTF-8 bytes/token across text and structured previews, shared by stdout/stderr; metadata separate. Skipped bytes are not lost: the read cursor only advances past what was returned."
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "Explicitly confirm execution of a dangerous host/device command written to stdin after obtaining human approval."
           },
           "session_id": {
             "type": "string",
