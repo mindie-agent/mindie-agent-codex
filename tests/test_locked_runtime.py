@@ -484,6 +484,9 @@ class RuntimeTests(unittest.TestCase):
                 runtime = data / "runtimes" / (key[:24] if os.name == "nt" else key)
                 self.assertEqual(kwargs["env"]["UV_PROJECT_ENVIRONMENT"], str(runtime))
                 self.assertEqual(kwargs["env"]["UV_NATIVE_TLS"], "true")
+                self.assertEqual(kwargs["env"]["GIT_CONFIG_COUNT"], "3")
+                self.assertEqual(kwargs["env"]["GIT_CONFIG_KEY_0"], "core.longpaths")
+                self.assertEqual(kwargs["env"]["GIT_CONFIG_VALUE_0"], "true")
                 log = Path(command[prefix_end - 1])
                 self.assertTrue(path_is_within(log, data))
                 # Exercise the actual descriptor redirection and owned runner;
