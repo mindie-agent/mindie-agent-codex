@@ -1,47 +1,36 @@
 # mindie-agent-codex 0.1.14
 
-Codex Desktop `0.166.0-alpha.5.1` was excluded by the exact-version
-compatibility registry, so automatic updates reported `no_compatible_release`.
-Model-free native acceptance on Windows confirms that the consumed plugin,
-hook and MCP interfaces still work. This release adds that exact Desktop
-version and stable CLI `0.166.0`; other unverified versions remain excluded.
+This maintenance release aligns the native component bridge, post-verification
+convergence, and distillation output-schema handling with `mindie-knowledge`
+`0.13.8` and `remote-dev` `0.11.2`, and extends native Codex host compatibility
+to cover `0.166.0-alpha.5.1`.
 
-## Windows installation and update fixes
+| Component | Version | Source commit |
+| --- | --- | --- |
+| knowledge | 0.13.8 | `9a4325858e6fadb10715275826a7795843cbbdf4` |
+| remote-dev | 0.11.2 | `85be999811771e03ecc7d78e5e560fac1636e7ef` |
+| diagnostics | 0.5.4 | `5ae643e19223f2181ecdbaa3edaf464137c4805e` |
 
-- Start newly prepared interpreters through the Windows extended path
-  namespace. Python retains that spelling in `sys.prefix`, allowing dependency
-  resources beyond `MAX_PATH` to load. This fixes the reproduced
-  `jsonschema_specifications` resource import failure during candidate
-  validation. Component candidates use the same spelling for interpreter,
-  retained source and release paths, including generated domain profiles.
-- Preserve already published runtime receipts and their original interpreter
-  spelling when reusing an existing environment.
-- Resolve the running Desktop executable from `CODEX_APP_RUNTIME_CLI_PATH`
-  for installed operations while retaining the selected `CODEX_HOME`. Desktop
-  replaces versioned binary directories during updates; a retired path in
-  the installation context must not keep blocking future update checks.
+## Native host compatibility
 
-The release also includes the bounded component-output capture and owned
-process cleanup fixes already merged since 0.1.13.
+The compatibility declaration adds the exact installed Desktop CLI version
+`0.166.0-alpha.5.1`. Earlier declarations only covered up to
+`0.165.0-alpha.1.2`, causing the normal background selector to report
+`no_compatible_release` after Desktop CLI auto-upgrade.
 
-## Validation
+Release preparation validates the actual executable in an isolated native
+profile, without model requests: plugin installation, five hooks, trust
+compare-and-swap, explicit disable preservation, locked runtime setup,
+SessionStart and MCP discovery. Existing contract tests cover the remaining
+registered protocol boundaries.
 
-The real Windows Desktop binary passes isolated native marketplace installation
-and readback, all five hooks, trust compare-and-swap, explicit disable
-preservation, locked runtime preparation, SessionStart and discovery of 23
-remote tools plus five component tools. No knowledge tools enter the public
-catalog. The native test uses a long plugin-data path and reproduced the
-dependency-resource failure before the fix.
+## Key fixes and improvements
 
-CI retains the three-platform adapter contracts and the two earlier stable
-native hosts, adds native CLI `0.166.0` on Ubuntu, and adds Windows native
-acceptance for `0.166.0`. Tests isolate host profiles and MindIE state. Local
-Windows network acceptance reuses the operator's existing Git transport
-configuration; production TLS verification is unchanged.
-
-These checks make no model requests and do not claim paid model-turn or NPU
-acceptance. Exact component pins remain knowledge `0.13.6`, remote-dev
-`0.11.1` and diagnostics `0.5.4`; automatic updates preserve installed component
-version floors. The tag workflow verifies formal dependency releases and
-publishes the wheel, source archive, compatibility metadata, benchmark reports
-and checksums from the exact tagged commit.
+- Align component bridge and post-verification convergence, and split `mcp_gate`
+  into `<800` line modules (`mcp_gate.py` + `mcp_identity.py`).
+- Omit strict `--output-schema` when C6 distillation schemas contain `anyOf`
+  and strip markdown code fences from structured output.
+- Join reader threads after terminating owned process trees in `process_guard`.
+- Update `product-contract.json` `verified_commit` to
+  `1c7bcad61f1156389dcf714468acd74c34754268` (`knowledge-vllm-ascend`) paired
+  with `mindie-knowledge 0.13.8` (`9a4325858e6fadb10715275826a7795843cbbdf4`).

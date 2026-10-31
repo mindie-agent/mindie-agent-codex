@@ -16,7 +16,7 @@ In CI, `plugins/mindie-agent/scripts/release_metadata.py` verifies that every re
 
 ### Codex 0.166 acceptance
 
-Release 0.1.14 adds the exact versions `0.166.0` and
+Release 0.1.15 adds the exact versions `0.166.0` and
 `0.166.0-alpha.5.1`. On 2026-10-31 the actual Windows Desktop executable passed
 the isolated `tests/test_native_harness_acceptance.py` checks: native plugin
 installation, five hooks, trust/config CAS, explicit disable preservation,

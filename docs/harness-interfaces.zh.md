@@ -2,7 +2,7 @@
 
 <b>中文</b> | <a href="harness-interfaces.md">English</a> · <a href="README.md">返回文档索引</a>
 
-[`plugins/mindie-agent/harness-compatibility.json`](../plugins/mindie-agent/harness-compatibility.json) 是插件所使用的 Codex 宿主接口的机器可读注册表。`0.1.14` 新增精确版本 `0.166.0` 和 `0.166.0-alpha.5.1`，此前声明继续保留；完整范围以该注册表为准。最初 `v0.0.2` 的两项验收基线为：
+[`plugins/mindie-agent/harness-compatibility.json`](../plugins/mindie-agent/harness-compatibility.json) 是插件所使用的 Codex 宿主接口的机器可读注册表。`0.1.15` 新增精确版本 `0.166.0` 和 `0.166.0-alpha.5.1`，此前声明继续保留；完整范围以该注册表为准。最初 `v0.0.2` 的两项验收基线为：
 - **`0.153.4`**（对应官方上游源码提交 `3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`）
 - **`0.162.0-alpha.17.2`**（对应官方上游源码提交 `740e5af33c71225640e0c1c1555c514c2c93ab74`）
 
