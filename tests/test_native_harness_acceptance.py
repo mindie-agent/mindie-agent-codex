@@ -111,3 +111,9 @@ def test_native_locked_runtime_and_mcp_discovery(monkeypatch, tmp_path):
         assert not any("knowledge_" in name for r in rows for name in r["tools"])
         print("native MCP discovery:", len(remote["tools"]), "remote tools,",
               len(components["tools"]), "component tools; thread", thread)
+    upgraded = invoke([
+        runtime["python"], "-I", str(ROOT / "tests/fixtures/native_component_upgrade.py"),
+        env["MINDIE_AGENT_CONFIG"], str(source), sys.executable,
+    ], env=env, timeout=900)
+    assert upgraded == dict(status="active", component_rebound=True)
+    print("native component generation: built, validated and rebound")

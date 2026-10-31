@@ -30,6 +30,12 @@ remote tools plus five component tools. No knowledge tools enter the public
 catalog. The native test uses a long plugin-data path and reproduced the
 dependency-resource failure before the fix.
 
+Native acceptance also builds and activates a real component generation,
+rebinds an external diagnostics command, and checks the generated domain
+profiles. Selection uses the actual pinned baseline inventory to keep this
+regression deterministic. uv keeps logical file-URI paths; the resulting
+Python interpreter and profile writes use the extended Windows namespace.
+
 CI retains the three-platform adapter contracts and the two earlier stable
 native hosts, adds native CLI `0.166.0` on Ubuntu, and adds Windows native
 acceptance for `0.166.0`. Tests isolate host profiles and MindIE state. Local

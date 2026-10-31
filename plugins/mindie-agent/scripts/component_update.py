@@ -32,6 +32,8 @@ def prepare(source, python, data, *, current_python=None, force=False, current_s
     from bootstrap import native_path, publish_entry, readback
     from release_activation import _atomic
 
+    # uv derives file URIs from these logical paths. Extend the completed
+    # artifact paths below, where Python imports and profile I/O need them.
     source, data = Path(source), Path(data)
     baseline = identity(source)
     required = required_components(adapter) if adapter else {}
