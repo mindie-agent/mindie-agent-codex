@@ -80,8 +80,6 @@ MindIE Agent combines **manual on-demand activation for domain knowledge & skill
 
 ## Quick Start
 
-### Option 1: Quick Install via Prompt
-
 Copy and paste the prompt below directly to your Codex CLI (or any terminal-capable AI Agent) and let it install and verify the plugin for you:
 
 ```text
@@ -139,19 +137,6 @@ If you are an AI Agent asked by the user to install this plugin, execute the fol
 
 </details>
 
-### Option 2: One-Line Terminal Install (Manual)
-
-To install manually from a macOS / Linux / WSL shell or native Windows PowerShell:
-
-```sh
-gh api --hostname github.com user --jq .login && gh auth setup-git --hostname github.com && \
-codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.1.13 && \
-codex plugin add mindie-agent@mindie-agent --json && \
-codex plugin list --json
-```
-
-After the commands, enter **`/mindie-agent help me finish first-time setup`** in a new session and complete [Workspace Setup](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md) as part of installation. The agent reuses GitHub authentication, offers workspace creation/reuse and adds the approved path to the current client. Keeping the current directory also completes the offer.
-
 #### Environment Notes
 - **Prerequisites (Hard Requirements)**: `git`, `uv`, an authenticated **`gh` (GitHub CLI)**, and an authenticated `codex` CLI with native plugin support.
 - **Native Windows**: Git for Windows supplies the SSH client used by `mindie-remote-dev`.
@@ -171,7 +156,7 @@ MindIE Agent routes interactive commands through **a single unified entrypoint: 
 
 ### Silent Updates, Uninstall & Known Limitations
 
-- **Silent Compatible Updates**: A background maintenance thread checks asynchronously for both the highest compatible plugin Release and formal GitHub Releases of shared runtime components from their official repositories (see [`docs/releases/mindie-agent-codex-0.1.11.en.md`](docs/releases/mindie-agent-codex-0.1.11.en.md)), builds a side-by-side locked `uv` runtime outside the operation lock, runs a model-free API probe, and retires the idle service before atomically publishing the binding (never starting a knowledge worker during updates and preserving your saved unified contribution setting and per-session manual `/mindie-agent` gate).
+- **Silent Compatible Updates**: A background maintenance thread checks asynchronously for both the highest compatible plugin Release and formal GitHub Releases of shared runtime components from their official repositories (see [`docs/releases/mindie-agent-codex-0.1.13.md`](docs/releases/mindie-agent-codex-0.1.13.md)), builds a side-by-side locked `uv` runtime outside the operation lock, runs a model-free API probe, and retires the idle service before atomically publishing the binding (never starting a knowledge worker during updates and preserving your saved unified contribution setting and per-session manual `/mindie-agent` gate).
 - **Safe Uninstall**: Close active sessions using the plugin and remove it via native Codex CLI:
   ```sh
   codex plugin remove mindie-agent@mindie-agent --json

@@ -80,8 +80,6 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 
 ## 快速开始
 
-### 方式一：通过提示词交由 Agent 自动安装（Quick Install via Prompt）
-
 直接复制下面这句话发送给你的 Codex CLI（或其他支持终端执行的 AI Agent），由其自动完成环境检查与插件安装：
 
 ```text
@@ -139,19 +137,6 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 
 </details>
 
-### 方式二：终端手动一行安装（One-Line Terminal Install）
-
-如果你习惯在终端手动执行（macOS / Linux / WSL 终端或原生 Windows PowerShell），可直接运行：
-
-```sh
-gh api --hostname github.com user --jq .login && gh auth setup-git --hostname github.com && \
-codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.1.13 && \
-codex plugin add mindie-agent@mindie-agent --json && \
-codex plugin list --json
-```
-
-安装命令完成后，在新会话输入 **`/mindie-agent 帮我完成首次配置`**，按 [工作区配置指南](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md) 完成本次安装引导。Agent 会复用 GitHub 登录，提供工作区创建/复用选择，并在同意后登记到当前客户端；选择当前目录也可完成引导。
-
 #### 环境要求说明
 - **基础依赖与硬性指标**：`git`、`uv`、已登录认证的 **`gh`（GitHub CLI）**，以及已登录且支持原生插件的 `codex` CLI。
 - **原生 Windows**：由 Git for Windows 提供远端开发所需的 SSH 客户端。
@@ -171,7 +156,7 @@ MindIE Agent 将交互能力收敛在 **`/mindie-agent`（或 `$mindie-agent`）
 
 ### 静默更新、安全卸载与已知限制
 
-- **后台静默更新**：后台维护线程按冷却周期异步检查兼容当前 Codex 版本的最高正式插件 Release 以及各官方共享组件仓库的正式 GitHub Release（参见 [`docs/releases/mindie-agent-codex-0.1.11.md`](docs/releases/mindie-agent-codex-0.1.11.md)），在操作锁外构建旁路锁定 `uv` 运行时并通过无模型探针校验，待后台服务空闲时退役旧服务并冷态原子切换绑定（不主动启动知识服务，完整保留已保存的统一贡献开关设置与会话手动 `/mindie-agent` 授权边界）。
+- **后台静默更新**：后台维护线程按冷却周期异步检查兼容当前 Codex 版本的最高正式插件 Release 以及各官方共享组件仓库的正式 GitHub Release（参见 [`docs/releases/mindie-agent-codex-0.1.13.md`](docs/releases/mindie-agent-codex-0.1.13.md)），在操作锁外构建旁路锁定 `uv` 运行时并通过无模型探针校验，待后台服务空闲时退役旧服务并冷态原子切换绑定（不主动启动知识服务，完整保留已保存的统一贡献开关设置与会话手动 `/mindie-agent` 授权边界）。
 - **安全卸载**：关闭正在使用插件的会话后，通过 Codex 原生命令卸载：
   ```sh
   codex plugin remove mindie-agent@mindie-agent --json
