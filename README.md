@@ -41,14 +41,13 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 | :--- | :--- | :--- | :--- |
 | **经验、知识库与 Skill 系统**<br/>（`mindie-knowledge` + `mindie-agent` Skill） | **🎯 当前会话手动触发** | 开展昇腾 AI Infra 架构设计、`vLLM-Ascend` 特性开发、`AscendC` / `Triton` 算子实现、单测/精度测试构建、性能调优或问题定位时 | 在当前会话中显式输入一次 **`/mindie-agent`（或 `$mindie-agent`）+ 你的需求描述**，即可在本会话后续轮次持续启用知识检索、反馈、蒸馏与同步（输入 `/mindie-agent deactivate` 可在当前会话关闭） |
 | **远端昇腾 NPU 开发与测试**<br/>（`mindie-remote-dev` MCP 工具集 + 事实状态查询） | **⚡ 默认自动触发** | 日常需要将本地代码或测试同步到远端昇腾服务器/容器、在 NPU 上跑编译/测试、查看 `npu-smi` 或实时轮询长日志时 | **无需输入 `/mindie-agent`**，直接用自然语言描述远端操作即可 |
-| **Profiling、仿真、资源协调与本地诊断**<br/>（`mindie-tools` MCP 工具集） | **默认可发现** | 调用已安装的 profiler、sim、coordinator，或查看本地 diagnostics、导出诊断包 | 直接调用 `profiler`、`sim`、`coordinator`、`diagnostics_status`、`diagnostics_bundle`；不需启用知识 |
+| **Profiling、仿真、资源协调与本地诊断**<br/>（`mindie-tools` MCP 工具集） | **⚡ 默认自动触发** | 调用已安装的 `profiler`、`sim`、`coordinator`，或查看本地 `diagnostics` 状态与导出诊断包 | **无需输入 `/mindie-agent`**，直接调用 `profiler`、`sim`、`coordinator`、`diagnostics_status`、`diagnostics_bundle` |
 | **研发经验沉淀与社区共建**<br/>（`Stop` 后台采集 + Gitleaks 脱敏） | **🔄 已启用会话后台自动运行** | 希望将有价值的架构设计、算子开发、测试验证或调优经验脱敏沉淀回开源知识库时 | **授权一次配置，按会话生效**——首次配置开启社区贡献后，在已通过 `/mindie-agent`（或 `$mindie-agent`）启用知识系统的会话中，每次回合结束自动在后台完成本地脱敏与知识 PR 整理；未调用 `/mindie-agent` 的普通会话不触发后台采集 |
 
-默认 MCP 工具目录不含 knowledge 的名称、描述和参数。手动入口启用当前聊天后，Skill 通过私有 `knowledge_cli.py` 加载 schema 并调用相同知识引擎；另一个聊天的启用不会改变共享工具目录。`npu-top` 是面向人的监控看板，不暴露为 Agent 工具。
-
-`mindie-tools` 复用组件现有 CLI，不复制解析与计算逻辑。profiler、sim 和 coordinator 是独立安装的组件，默认查找 PATH 上的对应 `mindie-*` 可执行程序；缺少组件时调用明确失败，不自动安装。若使用独立虚拟环境，可在适配器配置中设置 `component_commands`，例如 `"profiler": ["/absolute/venv/bin/python", "-I", "-X", "utf8", "-m", "mindie_profiler"]`。本地 diagnostics 使用插件锁定的解释器。所有调用保留退出码和原始输出，大报告使用组件的 `--output` 参数写文件。
-
-自动更新覆盖受管运行时中已安装的全部官方组件，并接管 `component_commands` 中上述标准 Python 模块绑定：以当前安装版本为下限选择已验证正式 Release，构建候选后，在空闲切换时将标准命令与解释器一起更新。原独立环境不原地修改；自定义 wrapper 和仅通过 PATH 发现的命令仍由其安装者管理。候选缺少已绑定组件、版本较旧或构建期间绑定发生变化时，不覆盖当前配置。组件代码替换不删除用户知识、同意记录或在途任务；更新失败会明确报告。
+> **按需加载与组件自动更新说明**：
+> - **知识工具按会话隔离加载**：默认 MCP 工具目录不包含知识工具 schema（零额外上下文开销）。当你在当前会话输入 `/mindie-agent`（或 `$mindie-agent`）后，Skill 通过私有 `knowledge_cli.py` 加载 schema 并访问知识引擎，不会影响其他会话的共享工具目录（注：`npu-top` 是面向开发者的 Web 监控看板，不作为 Agent 工具暴露）。
+> - **`mindie-tools` 零拷贝桥接**：直接复用 `PATH`（或适配器配置 `component_commands` 中显式指定的独立虚拟环境解释器）下的 `mindie-profiler`、`mindie-sim`、`mindie-coordinator` 与内置 `diagnostics`，完整保留原始退出码与输出，大体积报告直接通过组件的 `--output` 落盘。
+> - **共享组件平滑自动更新**：后台维护机制会自动检查受管运行时中已安装的官方组件及 `component_commands` 标准模块绑定的最新正式版 Release，在旁路构建并通过校验后，趁空闲时将标准命令与解释器原子切换至新版本（保留你的本地知识库、授权设置与在途任务，也不会覆盖自定义 wrapper）。
 
 ### 场景 1：输入 `/mindie-agent`（或 `$mindie-agent`）唤醒知识库与 Skill 辅助设计、开发与测试（手动触发）
 > **痛点**：在昇腾上设计新特性、开发 `AscendC` / `Triton` 算子或编写 `vLLM-Ascend` 测试时，在海量文档和 Issue 里翻找架构规范、算子约束与适用条件非常耗时。  
@@ -73,7 +72,7 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 > /mindie-agent 帮我结合知识库和远端 NPU 容器完成当前 vllm-ascend 自定义算子的编译与精度对齐验证，并跑通对应的单测。
 > ```
 > **会发生什么**：社区贡献**默认关闭**。当你显式开启社区贡献后，保存的授权配置会跨会话持久生效；在任何通过 `/mindie-agent`（或 `$mindie-agent`）启用了知识系统的会话中，每次回合结束（`Stop`）时，插件都会在后台提取该会话自激活起的公开对话，使用确定性隐私规则与 Gitleaks `8.30.1` 在本地完成脱敏，生成分块导航摘要并提交知识 PR，无需重复确认授权或专门执行收尾命令（未调用 `/mindie-agent` 的普通会话在 `Stop` 阶段直接短路跳过，不读取对话或配置）。
-> - **统一贡献开关（适配器配置文件同目录的 `mindie-consent.json`）**：社区知识贡献与自动工具故障上报共用同一个持久化开关。显式开启（`contribute`）会配置知识共享并启动原生后台 reporter；关闭（`disabled`）会同时停止两条路径的后续外发，且已有的 `disabled` / `later` / `read-only` 状态在升级后保持关闭。有效的已保存选择直接复用，不重复询问；仅当入口对旧版仅知识 `contribute` 记录返回 `needs_choice` 时，才在 `/mindie-agent` 中处理一次明确选择，不分开询问知识和故障授权，也不逐次任务确认；旧 `disabled`、`read-only`、`later` 选择直接保留、不提示。系统严格区分**本地授权配置已写入**、**后台 reporter 进程运行中**与**外部 GitHub Issue/PR 已实际创建**三种状态。
+> - **统一贡献开关（适配器配置文件同目录的 `mindie-consent.json`）**：社区知识贡献与自动工具故障上报共用同一个持久化开关。显式开启（`contribute`）会配置知识共享并启动原生后台 reporter；关闭（`disabled`）会同时停止两条路径的后续外发。已保存的有效设置（包括 `disabled` / `read-only` / `later`）在升级后直接沿用、不重复弹窗；仅当检测到旧版仅知识 `contribute` 记录返回 `needs_choice` 时，才会在 `/mindie-agent` 中向你确认一次统一选择（不会分开询问知识与故障授权，也不会在每次任务中重复确认）。系统严格区分**本地授权配置已写入**、**后台 reporter 进程运行中**与**外部 GitHub Issue/PR 已实际创建**三种状态。
 > - 关于公开消息筛选范围、确定性脱敏边界与公开 Git 历史说明，请参阅 **[用户须知 / Contribution Notice](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md)**。
 > - 如需在本地搭建 `vllm` + `vllm-ascend` 多任务 Git Worktree 协同工作区，可按需参考 **[工作区配置指南](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md)** 与 [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace)。
 
@@ -130,9 +129,9 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
    验证成功后继续第 5 步，完成首次配置后一起汇报安装结果。
 
 5. **完成首次配置与开发工作区引导**：
-   - 在本次安装中介绍已有 [用户须知](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md)，随后执行 [工作区配置指南](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md)。即使未开启贡献，也要提供创建并初始化 `vllm-ascend-workspace`、复用已有目录或继续当前目录的选择；复用已经确认的选择。
-   - 用户同意创建或复用后，自动通过当前宿主的原生项目/工作区入口登记所选路径，核对实际结果。源码初始化使用工作区检出的 `repo_init.py`，复用本次已验证的 GitHub 认证和已有 Fork 配置。
-   - 安装结果同时报告插件、工作区路径、宿主登记与源码初始化状态；需要原生界面操作时明确剩余步骤。
+   - 向用户简要说明 [用户须知](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md)，随后按 [工作区配置指南](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md) 引导工作区选择：无论是否开启社区贡献，都提供**新建并初始化 `vllm-ascend-workspace`**、**复用已有工作区目录**或**保持当前目录**三种选择（已有确认记录时直接复用）。
+   - 若用户选择新建或复用工作区，自动通过当前宿主的原生项目/工作区入口完成路径登记并核对结果，调用工作区内的 `repo_init.py` 完成源码与远端分支初始化（直接复用前序已验证的 GitHub 登录与已有 Fork 配置）。
+   - 汇总汇报插件安装状态、工作区路径、宿主登记结果与源码初始化状态（如有需用户在宿主界面点击的尾步一并说明）。
    - **询问用户是否愿意给主仓点个 Star ⭐**：在汇报末尾主动询问用户：*“如果觉得 MindIE Agent 对你有帮助，需要我顺手帮你在 GitHub 上给主仓 `mindie-agent/mindie-agent` 点个 Star 吗？这能帮助项目更好地成长！⭐”* **严格授权原则**：仅当用户明确表示同意（如回复“好”、“可以”、“yes”等）时才执行以下命令点亮并校验主仓 Star，严禁未经用户同意自动静默执行：
      ```sh
      gh api --hostname github.com --silent -X PUT /user/starred/mindie-agent/mindie-agent && gh api --hostname github.com --silent /user/starred/mindie-agent/mindie-agent
