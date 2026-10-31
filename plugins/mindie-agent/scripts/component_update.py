@@ -29,7 +29,7 @@ from mindie_knowledge.component_bindings import (
 def prepare(source, python, data, *, current_python=None, force=False, current_source=None,
             adapter=None):
     from mindie_knowledge.component_runtime import build, discover
-    from bootstrap import publish_entry, readback
+    from bootstrap import native_path, publish_entry, readback
     from release_activation import _atomic
 
     source, data = Path(source), Path(data)
@@ -47,9 +47,9 @@ def prepare(source, python, data, *, current_python=None, force=False, current_s
     artifact = build(source, data / "component-runtimes", baseline, selection["runtime"],
                      python=python, adapter_distribution="mindie-agent-codex",
                      files=[str(path.relative_to(source)) for path in package_files(source)])
-    python, retained = Path(artifact["python"]), Path(artifact["source"])
+    python, retained = native_path(artifact["python"]), native_path(artifact["source"])
     scripts = readback(python, retained)
-    release = Path(artifact["generation"]) / "release"
+    release = native_path(artifact["generation"]) / "release"
     release.mkdir(exist_ok=True)
     receipt = release / "runtime.json"
     if not receipt.exists():

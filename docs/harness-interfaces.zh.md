@@ -2,7 +2,7 @@
 
 <b>中文</b> | <a href="harness-interfaces.md">English</a> · <a href="README.md">返回文档索引</a>
 
-[`plugins/mindie-agent/harness-compatibility.json`](../plugins/mindie-agent/harness-compatibility.json) 是 `mindie-agent-codex` 所使用的 OpenAI Codex CLI 宿主接口的机器可读注册表。当前 `v0.0.2` 发行版声明支持两个经实机验证的 Codex 版本：
+[`plugins/mindie-agent/harness-compatibility.json`](../plugins/mindie-agent/harness-compatibility.json) 是插件所使用的 Codex 宿主接口的机器可读注册表。`0.1.14` 新增精确版本 `0.166.0` 和 `0.166.0-alpha.5.1`，此前声明继续保留；完整范围以该注册表为准。最初 `v0.0.2` 的两项验收基线为：
 - **`0.153.4`**（对应官方上游源码提交 `3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`）
 - **`0.162.0-alpha.17.2`**（对应官方上游源码提交 `740e5af33c71225640e0c1c1555c514c2c93ab74`）
 
@@ -11,6 +11,12 @@
 ---
 
 ## Native management {#native-management}
+
+### Codex 0.166 原生验收
+
+2026-10-31，在隔离配置中使用 Windows Desktop 的实际二进制 `0.166.0-alpha.5.1`，通过原生插件安装、5 条 Hook、信任配置 CAS、保留显式禁用状态、锁定运行时构建、SessionStart，以及 23 个远端工具和 5 个组件工具的发现。此前的 `no_compatible_release` 来自精确版本声明缺失；上述已消费接口未发现宿主破坏性变更。
+
+原生验收同时复现了独立的 Windows 长路径错误：深层插件数据目录中的 Python 依赖资源无法读取。新运行时保留扩展路径前缀，使 `sys.prefix` 和生成的领域配置均可处理长路径，修复后原生验收通过。CI 增加 Ubuntu 与 Windows 的稳定版 `0.166.0` 原生验收。测试不调用模型，不将这些结果表述为付费模型轮次或 NPU 验收，也不扩大到未验证的未来宿主版本。
 
 上述两个 Codex 版本均在 `codex-rs/app-server-protocol/src/protocol/common.rs` 中声明了 `hooks/list`、`config/read` 与 `config/value/write` 接口，支持读取并通过乐观并发控制（CAS `expectedVersion`）更新 Hook 的启用状态与信任哈希（`hooks.state.<key>.trusted_hash`）。
 

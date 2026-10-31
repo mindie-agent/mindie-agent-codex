@@ -62,6 +62,14 @@ def runtime_key(source):
     return hashlib.sha256(f"{identity}:{abi}".encode()).hexdigest()
 
 
+def native_path(path):
+    """Bootstrap runs before the shared filesystem helpers are installed."""
+    path = os.path.abspath(path)
+    if os.name == "nt" and not path.startswith("\\\\?\\"):
+        path = "\\\\?\\" + ("UNC\\" + path[2:] if path.startswith("\\\\") else path)
+    return Path(path)
+
+
 def readback(python, source):
     code = """
 import importlib.metadata as m, importlib.util, json, pathlib, sys
@@ -134,16 +142,23 @@ def _baseline_runtime(source, data):
             existing = json.loads(receipt.read_text(encoding="utf-8"))
             bound_python = Path(existing["python"])
             if existing.get("key") != key or bound_python not in (
-                python, data / "runtimes" / key / executable
+                python, data / "runtimes" / key / executable,
+                native_path(python), native_path(data / "runtimes" / key / executable),
             ):
                 raise ValueError("immutable plugin version has different source or Python ABI")
             # An existing release remains bound to its published runtime path.
             python = bound_python
+            if str(python).startswith("\\\\?\\"):
+                release = native_path(release)
             with preparing("completed-runtime"):
                 scripts = readback(python, source)
                 validate_receipt(json.dumps(existing["validation"]), identity(scripts.parent))
                 publish_entry(python, scripts, release)
             return python, scripts, release
+        # The interpreter spelling also determines sys.prefix. Retain the
+        # extended namespace so importlib can read long dependency resources.
+        python, release = native_path(python), native_path(release)
+        receipt = release / "runtime.json"
         uv = shutil.which("uv")
         if uv is None:
             raise FileNotFoundError("uv is required to prepare MindIE's locked runtime")

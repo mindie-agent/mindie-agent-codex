@@ -14,6 +14,22 @@ from session_gate import runtime_env
 
 
 class NativeContextTests(unittest.TestCase):
+    def test_running_desktop_replaces_retired_binary_without_changing_profile(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            current = root / "current" / "codex.exe"
+            current.parent.mkdir()
+            current.touch()
+            saved = dict(CODEX_HOME=str(root / "selected-home"),
+                         MINDIE_CODEX_BIN=str(root / "retired" / "codex.exe"))
+            config = root / "adapter.json"
+            config.write_text(json.dumps(dict(native_context=saved)), encoding="utf-8")
+            with patch.dict(os.environ, CODEX_APP_RUNTIME_CLI_PATH=str(current)):
+                resolved = runtime_env(config)
+            self.assertEqual(resolved["MINDIE_CODEX_BIN"], str(current))
+            self.assertEqual(resolved["CODEX_HOME"], saved["CODEX_HOME"])
+            self.assertEqual(json.loads(config.read_text())["native_context"], saved)
+
     def test_service_context_binds_selected_paths_and_only_environment_names(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary).resolve()
