@@ -16,6 +16,9 @@ excluded.
   retained source and release paths, including generated domain profiles.
 - Preserve already published runtime receipts and their original interpreter
   spelling when reusing an existing environment.
+- Build the baseline adapter in a short owned temporary workspace. This avoids
+  the extra relative wheel paths created by setuptools exceeding Windows path
+  limits, while leaving the native plugin payload untouched for hook trust.
 - Resolve the running Desktop executable from `CODEX_APP_RUNTIME_CLI_PATH`
   for installed operations while retaining the selected `CODEX_HOME`. Desktop
   replaces versioned binary directories during updates; a retired path in

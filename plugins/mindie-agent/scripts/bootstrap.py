@@ -11,7 +11,7 @@ Bootstraps the plugin's isolated `uv` virtual environment under `PLUGIN_DATA/run
 - Acquires `exclusive_lock(release / "prepare.lock")` across bounded `uv sync` (`540.0s`), `readback` (`60.0s`), `probe`, and `runtime.json` publication.
 
 [Side-Effect Policy]
-- Writes only under `PLUGIN_DATA/runtimes/<key>` and `PLUGIN_DATA/releases/<version>`; atomic `os.replace()` publishes `runtime.json`.
+- Writes under `PLUGIN_DATA` and an owned temporary build workspace; atomic `os.replace()` publishes `runtime.json`.
 """
 from __future__ import annotations
 
@@ -184,11 +184,10 @@ def _baseline_runtime(source, data):
             # Build backends may write build/ and *.egg-info into the project.
             # Native hook trust hashes the installed plugin payload, so even a
             # noneditable build must operate outside that published payload.
-            project = release / "build"
-            if project.exists():
-                shutil.rmtree(project)
-            project.mkdir()
-            try:
+            # Build backends form additional relative wheel paths. A short
+            # owned workspace also keeps those paths within Windows limits.
+            with tempfile.TemporaryDirectory(prefix="mindie-build-") as directory:
+                project = Path(directory)
                 for path in package_files(source):
                     target = project / path.relative_to(source)
                     target.parent.mkdir(parents=True, exist_ok=True)
@@ -196,8 +195,6 @@ def _baseline_runtime(source, data):
                 run([sys.executable, "-I", "-B", "-c", redirect, log, uv, "sync",
                      "--project", str(project), "--locked", "--no-editable", "--no-dev",
                      "--python", sys.executable], "", timeout=budget(540, 255), env=env).checked_stdout()
-            finally:
-                shutil.rmtree(project)
             Path(log).unlink()
         with preparing("installed-readback"):
             scripts = readback(python, source)
