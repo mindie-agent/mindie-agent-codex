@@ -50,6 +50,18 @@ def decide(request, model):
         return noop_decision(request, gate)
 
     raw = model.invoke_distill(request)
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if stripped.startswith("```"):
+            lines = stripped.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            stripped = "\n".join(lines).strip()
+        start, end = stripped.find("{"), stripped.rfind("}")
+        if 0 <= start < end:
+            raw = stripped[start : end + 1]
     try:
         return parse_validate_result(raw, request)
     except (ValueError, KeyError, TypeError):

@@ -116,6 +116,13 @@ class NativeSummaryModel:
             env = summary_provider.environment(route, directory)
             schema_path = Path(directory) / "schema.json"
             schema_path.write_text(json.dumps(schema), encoding="utf-8")
+            strict_incompatible = (
+                isinstance(schema, dict)
+                and isinstance(schema.get("properties"), dict)
+                and isinstance(schema["properties"].get("units"), dict)
+                and isinstance(schema["properties"]["units"].get("items"), dict)
+                and "anyOf" in schema["properties"]["units"]["items"]
+            )
             command = [os.environ.get("MINDIE_CODEX_BIN", "codex"), "exec", "--model", route["model"],
                        "-c", f'model_reasoning_effort="{SUMMARY_EFFORT}"', "--ignore-rules",
                        "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-C", directory,
@@ -125,7 +132,8 @@ class NativeSummaryModel:
                        "-c", "suppress_unstable_features_warning=true",
                        "-c", "features.skill_search=false",
                        "-c", "features.unbounded_connection_retries=false", "-c", 'web_search="disabled"',
-                       "--output-schema", str(schema_path), "--json", "-"]
+                       *(() if strict_incompatible else ("--output-schema", str(schema_path))),
+                       "--json", "-"]
             if env is None:
                 command.insert(2, "--ignore-user-config")
             run_codex(command, prompt, timeout=native_timeout(120.0),
