@@ -39,13 +39,20 @@ def environment(adapter):
             or any(not isinstance(path, str) or not Path(path).is_absolute()
                    for path in value.values())):
         raise ValueError("invalid installation native context")
-    return dict(value)
+    result = dict(value)
+    running = os.environ.get("CODEX_APP_RUNTIME_CLI_PATH")
+    if running and Path(running).is_absolute() and Path(running).is_file():
+        # Desktop owns this path and replaces its versioned binary directory
+        # during updates. Keep the selected profile, but use its running host.
+        result["MINDIE_CODEX_BIN"] = running
+    return result
 
 
 def capture(*, home=None, binary=None):
     result = {"CODEX_HOME": str(Path(home or os.environ.get("CODEX_HOME")
                                     or Path.home() / ".codex").expanduser().absolute())}
-    binary = binary or os.environ.get("MINDIE_CODEX_BIN") or shutil.which("codex")
+    binary = (binary or os.environ.get("MINDIE_CODEX_BIN")
+              or os.environ.get("CODEX_APP_RUNTIME_CLI_PATH") or shutil.which("codex"))
     if binary:
         expanded = Path(binary).expanduser()
         if not expanded.is_absolute() and not os.path.dirname(os.fspath(binary)):

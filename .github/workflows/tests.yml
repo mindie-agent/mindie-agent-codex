@@ -80,8 +80,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        codex: ["0.162.1", "0.164.0"]
-    runs-on: ubuntu-latest
+        os: [ubuntu-latest]
+        codex: ["0.162.1", "0.164.0", "0.166.0"]
+        include:
+          - os: windows-latest
+            codex: "0.166.0"
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -96,10 +103,10 @@ jobs:
           python -m pip install uv
           echo "UV_PROJECT_ENVIRONMENT=$RUNNER_TEMP/mindie-native-runtime" >> "$GITHUB_ENV"
           echo "UV_CACHE_DIR=$RUNNER_TEMP/uv-cache" >> "$GITHUB_ENV"
-          echo "MINDIE_TEST_CODEX_BIN=$(command -v codex)" >> "$GITHUB_ENV"
+          python -c 'import os,pathlib,shutil; p=pathlib.Path(shutil.which("codex")).resolve(); native=next(p.parent.glob("node_modules/@openai/codex/vendor/*/bin/codex.exe"),p); open(os.environ["GITHUB_ENV"],"a").write("MINDIE_TEST_CODEX_BIN="+str(native)+"\n")'
       - name: Prepare locked component dependencies
         run: |
           uv sync --project plugins/mindie-agent --locked --no-editable
-          uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" pytest==9.1.1
+          uv run --project plugins/mindie-agent --no-sync python -c 'import subprocess,sys; subprocess.run(["uv","pip","install","--python",sys.executable,"pytest==9.1.1"],check=True)'
       - name: Native plugin, hook trust, SessionStart and MCP acceptance
-        run: '"$UV_PROJECT_ENVIRONMENT/bin/python" -m pytest -q -s tests/test_native_harness_acceptance.py'
+        run: uv run --project plugins/mindie-agent --no-sync python -m pytest -q -s --tb=short tests/test_native_harness_acceptance.py

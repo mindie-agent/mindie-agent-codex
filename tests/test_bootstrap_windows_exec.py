@@ -64,7 +64,8 @@ class BootstrapExecTests(unittest.TestCase):
 
             def installer(argv, payload, **options):
                 prefix = argv[:argv.index("-c") + 3]
-                assert Path(prefix[-1]).is_relative_to(root / "data")
+                from mindie_knowledge.filesystem import path_is_within
+                assert path_is_within(prefix[-1], root / "data")
                 return run([*prefix, sys.executable, "-c", code], payload,
                            cancel=cancel, **options)
 

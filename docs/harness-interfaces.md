@@ -14,6 +14,27 @@ In CI, `plugins/mindie-agent/scripts/release_metadata.py` verifies that every re
 
 ## Native management
 
+### Codex 0.166 acceptance
+
+Release 0.1.15 adds the exact versions `0.166.0` and
+`0.166.0-alpha.5.1`. On 2026-10-31 the actual Windows Desktop executable passed
+the isolated `tests/test_native_harness_acceptance.py` checks: native plugin
+installation, five hooks, trust/config CAS, explicit disable preservation,
+locked runtime setup, SessionStart and discovery of 23 remote tools and five
+component tools. The old `no_compatible_release` result reflected an absent
+declaration; no break was observed in these consumed host interfaces.
+
+The Windows run also exposed a separate Python resource-path failure in a
+deep plugin-data directory. New runtime interpreters retain Windows extended
+paths in `sys.prefix`; the same native acceptance now passes. Stable 0.166.0
+joins the Ubuntu native CI matrix and gains a Windows native job. Existing
+contract tests cover the remaining registered boundaries. This evidence does
+not claim paid model turns, NPU execution, or compatibility with future hosts.
+
+The public [hook](https://learn.chatgpt.com/docs/hooks) and
+[app-server](https://learn.chatgpt.com/docs/app-server) contracts describe the
+interfaces exercised by these checks.
+
 Both verified Codex revisions expose `hooks/list`, `config/read`, and `config/value/write` in `codex-rs/app-server-protocol/src/protocol/common.rs`, providing hook identity, content hash, enabled state, trust state (`hooks.state.<key>.trusted_hash`), and optimistic compare-and-swap (`expectedVersion`).
 
 ### How Native Marketplace & Hook Trust Updates Work

@@ -22,6 +22,7 @@ def isolate_host_environment(monkeypatch, tmp_path, request):
     home = host / "home"
     # Resolve the real home before redirecting HOME/USERPROFILE.
     real_home = Path(os.path.expanduser("~"))
+    monkeypatch.delenv("CODEX_APP_RUNTIME_CLI_PATH", raising=False)
     directories = {
         "HOME": home,
         "USERPROFILE": home,

@@ -748,12 +748,13 @@ class UpdateTests(unittest.TestCase):
                 patch.object(update, "harness_version", return_value="0.154.0"):
             with self.assertRaisesRegex(ValueError, "does not support"):
                 release_metadata.require_harness(SCRIPTS.parent)
-        for version in ("0.153.4", "0.162.1", "0.164.0", "0.166.0-alpha.5.1"):
+        for version in ("0.153.4", "0.162.1", "0.164.0", "0.166.0", "0.166.0-alpha.5.1"):
             with self.subTest(version=version), \
                     patch("native_context.capture", return_value=dict(MINDIE_CODEX_BIN="/native")), \
                     patch.object(update, "harness_version", return_value=version):
                 self.assertEqual(release_metadata.require_harness(SCRIPTS.parent), version)
-        for version in ("0.162.2", "0.164.1", "0.165.0", "0.164.0-alpha.12"):
+        for version in ("0.162.2", "0.164.1", "0.165.0", "0.164.0-alpha.12",
+                        "0.166.1", "0.166.0-alpha.6"):
             with self.subTest(version=version), \
                     patch("native_context.capture", return_value=dict(MINDIE_CODEX_BIN="/native")), \
                     patch.object(update, "harness_version", return_value=version):

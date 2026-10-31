@@ -19,6 +19,7 @@ import entry
 import native_entry
 import product_contract
 import summary_provider
+from mindie_knowledge.filesystem import path_is_within
 
 
 class RuntimeTests(unittest.TestCase):
@@ -484,7 +485,7 @@ class RuntimeTests(unittest.TestCase):
                 self.assertEqual(kwargs["env"]["UV_PROJECT_ENVIRONMENT"], str(runtime))
                 self.assertEqual(kwargs["env"]["UV_NATIVE_TLS"], "true")
                 log = Path(command[prefix_end - 1])
-                self.assertTrue(log.is_relative_to(data))
+                self.assertTrue(path_is_within(log, data))
                 # Exercise the actual descriptor redirection and owned runner;
                 # replace only uv's executable/args with a no-network process.
                 actual = [*command[:prefix_end], sys.executable, "-c",

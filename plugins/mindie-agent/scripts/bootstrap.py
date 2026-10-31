@@ -11,7 +11,7 @@ Bootstraps the plugin's isolated `uv` virtual environment under `PLUGIN_DATA/run
 - Acquires `exclusive_lock(release / "prepare.lock")` across bounded `uv sync` (`540.0s`), `readback` (`60.0s`), `probe`, and `runtime.json` publication.
 
 [Side-Effect Policy]
-- Writes only under `PLUGIN_DATA/runtimes/<key>` and `PLUGIN_DATA/releases/<version>`; atomic `os.replace()` publishes `runtime.json`.
+- Writes under `PLUGIN_DATA` and an owned temporary build workspace; atomic `os.replace()` publishes `runtime.json`.
 """
 from __future__ import annotations
 
@@ -60,6 +60,14 @@ def runtime_key(source):
     identity = source_identity(source)
     abi = f"{sys.implementation.cache_tag}:{sysconfig.get_platform()}"
     return hashlib.sha256(f"{identity}:{abi}".encode()).hexdigest()
+
+
+def native_path(path):
+    """Bootstrap runs before the shared filesystem helpers are installed."""
+    path = os.path.abspath(path)
+    if os.name == "nt" and not path.startswith("\\\\?\\"):
+        path = "\\\\?\\" + ("UNC\\" + path[2:] if path.startswith("\\\\") else path)
+    return Path(path)
 
 
 def readback(python, source):
@@ -134,16 +142,23 @@ def _baseline_runtime(source, data):
             existing = json.loads(receipt.read_text(encoding="utf-8"))
             bound_python = Path(existing["python"])
             if existing.get("key") != key or bound_python not in (
-                python, data / "runtimes" / key / executable
+                python, data / "runtimes" / key / executable,
+                native_path(python), native_path(data / "runtimes" / key / executable),
             ):
                 raise ValueError("immutable plugin version has different source or Python ABI")
             # An existing release remains bound to its published runtime path.
             python = bound_python
+            if str(python).startswith("\\\\?\\"):
+                release = native_path(release)
             with preparing("completed-runtime"):
                 scripts = readback(python, source)
                 validate_receipt(json.dumps(existing["validation"]), identity(scripts.parent))
                 publish_entry(python, scripts, release)
             return python, scripts, release
+        # The interpreter spelling also determines sys.prefix. Retain the
+        # extended namespace so importlib can read long dependency resources.
+        python, release = native_path(python), native_path(release)
+        receipt = release / "runtime.json"
         uv = shutil.which("uv")
         if uv is None:
             raise FileNotFoundError("uv is required to prepare MindIE's locked runtime")
@@ -169,11 +184,10 @@ def _baseline_runtime(source, data):
             # Build backends may write build/ and *.egg-info into the project.
             # Native hook trust hashes the installed plugin payload, so even a
             # noneditable build must operate outside that published payload.
-            project = release / "build"
-            if project.exists():
-                shutil.rmtree(project)
-            project.mkdir()
-            try:
+            # Build backends form additional relative wheel paths. A short
+            # owned workspace also keeps those paths within Windows limits.
+            with tempfile.TemporaryDirectory(prefix="mindie-build-") as directory:
+                project = Path(directory)
                 for path in package_files(source):
                     target = project / path.relative_to(source)
                     target.parent.mkdir(parents=True, exist_ok=True)
@@ -181,8 +195,6 @@ def _baseline_runtime(source, data):
                 run([sys.executable, "-I", "-B", "-c", redirect, log, uv, "sync",
                      "--project", str(project), "--locked", "--no-editable", "--no-dev",
                      "--python", sys.executable], "", timeout=budget(540, 255), env=env).checked_stdout()
-            finally:
-                shutil.rmtree(project)
             Path(log).unlink()
         with preparing("installed-readback"):
             scripts = readback(python, source)
