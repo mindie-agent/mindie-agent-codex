@@ -1,6 +1,6 @@
 {
   "name": "mindie-agent",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "Domain knowledge and experience feedback for Ascend development",
   "author": {
     "name": "MindIE Agent contributors"

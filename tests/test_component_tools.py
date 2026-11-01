@@ -108,6 +108,39 @@ def test_profiler_inventory_reads_the_real_capture_without_knowledge(component_g
     assert "unknown command 'invalid-component-operation'" in invalid["structuredContent"]["stderr"]
 
 
+def test_sim_v090_compose_and_frontier_cli(sim_gate, tmp_path):
+    import component_tools
+
+    sim_tool = next(item for item in component_tools.catalog() if item["name"] == "sim")
+    description = sim_tool["description"]
+    for token in ("compose", "--model", "--hardware", "--concurrency", "--async-scheduling", "efficiency", "sla", "sweep"):
+        assert token in description
+    composed_path = tmp_path / "composed.json"
+    composed = call(sim_gate, "sim", {"argv": [
+        "compose", "--model", "qwen3.5-27b", "--hardware", "a3",
+        "--tp", "8", "--concurrency", "32", "--async-scheduling",
+        "--layers", "1", "--output", str(composed_path),
+    ]})
+    assert not composed["isError"], composed
+    assert json.loads(composed_path.read_text())["runtime"]["async_scheduling"] is True
+    eff = call(sim_gate, "sim", {"argv": [
+        "efficiency", str(composed_path), "--phase", "decode",
+        "--tokens", "1", "--context", "4096", "--sequences", "1", "--skip-graph",
+    ]})
+    assert not eff["isError"], eff
+    assert eff["structuredContent"]["result"]["schema"] == "mindie-sim.efficiency/1"
+    sla = call(sim_gate, "sim", {"argv": [
+        "sla", str(composed_path), "--sla-ms", "30", "--context", "4096",
+    ]})
+    assert not sla["isError"], sla
+    assert sla["structuredContent"]["result"]["sla_ms"] == 30.0
+    pd = call(sim_gate, "sim", {"argv": [
+        "sweep", str(composed_path), "--mode", "pd", "--num-devices", "16",
+    ]})
+    assert not pd["isError"], pd
+    assert "pareto_frontier" in pd["structuredContent"]["result"]
+
+
 def test_sim_installed_cli_keeps_operator_graph_and_serving_boundaries(sim_gate, sim_case, tmp_path):
     operators = call(sim_gate, "sim", {"argv": [
         "operators", str(sim_case), "--phase", "prefill", "--tokens", "4", "--scope", "model",

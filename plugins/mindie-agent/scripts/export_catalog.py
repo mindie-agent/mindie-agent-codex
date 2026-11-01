@@ -91,16 +91,14 @@ KNOWLEDGE_TOOLS = [
     dict(
         name="knowledge_query",
         description=(
-            "Search for a missing contract, mechanism or method that could change the next action. "
-            "Skip retrieval when the code and current evidence already support a fix and verification; "
-            "probe missing environment facts first. Search graded rules and task material in the selected domain. Returns bounded navigation cards "
-            "and deduplicated foundation_cards for progressive loading; each match identifies its source, "
-            "has a readable ref, and returns feedback_ref for the exact observed revision. "
-            "Pass known task conditions to filter graded rules; unknown conditions are excluded by default. "
-            "Archived or superseded units are omitted unless include_archived is true. "
-            "For related task blocks, pass related_next as continuation without query. "
-            "A changed corpus rejects the continuation. Pass navigation_only to omit inline bodies. "
-            "Reference material does not establish applicability."
+            "Search graded rules and task material in the selected domain when a missing "
+            "contract, mechanism, or method is needed for the next step. Returns bounded "
+            "navigation cards and deduplicated foundation_cards; each match includes a "
+            "readable ref and feedback_ref for its observed revision. Pass observed task "
+            "conditions to filter graded rules (unknown conditions are excluded unless "
+            "include_unknown is true; archived or superseded units are omitted unless "
+            "include_archived is true). Pass related_next as continuation for related task "
+            "blocks, navigation_only to omit inline bodies, and run_id to bind delivery events."
         ),
         inputSchema=schema(
             dict(
@@ -114,7 +112,7 @@ KNOWLEDGE_TOOLS = [
                               "default": 800,
                               "description": "Body excerpt and inherited-rule budget in estimated tokens."},
                 include_unknown={"type": "boolean", "default": False,
-                                 "description": "Include units whose declared conditions are unknown; unknown is not evidence of applicability."},
+                                 "description": "Include units whose declared conditions are unknown."},
                 include_archived={"type": "boolean", "default": False,
                                   "description": "Include archived or superseded units in discovery."},
                 navigation_only={"type": "boolean", "default": False,
@@ -131,16 +129,12 @@ KNOWLEDGE_TOOLS = [
     dict(
         name="knowledge_explain",
         description=(
-            "Read only knowledge needed for the next action; an exact returned ref needs no new query. "
-            "For graded units, prefer refs even for one unit, with observed conditions, fully visible "
-            "known_refs and an explicit token_budget. Copy revision references exactly. Stop reading "
-            "once the next action and required premises are clear; new evidence can reopen retrieval. "
-            "Single ref reads preserve legacy task/block navigation. A graded-unit ref "
-            "returns its exact current revision and conditions; a task ref returns navigation and first_block_ref; "
-            "a block ref returns its immutable body and adjacent block refs. Batch refs assemble the dependency "
-            "closure minus known_refs, returning complete bodies with shared premises expanded once. "
-            "Replaced graded revisions and withdrawn material are unavailable. "
-            "Use the returned ref to read and feedback_ref to vote. Pass run_id to bind delivery events."
+            "Read complete graded units or task/block references by their exact returned ref. "
+            "For graded units, pass refs (even for one unit) with observed conditions, visible "
+            "known_refs, and token_budget to assemble the dependency closure (shared prerequisites "
+            "appear once in requires and full unit bodies appear in units). Single ref reads "
+            "support legacy task and block navigation (first_block_ref / adjacent block refs). "
+            "Pass run_id to bind delivery events."
         ),
         inputSchema=schema(
             dict(
@@ -164,11 +158,10 @@ KNOWLEDGE_TOOLS = [
     dict(
         name="knowledge_feedback",
         description=(
-            "Optional: copy feedback_ref from query/explain into ref to record an up/down vote on that observed revision "
-            "with an optional one-line reason. Also records the four-stage usage flywheel: discovered, loaded, "
-            "applied, or evaluated (applied/evaluated bind run_id and an evaluated outcome). "
-            "evaluated records how the outcome was established through evidence_source. "
-            "Vote and usage event may be combined. Never required; silence is not a vote."
+            "Record optional usage events (discovered, loaded, applied, evaluated) or an "
+            "up/down vote for an exact feedback_ref returned by query or explain. "
+            "evaluated binds run_id, outcome (supported, refuted, inconclusive), and "
+            "optional evidence_source."
         ),
         inputSchema=schema(
             dict(
@@ -193,13 +186,10 @@ KNOWLEDGE_TOOLS = [
     dict(
         name="knowledge_distill",
         description=(
-            "Explicitly distill caller-selected, already-authorized evidence into graded knowledge. "
-            "task_state is supplied by the caller; ordinary Stop never selects completion. "
-            "Pass related_refs to compare against existing units for a milestone/delta proposal; "
-            "pass a mindie-distill-decision/1 proposal to apply deterministic validation with no model call. "
-            "The host binds native task identity and the active lease. "
-            "May invoke the configured native organizer once and apply a returned C6 decision locally; "
-            "no GitHub write."
+            "Distill caller-selected, authorized evidence into local graded knowledge units "
+            "at task_state='verified_milestone' or 'completed'. Pass related_refs to compare "
+            "against existing units as a delta, or pass a mindie-distill-decision/1 proposal "
+            "for deterministic validation and local application with zero model calls."
         ),
         inputSchema=schema(
             dict(

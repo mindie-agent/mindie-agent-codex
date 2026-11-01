@@ -38,38 +38,29 @@ OUTPUT_TOKENS = (1, 262144, 16384)
 
 DESCRIPTIONS = {
     "profiler": (
-        "Inspect and analyze Ascend profiling captures using mindie-profiler. "
+        "Inspect and analyze Ascend NPU profiling captures using mindie-profiler. "
         "Pass CLI arguments as an argv array, e.g. ['inventory', '--root', '/capture'] "
-        "or ['analyze', '--root', '/capture', '--full-range']. Commands: inventory, analyze, correlate, "
-        "compare and sql. ['-h'] or ['--help'] enumerates the installed commands "
-        "and a subcommand's --help documents its options; an unknown first "
-        "non-option word exits 2 listing the valid choices, and legacy "
-        "option-first analyze arguments are still accepted. Use --output for "
-        "large reports. Offline parsing needs no NPU lease; device capture still "
-        "requires one. Profiler exports need explicit identity and boundary "
-        "mapping before sim consumption; they are not automatically a sim Case "
-        "or calibration input."
+        "or ['analyze', '--root', '/capture', '--full-range']. Commands: inventory, analyze, "
+        "correlate, compare, sql, camodel, and kernels. Use ['--help'] to inspect options "
+        "and --output for large reports."
     ),
     "sim": (
-        "Model hardware-neutral operators, pure graphs/models and serving constraints "
-        "using mindie-sim and explicit input files. Pass CLI arguments as an argv "
-        "array, e.g. ['graph', '/case.json', '--phase', 'prefill', '--tokens', '32', "
-        "'--scope', 'model', '--output', '/report.json']. Use ['--help'] for the "
-        "installed parser; operators, graph and predict have distinct boundaries. "
-        "Study enumerates declared candidates; accuracy compares independent "
-        "matched observations. A partial study keeps its report with a nonzero exit. "
-        "Output-file calls may have empty stdout; the exit code and stderr remain "
-        "available. Predictions do not establish measured hardware accuracy. "
-        "Check CPU/RAM needs before large runs and use remote-dev "
-        "on a suitable host when local resources are insufficient."
+        "Compute Ascend hardware bounds (A2/A3/A5), operator/graph/serving latency, HBM capacity "
+        "(including async_scheduling delayed release), Roofline efficiency, SLA concurrency "
+        "frontiers, and P/D disaggregation using mindie-sim. Pass CLI arguments as an argv "
+        "array: synthesize a case from model/hardware IDs or HF config (e.g. ['compose', "
+        "'--model', 'qwen3.5-27b', '--hardware', 'a3', '--tp', '8', '--concurrency', '32', "
+        "'--async-scheduling', '--output', '/case.json']) and run ['predict', '/case.json'], "
+        "['efficiency', '/case.json'], ['sla', '/case.json'], ['sweep', '/case.json', "
+        "'--mode', 'pd'], ['skew', '/case.json'], or ['graph', '/case.json', '--phase', "
+        "'prefill', '--tokens', '32']. Use ['--help'] to inspect options and --output for "
+        "large reports."
     ),
     "coordinator": (
-        "Manage Ascend host inventory, probe CPU/RAM/NPU capacity, bind containers "
+        "Manage Ascend host inventory, probe CPU/RAM/NPU capacity, bind containers, "
         "and acquire/inspect/release NPU and service-port leases through "
         "mindie-coordinator. Pass CLI argv, e.g. ['hosts', '--action', 'list'] "
-        "or ['probe', '--json', '{\"action\":\"hosts\"}']. Use ['--help'] "
-        "for the installed parser. Preserve lease IDs and uncertain external "
-        "outcomes; never resubmit an uncertain mutation."
+        "or ['probe', '--json', '{\"action\":\"hosts\"}']. Use ['--help'] to inspect options."
     ),
 }
 
