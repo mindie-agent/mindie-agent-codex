@@ -62,6 +62,18 @@ DESCRIPTIONS = {
         "mindie-coordinator. Pass CLI argv, e.g. ['hosts', '--action', 'list'] "
         "or ['probe', '--json', '{\"action\":\"hosts\"}']. Use ['--help'] to inspect options."
     ),
+    "debugger": (
+        "Ascend NPU fault triage (`triage`, `decode-code`), ACLGraph/NPUGraph capture/replay & buffer-address "
+        "debugger (`aclgraph`: `guard`, `inspect`), and operator precision/memory-stomp toolkit (`precision`: "
+        "`check-call`, `replay-call`, `inspect-capsule`, `compare-traces`, `watch`) via mindie-debugger. "
+        "Log triage (`['triage', '--root', 'logs']`, `['triage', '--file', 'logs/rank0.log']`, or "
+        "`['decode-code', '507015']`) runs directly without NPU hardware. For NPU-dependent dynamic ACLGraph "
+        "or precision debugging, call `['remote-guide']` (or any `['aclgraph', ...]` / `['precision', ...]` "
+        "command) to stage the pure-Python `mindie_debugger` bundle locally and obtain the exact `remote-dev` "
+        "(`remote_artifact_push` + `remote_bash`) commands and Python API hooks (`ACLGraphCaptureGuard`, "
+        "`ACLGraphAddressTracker`, `ACLGraphDumper`, `ACLGraphVllmInspector`, `capture_call`, `replay_call`) "
+        "to execute inside the remote NPU container."
+    ),
 }
 
 
