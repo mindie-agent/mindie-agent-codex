@@ -23,12 +23,13 @@ def source_root(package):
 def component_gate(tmp_path, monkeypatch):
     monkeypatch.setenv("MINDIE_COORDINATOR_STATE_DIR", str(tmp_path / "coordinator"))
     packages = ["mindie_profiler", "mindie_sim", "mindie_coordinator",
-                "mindie_diagnostics", "remote_dev"]
+                "mindie_debugger", "mindie_diagnostics", "remote_dev"]
     roots = {package: root for package in packages if (root := source_root(package)) is not None}
     paths = json.dumps([str(root) for root in roots.values()])
     entry = Path(__file__).parent / "fixtures/component_source_cli.py"
     modules = dict(profiler="mindie_profiler", sim="mindie_sim",
-                   coordinator="mindie_coordinator.cli", diagnostics="mindie_diagnostics.cli")
+                   coordinator="mindie_coordinator.cli", debugger="mindie_debugger.cli",
+                   diagnostics="mindie_diagnostics.cli")
     config = tmp_path / "adapter.json"
     config.write_text(json.dumps(dict(
         python=sys.executable, runtime_scripts=str(SCRIPTS),

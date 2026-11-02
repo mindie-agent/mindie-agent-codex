@@ -10,13 +10,13 @@ requires-python = ">=3.11"
 dependencies = ["mindie-knowledge", "remote-dev", "mindie-diagnostics"]
 
 [tool.uv.sources]
-mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "9a4325858e6fadb10715275826a7795843cbbdf4" }
-remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "85be999811771e03ecc7d78e5e560fac1636e7ef" }
-mindie-diagnostics = { git = "https://github.com/mindie-agent/diagnostics", rev = "5ae643e19223f2181ecdbaa3edaf464137c4805e" }
+mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "7936a4fda67f6808d8fa73824363a4d7345766e5" }
+remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "7c67876d716feb3949e4dbf33eb5e06980ff0d36" }
+mindie-diagnostics = { git = "https://github.com/mindie-agent/diagnostics", rev = "f2f2f946c172afc99342a84c0c1ed244f6d44e01" }
 
 [tool.uv]
 # The reviewed plugin selection also replaces older transitive component pins.
-override-dependencies = ["mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@5ae643e19223f2181ecdbaa3edaf464137c4805e"]
+override-dependencies = ["mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@f2f2f946c172afc99342a84c0c1ed244f6d44e01"]
 
 [tool.setuptools]
 packages = ["mindie_codex", "mindie_codex.scripts"]
