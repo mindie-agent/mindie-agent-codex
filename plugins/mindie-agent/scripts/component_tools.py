@@ -66,13 +66,13 @@ DESCRIPTIONS = {
         "Ascend NPU fault triage (`triage`, `decode-code`), ACLGraph/NPUGraph capture/replay & buffer-address "
         "debugger (`aclgraph`: `guard`, `inspect`), and operator precision/memory-stomp toolkit (`precision`: "
         "`check-call`, `replay-call`, `inspect-capsule`, `compare-traces`, `watch`) via mindie-debugger. "
-        "Log triage (`['triage', '--root', 'logs']`, `['triage', '--file', 'logs/rank0.log']`, or "
-        "`['decode-code', '507015']`) runs directly without NPU hardware. For NPU-dependent dynamic ACLGraph "
-        "or precision debugging, call `['remote-guide']` (or any `['aclgraph', ...]` / `['precision', ...]` "
-        "command) to stage the pure-Python `mindie_debugger` bundle locally and obtain the exact `remote-dev` "
-        "(`remote_artifact_push` + `remote_bash`) commands and Python API hooks (`ACLGraphCaptureGuard`, "
-        "`ACLGraphAddressTracker`, `ACLGraphDumper`, `ACLGraphVllmInspector`, `capture_call`, `replay_call`) "
-        "to execute inside the remote NPU container."
+        "Error-code decoding (`['decode-code', '507015']`) or inline stderr triage (`['triage', '--text', '<err>']`) "
+        "runs locally. Since full CANN `plog` directories (`$ASCEND_PROCESS_LOG_PATH` or `~/ascend/log/debug/plog`) "
+        "and dynamic ACLGraph/precision runtime hooks reside inside the remote NPU container, call `['remote-guide']` "
+        "(or `['triage']` / `['aclgraph', ...]` / `['precision', ...]`) to stage the pure-Python `mindie_debugger` "
+        "bundle locally and get the exact `remote-dev` (`remote_artifact_push` + `remote_bash`) commands to triage "
+        "CANN `plog`s in-place (`python3 -m mindie_debugger.cli triage`) or run `ACLGraphCaptureGuard`, "
+        "`ACLGraphAddressTracker`, `ACLGraphDumper`, `ACLGraphVllmInspector`, and `precision` inside the NPU container."
     ),
 }
 
