@@ -20,6 +20,7 @@ All plugin scripts live under `plugins/mindie-agent/scripts/` and include standa
 | | `receipt_layout.py` | Resolves `<config>.remote-receipts.sqlite3` and cleans up legacy sidecar artifacts. |
 | | `mcp_identity.py` | Validates native task/turn metadata and signals matching in-flight requests for interruption; `mcp_gate.py` preserves the existing import names. |
 | | `runtime_call.py` | Verifies `Admission.knowledge_lease(session_id)` (`entry_enabled=1`, raising `KnowledgeInactive` when unactivated) and executes one authorized knowledge tool call inside the configured runtime without silent request replay. |
+| **RSI Experiment Ledger** | `experiment_ledger.py` | Shell helper run by the Skill: source `fingerprint`, three-state `judge` (missing evidence -> `inconclusive`; complete evidence gated by the knowledge engine), single-writer `append` to `experiment-ledger.jsonl`, and pre-submission `gate` (duplicate source / run and card-second budget). |
 | **Diagnostics & Transcript** | `agent_diagnostics.py` | Stdlib-only diagnostic event capture (`<config>.diagnostics/pending.sqlite3` with WAL + `busy_timeout=5000`). |
 | | `diagnostic_support.py` / `diagnostic_ops.py` / `diagnostic_Consumer.py` | Redacts paths/secrets, attaches diagnostic references, and drains pending SQLite events into the shared diagnostics store. |
 | | `codex_transcript.py` | Extracts redaction-ready transcript material (`identify`, `read_material`, `capture_source`, `history_source`) from Codex rollout files. |
