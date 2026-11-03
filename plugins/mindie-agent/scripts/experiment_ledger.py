@@ -13,12 +13,16 @@ prose into a deterministic shell helper (`fingerprint`, `judge`, `append`,
   `evaluate_exploration_candidate`; this adapter does not reimplement it.
 - `append` rejects records that contradict their own run status (an infra or
   compile failure recorded as `refuted`) or lack a source fingerprint.
-- `gate` blocks a submission whose source fingerprint and scope already have a
-  supported/refuted record, or whose task exceeded the caller's run or
-  card-second budget. An `inconclusive` record never blocks a retry.
+- `gate` blocks a submission whose source fingerprint and scope (missing scope
+  equals `{}`) already have a live supported/refuted record, or whose task
+  exceeded the caller's run or card-second budget. Superseded revisions are
+  folded first and distinct runs are counted once. An `inconclusive` record
+  never blocks a retry.
 
 [Timeouts & Locks]
-- `fingerprint` runs bounded `git` subprocesses. Ledger appends hold an
+- `fingerprint` runs `git` subprocesses bounded per call and in total, streams
+  the tracked diff through a temporary file, and identifies untracked files
+  above 512 MiB by size. Ledger appends hold an
   exclusive sidecar `<ledger>.lock` via `update_lock.file_lock`.
 
 [Side-Effect Policy]
@@ -35,6 +39,8 @@ from pathlib import Path
 import statistics
 import subprocess
 import sys
+import tempfile
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -49,30 +55,60 @@ INCONCLUSIVE_STATUSES = frozenset({
 SETTLED = frozenset({"supported", "refuted"})
 # source: per-call git bound used by InferRSI infra/targets/git.py
 GIT_TIMEOUT = 15.0
+# source: four git calls of a submodule-free fingerprint, each within GIT_TIMEOUT;
+# submodule probes share this total instead of adding 15 s each
+FINGERPRINT_TIMEOUT = 4 * GIT_TIMEOUT
+# source: git core.bigFileThreshold default (512 MiB); larger untracked files
+# (profiling dumps, wheels) are identified by size instead of being hashed
+LARGE_FILE_BYTES = 512 * 1024 * 1024
+# source: knowledge engine legacy_evaluate noise_margin default
+DEFAULT_NOISE_MARGIN = 0.01
 # source: stdin bound used by knowledge_cli.py
 ARGUMENT_LIMIT = 1024 * 1024
 # source: knowledge engine evaluate_exploration_candidate default target
 DEFAULT_TARGET = 1.05
 # source: exit code for a blocked gate decision; 1 stays reserved for errors
 BLOCKED = 3
+# Optional G1/G3 evidence accepted by the knowledge engine's `_gates`.
+GATE_FIELDS = ("ablation_ok", "hygiene_ok", "workspace_delta_bytes", "guard_workloads",
+               "hidden_input_summary", "reusable_scope")
 
 
 # --------------------------------------------------------------------- fingerprint
-def _git(repo: Path, *args: str) -> bytes:
-    result = subprocess.run(["git", "-C", str(repo), *args], stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, timeout=GIT_TIMEOUT, check=False)
+def _git(repo: Path, *args: str, deadline=None, stdout=subprocess.PIPE) -> bytes:
+    timeout = GIT_TIMEOUT
+    if deadline is not None:
+        timeout = min(timeout, deadline - time.monotonic())
+        if timeout <= 0:
+            raise subprocess.TimeoutExpired(["git", *args], FINGERPRINT_TIMEOUT)
+    result = subprocess.run(["git", "-C", str(repo), *args], stdout=stdout,
+                            stderr=subprocess.PIPE, timeout=timeout, check=False)
     if result.returncode:
         raise ValueError(result.stderr.decode("utf-8", errors="replace").strip()
                          or f"git {args[0]} failed")
     return result.stdout
 
 
+def _stream_digest(handle) -> tuple[str, int]:
+    digest, size = hashlib.sha256(), 0
+    for block in iter(lambda: handle.read(1 << 20), b""):  # streamed (Principle 18)
+        digest.update(block)
+        size += len(block)
+    return digest.hexdigest(), size
+
+
 def _file_digest(path: Path) -> str:
-    digest = hashlib.sha256()
     with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):  # streamed (Principle 18)
-            digest.update(block)
-    return digest.hexdigest()
+        return _stream_digest(handle)[0]
+
+
+def _diff_digest(repo: Path, deadline) -> tuple[str, bool]:
+    """Hash `git diff --binary HEAD` through a temporary file, never holding it in memory."""
+    with tempfile.TemporaryFile() as spool:
+        _git(repo, "diff", "--binary", "HEAD", "--", ".", deadline=deadline, stdout=spool)
+        spool.seek(0)
+        digest, size = _stream_digest(spool)
+    return digest, size > 0
 
 
 def fingerprint(repo) -> dict:
@@ -80,32 +116,49 @@ def fingerprint(repo) -> dict:
 
     Adapted from InferRSI `infra/targets/git.py:repository_identity` (Apache-2.0).
     """
+    deadline = time.monotonic() + FINGERPRINT_TIMEOUT
     repo = Path(repo).resolve()
-    root = Path(os.fsdecode(_git(repo, "rev-parse", "--show-toplevel")).strip()).resolve()
+    root = Path(os.fsdecode(_git(repo, "rev-parse", "--show-toplevel", deadline=deadline))
+                .strip()).resolve()
     if root != repo:
         raise ValueError("repo must be the root of its Git checkout")
-    head = _git(repo, "rev-parse", "HEAD").decode("ascii").strip()
-    diff = _git(repo, "diff", "--binary", "HEAD", "--", ".")
-    untracked = []
-    for raw in _git(repo, "ls-files", "--others", "--exclude-standard", "-z").split(b"\0"):
+    head = _git(repo, "rev-parse", "HEAD", deadline=deadline).decode("ascii").strip()
+    diff_sha256, diff_present = _diff_digest(repo, deadline)
+    untracked, large = [], []
+    for raw in _git(repo, "ls-files", "--others", "--exclude-standard", "-z",
+                    deadline=deadline).split(b"\0"):
         if raw:
             name = os.fsdecode(raw)
             path = repo / name
-            untracked.append([name, _file_digest(path) if path.is_file() else "non-file"])
+            if not path.is_file():
+                untracked.append([name, "non-file"])
+            elif path.stat().st_size > LARGE_FILE_BYTES:
+                untracked.append([name, f"size:{path.stat().st_size}"])
+                large.append(name)
+            else:
+                untracked.append([name, _file_digest(path)])
+            if time.monotonic() > deadline:
+                raise subprocess.TimeoutExpired(["fingerprint", str(repo)], FINGERPRINT_TIMEOUT)
     submodules = []
-    for raw in _git(repo, "submodule", "status", "--recursive").splitlines():
+    for raw in _git(repo, "submodule", "status", "--recursive", deadline=deadline).splitlines():
         line = raw.decode("utf-8", errors="replace").strip()
         if line:
             commit, _, rest = line.lstrip("+-U ").partition(" ")
             path = rest.split(" (", 1)[0]
-            dirty = bool(_git(repo / path, "status", "--porcelain")) if (repo / path).is_dir() else None
+            dirty = bool(_git(repo / path, "status", "--porcelain", deadline=deadline)) \
+                if (repo / path).is_dir() else None
             submodules.append([path, commit, dirty])
-    material = dict(head=head, diff_sha256=hashlib.sha256(diff).hexdigest(),
+    material = dict(head=head, diff_sha256=diff_sha256,
                     untracked=sorted(untracked), submodules=sorted(submodules))
     digest = hashlib.sha256(json.dumps(material, sort_keys=True).encode("utf-8")).hexdigest()
-    return dict(source_digest="sha256:" + digest, head=head,
-                dirty=bool(diff or untracked or any(s[2] for s in submodules)),
-                untracked_files=len(untracked), submodules=len(submodules))
+    result = dict(source_digest="sha256:" + digest, head=head,
+                  dirty=bool(diff_present or untracked or any(s[2] for s in submodules)),
+                  untracked_files=len(untracked), submodules=len(submodules))
+    if large:
+        result["unhashed_large_files"] = sorted(large)
+        result["note"] = ("untracked files above 512 MiB are identified by size only; move "
+                          "profiling dumps out of the checkout or add them to .gitignore")
+    return result
 
 
 # ------------------------------------------------------------------------- judge
@@ -125,10 +178,13 @@ def _metric(trial, label, index, incomplete):
 
 
 def judge(evidence) -> dict:
-    """Three-state judgment: inconclusive > refuted > supported.
+    """Three-state judgment: inconclusive > refuted > supported, plus the three axes.
 
     The evidence-completeness order follows InferRSI `harness/evaluation.py:evaluate`
-    (Apache-2.0); complete evidence goes to the knowledge engine's gates.
+    (Apache-2.0); complete evidence goes to the knowledge engine's gates. A valid
+    gain below the target stays `supported` with `goal_attained=False`; a ratio
+    inside `1 +/- noise_margin` is `inconclusive` (`speedup_within_noise`); only a
+    correctness failure or a regression beyond the noise is `refuted`.
     """
     if not isinstance(evidence, dict):
         raise ValueError("evidence must be an object")
@@ -143,6 +199,10 @@ def judge(evidence) -> dict:
     if isinstance(target, bool) or not isinstance(target, (int, float)) \
             or not math.isfinite(target) or target <= 0:
         raise ValueError("target_speedup must be a positive finite number")
+    noise = evidence.get("noise_margin", DEFAULT_NOISE_MARGIN)
+    if isinstance(noise, bool) or not isinstance(noise, (int, float)) \
+            or not math.isfinite(noise) or noise < 0:
+        raise ValueError("noise_margin must be a nonnegative finite number")
     pairs = {}
     for label in ("baseline", "candidate"):
         trials = evidence.get(label)
@@ -171,21 +231,53 @@ def judge(evidence) -> dict:
         # Median of paired ratios, as MindIE Bench scores paired rounds.
         ratios = [c / b if direction == "maximize" else b / c for b, c in complete]
         speedup = statistics.median(ratios)
-    engine = None
+    engine, outcome, noisy = None, None, []
     if not incomplete and not failed:
         from mindie_knowledge.graded.explore import evaluate_exploration_candidate
-        engine = evaluate_exploration_candidate(
-            dict(compile_ok=True, correctness_ok=True, speedup=speedup,
-                 conditions=dict(evidence.get("scope_conditions") or {}),
-                 hypothesis=str(evidence.get("hypothesis") or "")),
-            target_speedup=float(target))
-        if engine["verdict"] not in ("distill_candidate", "retain_verified_evidence"):
-            failed.append(f"{engine['reason']}: median paired speedup {speedup:.4g} "
-                          f"below target {float(target):.4g}")
-    judgment = "inconclusive" if incomplete else "refuted" if failed else "supported"
-    return dict(judgment=judgment, reasons=incomplete + failed, speedup=speedup,
-                target_speedup=float(target), paired_rounds=len(complete),
-                engine_verdict=engine and engine["verdict"])
+        candidate = dict(compile_ok=True, correctness_ok=True, speedup=speedup,
+                         conditions=dict(evidence.get("scope_conditions") or {}),
+                         hypothesis=str(evidence.get("hypothesis") or ""))
+        # G1 hidden retention and G3 ablation / workspace / guard evidence go to the
+        # engine as given; an absent field is left absent rather than assumed passed.
+        for key in GATE_FIELDS:
+            if key in evidence:
+                candidate[key] = evidence[key]
+        engine = evaluate_exploration_candidate(candidate, target_speedup=float(target))
+        verdict = engine["verdict"]
+        if verdict == "reject_invalid_evidence":
+            failed.append(f"{engine['reason']}: hidden-input or parity gate failed")
+            outcome = engine["reason"]
+        elif verdict in ("distill_candidate", "retain_verified_evidence"):
+            outcome = "qualified_improvement" if verdict == "distill_candidate" \
+                else engine["reason"]
+        elif speedup > 1 + noise:
+            outcome = "subtarget_valid"
+        elif speedup >= 1 - noise:
+            outcome = "speedup_within_noise"
+            noisy.append(f"median paired speedup {speedup:.4g} is within the noise margin "
+                         f"1 +/- {float(noise):g}; neither a gain nor a loss is shown")
+        else:
+            outcome = "regression"
+            failed.append(f"median paired speedup {speedup:.4g} is a regression beyond the "
+                          f"noise margin {float(noise):g}")
+    elif failed:
+        outcome = "correctness_failed"
+    judgment = "inconclusive" if incomplete or noisy else "refuted" if failed else "supported"
+    axes = dict(evidence_valid=not incomplete and not failed,
+                goal_attained=bool(engine and engine["axes"]["goal_achieved"]
+                                   and judgment == "supported"),
+                reusable=bool(engine and engine["axes"]["reusable_encoding"]
+                              and judgment == "supported"))
+    reasons = incomplete + failed + noisy
+    if outcome == "subtarget_valid":
+        reasons.append(f"valid gain {speedup:.4g} is below target {float(target):.4g}; kept as "
+                       "supported evidence with goal_attained=false")
+    elif engine and outcome != "qualified_improvement" and judgment == "supported":
+        reasons.append(f"{engine['reason']}: gain kept, not yet reusable as a mutator")
+    return dict(judgment=judgment, outcome=outcome, axes=axes, reasons=reasons,
+                speedup=speedup, target_speedup=float(target), noise_margin=float(noise),
+                paired_rounds=len(complete), engine_verdict=engine and engine["verdict"],
+                engine_gates=engine and {k: v["passed"] for k, v in engine["gates"].items()})
 
 
 # ------------------------------------------------------------------------ ledger
@@ -248,21 +340,53 @@ def append(path, record) -> dict:
     return dict(status="recorded", exp_id=entry["exp_id"], judgment=entry["judgment"])
 
 
+def fold(records) -> tuple[list[dict], dict]:
+    """Apply `supersedes_exp_id` revisions in ledger order.
+
+    Returns the live records (latest revision per experiment, in order) and the
+    spend: distinct `run_ids`, and card-seconds per revision chain. A revision that
+    adds no new run restates the same device time, so its `card_seconds` (when
+    given) replaces the chain's value instead of adding to it.
+    """
+    live, chain_seconds, seen = {}, {}, set()
+    for record in records:
+        runs = set(record.get("run_ids") or ())
+        fresh = bool(runs - seen)
+        seen |= runs
+        own = record.get("card_seconds")
+        prior = record.get("supersedes_exp_id")
+        carried = None
+        if prior is not None and prior in live:
+            live.pop(prior)
+            carried = chain_seconds.pop(prior)
+        if carried is None:
+            seconds = float(own or 0)
+        elif fresh:
+            seconds = carried + float(own or 0)
+        else:
+            seconds = carried if own is None else float(own)
+        key = record.get("exp_id")
+        live.pop(key, None)
+        live[key], chain_seconds[key] = record, seconds
+    return list(live.values()), dict(runs=len(seen), card_seconds=sum(chain_seconds.values()))
+
+
+def _same_scope(recorded, scope) -> bool:
+    return (recorded or {}) == (scope or {})
+
+
 def gate(path, *, task_id, source_digest, scope=None, max_runs=None, max_card_seconds=None):
     """Decide before a candidate goes to the device: submit, duplicate or budget_exhausted.
 
     Mechanism follows vllm-evolve `bench/eval_pool.py` (HashCache + EvalBudget).
     """
-    records = [r for r in read_ledger(path) if r.get("task_id") == task_id]
-    superseded = {r.get("supersedes_exp_id") for r in records if r.get("supersedes_exp_id")}
-    live = [r for r in records if r.get("exp_id") not in superseded]
-    runs = sum(len(r.get("run_ids") or ()) for r in records)
-    seconds = sum(float(r.get("card_seconds") or 0) for r in records)
+    live, total = fold(r for r in read_ledger(path) if r.get("task_id") == task_id)
+    runs, seconds = total["runs"], total["card_seconds"]
     spent = dict(runs=runs, card_seconds=seconds, max_runs=max_runs,
                  max_card_seconds=max_card_seconds)
     for record in reversed(live):
         if record.get("source_digest") == source_digest and record.get("judgment") in SETTLED \
-                and (scope is None or record.get("scope_conditions") == scope):
+                and _same_scope(record.get("scope_conditions"), scope):
             return dict(decision="duplicate", spent=spent,
                         prior=dict(exp_id=record.get("exp_id"), judgment=record["judgment"],
                                    run_ids=record.get("run_ids")),

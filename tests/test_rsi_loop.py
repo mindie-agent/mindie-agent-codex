@@ -43,8 +43,9 @@ def trials(*values, status="completed"):
 
 
 def to_measure(path, repo, change, exp_id="e1"):
-    loop.complete(path, "profile", dict(bottleneck_summary=dict(op="rmsnorm", share=0.31),
-                                        profile_ref="profile/r0"))
+    if loop.next_step(path)["step"] == "profile":
+        loop.complete(path, "profile", dict(bottleneck_summary=dict(op="rmsnorm", share=0.31),
+                                            profile_ref="profile/r0"))
     mode = loop.next_step(path)["mode"]
     loop.complete(path, "consult", dict(mode=mode, unit_refs=[dict(unit_id="u1", revision=2)]))
     (repo / "kernel.py").write_text(change, encoding="utf-8")
@@ -90,8 +91,8 @@ def test_out_of_order_step_is_rejected_and_resume_points_to_current(state):
 
 def test_duplicate_source_is_not_submitted_again(state, repo):
     to_measure(state, repo, "x = 2\n")
-    loop.complete(state, "measure", measured(candidate=trials(101.0, 100.0)))
-    loop.complete(state, "learn", dict(conditional_avoid="no gain on 910B bf16"))
+    loop.complete(state, "measure", measured(candidate=trials(90.0, 91.0)))
+    loop.complete(state, "learn", dict(conditional_avoid="regresses on 910B bf16"))
     # Same code again in round 2: the gate blocks it before the device.
     result, code = to_measure(state, repo, "x = 2\n", exp_id="e2")
     assert code == loop.BLOCKED and result["gate"]["decision"] == "duplicate"
@@ -103,8 +104,8 @@ def test_budget_exhausted_finishes_the_loop(tmp_path, repo):
     loop.init(path, task_id="t1", ledger_path=tmp_path / "b" / "ledger.jsonl",
               baseline_repo=repo, direction="maximize", repetitions=2, max_runs=2)
     to_measure(path, repo, "x = 2\n")
-    loop.complete(path, "measure", measured(candidate=trials(101.0, 100.0)))
-    loop.complete(path, "learn", dict(conditional_avoid="no gain"))
+    loop.complete(path, "measure", measured(candidate=trials(90.0, 91.0)))
+    loop.complete(path, "learn", dict(conditional_avoid="regresses"))
     result, code = to_measure(path, repo, "x = 3\n", exp_id="e2")
     assert code == loop.BLOCKED and result["status"] == "finished"
     assert result["finish_reason"].startswith("budget_exhausted")
@@ -138,12 +139,14 @@ def test_three_stalled_rounds_switch_next_round_to_explore(tmp_path, repo):
     for index in range(3):
         assert loop.next_step(path)["mode"] == "reuse"
         to_measure(path, repo, f"x = {index + 10}\n", exp_id=f"e{index}")
-        loop.complete(path, "measure", measured(run_ids=[f"r{index}"],
+        # The baseline run is reused every round; rounds must still count separately.
+        loop.complete(path, "measure", measured(run_ids=["base", f"r{index}"],
                                                 candidate=trials(100.5, 100.0)))
-        loop.complete(path, "learn", dict(conditional_avoid="no gain"))
-    assert loop.next_step(path)["mode"] == "explore"
-    loop.complete(path, "profile", dict(bottleneck_summary=dict(op="a"), profile_ref="p"))
-    assert "subagent_fact_pack" in loop.next_step(path)["guide"]
+        loop.complete(path, "learn", dict(repair="within noise; add repetitions"))
+    resumed = loop.next_step(path)
+    assert resumed["mode"] == "explore" and resumed["step"] == "consult"
+    assert resumed["profile_reused_from_round"] == 1
+    assert "subagent_fact_pack" in resumed["guide"]
     with pytest.raises(ValueError, match="explore"):
         loop.complete(path, "consult", dict(mode="reuse", unit_refs=[]))
 
@@ -171,3 +174,41 @@ def test_cli_resume_and_blocked_exit_code(tmp_path, repo, capsys):
     assert json.loads(capsys.readouterr().out)["round"] == 1
     assert loop.main(["finish", *args, "--reason", "user stopped"]) == 0
     assert json.loads(capsys.readouterr().out)["status"] == "finished"
+
+
+def test_unchanged_baseline_reuses_profile_and_supported_reprofiles(state, repo):
+    to_measure(state, repo, "x = 2\n")
+    loop.complete(state, "measure", measured(candidate=trials(90.0, 91.0)))
+    result, _ = loop.complete(state, "learn", dict(conditional_avoid="regresses"))
+    assert result["step"] == "consult" and "restore_hint" in result
+    report = Path(result["report"]).read_text(encoding="utf-8")
+    assert "Judgment: refuted" in report
+    git(repo, "checkout", "--", "kernel.py")
+    to_measure(state, repo, "x = 3\n", exp_id="e2")
+    loop.complete(state, "measure", measured())
+    result, _ = loop.complete(state, "learn", dict(distill=dict(unit_id="u9", revision=1)))
+    assert result["step"] == "profile" and "restore_hint" not in result
+    second = (state.parent / "rsi-reports" / "round-2.md").read_text(encoding="utf-8")
+    assert "reused from round 1" in second
+
+
+def test_consult_skip_and_deferred_distill(state, repo):
+    loop.complete(state, "profile", dict(bottleneck_summary=dict(op="a"), profile_ref="p"))
+    loop.complete(state, "consult", dict(mode="reuse", unit_refs=[],
+                                         skipped_reason="knowledge flywheel not enabled"))
+    (repo / "kernel.py").write_text("x = 2\n", encoding="utf-8")
+    loop.complete(state, "propose", dict(exp_id="e1", hypothesis="h", candidate_repo=str(repo)))
+    loop.complete(state, "measure", measured(candidate=trials(103.0, 103.0)))
+    assert loop.next_step(state)["judgment"] == "supported"  # valid 1.03x under 1.05x
+    with pytest.raises(ValueError, match="reason"):
+        loop.complete(state, "learn", dict(defer_distill=True))
+    result, _ = loop.complete(state, "learn", dict(defer_distill=True,
+                                                   reason="distill after final ablation"))
+    assert result["pending_distill"][0]["exp_id"] == "e1"
+    report = Path(result["report"]).read_text(encoding="utf-8")
+    assert "query skipped: knowledge flywheel not enabled" in report
+    assert "subtarget_valid" in report and "deferred" in report
+    index = (state.parent / "rsi-reports" / "index.md").read_text(encoding="utf-8")
+    assert "Deferred knowledge_distill" in index
+    record = ledger.read_ledger(state.parent / "experiment-ledger.jsonl")[0]
+    assert record["outcome"] == "subtarget_valid" and record["axes"]["goal_attained"] is False

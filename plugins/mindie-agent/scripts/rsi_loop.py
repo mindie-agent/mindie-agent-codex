@@ -19,9 +19,15 @@ knowledge engine's `assess_stagnation` whether the next round must explore.
 - `measure` re-fingerprints the candidate checkout and refuses evidence whose
   source changed after the gate. Execution failures are always `inconclusive`.
 - `learn` requires a lesson matching the judgment: a `knowledge_distill`
-  receipt for `supported`, a scoped `conditional_avoid` for `refuted`, a
-  `repair` note for `inconclusive`. A supported candidate becomes the next
+  receipt or an explicit `defer_distill` for `supported` (a deferred lesson
+  stays listed in `pending_distill` until the loop ends), a scoped
+  `conditional_avoid` for `refuted`, a `repair` note for `inconclusive`. A
+  supported candidate (including a valid sub-target gain) becomes the next
   baseline. Every finished round writes `round-<n>.md` before advancing.
+- The baseline is re-profiled only after it changed; a round that kept the
+  baseline carries its profile into the next round, which starts at `consult`.
+- `consult` may skip the knowledge query with a `skipped_reason` (knowledge
+  flywheel not enabled, hypothesis already chosen); the reason is reported.
 
 [Timeouts & Locks]
 - State changes hold an exclusive `<state>.lock` via `update_lock.file_lock`
@@ -58,20 +64,29 @@ GUIDE = {
     "profile": ("Hold an exclusive coordinator lease and run mindie_profiler with an explicit "
                 "--time-window/--step-window/--full-range on the current baseline. Complete with "
                 '{"bottleneck_summary": {...}, "profile_ref": "<receipt or path>"}.'),
-    "consult": ("Call knowledge_query(query=<bottleneck>, mode=<mode>) and read the cards you "
-                "will rely on with knowledge_explain. In explore mode pass native_subcontext=True, "
+    "consult": ("When /mindie-agent knowledge is enabled and an information gap remains, call "
+                "knowledge_query(query=<bottleneck>, mode=<mode>) and read the cards you will "
+                "rely on with knowledge_explain. In explore mode pass native_subcontext=True, "
                 "ledger_entries and bottleneck_summary, and seed a fresh subagent only with "
                 "exploration_context.subagent_fact_pack.prompt_brief. Complete with "
-                '{"mode": <mode>, "unit_refs": [{"unit_id", "revision"}]}.'),
-    "propose": ("Change the candidate checkout for exactly one hypothesis. Complete with "
+                '{"mode": <mode>, "unit_refs": [{"unit_id", "revision"}]}, or with '
+                '{"mode": <mode>, "unit_refs": [], "skipped_reason": "<why no query>"}.'),
+    "propose": ("Change the candidate checkout for exactly one hypothesis. Prefer a separate git "
+                "worktree for the candidate; if it shares the baseline checkout, first restore "
+                "that checkout to the baseline source. Complete with "
                 '{"exp_id", "hypothesis", "candidate_repo", "scope_conditions": {...}}; the loop '
                 "fingerprints it and runs the ledger gate. Exit 3 means do not submit."),
     "measure": ("Submit baseline and candidate through coordinator/remote-dev on the same device, "
-                "alternating AB/BA, and register every run_id in PROGRESS.md in_flight_runs. "
-                'Complete with {"run_ids", "baseline": [{"status", "metric"}], "candidate": [...], '
-                '"correctness": "passed|failed", "compile_ok", "run_status", "card_seconds"}.'),
+                "alternating AB/BA, and register every run_id in PROGRESS.md in_flight_runs. If "
+                "baseline and candidate share one checkout, leave it at the candidate code before "
+                "completing: the loop re-fingerprints it. Complete with "
+                '{"run_ids", "baseline": [{"status", "metric"}], "candidate": [...], '
+                '"correctness": "passed|failed", "compile_ok", "run_status", "card_seconds"} '
+                "plus any of ablation_ok, workspace_delta_bytes, guard_workloads, "
+                "hidden_input_summary, noise_margin."),
     "learn": ("Keep the lesson. supported: call knowledge_distill and pass its receipt as "
-              '{"distill": {...}}. refuted: pass {"conditional_avoid": "<scoped negative '
+              '{"distill": {...}}, or defer it to a milestone with {"defer_distill": true, '
+              '"reason": "..."}. refuted: pass {"conditional_avoid": "<scoped negative '
               'result>"} (distill optional). inconclusive: pass {"repair": "<missing evidence '
               'to fix>"}.'),
 }
@@ -141,7 +156,7 @@ def init(path, *, task_id, ledger_path, baseline_repo, direction, repetitions,
         baseline=dict(repo=str(Path(baseline_repo).resolve()),
                       source_digest=baseline["source_digest"], exp_id=None),
         round=1, step="profile", mode="reuse", status="running", finish_reason=None,
-        current=dict(skipped=[]), rounds=[])
+        current=dict(skipped=[]), rounds=[], pending_distill=[])
     path.parent.mkdir(parents=True, exist_ok=True)
     with _locked(path):
         if path.exists():
@@ -163,6 +178,12 @@ def next_step(path) -> dict:
         result["judgment"] = state["current"]["judgment"]["judgment"]
     if state["current"].get("skipped"):
         result["skipped_this_round"] = state["current"]["skipped"]
+    if state["current"].get("profile_reused_from") is not None:
+        result["profile_reused_from_round"] = state["current"]["profile_reused_from"]
+    if state.get("restore_hint"):
+        result["restore_hint"] = state["restore_hint"]
+    if state.get("pending_distill"):
+        result["pending_distill"] = state["pending_distill"]
     return result
 
 
@@ -183,7 +204,11 @@ def _consult(state, body):
             not isinstance(r, dict) or not r.get("unit_id") or type(r.get("revision")) is not int
             for r in refs):
         raise ValueError("unit_refs must be an array of {unit_id, revision} objects")
-    state["current"].update(unit_refs=refs, knowledge_mode=state["mode"])
+    skipped = body.get("skipped_reason")
+    if skipped is not None and (not isinstance(skipped, str) or not skipped.strip()):
+        raise ValueError("skipped_reason must be nonempty text when given")
+    state["current"].update(unit_refs=refs, knowledge_mode=state["mode"],
+                            knowledge_skipped=skipped and skipped.strip())
     return "propose", {}
 
 
@@ -197,6 +222,7 @@ def _propose(state, body):
     digest = ledger.fingerprint(repo)["source_digest"]
     if digest == state["baseline"]["source_digest"]:
         raise ValueError("candidate source equals the baseline; change the code before proposing")
+    state.pop("restore_hint", None)
     decision = ledger.gate(state["ledger"], task_id=state["task_id"], source_digest=digest,
                            scope=scope, max_runs=state["max_runs"],
                            max_card_seconds=state["max_card_seconds"])
@@ -235,10 +261,14 @@ def _measure(state, body):
                     source_digest=candidate["source_digest"],
                     scope_conditions=candidate["scope_conditions"],
                     hypothesis=candidate["hypothesis"])
+    for key in ledger.GATE_FIELDS + ("noise_margin",):
+        if key in body:
+            evidence[key] = body[key]
     verdict = ledger.judge(evidence)
     status = body.get("run_status") or "completed"
     if status in ledger.INCONCLUSIVE_STATUSES and verdict["judgment"] != "inconclusive":
-        verdict = dict(verdict, judgment="inconclusive",
+        verdict = dict(verdict, judgment="inconclusive", outcome=status,
+                       axes=dict(evidence_valid=False, goal_attained=False, reusable=False),
                        reasons=[f"run_status {status!r} means evidence is missing"]
                        + verdict["reasons"])
     seconds = body.get("card_seconds")
@@ -256,10 +286,20 @@ def _measure(state, body):
 
 def _stagnation(state) -> dict:
     from mindie_knowledge.graded.explore import assess_stagnation
-    entries = [dict(run_id=(r.get("run_ids") or [r.get("exp_id")])[0], verdict=r["judgment"],
-                    outcome=r.get("run_status"), hypothesis=r.get("hypothesis"),
-                    hypothesis_verified=r["judgment"] == "supported")
-               for r in ledger.read_ledger(state["ledger"]) if r.get("task_id") == state["task_id"]]
+    live, _ = ledger.fold(r for r in ledger.read_ledger(state["ledger"])
+                          if r.get("task_id") == state["task_id"])
+    entries = []
+    for r in live:
+        # One entry per experiment: the engine dedups by run_id, and a reused
+        # baseline run in run_ids must not fold several rounds into one.
+        entry = dict(run_id=r["exp_id"], verdict=r["judgment"],
+                     outcome=r.get("outcome") or r.get("run_status"),
+                     hypothesis=r.get("hypothesis"),
+                     hypothesis_verified=r["judgment"] == "supported")
+        for key in ("new_observation", "divergent_layer_identified"):
+            if key in r:
+                entry[key] = r[key]
+        entries.append(entry)
     return assess_stagnation(entries, consecutive_limit=STALL_WINDOW)
 
 
@@ -269,9 +309,13 @@ def _learn(state, body):
     judgment = verdict["judgment"]
     lesson = {}
     if judgment == "supported":
-        if not isinstance(body.get("distill"), dict) or not body["distill"]:
-            raise ValueError("a supported result needs the knowledge_distill receipt as distill")
-        lesson["distill"] = body["distill"]
+        if isinstance(body.get("distill"), dict) and body["distill"]:
+            lesson["distill"] = body["distill"]
+        elif body.get("defer_distill") is True:
+            lesson["defer_distill"] = _text(body, "reason")
+        else:
+            raise ValueError("a supported result needs the knowledge_distill receipt as distill, "
+                             'or {"defer_distill": true, "reason": "..."}')
     elif judgment == "refuted":
         lesson["conditional_avoid"] = _text(body, "conditional_avoid")
         if isinstance(body.get("distill"), dict):
@@ -287,7 +331,11 @@ def _learn(state, body):
                   receipt_refs=dict(current.get("receipt_refs") or {},
                                     profile=current.get("profile_ref")),
                   speedup=verdict.get("speedup"), factors=candidate.get("factors"),
+                  outcome=verdict.get("outcome"), axes=verdict.get("axes"),
                   conditional_avoid=lesson.get("conditional_avoid"))
+    for key in ("new_observation", "divergent_layer_identified"):
+        if type(body.get(key)) is bool:
+            record[key] = body[key]
     if candidate.get("scope_conditions") is not None:
         record["scope_conditions"] = candidate["scope_conditions"]
     if current.get("card_seconds") is not None:
@@ -297,9 +345,18 @@ def _learn(state, body):
     current.update(lesson=lesson, stagnation=dict(status=stagnation.get("status"),
                                                   reason=stagnation.get("reason")))
     previous = dict(state["baseline"])
+    pending = state.setdefault("pending_distill", [])
+    if "defer_distill" in lesson:
+        pending.append(dict(round=state["round"], exp_id=candidate["exp_id"],
+                            reason=lesson["defer_distill"]))
     if judgment == "supported":
         state["baseline"] = dict(repo=candidate["repo"], source_digest=candidate["source_digest"],
                                  exp_id=candidate["exp_id"])
+        state.pop("restore_hint", None)
+    elif candidate["repo"] == previous["repo"]:
+        state["restore_hint"] = (f"the candidate shared the baseline checkout {previous['repo']}; "
+                                 f"restore it to baseline source {previous['source_digest']} "
+                                 "before the next change")
     report = _write_report(state, dict(current, round=state["round"], mode=state["mode"],
                                        baseline=previous))
     state["rounds"].append(dict(round=state["round"], exp_id=candidate["exp_id"],
@@ -311,8 +368,20 @@ def _learn(state, body):
         _finish(state, f"max_rounds {state['max_rounds']} reached")
         return None, dict(report=report)
     state["round"] += 1
-    state["current"] = dict(skipped=[])
-    return "profile", dict(report=report, next_mode=state["mode"])
+    if judgment != "supported" and current.get("profile_ref"):
+        # The baseline did not change, so its profile still holds (GEAK reprofile rule).
+        state["current"] = dict(skipped=[], bottleneck_summary=current["bottleneck_summary"],
+                                profile_ref=current["profile_ref"],
+                                profile_reused_from=current.get("profile_reused_from")
+                                or state["round"] - 1)
+        upcoming = "consult"
+    else:
+        state["current"] = dict(skipped=[])
+        upcoming = "profile"
+    extra = dict(report=report, next_mode=state["mode"])
+    if state.get("restore_hint"):
+        extra["restore_hint"] = state["restore_hint"]
+    return upcoming, extra
 
 
 HANDLERS = dict(profile=_profile, consult=_consult, propose=_propose,
@@ -358,13 +427,18 @@ def render_round(state, data) -> str:
     lines = [f"# RSI round {data['round']} — {state['task_id']}", "",
              f"**Judgment: {verdict['judgment']}**"
              + (f" (median paired speedup {verdict['speedup']:.4g}, target "
-                f"{verdict['target_speedup']:.4g})" if verdict.get("speedup") else ""), "",
+                f"{verdict['target_speedup']:.4g})" if verdict.get("speedup") else "")
+             + (f"; outcome `{verdict['outcome']}`" if verdict.get("outcome") else ""), "",
              "## Where the time went", "",
-             f"- Profile: `{_cell(data.get('profile_ref'))}`",
+             f"- Profile: `{_cell(data.get('profile_ref'))}`"
+             + (f" (reused from round {data['profile_reused_from']}; baseline unchanged)"
+                if data.get("profile_reused_from") else ""),
              f"- Bottleneck: `{json.dumps(data.get('bottleneck_summary'), ensure_ascii=False)}`",
              f"- Knowledge mode: {data['mode']}; cards used: "
              + (", ".join(f"`{r['unit_id']}@{r['revision']}`" for r in data.get("unit_refs") or [])
-                or "none"), "",
+                or "none")
+             + (f" (query skipped: {_cell(data['knowledge_skipped'])})"
+                if data.get("knowledge_skipped") else ""), "",
              "## What changed", "",
              f"- Experiment `{candidate['exp_id']}`: {candidate['hypothesis']}",
              f"- Baseline source `{data['baseline']['source_digest']}`",
@@ -395,6 +469,8 @@ def render_round(state, data) -> str:
     lines += ["", "## Lesson kept", ""]
     if "distill" in lesson:
         lines.append(f"- knowledge_distill: `{json.dumps(lesson['distill'], ensure_ascii=False)}`")
+    if "defer_distill" in lesson:
+        lines.append(f"- knowledge_distill deferred: {lesson['defer_distill']}")
     if "conditional_avoid" in lesson:
         lines.append(f"- Avoid under this scope: {lesson['conditional_avoid']}")
     if "repair" in lesson:
@@ -428,6 +504,10 @@ def _write_index(state) -> str:
         speed = f"{item['speedup']:.4g}" if item.get("speedup") else None
         lines.append(f"| {item['round']} | `{item['exp_id']}` | {item['judgment']} | "
                      f"{_cell(speed)} | [round-{item['round']}.md](round-{item['round']}.md) |")
+    if state.get("pending_distill"):
+        lines += ["", "## Deferred knowledge_distill", ""]
+        lines += [f"- Round {item['round']} `{item['exp_id']}`: {item['reason']}"
+                  for item in state["pending_distill"]]
     target = directory / "index.md"
     target.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     return str(target)
