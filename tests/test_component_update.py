@@ -96,6 +96,7 @@ def test_plugin_upgrade_rebinds_a_core_component_even_when_pins_match_the_baseli
         "mindie-knowledge": "mindie-agent/knowledge",
         "remote-dev": "mindie-agent/remote-dev",
         "mindie-diagnostics": "mindie-agent/diagnostics",
+        "mindie-bench": "mindie-agent/mindie-bench",
     }
     selected = {name: dict(revision=revision, version=version(name), repository=repositories[name])
                 for name, revision in baseline["runtime"].items()}

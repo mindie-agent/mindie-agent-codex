@@ -131,6 +131,8 @@ def adapter_check(source):
         "service_client.py",
         "mcp_catalog.json",
         "agent_diagnostics.py",
+        "experiment_ledger.py",
+        "rsi_loop.py",
     ):
         if not (plugin / "scripts" / name).is_file():
             raise ValueError("missing bounded runtime entry: " + name)
