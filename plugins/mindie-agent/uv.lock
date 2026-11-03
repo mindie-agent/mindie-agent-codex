@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -1944,6 +1944,7 @@ name = "mindie-agent-codex"
 version = "0.1.17"
 source = { editable = "." }
 dependencies = [
+    { name = "mindie-bench" },
     { name = "mindie-diagnostics" },
     { name = "mindie-knowledge" },
     { name = "remote-dev" },
@@ -1951,9 +1952,19 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "mindie-bench", git = "https://github.com/mindie-agent/mindie-bench?rev=3af01f5f771949557221aabdd4536948e6d503c6" },
     { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=f2f2f946c172afc99342a84c0c1ed244f6d44e01" },
     { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=7936a4fda67f6808d8fa73824363a4d7345766e5" },
     { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=7c67876d716feb3949e4dbf33eb5e06980ff0d36" },
+]
+
+[[package]]
+name = "mindie-bench"
+version = "0.4.6"
+source = { git = "https://github.com/mindie-agent/mindie-bench?rev=3af01f5f771949557221aabdd4536948e6d503c6#3af01f5f771949557221aabdd4536948e6d503c6" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pyyaml" },
 ]
 
 [[package]]
