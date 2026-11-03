@@ -70,14 +70,8 @@ def parse_args(arguments) -> dict:
 
 
 def forwarded(arguments) -> dict:
-    """Return arguments plus RSI keys only when the caller selected them."""
-    body = dict(arguments or {})
-    selected = body.get("mode") != "reuse" or any(
-        key in body for key in ("mode",) + OPTIONAL_KEYS
-    )
-    if selected:
-        body = parse_args(body)
-    return body
+    """Validate and normalize RSI arguments for the knowledge service."""
+    return parse_args(arguments)
 
 
 __all__ = ["MODES", "OPTIONAL_KEYS", "forwarded", "parse_args", "schema_properties"]

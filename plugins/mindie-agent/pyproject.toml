@@ -7,13 +7,12 @@ name = "mindie-agent-codex"
 version = "0.1.17"
 description = "Codex adapter for MindIE Agent"
 requires-python = ">=3.11"
-dependencies = ["mindie-knowledge", "remote-dev", "mindie-diagnostics", "mindie-bench"]
+dependencies = ["mindie-knowledge", "remote-dev", "mindie-diagnostics"]
 
 [tool.uv.sources]
-mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "7936a4fda67f6808d8fa73824363a4d7345766e5" }
+mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "8645deb20026a3d47ef0aa97e2dbaff619065353" }
 remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "7c67876d716feb3949e4dbf33eb5e06980ff0d36" }
 mindie-diagnostics = { git = "https://github.com/mindie-agent/diagnostics", rev = "f2f2f946c172afc99342a84c0c1ed244f6d44e01" }
-mindie-bench = { git = "https://github.com/mindie-agent/mindie-bench", rev = "c7d0c8a4969b3816925c0405931ae17e28ce7a34" }
 
 [tool.uv]
 # The reviewed plugin selection also replaces older transitive component pins.

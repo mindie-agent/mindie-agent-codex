@@ -160,7 +160,7 @@ class KnowledgePageTests(unittest.TestCase):
             },
         )
         self.assertEqual(explain["inputSchema"]["required"], [])
-        self.assertEqual(explain["inputSchema"]["properties"]["token_budget"]["default"], 4096)
+        self.assertEqual(explain["inputSchema"]["properties"]["token_budget"]["default"], 16000)
         self.assertEqual(explain["inputSchema"]["properties"]["refs"]["items"], {"type": "string"})
         self.assertIs(explain["inputSchema"]["additionalProperties"], False)
         self.assertIn("block", explain["description"])

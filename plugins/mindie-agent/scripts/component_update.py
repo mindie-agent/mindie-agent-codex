@@ -9,8 +9,9 @@ publishes through release_activation. No consent or knowledge lease is created.
 """
 from __future__ import annotations
 
-import json
 import argparse
+from contextlib import contextmanager
+import json
 from pathlib import Path
 import sys
 
@@ -25,9 +26,35 @@ from mindie_knowledge.component_bindings import (
     required_components,
 )
 
+# Retired runtime packages must never be inherited from an older installation
+# or queried against the release catalog during component upgrades.
+RETIRED_COMPONENTS = frozenset({"mindie-bench"})
+
+
+@contextmanager
+def _without_retired_inventory(runtime_module, retired_state: dict):
+    original = getattr(runtime_module, "read_inventory", None)
+    if original is None:
+        yield
+        return
+
+    def filtered_inventory(python, *args, **kwargs):
+        installed = dict(original(python, *args, **kwargs))
+        removed = {name: installed.pop(name) for name in list(installed) if name in RETIRED_COMPONENTS}
+        if removed:
+            retired_state["removed"] = True
+        return installed
+
+    runtime_module.read_inventory = filtered_inventory
+    try:
+        yield
+    finally:
+        runtime_module.read_inventory = original
+
 
 def prepare(source, python, data, *, current_python=None, force=False, current_source=None,
             adapter=None):
+    import mindie_knowledge.component_runtime as component_runtime
     from mindie_knowledge.component_runtime import build, discover
     from bootstrap import native_path, publish_entry, readback
     from release_activation import _atomic
@@ -36,12 +63,26 @@ def prepare(source, python, data, *, current_python=None, force=False, current_s
     # artifact paths below, where Python imports and profile I/O need them.
     source, data = Path(source), Path(data)
     baseline = identity(source)
-    required = required_components(adapter) if adapter else {}
-    selection = discover(current_python or python, baseline["runtime"], force=force,
-                         required_components=required)
+    required = {
+        name: version for name, version in (required_components(adapter) if adapter else {}).items()
+        if name not in RETIRED_COMPONENTS
+    }
+    retired_state = {"removed": False}
+    with _without_retired_inventory(component_runtime, retired_state):
+        selection = discover(current_python or python, baseline["runtime"], force=force,
+                             required_components=required)
+    if isinstance(selection.get("runtime"), dict):
+        for name in RETIRED_COMPONENTS:
+            if name in selection["runtime"]:
+                selection["runtime"] = {
+                    k: v for k, v in selection["runtime"].items() if k not in RETIRED_COMPONENTS
+                }
+                retired_state["removed"] = True
+                break
     needs_binding = any(str(bound_python) != str(python)
                         for _name, bound_python, _module in managed_commands(adapter or {}).values())
-    if not selection["changed"] and current_source == baseline["source_sha256"] and not needs_binding:
+    if (not selection["changed"] and not retired_state["removed"]
+            and current_source == baseline["source_sha256"] and not needs_binding):
         return None
     pins = {name: row["revision"] for name, row in selection["runtime"].items()}
     if pins == baseline["runtime"] and not needs_binding:

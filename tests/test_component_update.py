@@ -96,7 +96,6 @@ def test_plugin_upgrade_rebinds_a_core_component_even_when_pins_match_the_baseli
         "mindie-knowledge": "mindie-agent/knowledge",
         "remote-dev": "mindie-agent/remote-dev",
         "mindie-diagnostics": "mindie-agent/diagnostics",
-        "mindie-bench": "mindie-agent/mindie-bench",
     }
     selected = {name: dict(revision=revision, version=version(name), repository=repositories[name])
                 for name, revision in baseline["runtime"].items()}
@@ -113,6 +112,61 @@ def test_plugin_upgrade_rebinds_a_core_component_even_when_pins_match_the_baseli
             )
     assert build.call_args.kwargs["python"] == candidate_python
     assert build.call_args.args[3] == selected
+
+
+def test_upgrade_drops_retired_mindie_bench_from_inherited_inventory_before_catalog_lookup(tmp_path):
+    from mindie_knowledge import component_runtime as cr
+    baseline = identity(SCRIPTS.parent)
+    old_python, candidate_python = "/old/python", "/candidate/python"
+    adapter = dict(component_commands={
+        "diagnostics": [old_python, "-I", "-m", "mindie_diagnostics.cli"],
+    })
+    repositories = {
+        "mindie-knowledge": "mindie-agent/knowledge",
+        "remote-dev": "mindie-agent/remote-dev",
+        "mindie-diagnostics": "mindie-agent/diagnostics",
+    }
+    installed = {
+        name: dict(revision=revision, version=version(name), repository=repositories[name])
+        for name, revision in baseline["runtime"].items()
+    }
+    installed_with_bench = dict(
+        installed,
+        **{"mindie-bench": dict(
+            repository="mindie-agent/mindie-bench",
+            version="0.4.6",
+            revision="c7d0c8a4969b3816925c0405931ae17e28ce7a34",
+        )},
+    )
+    queried_packages = []
+
+    class FakeCatalog:
+        def source(self, name, rev):
+            queried_packages.append(("source", name))
+            return dict(installed[name], revision=rev)
+
+        def latest(self, name, force=False):
+            queried_packages.append(("latest", name))
+            if name == "mindie-bench":
+                raise AssertionError("retired mindie-bench must not be queried in release catalog")
+            return installed[name]
+
+    real_discover = cr.discover
+    with patch("mindie_knowledge.component_bindings.read_versions",
+               return_value={"mindie-diagnostics": version("mindie-diagnostics")}), \
+            patch.object(cr, "read_inventory", return_value=installed_with_bench), \
+            patch.object(cr, "discover",
+                         side_effect=lambda *a, **kw: real_discover(*a, **kw, catalog=FakeCatalog())), \
+            patch("mindie_knowledge.component_runtime.build",
+                  side_effect=RuntimeError("candidate build reached")) as build:
+        with pytest.raises(RuntimeError, match="candidate build reached"):
+            component_update.prepare(
+                SCRIPTS.parent, candidate_python, tmp_path,
+                current_python=old_python, adapter=adapter,
+            )
+    assert all(pkg != "mindie-bench" for _, pkg in queried_packages)
+    assert "mindie-bench" not in build.call_args.args[3]
+    assert set(build.call_args.args[3]) == set(installed)
 
 
 def test_component_activation_carries_the_binding_used_for_release_selection(tmp_path):

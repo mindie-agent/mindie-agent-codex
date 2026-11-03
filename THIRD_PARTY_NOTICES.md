@@ -9,9 +9,9 @@ authors), licensed under the Apache License 2.0:
 - `fingerprint` is adapted from `src/inferrsi/infra/targets/git.py:repository_identity`.
 - The evidence-completeness order in `check_trials` follows `src/inferrsi/harness/evaluation.py:evaluate`.
 
-Both were rewritten for this plugin (stdlib only; the verdict itself comes from
-MindIE Bench `evaluate_rsi_candidate_gates`). The full license text is in
-[`licenses/InferRSI-Apache-2.0.txt`](licenses/InferRSI-Apache-2.0.txt).
+Both were rewritten for this plugin (stdlib only; the 4-stage RSI candidate
+verification gates are evaluated directly in `experiment_ledger.py`). The full
+license text is in [`licenses/InferRSI-Apache-2.0.txt`](licenses/InferRSI-Apache-2.0.txt).
 
 ## vllm-evolve
 

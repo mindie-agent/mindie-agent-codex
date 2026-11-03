@@ -543,7 +543,7 @@ class QueryParameterTests(ServiceCase):
             'query': 'HCCL', 'token_budget': 0}))
         self.assertTrue(rejected['isError'])
         self.assertIn('token_budget', rejected['content'][0]['text'])
-        self.assertIn('16000', rejected['content'][0]['text'])
+        self.assertIn('64000', rejected['content'][0]['text'])
 
 
 class ExploreModeTests(unittest.TestCase):

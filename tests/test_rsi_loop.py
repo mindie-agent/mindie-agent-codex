@@ -1,4 +1,4 @@
-"""The RSI loop advances one checked step at a time, resumes, gates, and records through MindIE Bench."""
+"""The RSI loop advances one checked step at a time, resumes, gates, and records in the RSI ledger."""
 import json
 from pathlib import Path
 import subprocess
@@ -66,7 +66,7 @@ def measured(**changes):
     return body
 
 
-def test_supported_round_is_recorded_by_bench_and_moves_baseline(state, repo):
+def test_supported_round_is_recorded_in_ledger_and_moves_baseline(state, repo):
     result, code = to_measure(state, repo, "x = 2\n")
     assert code == 0 and result["step"] == "measure"
     result, _ = loop.complete(state, "measure", measured())
@@ -128,7 +128,7 @@ def test_code_changed_after_gate_is_not_judged(state, repo):
 
 
 @pytest.mark.parametrize("status", ["infra_failed", "compile_failed"])
-def test_execution_failure_is_inconclusive_in_the_bench_entry(state, repo, status):
+def test_execution_failure_is_inconclusive_in_the_ledger_entry(state, repo, status):
     to_measure(state, repo, "x = 2\n")
     result, _ = loop.complete(state, "measure", measured(run_status=status))
     assert result["verdict"] == "inconclusive"
@@ -213,15 +213,179 @@ def test_supported_without_distill_is_pending_with_note(state, repo):
 
 
 def test_multi_factor_candidate_needs_ablation_receipt(state, repo):
+    # P2 #2: Even when speedup is below target (1.03x < 1.05x), a multi-factor
+    # change without ablation must stay inconclusive and must NOT move baseline.
     to_measure(state, repo, "x = 2\n", factors=["fuse", "tile"])
-    result, _ = loop.complete(state, "measure", measured())
+    result, _ = loop.complete(state, "measure", measured(candidate=trials(103.0, 103.0)))
     assert result["verdict"] == "inconclusive" and result["entry"]["outcome"] == "ablation_pending"
     loop.complete(state, "learn", {})
+    saved = json.loads(state.read_text(encoding="utf-8"))
+    assert saved["baseline"]["exp_id"] is None
     git(repo, "checkout", "--", "kernel.py")
     to_measure(state, repo, "x = 2\n", exp_id="e2", factors=["fuse", "tile"])
     result, _ = loop.complete(state, "measure", measured(
         run_ids=["r3", "r4"], ablation_receipt=dict(ablation_retained=True)))
     assert result["verdict"] == "supported"
+
+
+def test_progressive_baselines_select_second_round_best_and_preserve_in_flight_runs(state, repo):
+    progress_path = state.parent / "PROGRESS.md"
+    progress_path.write_text(
+        "# RSI Progress: t1\n\n## in_flight_runs\n\n- `run-active-42` (`slot_id=0`, `endpoint=ssh://a2`)\n",
+        encoding="utf-8", newline="\n",
+    )
+    # Round 1: 100 -> 120 (1.20x)
+    to_measure(state, repo, "x = 2\n", exp_id="e1")
+    loop.complete(state, "measure", measured(
+        run_ids=["r1", "r2"], baseline=trials(100.0, 100.0), candidate=trials(120.0, 120.0),
+    ))
+    loop.complete(state, "learn", dict(distill=dict(unit_id="u1", revision=1)))
+    # Round 2: 120 -> 132 (1.10x step, 1.32x cumulative)
+    to_measure(state, repo, "x = 3\n", exp_id="e2")
+    loop.complete(state, "measure", measured(
+        run_ids=["r3", "r4"], baseline=trials(120.0, 120.0), candidate=trials(132.0, 132.0),
+    ))
+    loop.complete(state, "learn", dict(distill=dict(unit_id="u2", revision=1)))
+    rendered = progress_path.read_text(encoding="utf-8")
+    assert "run-active-42" in rendered and "ssh://a2" in rendered
+    best_section = rendered.split("## Best Supported Candidate\n\n", 1)[1].split("\n\n## ", 1)[0]
+    assert "- candidate: `e2` (`supported`, `1.1000x`, cumulative `1.3200x`)" in best_section
+
+
+def test_interrupted_learn_after_ledger_append_recovers_idempotently(state, repo, monkeypatch):
+    to_measure(state, repo, "x = 2\n", exp_id="e1")
+    loop.complete(state, "measure", measured())
+    real_save = loop._save
+
+    def crash_on_save(path, payload):
+        raise OSError("power loss before state save")
+
+    monkeypatch.setattr(loop, "_save", crash_on_save)
+    first_out, first_code = loop.complete(state, "learn", dict(distill=dict(unit_id="u9", revision=1)))
+    assert first_code == 0
+    assert first_out["receipt_unconfirmed"] is True and first_out["state_unconfirmed"] is True
+    # The ledger already has e1, while raw on-disk state file was not overwritten.
+    assert len(ledger_of(state)) == 1
+    assert json.loads(state.read_text(encoding="utf-8"))["step"] == "learn"
+
+    monkeypatch.setattr(loop, "_save", real_save)
+    # Retrying with {} must honor the already-committed distill receipt in the ledger
+    # rather than adding e1 to pending_distill.
+    resumed, code = loop.complete(state, "learn", {})
+    assert code == 0 and resumed["round"] == 2 and resumed["step"] == "profile"
+    assert len(ledger_of(state)) == 1
+    assert json.loads(state.read_text(encoding="utf-8"))["pending_distill"] == []
+
+    # Conversely, if the first attempt committed distill=None and the retry provides a
+    # distill receipt, a revision is appended so ledger and state stay in sync.
+    to_measure(state, repo, "x = 3\n", exp_id="e2")
+    loop.complete(state, "measure", measured(run_ids=["r3", "r4"]))
+    monkeypatch.setattr(loop, "_save", crash_on_save)
+    second_out, second_code = loop.complete(state, "learn", {})
+    assert second_code == 0 and second_out["state_unconfirmed"] is True
+    monkeypatch.setattr(loop, "_save", real_save)
+    resumed2, code2 = loop.complete(state, "learn", dict(distill=dict(unit_id="u10", revision=1)))
+    assert code2 == 0 and resumed2["round"] == 3
+    folded_live, _ = ledger.fold(ledger_of(state))
+    e2_live = next(r for r in folded_live if r["exp_id"] == "e2")
+    assert e2_live["lesson"]["distill"] == dict(unit_id="u10", revision=1)
+    assert json.loads(state.read_text(encoding="utf-8"))["pending_distill"] == []
+
+    # Conflicting core evidence (e.g. speedup_ratio, conditions, trials) is rejected.
+    base_rec = dict(e2_live)
+    assert loop._same_committed_experiment(base_rec, dict(base_rec, speedup_ratio=9.9)) is False
+    assert loop._same_committed_experiment(base_rec, dict(base_rec, conditions=dict(soc="910C"))) is False
+    assert loop._same_committed_experiment(base_rec, dict(base_rec, trials=dict(baseline=[1], candidate=[2]))) is False
+
+
+def test_state_and_ledger_inside_checkout_do_not_contaminate_source_digest(repo):
+    state_in_repo = repo / ".mindie" / "rsi-state.json"
+    ledger_in_repo = repo / ".mindie" / "rsi-ledger.jsonl"
+    loop.init(state_in_repo, task_id="t-in-repo", ledger_path=ledger_in_repo,
+              baseline_repo=repo, direction="maximize", repetitions=2)
+    (repo / "kernel.py").write_text("x = 2\n", encoding="utf-8")
+    _, propose_code = loop.complete(state_in_repo, "propose", dict(
+        exp_id="e1", hypothesis="in-repo state", candidate_repo=str(repo),
+        scope_conditions=dict(soc="910B"),
+    ))
+    assert propose_code == 0
+    measured_out, measure_code = loop.complete(state_in_repo, "measure", measured())
+    assert measure_code == 0 and measured_out["step"] == "learn"
+
+
+def test_one_shot_record_receipt_honesty_and_idempotent_retry(tmp_path, repo, monkeypatch):
+    candidate = tmp_path / "candidate-wt"
+    git(repo, "worktree", "add", "--detach", str(candidate), "HEAD")
+    state = tmp_path / "wt-work" / "rsi-loop.json"
+    loop.init(state, task_id="t1", ledger_path=tmp_path / "wt-work" / "experiment-ledger.jsonl",
+              baseline_repo=repo, direction="maximize", repetitions=2, max_rounds=3)
+    (candidate / "kernel.py").write_text("x = 2\n", encoding="utf-8")
+    real_save = loop._save
+    monkeypatch.setattr(loop, "_save", lambda *a, **kw: (_ for _ in ()).throw(OSError("disk full")))
+    rec_payload = dict(
+        exp_id="e1", hypothesis="h", candidate_repo=str(candidate),
+        scope_conditions=dict(soc="910B"), run_ids=["r1", "r2"], run_status="completed",
+        compile_ok=True, correctness="passed", card_seconds=10,
+        baseline=trials(100.0, 100.0), candidate=trials(120.0, 120.0),
+        distill=dict(unit_id="u1", revision=1),
+    )
+    out, code = loop.complete(state, "record", rec_payload)
+    assert code == 0
+    assert out["receipt_unconfirmed"] is True and out["state_unconfirmed"] is True
+    assert len(ledger_of(state)) == 1
+    recovered = loop.next_step(state)
+    assert recovered["step"] == "profile"
+    assert Path(recovered["baseline"]["repo"]).resolve() == candidate.resolve()
+    assert ledger.fingerprint(recovered["baseline"]["repo"])["source_digest"] == recovered["baseline"]["source_digest"]
+
+    monkeypatch.setattr(loop, "_save", real_save)
+    retry_out, retry_code = loop.complete(state, "record", rec_payload)
+    assert retry_code == 0 and retry_out["step"] == "profile" and retry_out["round"] == 2
+    assert retry_out["baseline"]["exp_id"] == "e1"
+    assert Path(retry_out["baseline"]["repo"]).resolve() == candidate.resolve()
+    assert len(ledger_of(state)) == 1
+
+
+def test_measure_forwards_optional_gate_fields(state, repo):
+    to_measure(state, repo, "x = 2\n", exp_id="e-abl")
+    out, code = loop.complete(state, "measure", measured(ablation_ok=False))
+    assert code == 0 and out["verdict"] == "refuted"
+    saved = json.loads(state.read_text(encoding="utf-8"))
+    assert saved["current"]["entry"]["outcome"] == "ablation_not_retained"
+
+
+
+
+def test_stagnation_tracks_same_l3_route_and_persists_progress_warning(tmp_path, repo, monkeypatch):
+    path = tmp_path / "r" / "rsi-loop.json"
+    loop.init(path, task_id="t1", ledger_path=tmp_path / "r" / "ledger.jsonl",
+              baseline_repo=repo, direction="maximize", repetitions=2)
+    # Three rounds on three different L3 unit routes must NOT trigger stalled explore mode.
+    for idx in range(3):
+        if loop.next_step(path)["step"] == "profile":
+            loop.complete(path, "profile", dict(bottleneck_summary=dict(op="rmsnorm"),
+                                                profile_ref="p0"))
+        loop.complete(path, "consult", dict(
+            mode="reuse", unit_refs=[dict(unit_id="u-route", revision=idx + 1)],
+        ))
+        (repo / "kernel.py").write_text(f"x = {idx + 10}\n", encoding="utf-8")
+        loop.complete(path, "propose", dict(exp_id=f"e{idx}", hypothesis="h",
+                                            candidate_repo=str(repo),
+                                            scope_conditions=dict(soc="910B")))
+        loop.complete(path, "measure", measured(run_ids=[f"r{idx}"],
+                                                candidate=trials(100.5, 100.0)))
+        if idx == 1:
+            monkeypatch.setattr(ledger, "_write_progress_atomic",
+                                lambda *a, **kw: (_ for _ in ()).throw(OSError("progress ro")))
+            out, _ = loop.complete(path, "learn", {})
+            assert out["progress_unconfirmed"] is True
+            assert loop.next_step(path)["progress_unconfirmed"] is True
+            monkeypatch.undo()
+        else:
+            out, _ = loop.complete(path, "learn", {})
+            assert "progress_unconfirmed" not in out
+    assert loop.next_step(path)["mode"] == "reuse"
+    assert "progress_unconfirmed" not in loop.next_step(path)
 
 
 def test_max_rounds_finishes(tmp_path, repo):
@@ -265,3 +429,57 @@ def test_cli_exit_codes(tmp_path, repo):
     assert code == loop.BLOCKED and out["gate"]["decision"] == "duplicate"
     assert "Speed up decode" in (tmp_path / "c" / "PROGRESS.md").read_text(encoding="utf-8")
     assert cli("finish", *args, "--reason", "user stopped")[1]["status"] == "finished"
+
+
+def test_composable_nonlinear_transitions_and_one_shot_record(state, repo):
+    # Direct propose from profile (auto-consults or skips rigid step lock), re-propose from measure,
+    # and one-shot `record` primitive from profile/consult.
+    loop.complete(state, "profile", dict(bottleneck_summary=dict(op="matmul"), profile_ref="p0"))
+    (repo / "kernel.py").write_text("x = 2\n", encoding="utf-8")
+    proposed, code = loop.complete(state, "propose", dict(
+        exp_id="e1", hypothesis="direct propose", candidate_repo=str(repo),
+        scope_conditions=dict(soc="910B"),
+    ))
+    assert code == 0 and proposed["step"] == "measure"
+    # Re-propose a revised candidate before measuring without self-locking.
+    (repo / "kernel.py").write_text("x = 3\n", encoding="utf-8")
+    reproposed, code = loop.complete(state, "propose", dict(
+        exp_id="e1", hypothesis="revised direct propose", candidate_repo=str(repo),
+        scope_conditions=dict(soc="910B"),
+    ))
+    assert code == 0 and reproposed["step"] == "measure"
+    loop.complete(state, "measure", measured())
+    loop.complete(state, "learn", dict(distill=dict(unit_id="u1", revision=1)))
+
+    # Round 2: one-shot `record` directly from consult.
+    (repo / "kernel.py").write_text("x = 4\n", encoding="utf-8")
+    one_shot, code = loop.complete(state, "record", dict(
+        exp_id="e2", hypothesis="one-shot experiment", candidate_repo=str(repo),
+        scope_conditions=dict(soc="910B"), run_ids=["r3", "r4"], run_status="completed",
+        compile_ok=True, correctness="passed", card_seconds=20,
+        baseline=trials(120.0, 120.0), candidate=trials(132.0, 132.0),
+        distill=dict(unit_id="u2", revision=1),
+    ))
+    assert code == 0 and one_shot["round"] == 3
+    assert one_shot["baseline"]["exp_id"] == "e2"
+
+
+def test_init_reconciles_preexisting_ledger_state(tmp_path, repo):
+    ledger_path = tmp_path / "pre" / "experiment-ledger.jsonl"
+    (repo / "kernel.py").write_text("x = 2\n", encoding="utf-8")
+    cand_fp = ledger.fingerprint(repo)
+    ledger.append(ledger_path, dict(
+        task_id="t1", exp_id="e-pre", source_digest=cand_fp["source_digest"],
+        head=cand_fp["head"], baseline_source_digest="sha256:base0",
+        run_ids=["r1", "r2"], run_status="completed", verdict="supported",
+        outcome="verified", speedup_ratio=1.25, distill_ready=True,
+        conditions=dict(soc="910B"), lesson=dict(distill=None, note="not distilled yet"),
+    ))
+    state_path = tmp_path / "pre" / "rsi-loop.json"
+    out = loop.init(state_path, task_id="t1", ledger_path=ledger_path,
+                    baseline_repo=repo, direction="maximize", repetitions=2)
+    assert out["round"] == 2
+    assert out["baseline"]["exp_id"] == "e-pre"
+    assert out["baseline"]["source_digest"] == cand_fp["source_digest"]
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert [p["exp_id"] for p in saved["pending_distill"]] == ["e-pre"]
