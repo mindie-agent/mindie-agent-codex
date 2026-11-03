@@ -5,7 +5,7 @@ Computes candidate source/product/dependency digests (`mindie-product/1`, `mindi
 
 [Invariants]
 - The running installer never imports the candidate's private runtime probe; the candidate validates its own runtime and publication contract.
-- `uv.lock` revisions must match `pyproject.toml` exact official commit pins for `mindie-knowledge`, `remote-dev`, and `mindie-diagnostics`.
+- `uv.lock` revisions must match `pyproject.toml` exact official commit pins for `mindie-knowledge`, `remote-dev`, `mindie-diagnostics`, and `mindie-bench`.
 
 [Timeouts & Locks]
 - `probe()` bounds candidate validation at `180.0s` and `max_output=65536` through the caller-supplied `command` runner.
@@ -46,7 +46,7 @@ FAILURE_CODES = {
     "validation": {"internal_error"},
     "process": {"nonzero_exit"},
 }
-FAILURE_COMPONENTS = {"mindie-knowledge", "remote-dev", "mindie-diagnostics"}
+FAILURE_COMPONENTS = {"mindie-knowledge", "remote-dev", "mindie-diagnostics", "mindie-bench"}
 PUBLICATION_PROCESS_CODES = {"init_failed", "fetch_failed", "revision_read_failed"}
 
 
@@ -155,7 +155,7 @@ def requirements(source):
     sources = project["tool"]["uv"]["sources"]
     pins = {}
     expected = {"mindie-knowledge": "knowledge", "remote-dev": "remote-dev",
-                "mindie-diagnostics": "diagnostics"}
+                "mindie-diagnostics": "diagnostics", "mindie-bench": "mindie-bench"}
     for name, repo in expected.items():
         value = sources.get(name, {})
         if (set(value) != {"git", "rev"}
