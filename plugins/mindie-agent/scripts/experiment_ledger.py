@@ -27,7 +27,7 @@ and `PROGRESS.md` are MindIE Bench's (`evaluate_rsi_candidate_gates`,
   for at most LOCK_WAIT_SECONDS, then raises `TimeoutError`.
 
 [Side-Effect Policy]
-- Only `append` writes: one ledger line and `PROGRESS.md`, both through MindIE Bench.
+- Only `append` writes: one ledger line and `PROGRESS.md` through MindIE Bench, as UTF-8 LF.
 """
 from __future__ import annotations
 
@@ -284,9 +284,44 @@ def validate(record) -> dict:
     return record
 
 
+def _append_json_line(path, entry) -> None:
+    """Append one JSON object as a single LF-terminated line.
+
+    MindIE Bench `rsi_explorer._append_json_line` uses `os.open` + `os.write`.
+    On Windows that is CRT text mode unless `O_BINARY` is set, so a lone `\\n`
+    becomes `\\r\\n`. `newline="\\n"` keeps the on-disk ledger portable.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(entry, sort_keys=True, ensure_ascii=False, default=str) + "\n"
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(line)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _atomic_write_text(path, text: str) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
 def append(path, record, *, progress=None, goal="") -> dict:
     """Validate, then write through MindIE Bench `append_ledger_and_render_progress`."""
-    from mindie_bench.runner.rsi_explorer import append_ledger_and_render_progress
+    from mindie_bench.runner import rsi_explorer
+    # Own the two file writers so Windows CRT text-mode `os.open`/`fdopen`
+    # cannot inject CR; judgment and PROGRESS.md rendering stay in Bench.
+    rsi_explorer._append_json_line = _append_json_line
+    rsi_explorer._atomic_write_text = _atomic_write_text
     entry = validate(record)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -297,8 +332,8 @@ def append(path, record, *, progress=None, goal="") -> dict:
                 for r in read_ledger(path)):
             raise ValueError(f"exp_id {entry['exp_id']!r} already recorded; set "
                              "supersedes_exp_id to revise it")
-        append_ledger_and_render_progress(path, progress, entry,
-                                          campaign_id=entry["task_id"], goal=goal)
+        rsi_explorer.append_ledger_and_render_progress(
+            path, progress, entry, campaign_id=entry["task_id"], goal=goal)
     return dict(status="recorded", exp_id=entry["exp_id"], verdict=entry["verdict"],
                 progress=str(progress))
 
