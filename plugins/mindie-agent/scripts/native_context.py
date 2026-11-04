@@ -33,6 +33,23 @@ TRANSPORT_ENV = (
 )
 
 
+def _desktop_replacement(configured):
+    """Desktop replaces its versioned bin/<build_id>/codex(.exe) directory on update."""
+    path = Path(configured)
+    if path.is_file():
+        return str(path)
+    try:
+        candidates = [entry / path.name for entry in path.parent.parent.iterdir()
+                      if entry.is_dir() and (entry / path.name).is_file()]
+        if candidates:
+            return str(max(candidates, key=lambda item: item.stat().st_mtime))
+    except TimeoutError:
+        raise
+    except OSError:
+        return None
+    return None
+
+
 def environment(adapter):
     value = adapter.get("native_context", {})
     if (not isinstance(value, dict) or set(value) - KEYS
@@ -45,6 +62,10 @@ def environment(adapter):
         # Desktop owns this path and replaces its versioned binary directory
         # during updates. Keep the selected profile, but use its running host.
         result["MINDIE_CODEX_BIN"] = running
+    elif "MINDIE_CODEX_BIN" in result:
+        replacement = _desktop_replacement(result["MINDIE_CODEX_BIN"])
+        if replacement is not None:
+            result["MINDIE_CODEX_BIN"] = replacement
     return result
 
 

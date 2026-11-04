@@ -133,6 +133,32 @@ def _exclusive_probe(config, deadline):
             time.sleep(min(0.1, remaining))
 
 
+def _reconcile_migrated_hooks(config, receipt):
+    """Carry forward command-matched hook trust when native updates the seed first."""
+    try:
+        adapter = _canonical(config)
+        if not isinstance(adapter, dict) or not isinstance(adapter.get("native_context"), dict):
+            return
+        from native_context import environment
+        from native_hooks import reconcile
+        from session_gate import runtime_env
+        env = runtime_env(config, adapter=adapter)
+        env.update(environment(adapter))
+        native = env.get("MINDIE_CODEX_BIN")
+        home = env.get("CODEX_HOME")
+        version = receipt.get("validation", {}).get("native_version")
+        if not (isinstance(native, str) and Path(native).is_file()
+                and isinstance(home, str) and isinstance(version, str)):
+            return
+        source = Path(home) / "plugins/cache/mindie-agent/mindie-agent" / version
+        if (source / "hooks/hooks.json").is_file():
+            reconcile(native, env, source)
+    except Exception:
+        # Canonical activation already succeeded; hook reconciliation retries
+        # in background maintenance without failing MCP startup.
+        return
+
+
 def _migrate_locked(config, release, receipt, deadline):
     if binding_matches_release(config, release, receipt):
         return dict(status="ready")
@@ -179,6 +205,7 @@ def _migrate_locked(config, release, receipt, deadline):
             return _deferred("startup_deadline")
         result = activate(config, prepared, control_seconds=min(30.0, remaining))
         if binding_matches_release(config, release, receipt):
+            _reconcile_migrated_hooks(config, receipt)
             return dict(status="ready", service=result.get("service") or result.get("status"))
         if (result.get("status") == "deferred"
                 and result.get("reason") in {"operation_busy", "service_busy"}):
