@@ -29,11 +29,16 @@ class GuardLimitTests(unittest.TestCase):
         self._owner_exit_case(close_pipes=True)
 
     def _owner_exit_case(self, *, close_pipes):
+        # The native writes `survived` only after this quiet period. Owner
+        # death is observed on a 0.1s poll, so the period has to outlast a
+        # slow kill on the CI runner. The assertion waits past the period,
+        # which keeps an unreaped native visible.
+        quiet = 1.0
         with tempfile.TemporaryDirectory() as directory:
             ready, survived = Path(directory) / 'ready', Path(directory) / 'survived'
             prefix = 'import os; os.close(1); os.close(2); ' if close_pipes else ''
             native = (prefix + f"from pathlib import Path; import time; Path({str(ready)!r}).touch(); "
-                      f"time.sleep(0.25); Path({str(survived)!r}).touch(); time.sleep(20)")
+                      f"time.sleep({quiet}); Path({str(survived)!r}).touch(); time.sleep(20)")
             worker = (f"import sys; sys.path.insert(0,{str(SCRIPTS)!r}); import process_guard; "
                       f"process_guard.run_codex([sys.executable,'-c',{native!r}], '')")
             owner = ("import os,sys,subprocess,time; "
@@ -47,9 +52,12 @@ class GuardLimitTests(unittest.TestCase):
                 while not ready.exists() and time.monotonic() < until:
                     time.sleep(.02)
                 self.assertTrue(ready.exists())
+                ready_at = time.monotonic()
                 process.kill()
                 process.wait(timeout=2)
-                time.sleep(0.35)
+                remaining = quiet + 0.4 - (time.monotonic() - ready_at)
+                if remaining > 0:
+                    time.sleep(remaining)
                 self.assertFalse(survived.exists(), 'native outlived its owner')
             finally:
                 if process.poll() is None:

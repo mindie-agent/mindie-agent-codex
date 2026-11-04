@@ -12,7 +12,7 @@ Implements the JSON-RPC MCP server gate (`Gate`, `serve`) for public `remote`/`c
 - When a remote operation has already succeeded (`outcome == "succeeded"`), a local receipt-accounting failure NEVER overwrites the business result with `isError=True` (`receipt_unconfirmed=True` is attached instead).
 
 [Timeouts & Locks]
-- Uses shared `update_lock` around bounded runtime subprocess dispatch (per-tool remote budget derived from the native inner wait plus 60s grace, knowledge `45.0s`, distill helper budget), SQLite WAL mode with `busy_timeout=5000` for `RemoteReceipts`, and per-request cancellation events triggered by `notifications/cancelled` or `mindie_interrupt`.
+- Uses shared `update_lock` around bounded runtime subprocess dispatch (per-tool remote budget derived from the native inner wait plus 60s grace, knowledge `45.0s`, distill helper budget). Tools whose accepted arguments include `timeout_ms` and that have no native wait get an inner `timeout_ms` inside that budget. SQLite WAL mode with `busy_timeout=5000` for `RemoteReceipts`, and per-request cancellation events triggered by `notifications/cancelled` or `mindie_interrupt`.
 
 [Side-Effect Policy]
 - `initialize` and `tools/list` are pure in-memory catalog reads (`mcp_catalog.json`) that never touch disk or start services.
@@ -32,7 +32,7 @@ import threading
 import uuid
 import weakref
 
-from bounded_process import run, ProcessResult
+from bounded_process import helper_deadline_category, helper_deadline_text, helper_failure_message, run, ProcessResult
 from diagnostic_support import attach as attach_diagnostic
 from diagnostic_support import failure as diagnostic_failure
 from session_gate import (
@@ -53,6 +53,8 @@ KNOWLEDGE_MAX_OUTPUT = 1024 * 1024
 REMOTE_MAX_OUTPUT = 32 * 1024 * 1024
 REMOTE_GRACE_SECONDS = 60.0
 REMOTE_MIN_BUDGET_SECONDS = 180.0
+# remote-dev restarts the python RPC wait by this much after the worker is ready.
+REMOTE_RPC_FOLLOW_SECONDS = 5.0
 # Native outer wait contracts (milliseconds). write_stdin's empty poll may wait
 # 300000 ms even though a non-empty write yields sooner; the outer helper must
 # include the larger contract or it would cut off a legal inner poll.
@@ -267,11 +269,11 @@ def helper_failure(result, diagnostic, stage, category):
         execution="outcome_unconfirmed", automatic_retry=False,
         diagnostic=result.get("diagnostic", {}),
     )
-    result["content"].append(dict(
-        type="text",
-        text=f"The local MindIE runtime helper failed at {stage} ({category}). "
-             "The business operation's outcome is unconfirmed; no automatic retry.",
-    ))
+    block = dict(type="text", text=helper_failure_message(stage, category))
+    if helper_deadline_text(category):
+        result["content"] = [block]
+    else:
+        result["content"].append(block)
     return result
 
 
@@ -517,16 +519,18 @@ class Gate:
             if not receipts.claim(identity):
                 raise ValueError("Duplicate MCP request; not executed again")
             admitted = True
+            # Derive the outer budget from this tool's native inner wait, then
+            # add SSH preparation, JSON framing, pipe drain and cleanup. An
+            # explicit caller budget may only lengthen this bound. The helper
+            # uses the same number to place a shorter inner remote deadline.
+            bound = max(coerce_timeout(timeout) or 0.0, remote_timeout(name, args))
             payload = dict(
                 surface="remote",
                 name=name,
                 arguments=args,
                 remote_session_id=session,
+                helper_timeout_seconds=bound,
             )
-            # Derive the outer budget from this tool's native inner wait, then
-            # add SSH preparation, JSON framing, pipe drain and cleanup. An
-            # explicit caller budget may only lengthen this bound.
-            bound = max(coerce_timeout(timeout) or 0.0, remote_timeout(name, args))
             with update_lock(config_path()):
                 config = _adapter_config()
                 stage = "helper_run"
@@ -540,6 +544,7 @@ class Gate:
                     max_output=REMOTE_MAX_OUTPUT,
                     cancel=cancel,
                     env=runtime_env(config_path()),
+                    classify_timeout=True,
                 )
             stage = "helper_response"
             result = runtime_result(output)
@@ -559,7 +564,7 @@ class Gate:
                 if stage == "helper_response":
                     category = "helper_protocol"
                 elif isinstance(exc, TimeoutError):
-                    category = "helper_timeout"
+                    category = helper_deadline_category(exc)
                 else:
                     category = "helper_failed"
                 diagnostic = diagnostic_failure(
@@ -643,7 +648,7 @@ class Gate:
                 if stage == "helper_response":
                     category = "helper_protocol"
                 elif isinstance(exc, TimeoutError):
-                    category = "helper_timeout"
+                    category = helper_deadline_category(exc)
                 else:
                     category = "helper_failed"
                 diagnostic = diagnostic_failure(
