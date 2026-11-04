@@ -906,6 +906,65 @@ class UpdateTests(unittest.TestCase):
             status="disabled", checked_at=100, last_successful_check=1)))
         self.assertEqual(update_trigger.next_check(self.config), 160)
 
+    def _component_update_event(self, error):
+        from mindie_diagnostics.integration import configure_reporting
+
+        policy, logs = Path(os.environ["MINDIE_DIAGNOSTICS_CONFIG"]), Path(os.environ["MINDIE_DIAGNOSTICS_ROOT"])
+        configure_reporting(True, config=policy, roots=[str(logs)])
+        self.components.side_effect = error
+        with patch("mindie_knowledge.releases_io.fetch_releases", return_value=[]):
+            result = update.check(self.config)
+        events = [json.loads(line) for path in logs.glob("events/*/*.jsonl")
+                  for line in path.read_text().splitlines()]
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["stage"], "component_update")
+        self.assertTrue(events)
+        return result, events[-1]
+
+    def test_component_update_http_error_is_connectivity_not_internal(self):
+        import component_update
+        from bounded_process import ProcessResult
+
+        error = component_update.CatalogError("release_http_error")
+        error.code = "release_http_error"
+        error.category = "temporary_network"
+        error.status = 403
+        error.process_result = ProcessResult("completed", "", 1)
+        _result, event = self._component_update_event(error)
+        self.assertEqual(event["attributes"]["category"], "connectivity")
+        self.assertEqual(event["attributes"]["error_code"], "release_http_error")
+        self.assertEqual(event["attributes"]["error_type"], "CatalogError")
+        self.assertEqual(event["attributes"]["exit_code"], 1)
+        self.assertIs(event["reportable"], False)
+
+    def test_component_update_malformed_feed_is_not_an_internal_product_fault(self):
+        import component_update
+
+        error = component_update.CatalogError("invalid_release_json")
+        error.code = "invalid_release_json"
+        error.category = "temporary_network"
+        _result, event = self._component_update_event(error)
+        self.assertEqual(event["attributes"]["category"], "connectivity")
+        self.assertEqual(event["attributes"]["error_code"], "update_transport_unavailable")
+        self.assertIs(event["reportable"], False)
+
+    def test_unclassified_component_update_runtimeerror_remains_internal(self):
+        error = RuntimeError("MindIE runtime failed; not retried")
+        error.process_result = ProcessResult("completed", "", 1)
+        _result, event = self._component_update_event(error)
+        self.assertEqual(event["attributes"]["category"], "internal")
+        self.assertEqual(event["attributes"]["error_code"], "update_internal_failure")
+        self.assertEqual(event["attributes"]["error_type"], "RuntimeError")
+        self.assertEqual(event["attributes"]["exit_code"], 1)
+        self.assertIs(event["reportable"], True)
+
+    def test_component_update_missing_helper_is_a_local_prerequisite(self):
+        error = FileNotFoundError("uv is required to prepare a component runtime")
+        _result, event = self._component_update_event(error)
+        self.assertEqual(event["attributes"]["category"], "prerequisite")
+        self.assertEqual(event["attributes"]["error_code"], "update_prerequisite_unavailable")
+        self.assertIs(event["reportable"], False)
+
 
 if __name__ == "__main__":
     unittest.main()
