@@ -10,6 +10,7 @@ Runs a child subprocess (`run(command, payload, timeout=..., max_output=..., can
 [Timeouts & Locks]
 - An opt-in `capture` (capture_spool.Capture) streams output to bounded local files instead of the in-memory `max_output` guard; without it the strict guard is unchanged.
 - Enforces caller-supplied `timeout` (monotonic deadline) and `max_output` (`default 1 MiB` bytes), plus a 2.0s reader-join grace on Windows.
+- `classify_timeout` labels a deadline with helper liveness and a closed remote category. Stderr text is not copied onto the error.
 
 [Side-Effect Policy]
 - Spawns and reaps the requested child process tree; attaches structured `ProcessResult` metadata to raised exceptions.
@@ -324,7 +325,83 @@ def _attach_transport(exc, stdout, stderr, *, timed_out):
         exc.category = "temporary_network"
 
 
-def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), transport=False, on_failure=None, output_encoding="utf-8", capture=None):
+_DEADLINE_MESSAGE = "MindIE request deadline exceeded; outcome may be unknown; not retried"
+# Definite connect failures only. A bare "timed out" does not mean the host is unreachable.
+_UNREACHABLE_PHRASES = (
+    "could not resolve host",
+    "temporary failure in name resolution",
+    "name or service not known",
+    "nodename nor servname",
+    "temporary failure resolving",
+    "network is unreachable",
+    "no route to host",
+    "connection refused",
+    "connection timed out",
+    "operation timed out",
+    "failed to connect",
+)
+_HELPER_DEADLINE_CATEGORIES = frozenset({
+    "remote_unreachable",
+    "remote_authentication",
+    "helper_still_running",
+    "helper_output_stalled",
+})
+_HELPER_DEADLINE_TEXT = {
+    "remote_unreachable": "The remote host was unreachable.",
+    "remote_authentication": "Remote authentication failed before the operation finished.",
+    "helper_still_running": "The helper process was still alive at the deadline and was stopped.",
+    "helper_output_stalled": "The helper process had already exited, but its output was not closed before the deadline.",
+}
+
+
+class HelperDeadline(TimeoutError):
+    """Helper deadline whose category is a closed label. The message stays static."""
+
+    def __init__(self, category, *, helper_alive):
+        self.category = category
+        self.helper_alive = bool(helper_alive)
+        super().__init__(_DEADLINE_MESSAGE)
+
+
+def _stderr_deadline_category(stderr):
+    text = _stream_edges(stderr).lower()
+    if _has_phrase(text, _UNREACHABLE_PHRASES):
+        return "remote_unreachable"
+    if _has_phrase(text, _AUTH_PHRASES):
+        return "remote_authentication"
+    return None
+
+
+def classified_deadline(process, stderr):
+    """Label one helper deadline from liveness and stderr. Does not copy stderr."""
+    alive = process.poll() is None
+    category = _stderr_deadline_category(stderr) or (
+        "helper_still_running" if alive else "helper_output_stalled"
+    )
+    return HelperDeadline(category, helper_alive=alive)
+
+
+def helper_deadline_category(exc):
+    category = getattr(exc, "category", None)
+    if category in _HELPER_DEADLINE_CATEGORIES:
+        return category
+    return "helper_timeout"
+
+
+def helper_deadline_text(category):
+    return _HELPER_DEADLINE_TEXT.get(category)
+
+
+def helper_failure_message(stage, category):
+    """Public helper failure sentence. Classified deadlines do not echo stderr."""
+    detail = helper_deadline_text(category)
+    text = f"The local MindIE runtime helper failed at {stage} ({category}). "
+    if detail:
+        text += detail + " "
+    return text + "The business operation's outcome is unconfirmed; no automatic retry."
+
+
+def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), transport=False, on_failure=None, output_encoding="utf-8", capture=None, classify_timeout=False):
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ, "out")
     selector.register(process.stderr, selectors.EVENT_READ, "err")
@@ -334,9 +411,9 @@ def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), t
     cap = _Cap(max_output)
 
     def timeout_error():
-        err = TimeoutError(
-            "MindIE request deadline exceeded; outcome may be unknown; not retried"
-        )
+        if classify_timeout:
+            return classified_deadline(process, errors)
+        err = TimeoutError(_DEADLINE_MESSAGE)
         if transport:
             _attach_transport(err, output, errors, timed_out=True)
         return err
@@ -401,7 +478,7 @@ def _run_posix(process, timeout, max_output, cancel, allowed_returncodes=(0,), t
         _cleanup(process, result, selector=selector)
 
 
-def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,), transport=False, on_failure=None, output_encoding="utf-8", capture=None):
+def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,), transport=False, on_failure=None, output_encoding="utf-8", capture=None, classify_timeout=False):
     # Windows (unverified on real hardware): reader threads replace selectors.
     deadline = None if timeout is None else time.monotonic() + timeout
     output = bytearray()
@@ -445,9 +522,11 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
             if cancel is not None and cancel.is_set():
                 raise RuntimeError("MindIE request cancelled; not retried")
             if deadline is not None and time.monotonic() >= deadline:
-                err = TimeoutError(
-                    "MindIE request deadline exceeded; outcome may be unknown; not retried"
-                )
+                with lock:
+                    snapshot = bytes(errors)
+                if classify_timeout:
+                    raise classified_deadline(process, snapshot)
+                err = TimeoutError(_DEADLINE_MESSAGE)
                 if transport:
                     _attach_transport(err, output, errors, timed_out=True)
                 raise err
@@ -491,7 +570,7 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
         _cleanup(process, result, threads=threads)
 
 
-def run(command, data, *, timeout=None, max_output=1024 * 1024, cancel=None, env=None, allowed_returncodes=(0,), transport=False, allow_service=False, on_failure=None, output_encoding="utf-8", capture=None):
+def run(command, data, *, timeout=None, max_output=1024 * 1024, cancel=None, env=None, allowed_returncodes=(0,), transport=False, allow_service=False, on_failure=None, output_encoding="utf-8", capture=None, classify_timeout=False):
     codecs.lookup(output_encoding)
     if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
                                 or not math.isfinite(timeout) or timeout <= 0):
@@ -509,8 +588,8 @@ def run(command, data, *, timeout=None, max_output=1024 * 1024, cancel=None, env
             raise
         if POSIX:
             return _run_posix(
-                process, timeout, max_output, cancel, allowed_returncodes, transport, on_failure, output_encoding, capture
+                process, timeout, max_output, cancel, allowed_returncodes, transport, on_failure, output_encoding, capture, classify_timeout
             )
         return _run_windows(
-            process, timeout, max_output, cancel, allowed_returncodes, transport, on_failure, output_encoding, capture
+            process, timeout, max_output, cancel, allowed_returncodes, transport, on_failure, output_encoding, capture, classify_timeout
         )

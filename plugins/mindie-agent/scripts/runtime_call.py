@@ -20,6 +20,8 @@ fixed installed runtime environment.
 [Timeouts & Locks]
 - Bounded RPC and helper deadlines; C6 distillation uses the shared summary
   worker budget plus ledger/cleanup reserve, not the short query deadline.
+- A remote tool with no native wait and no caller timeout receives a finite
+  `timeout_ms` inside the helper budget.
 
 [Side-Effect Policy]
 - Attaches structured diagnostic references on failure; never silently replays
@@ -61,6 +63,30 @@ def distill_rpc_timeout():
 def distill_helper_timeout():
     """Leave process start, serialization and cleanup outside the inner RPC."""
     return distill_rpc_timeout() + 30.0
+
+
+def apply_remote_deadline(name, arguments, outer_seconds):
+    """Give a cutoff to a remote tool that would otherwise wait without one.
+
+    remote-dev treats a missing timeout as no wall-clock limit, so the helper
+    sits until this process is killed and the only public failure is
+    TimeoutError. Native long polls and an explicit timeout/yield keep their
+    own contract. The injected deadline stays inside the helper budget by the
+    cleanup grace and the python RPC follow-on wait. A slow handshake can
+    restart that wait; the outer helper deadline still stops the overlap.
+    """
+    from mcp_gate import REMOTE_GRACE_SECONDS, REMOTE_NATIVE_MAX_WAIT_MS, REMOTE_RPC_FOLLOW_SECONDS
+
+    args = dict(arguments or {})
+    if name in REMOTE_NATIVE_MAX_WAIT_MS or any(key in args for key in ("timeout_ms", "timeout", "yield_time_ms")):
+        return args
+    if isinstance(outer_seconds, bool) or not isinstance(outer_seconds, (int, float)):
+        raise ValueError("remote helper budget must be a positive finite number")
+    inner = float(outer_seconds) - float(REMOTE_GRACE_SECONDS) - float(REMOTE_RPC_FOLLOW_SECONDS)
+    if inner != inner or inner <= 0 or inner == float("inf"):
+        raise ValueError("remote helper budget does not cover the inner deadline and cleanup grace")
+    args["timeout_ms"] = int(inner * 1000)
+    return args
 
 
 class LeaseRequired(ValueError):
@@ -352,6 +378,9 @@ def remote(payload):
     from remote_dev.core.rpc_transport import close_connections
 
     args = dict(payload["arguments"])
+    outer = payload.get("helper_timeout_seconds")
+    if not isinstance(outer, bool) and isinstance(outer, (int, float)):
+        args = apply_remote_deadline(name, args, outer)
     shaped = None
     # Trusted plugin binding for this MCP process. Tool arguments can never
     # select or override the native profile; the launcher already injects the
