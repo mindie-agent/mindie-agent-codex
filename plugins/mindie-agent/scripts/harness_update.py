@@ -210,6 +210,27 @@ def _select_catalog(native, env, root, pending):
     _atomic(root / "native.json", pending)
 
 
+def _preserve_hook_trust(pending, env, root):
+    from native_hooks import preserve
+    source = Path(pending["source"])
+    try:
+        pending["hook_trust"] = preserve(env["MINDIE_CODEX_BIN"], env, source,
+                                         pending.get("approved_hooks", []))
+    except Exception as exc:
+        process = getattr(exc, "process_result", None)
+        if isinstance(process, ProcessResult) and process.cleanup:
+            pending.update(stage="hook_trust_unknown", process=_process_fact(process))
+            try:
+                _atomic(root / "native.json", pending)
+            except TimeoutError:
+                raise
+            except (OSError, ValueError) as record_error:
+                exc.add_note("Hook management receipt also failed: " + type(record_error).__name__)
+                exc.receipt_error_type = type(record_error).__name__
+        raise
+    _atomic(root / "native.json", pending)
+
+
 def _native_install(native, env, root, metadata, before):
     pending_path = root / "native.json"
     catalog_root = root / "catalog"
@@ -240,6 +261,10 @@ def _native_install(native, env, root, metadata, before):
                      [native, "plugin", "add", PLUGIN, "--json"], env)
     pending = _complete_install(native, env, pending)
     _atomic(pending_path, pending)
+    if pending.get("approved_hooks"):
+        # Carry forward hook trust immediately after plugin_add so the user is
+        # never prompted while ensure_runtime builds the isolated uv environment.
+        _preserve_hook_trust(pending, env, root)
     return pending
 
 
@@ -310,23 +335,7 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
             pending["activation"] = dict(status="not_started")
         _atomic(root / "native.json", pending)
     if "hook_trust" not in pending:
-        from native_hooks import preserve
-        try:
-            pending["hook_trust"] = preserve(env["MINDIE_CODEX_BIN"], env, source,
-                                             pending.get("approved_hooks", []))
-        except Exception as exc:
-            process = getattr(exc, "process_result", None)
-            if isinstance(process, ProcessResult) and process.cleanup:
-                pending.update(stage="hook_trust_unknown", process=_process_fact(process))
-                try:
-                    _atomic(root / "native.json", pending)
-                except TimeoutError:
-                    raise
-                except (OSError, ValueError) as record_error:
-                    exc.add_note("Hook management receipt also failed: " + type(record_error).__name__)
-                    exc.receipt_error_type = type(record_error).__name__
-            raise
-        _atomic(root / "native.json", pending)
+        _preserve_hook_trust(pending, env, root)
     runtime = pending["runtime"]
     if first_install:
         pending["activation"] = dict(status="unconfirmed")
@@ -610,8 +619,12 @@ def check(config, *, first_install=False, force=False):
                         if selected["status"] != "candidate":
                             if before is not None:
                                 from component_update import check as component_check
+                                from native_hooks import reconcile
                                 source = (Path(env["CODEX_HOME"]) / "plugins/cache/mindie-agent/mindie-agent"
                                           / before["version"])
+                                if (source / "hooks/hooks.json").is_file():
+                                    stage = "hook_trust"
+                                    reconcile(native, env, source)
                                 data = Path(env["CODEX_HOME"]) / "plugins/data/mindie-agent-mindie-agent"
                                 stage = "component_update"
                                 status["components"] = component_check(config, source, data, force=force)

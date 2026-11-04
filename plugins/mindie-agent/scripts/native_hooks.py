@@ -238,12 +238,72 @@ def _own_handler(hook, source):
     return True
 
 
+def _prior_split_approval(row, states):
+    """Return prior combined hash when only plugin content hash changed across versions."""
+    current = row.get("currentHash")
+    if row.get("trustStatus") != "modified" or not isinstance(current, str) or "/" not in current:
+        return None
+    command_hash, _ = current.split("/", 1)
+    state = states.get(row.get("key"))
+    if not isinstance(state, dict) or state.get("enabled") is False:
+        return None
+    trusted_hash = state.get("trusted_hash")
+    content_hash = state.get("trusted_content_hash")
+    if (trusted_hash == command_hash and isinstance(content_hash, str)
+            and content_hash.startswith("sha256:")):
+        return f"{trusted_hash}/{content_hash}"
+    return None
+
+
 def snapshot(native, env, source):
     with NativeHooks(native, env) as api:
-        return [dict(key=row["key"], event=row["eventName"], hash=row["currentHash"])
-                for row in api.hooks()
-                if _own_handler(row, source)
-                and row.get("enabled") is True and row.get("trustStatus") == "trusted"]
+        rows = [row for row in api.hooks() if _own_handler(row, source)]
+        states = None
+        approved = []
+        for row in rows:
+            if row.get("enabled") is not True:
+                continue
+            if row.get("trustStatus") == "trusted":
+                approved.append(dict(key=row["key"], event=row["eventName"], hash=row["currentHash"]))
+                continue
+            if row.get("trustStatus") == "modified" and "/" in str(row.get("currentHash", "")):
+                if states is None:
+                    config, _, _ = api.user_config()
+                    states = ((config.get("config", {}).get("hooks") or {}).get("state") or {})
+                prior = _prior_split_approval(row, states)
+                if prior is not None:
+                    approved.append(dict(key=row["key"], event=row["eventName"], hash=prior))
+        return approved
+
+
+def reconcile(native, env, source):
+    """Update split content hashes when own handlers keep their user-approved command hash."""
+    source = Path(source)
+    if not (source / "hooks/hooks.json").is_file():
+        return dict(status="unchanged", trusted=0)
+    with NativeHooks(native, env) as api:
+        rows = [row for row in api.hooks() if _own_handler(row, source)]
+        modified = [row for row in rows
+                    if row.get("enabled") is True and row.get("trustStatus") == "modified"
+                    and "/" in str(row.get("currentHash", ""))]
+        if not modified:
+            return dict(status="unchanged", trusted=0)
+        config, _, _ = api.user_config()
+        states = ((config.get("config", {}).get("hooks") or {}).get("state") or {})
+        approved, needs_write = [], False
+        for row in rows:
+            if row.get("enabled") is not True:
+                continue
+            if row.get("trustStatus") == "trusted":
+                approved.append(dict(key=row["key"], event=row["eventName"], hash=row["currentHash"]))
+            else:
+                prior = _prior_split_approval(row, states)
+                if prior is not None:
+                    approved.append(dict(key=row["key"], event=row["eventName"], hash=prior))
+                    needs_write = True
+    if not needs_write:
+        return dict(status="unchanged", trusted=0)
+    return preserve(native, env, source, approved)
 
 
 def preserve(native, env, source, approved):

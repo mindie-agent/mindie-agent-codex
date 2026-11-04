@@ -246,6 +246,39 @@ class HookTests(unittest.TestCase):
                 api.select_catalog(self.root / "catalog")
         write.assert_called_once()
 
+    def test_reconcile_carries_forward_approved_command_hash_when_only_plugin_content_changed(self):
+        cmd_start = "sha256:" + "1" * 64
+        cmd_stop = "sha256:" + "2" * 64
+        old_content = "sha256:" + "a" * 64
+        new_content = "sha256:" + "b" * 64
+        self.rows[0].update(currentHash=f"{cmd_start}/{new_content}", trustStatus="modified")
+        self.rows[1].update(currentHash=f"{cmd_stop}/{new_content}", trustStatus="modified")
+        states = {
+            self.rows[0]["key"]: dict(trusted_hash=cmd_start, trusted_content_hash=old_content),
+            self.rows[1]["key"]: dict(trusted_hash="sha256:" + "9" * 64, trusted_content_hash=old_content),
+        }
+        self.api.user_config = lambda: (dict(config=dict(hooks=dict(state=states))), {}, self.root / "config.toml")
+        snap = native_hooks.snapshot("/native", {}, self.root)
+        self.assertEqual(snap, [dict(key=self.rows[0]["key"], event="sessionStart",
+                                     hash=f"{cmd_start}/{old_content}")])
+        outcome = native_hooks.reconcile("/native", {}, self.root)
+        self.assertEqual(outcome, dict(status="complete", trusted=1, user_choices_preserved=0))
+        self.assertEqual(self.writes, [(self.rows[0]["key"], f"{cmd_start}/{old_content}")])
+
+    def test_desktop_replacement_resolves_updated_host_binary(self):
+        import os
+        import native_context
+        bin_root = self.root / "OpenAI/Codex/bin"
+        old_bin = bin_root / "oldbuild/codex.exe"
+        new_bin = bin_root / "newbuild/codex.exe"
+        new_bin.parent.mkdir(parents=True)
+        new_bin.write_text("binary")
+        adapter = dict(native_context=dict(CODEX_HOME=str(self.root), MINDIE_CODEX_BIN=str(old_bin)))
+        with patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("CODEX_APP_RUNTIME_CLI_PATH", None)
+            resolved = native_context.environment(adapter)
+        self.assertEqual(resolved["MINDIE_CODEX_BIN"], str(new_bin))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.18-0F766E.svg" alt="Release v0.1.18"></a>
+  <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.19-0F766E.svg" alt="Release v0.1.19"></a>
   <a href="plugins/mindie-agent/harness-compatibility.json"><img src="https://img.shields.io/badge/Codex_CLI-0.153.4_%7C_%3E%3D0.162.0-10A37F.svg" alt="Codex CLI 0.153.4 | >=0.162.0"></a>
   <a href="plugins/mindie-agent/pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
@@ -27,7 +27,7 @@
 
 ---
 
-**MindIE Agent for OpenAI Codex CLI**（`mindie-agent-codex`）是 [MindIE Agent](https://github.com/mindie-agent/mindie-agent) 面向 OpenAI Codex CLI 的原生插件，服务于**昇腾（Ascend）NPU 上的 AI Infra 设计、开发与测试全流程**。当前 `v0.1.18`（配套主产品 `0.1.8`）已交付三大核心能力：**本地与社区知识库检索及隐私脱敏**（优先覆盖 `vLLM-Ascend` 特性开发与 `AscendC` / `Triton` 算子工程）、**远端 SSH / Docker 开发与 NPU 状态巡检**，以及**统一故障诊断与脱敏上报**；更多昇腾基础软件领域将随演进路线图持续扩展。
+**MindIE Agent for OpenAI Codex CLI**（`mindie-agent-codex`）是 [MindIE Agent](https://github.com/mindie-agent/mindie-agent) 面向 OpenAI Codex CLI 的原生插件，服务于**昇腾（Ascend）NPU 上的 AI Infra 设计、开发与测试全流程**。当前 `v0.1.19`（配套主产品 `0.1.8`）已交付三大核心能力：**本地与社区知识库检索及隐私脱敏**（优先覆盖 `vLLM-Ascend` 特性开发与 `AscendC` / `Triton` 算子工程）、**远端 SSH / Docker 开发与 NPU 状态巡检**，以及**统一故障诊断与脱敏上报**；更多昇腾基础软件领域将随演进路线图持续扩展。
 
 项目设计遵循 [MindIE Agent 工程设计原则](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md)：**领域知识与 Skill 体系通过 `/mindie-agent`（或 `$mindie-agent`）手动按需唤醒**，不干扰非昇腾常规任务；**`mindie-remote-dev` 远端昇腾开发与测试工具默认常驻自动触发**；所有状态与报错真实可定位，不做静默降级或盲目重试。
 
@@ -102,10 +102,10 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
    codex --version
    ```
    - **硬性门禁（严禁跳过或静默忽略）**：若未安装 `gh`，请先协助安装（macOS：`brew install gh`；Windows：`winget install --id GitHub.cli`；Ubuntu / WSL：`sudo apt update && sudo apt install -y gh`）。账号读取成功时复用已有认证；需要登录时按 [GitHub 登录引导](plugins/mindie-agent/skills/mindie-agent/references/github-authentication.md) 选择方式：普通网络使用浏览器，企业网络或浏览器授权受阻时优先 Token。已有 Token 就在 `gh` 隐藏输入提示中粘贴（或使用已提供的私有文件），没有则引导创建。验证账号、Git 和后续进程可复用凭据后继续；网络/证书错误先修复传输，不反复要求登录。
-   - 确认 `codex --version` 匹配兼容声明中记录的宿主版本（声明于 [`plugins/mindie-agent/harness-compatibility.json`](plugins/mindie-agent/harness-compatibility.json)）：
-     - macOS：`codex-cli 0.162.0-alpha.17.2` 或 `0.164.0-alpha.11.1`
-     - 原生 Windows：`codex-cli 0.153.4`
-     - Linux / Windows WSL：`codex-cli 0.153.4`、`0.162.1` 或 `0.164.0`（新增版本的无模型验收范围见 [接口证据](docs/harness-interfaces.zh.md)）
+   - 确认 `codex --version` 落在兼容声明记录的宿主版本内（声明于 [`plugins/mindie-agent/harness-compatibility.json`](plugins/mindie-agent/harness-compatibility.json)，与页首徽章 `Codex CLI 0.153.4 | >=0.162.0` 一致；不按操作系统把精确版本排除在外）：
+     - 精确版本 `codex-cli 0.153.4`，以及范围 `>=0.162.0-alpha.17.2` 且 `<=0.999.999`（含预发布）：macOS、原生 Windows、Linux / Windows WSL 均适用。
+     - macOS 上 Homebrew `codex` `0.153.4`（无需 Codex.app）在声明内；alpha 行仍然有效，包括 `0.162.0-alpha.17.2` 与 `0.164.0-alpha.11.1`。
+     - Linux / Windows WSL 上已记录的稳定版本还包括 `0.162.1` 与 `0.164.0`（新增版本的无模型验收范围见 [接口证据](docs/harness-interfaces.zh.md)）。
    - 若在 **Linux 或 Windows WSL** 下使用后台知识服务，请额外执行 `systemctl --user show --property=Version` 确认 `systemd >= 254` 且启用了统一 cgroup v2 层级（WSL 内须使用 Linux 原生 `codex`、`git`、`uv` 与 `gh`，切勿跨 `/mnt/c` 混用 Windows 可执行文件）。
 
 2. **可选支持与贡献准备**：
@@ -113,7 +113,7 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 
 3. **添加插件市场并安装 `mindie-agent` 插件**：
    ```sh
-   codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.1.18
+   codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.1.19
    codex plugin add mindie-agent@mindie-agent --json
    ```
 
@@ -121,15 +121,15 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
    ```sh
    codex plugin list --json
    ```
-   - 确认 `codex plugin list --json` 显示 `mindie-agent@mindie-agent` 版本为 `0.1.18` 且处于启用状态。
+   - 确认 `codex plugin list --json` 显示 `mindie-agent@mindie-agent` 版本为 `0.1.19` 且处于启用状态。
    - 向用户汇报已验证的 GitHub 交互通道账号（`$GH_USER`），并告知用户：下次启动新的原生 Codex 会话时将自动触发 `SessionStart` 与 MCP 初始化（首次冷启动会通过 `uv sync --locked --no-editable` 在 `PLUGIN_DATA` 下构建隔离运行时，准备窗口最长 10 分钟），默认暴露 `mindie-remote-dev` 与 `mindie-tools`，知识接口仅由手动入口按需加载。
 
    验证成功后继续第 5 步，完成首次配置后一起汇报安装结果。
 
 5. **完成首次配置与开发工作区引导**：
    - 向用户简要说明 [用户须知](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md)，随后按 [工作区配置指南](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md) 引导工作区选择：无论是否开启社区贡献，都提供**新建并初始化 `vllm-ascend-workspace`**、**复用已有工作区目录**或**保持当前目录**三种选择（已有确认记录时直接复用）。
-   - 若用户选择新建或复用工作区，自动通过当前宿主的原生项目/工作区入口完成路径登记并核对结果，调用工作区内的 `repo_init.py` 完成源码与远端分支初始化（直接复用前序已验证的 GitHub 登录与已有 Fork 配置）。
-   - 汇总汇报插件安装状态、工作区路径、宿主登记结果与源码初始化状态（如有需用户在宿主界面点击的尾步一并说明）。
+   - 若用户选择新建或复用工作区，按 [工作区配置指南](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md) 登记路径并核对结果。只有 Codex CLI、没有 Codex.app 时，用 `codex -C "<absolute-path>"` 作为成功路径，不要执行 `codex app`，也不要把缺少 Desktop 应用当成安装失败。已安装 Codex Desktop 时，可另外通过 **Add project** 打开工作区根目录（macOS 上可选 `codex app "<absolute-path>"`；Windows 上如需则在文件夹选择器中完成选择）。`codex app` 因未安装 App 失败时，改走 `codex -C` 并继续。随后调用工作区内的 `repo_init.py` 完成源码与远端分支初始化（直接复用前序已验证的 GitHub 登录与已有 Fork 配置）。
+   - 汇总汇报插件安装状态、工作区路径、宿主登记结果（CLI `codex -C` 和/或 Desktop **Add project**）与源码初始化状态（仅当 Desktop 登记仍有需用户在界面点击的尾步时一并说明）。
    - **询问用户是否愿意给主仓点个 Star ⭐**：在汇报末尾主动询问用户：*“如果觉得 MindIE Agent 对你有帮助，需要我顺手帮你在 GitHub 上给主仓 `mindie-agent/mindie-agent` 点个 Star 吗？这能帮助项目更好地成长！⭐”* **严格授权原则**：仅当用户明确表示同意（如回复“好”、“可以”、“yes”等）时才执行以下命令点亮并校验主仓 Star，严禁未经用户同意自动静默执行：
      ```sh
      gh api --hostname github.com --silent -X PUT /user/starred/mindie-agent/mindie-agent && gh api --hostname github.com --silent /user/starred/mindie-agent/mindie-agent
@@ -138,7 +138,8 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 </details>
 
 #### 环境要求说明
-- **基础依赖与硬性指标**：`git`、`uv`、已登录认证的 **`gh`（GitHub CLI）**，以及已登录且支持原生插件的 `codex` CLI。
+- **基础依赖与硬性指标**：`git`、`uv`、已登录认证的 **`gh`（GitHub CLI）**，以及已登录且支持原生插件的 `codex` CLI。宿主版本以 [`plugins/mindie-agent/harness-compatibility.json`](plugins/mindie-agent/harness-compatibility.json) 为准：精确 `0.153.4` 与 `>=0.162.0-alpha.17.2`（含预发布，至 `0.999.999`）在 macOS、原生 Windows、Linux / WSL 上均有效。
+- **macOS**：Homebrew 或其他方式安装的 `codex` CLI 即可（`0.153.4` 与上述范围内的 alpha，含 `0.162.0-alpha.17.2`、`0.164.0-alpha.11.1`）。没有 Codex.app 时，工作区用 `codex -C`，不要求 `codex app`。
 - **原生 Windows**：由 Git for Windows 提供远端开发所需的 SSH 客户端。
 - **Linux 与 Windows WSL**：在 WSL 内请使用 Linux 原生 `codex`、`git`、`uv` 与 `gh`（配置、SQLite 与运行时均保存在 Linux 文件系统内）。后台知识服务依赖用户态 `systemd --user`（`systemd >= 254`）；若不可用，知识服务会明确报错，但独立的 `mindie-remote-dev` 远端工具集仍可正常使用。
 

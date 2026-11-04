@@ -192,8 +192,9 @@ def _baseline_runtime(source, data):
             # completion would make the owned runner terminate uv prematurely.
             redirect = ("import os,sys,subprocess;"
                         "fd=os.open(sys.argv[1],os.O_WRONLY|os.O_APPEND);"
-                        "os.dup2(fd,1);os.dup2(fd,2);os.close(fd);"
-                        "sys.exit(subprocess.run(sys.argv[2:]).returncode)")
+                        "rc=subprocess.run(sys.argv[2:],stdin=subprocess.DEVNULL,stdout=fd,stderr=fd,"
+                        "creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0)).returncode;"
+                        "os.close(fd);sys.exit(rc)")
             # Build backends may write build/ and *.egg-info into the project.
             # Native hook trust hashes the installed plugin payload, so even a
             # noneditable build must operate outside that published payload.

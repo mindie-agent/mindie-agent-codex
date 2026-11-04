@@ -56,7 +56,8 @@ class BootstrapExecTests(unittest.TestCase):
             errors = []
             output = io.StringIO()
             code = (
-                "import sys,time;from pathlib import Path;"
+                "import ctypes,os,sys,time;from pathlib import Path;"
+                "assert os.name != 'nt' or not ctypes.windll.kernel32.GetConsoleWindow();"
                 f"Path({str(marker)!r}).touch();"
                 f"\nwhile not Path({str(release)!r}).exists(): time.sleep(.01)"
                 "\nprint('PRIVATE_INSTALL_DETAIL',file=sys.stderr);raise SystemExit(17)"
