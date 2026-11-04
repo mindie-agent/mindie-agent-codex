@@ -10,7 +10,7 @@ Runs a child subprocess (`run(command, payload, timeout=..., max_output=..., can
 [Timeouts & Locks]
 - An opt-in `capture` (capture_spool.Capture) streams output to bounded local files instead of the in-memory `max_output` guard; without it the strict guard is unchanged.
 - Enforces caller-supplied `timeout` (monotonic deadline) and `max_output` (`default 1 MiB` bytes), plus a 2.0s reader-join grace on Windows.
-- `classify_timeout` labels a deadline with helper liveness and a closed remote category. Stderr text is not copied onto the error.
+- `classify_timeout` labels a deadline with helper liveness and a closed remote category. Stderr text is not copied onto the error. The Windows reader publishes one raw chunk so a short flushed line is visible at that deadline.
 
 [Side-Effect Policy]
 - Spawns and reaps the requested child process tree; attaches structured `ProcessResult` metadata to raised exceptions.
@@ -490,7 +490,9 @@ def _run_windows(process, timeout, max_output, cancel, allowed_returncodes=(0,),
     def reader(stream, dest):
         try:
             while True:
-                if capture is not None and hasattr(stream, "read1"):
+                # BufferedReader.read(n) waits for n bytes or EOF, so a short
+                # flushed stderr line stays invisible at the deadline.
+                if hasattr(stream, "read1") and (capture is not None or classify_timeout):
                     chunk = stream.read1(8192)
                 else:
                     chunk = stream.read(8192)

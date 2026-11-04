@@ -204,6 +204,7 @@ class RemoteWriteBudgetTests(unittest.TestCase):
 
 class RemoteWriteGateTests(unittest.TestCase):
     def setUp(self):
+        self.gates = []
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
         self.config = root / "config.json"
@@ -224,8 +225,19 @@ class RemoteWriteGateTests(unittest.TestCase):
         self.env.start()
 
     def tearDown(self):
+        # A helper failure traceback keeps RemoteReceipts reachable. Windows
+        # cannot delete owner.lock until that descriptor is closed.
+        for gate in self.gates:
+            for receipts in gate._remote_receipts.values():
+                receipts._ownership.close()
+        self.gates.clear()
         self.env.stop()
         cleanup_temporary_directory(self.temp)
+
+    def _gate(self):
+        gate = mcp_gate.Gate("remote")
+        self.gates.append(gate)
+        return gate
 
     def request(self):
         return {
@@ -258,7 +270,7 @@ class RemoteWriteGateTests(unittest.TestCase):
             mcp_gate, "run",
             return_value=bounded_process.ProcessResult("completed", json.dumps(helper), 0),
         ) as dispatch:
-            result = mcp_gate.Gate("remote").call(self.request())
+            result = self._gate().call(self.request())
         self.assertFalse(result["isError"])
         payload = json.loads(dispatch.call_args.args[1])
         self.assertEqual(payload["helper_timeout_seconds"], dispatch.call_args.kwargs["timeout"])
@@ -269,7 +281,7 @@ class RemoteWriteGateTests(unittest.TestCase):
     def _failed(self, exc):
         with patch.object(mcp_gate, "run", side_effect=exc), \
                 patch.object(mcp_gate, "diagnostic_failure", return_value={"logging_failed": False}) as recorded:
-            result = mcp_gate.Gate("remote").call(self.request())
+            result = self._gate().call(self.request())
         return result, recorded
 
     def test_unreachable_deadline_replaces_opaque_timeout(self):
