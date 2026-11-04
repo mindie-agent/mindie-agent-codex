@@ -20,8 +20,8 @@ fixed installed runtime environment.
 [Timeouts & Locks]
 - Bounded RPC and helper deadlines; C6 distillation uses the shared summary
   worker budget plus ledger/cleanup reserve, not the short query deadline.
-- A remote tool with no native wait and no caller timeout receives a finite
-  `timeout_ms` inside the helper budget.
+- A remote tool with no native wait, no caller timeout, and a schema that
+  accepts `timeout_ms` receives that finite deadline inside the helper budget.
 
 [Side-Effect Policy]
 - Attaches structured diagnostic references on failure; never silently replays
@@ -65,20 +65,40 @@ def distill_helper_timeout():
     return distill_rpc_timeout() + 30.0
 
 
+def _codex_native_accepts_timeout(name):
+    """Whether a Codex native wire allows timeout_ms before normalize.
+
+    None means the name is not a Codex native wire. dispatch_native validates
+    the wire properties and endpoint fields first, so an undeclared timeout_ms
+    is an unsupported argument and never reaches the canonical call.
+    """
+    from remote_dev.mcp.harness_profiles import spec_by_wire
+
+    spec = spec_by_wire("codex", name)
+    if spec is None:
+        return None
+    return "timeout_ms" in spec.properties
+
+
 def apply_remote_deadline(name, arguments, outer_seconds):
     """Give a cutoff to a remote tool that would otherwise wait without one.
 
     remote-dev treats a missing timeout as no wall-clock limit, so the helper
     sits until this process is killed and the only public failure is
-    TimeoutError. Native long polls and an explicit timeout/yield keep their
-    own contract. The injected deadline stays inside the helper budget by the
-    cleanup grace and the python RPC follow-on wait. A slow handshake can
-    restart that wait; the outer helper deadline still stops the overlap.
+    TimeoutError. Native long polls, an explicit timeout/yield, and a Codex
+    native wire that does not declare timeout_ms keep their own contract. The
+    injected deadline stays inside the helper budget by the cleanup grace and
+    the python RPC follow-on wait. A slow handshake can restart that wait; the
+    outer helper deadline still stops the overlap.
     """
     from mcp_gate import REMOTE_GRACE_SECONDS, REMOTE_NATIVE_MAX_WAIT_MS, REMOTE_RPC_FOLLOW_SECONDS
 
     args = dict(arguments or {})
-    if name in REMOTE_NATIVE_MAX_WAIT_MS or any(key in args for key in ("timeout_ms", "timeout", "yield_time_ms")):
+    if (
+        _codex_native_accepts_timeout(name) is False
+        or name in REMOTE_NATIVE_MAX_WAIT_MS
+        or any(key in args for key in ("timeout_ms", "timeout", "yield_time_ms"))
+    ):
         return args
     if isinstance(outer_seconds, bool) or not isinstance(outer_seconds, (int, float)):
         raise ValueError("remote helper budget must be a positive finite number")

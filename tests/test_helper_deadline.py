@@ -153,6 +153,54 @@ class RemoteWriteBudgetTests(unittest.TestCase):
         )
         self.assertNotEqual(args["timeout_ms"], None)
 
+    def test_codex_native_wires_are_not_given_timeout_ms(self):
+        from remote_dev.mcp.harness_profiles import spec_by_wire, validate_native_arguments
+        from remote_dev.mcp.native_runtime import _allowed_endpoint_fields
+        from remote_dev.mcp.native_spec import HarnessProfileError
+
+        cases = (
+            ("remote_apply_patch", {
+                "patch": "*** Begin Patch\n*** End Patch\n",
+                "host": "example.invalid",
+                "port": 22,
+            }),
+            ("remote_view_image", {
+                "path": "/tmp/a.png",
+                "host": "example.invalid",
+                "port": 22,
+            }),
+        )
+        seen = []
+
+        def dispatch(name, args):
+            self.assertEqual(os.environ.get("REMOTE_DEV_HARNESS_PROFILE"), "codex")
+            seen.append((name, dict(args)))
+            return {"text": "ok", "result": {"outcome": "success", "status": "ok"}}
+
+        with patch("remote_dev.mcp.tools.call_tool", side_effect=dispatch), \
+                patch("remote_dev.core.rpc_transport.close_connections"):
+            for name, arguments in cases:
+                result = runtime_call.call({
+                    "surface": "remote",
+                    "remote_session_id": "task-A",
+                    "name": name,
+                    "arguments": arguments,
+                    "helper_timeout_seconds": 180.0,
+                })
+                self.assertFalse(result["isError"])
+        self.assertEqual([item[0] for item in seen], [case[0] for case in cases])
+        allowed = _allowed_endpoint_fields()
+        for name, args in seen:
+            self.assertNotIn("timeout_ms", args)
+            self.assertNotIn("timeout", args)
+            spec = spec_by_wire("codex", name)
+            self.assertIsNotNone(spec)
+            self.assertNotIn("timeout_ms", spec.properties)
+            validate_native_arguments(spec, args, allowed)
+            with self.assertRaises(HarnessProfileError) as caught:
+                validate_native_arguments(spec, dict(args, timeout_ms=115000), allowed)
+            self.assertIn("timeout_ms", str(caught.exception))
+
     def test_native_polls_and_explicit_timeouts_are_not_shortened(self):
         bash = runtime_call.apply_remote_deadline("remote_bash", {"command": "true"}, 660)
         self.assertNotIn("timeout_ms", bash)

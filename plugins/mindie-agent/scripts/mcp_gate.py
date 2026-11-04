@@ -12,7 +12,7 @@ Implements the JSON-RPC MCP server gate (`Gate`, `serve`) for public `remote`/`c
 - When a remote operation has already succeeded (`outcome == "succeeded"`), a local receipt-accounting failure NEVER overwrites the business result with `isError=True` (`receipt_unconfirmed=True` is attached instead).
 
 [Timeouts & Locks]
-- Uses shared `update_lock` around bounded runtime subprocess dispatch (per-tool remote budget derived from the native inner wait plus 60s grace, knowledge `45.0s`, distill helper budget). File tools without a native wait get an inner `timeout_ms` inside that budget. SQLite WAL mode with `busy_timeout=5000` for `RemoteReceipts`, and per-request cancellation events triggered by `notifications/cancelled` or `mindie_interrupt`.
+- Uses shared `update_lock` around bounded runtime subprocess dispatch (per-tool remote budget derived from the native inner wait plus 60s grace, knowledge `45.0s`, distill helper budget). Tools whose accepted arguments include `timeout_ms` and that have no native wait get an inner `timeout_ms` inside that budget. SQLite WAL mode with `busy_timeout=5000` for `RemoteReceipts`, and per-request cancellation events triggered by `notifications/cancelled` or `mindie_interrupt`.
 
 [Side-Effect Policy]
 - `initialize` and `tools/list` are pure in-memory catalog reads (`mcp_catalog.json`) that never touch disk or start services.
