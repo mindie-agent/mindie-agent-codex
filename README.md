@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.19-0F766E.svg" alt="Release v0.1.19"></a>
+  <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.20-0F766E.svg" alt="Release v0.1.20"></a>
   <a href="plugins/mindie-agent/harness-compatibility.json"><img src="https://img.shields.io/badge/Codex_CLI-0.153.4_%7C_%3E%3D0.162.0-10A37F.svg" alt="Codex CLI 0.153.4 | >=0.162.0"></a>
   <a href="plugins/mindie-agent/pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
@@ -19,15 +19,15 @@
 <p align="center">
   <b>中文</b> | <a href="README.en.md">English</a> ·
   <a href="#快速开始">快速开始</a> ·
-  <a href="#装上之后能做什么">应用场景</a> ·
-  <a href="#日常使用与管理命令">命令参考</a> ·
+  <a href="#装上之后能做什么触发方式与使用示例">应用场景</a> ·
+  <a href="#日常使用与管理命令统一入口-mindie-agent">命令参考</a> ·
   <a href="#架构与组件边界">系统架构</a> ·
   <a href="docs/README.md">技术文档</a>
 </p>
 
 ---
 
-**MindIE Agent for OpenAI Codex CLI**（`mindie-agent-codex`）是 [MindIE Agent](https://github.com/mindie-agent/mindie-agent) 面向 OpenAI Codex CLI 的原生插件，服务于**昇腾（Ascend）NPU 上的 AI Infra 设计、开发与测试全流程**。当前 `v0.1.19`（配套主产品 `0.1.8`）已交付三大核心能力：**本地与社区知识库检索及隐私脱敏**（优先覆盖 `vLLM-Ascend` 特性开发与 `AscendC` / `Triton` 算子工程）、**远端 SSH / Docker 开发与 NPU 状态巡检**，以及**统一故障诊断与脱敏上报**；更多昇腾基础软件领域将随演进路线图持续扩展。
+**MindIE Agent for OpenAI Codex CLI**（`mindie-agent-codex`）是 [MindIE Agent](https://github.com/mindie-agent/mindie-agent) 面向 OpenAI Codex CLI 的原生插件，服务于**昇腾（Ascend）NPU 上的 AI Infra 设计、开发与测试全流程**。当前 `v0.1.20`（配套主产品 `0.1.8`）已交付三大核心能力：**本地与社区知识库检索及隐私脱敏**（优先覆盖 `vLLM-Ascend` 特性开发与 `AscendC` / `Triton` 算子工程）、**远端 SSH / Docker 开发与 NPU 状态巡检**，以及**统一故障诊断与脱敏上报**；更多昇腾基础软件领域将随演进路线图持续扩展。
 
 项目设计遵循 [MindIE Agent 工程设计原则](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md)：**领域知识与 Skill 体系通过 `/mindie-agent`（或 `$mindie-agent`）手动按需唤醒**，不干扰非昇腾常规任务；**`mindie-remote-dev` 远端昇腾开发与测试工具默认常驻自动触发**；所有状态与报错真实可定位，不做静默降级或盲目重试。
 
@@ -98,10 +98,15 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
    uv --version
    gh --version
    GH_USER=$(gh api --hostname github.com user --jq .login) && echo "GitHub channel verified for account: $GH_USER"
-   gh auth setup-git --hostname github.com
+   GIT_CONFIG_COUNT=2 \
+     GIT_CONFIG_KEY_0=credential.https://github.com.helper \
+     GIT_CONFIG_VALUE_0='!gh auth git-credential' \
+     GIT_CONFIG_KEY_1=credential.interactive \
+     GIT_CONFIG_VALUE_1=never \
+     git ls-remote https://github.com/mindie-agent/mindie-agent-codex.git HEAD
    codex --version
    ```
-   - **硬性门禁（严禁跳过或静默忽略）**：若未安装 `gh`，请先协助安装（macOS：`brew install gh`；Windows：`winget install --id GitHub.cli`；Ubuntu / WSL：`sudo apt update && sudo apt install -y gh`）。账号读取成功时复用已有认证；需要登录时按 [GitHub 登录引导](plugins/mindie-agent/skills/mindie-agent/references/github-authentication.md) 选择方式：普通网络使用浏览器，企业网络或浏览器授权受阻时优先 Token。已有 Token 就在 `gh` 隐藏输入提示中粘贴（或使用已提供的私有文件），没有则引导创建。验证账号、Git 和后续进程可复用凭据后继续；网络/证书错误先修复传输，不反复要求登录。
+   - **硬性门禁（严禁跳过或静默忽略，且严禁修改宿主机全局或系统级 Git 配置）**：若未安装 `gh`，请先协助安装（macOS：`brew install gh`；Windows：`winget install --id GitHub.cli`；Ubuntu / WSL：`sudo apt update && sudo apt install -y gh`）。账号读取成功时复用已有认证；需要登录时按 [GitHub 登录引导](plugins/mindie-agent/skills/mindie-agent/references/github-authentication.md) 选择方式：普通网络使用浏览器，企业网络或浏览器授权受阻时优先 Token。已有 Token 就在 `gh` 隐藏输入提示中粘贴（或使用已提供的私有文件），没有则引导创建。仅使用进程级 `GIT_CONFIG_COUNT`（及企业证书场景下的 `UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true`）验证传输通道，切勿污染宿主机全局 Git 配置。
    - 确认 `codex --version` 落在兼容声明记录的宿主版本内（声明于 [`plugins/mindie-agent/harness-compatibility.json`](plugins/mindie-agent/harness-compatibility.json)，与页首徽章 `Codex CLI 0.153.4 | >=0.162.0` 一致；不按操作系统把精确版本排除在外）：
      - 精确版本 `codex-cli 0.153.4`，以及范围 `>=0.162.0-alpha.17.2` 且 `<=0.999.999`（含预发布）：macOS、原生 Windows、Linux / Windows WSL 均适用。
      - macOS 上 Homebrew `codex` `0.153.4`（无需 Codex.app）在声明内；alpha 行仍然有效，包括 `0.162.0-alpha.17.2` 与 `0.164.0-alpha.11.1`。
@@ -109,31 +114,48 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
    - 若在 **Linux 或 Windows WSL** 下使用后台知识服务，请额外执行 `systemctl --user show --property=Version` 确认 `systemd >= 254` 且启用了统一 cgroup v2 层级（WSL 内须使用 Linux 原生 `codex`、`git`、`uv` 与 `gh`，切勿跨 `/mnt/c` 混用 Windows 可执行文件）。
 
 2. **可选支持与贡献准备**：
-   安装过程不未经询问静默执行 Star 或 Fork；安装汇报完成后显式询问用户是否愿意为主仓 `mindie-agent/mindie-agent` 点亮 Star ⭐。只有用户明确开启知识贡献后，Agent 才按需创建目标知识仓的 Fork，并将其绑定到贡献配置。
+   安装过程不未经询问静默执行 Star 或 Fork；第 5 步通过原生交互弹窗询问用户是否开启社区贡献、是否点亮主仓 `mindie-agent/mindie-agent` Star ⭐ 以及工作区初始化选项。只有用户明确开启知识贡献后，才按需自动解析或创建目标知识仓的 Fork 并绑定到贡献配置。
 
-3. **添加插件市场并安装 `mindie-agent` 插件**：
+3. **添加插件市场、安装 `mindie-agent` 插件并预热锁定运行时**：
    ```sh
-   codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.1.19
+   codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.1.20
    codex plugin add mindie-agent@mindie-agent --json
+   BOOT_PY=$(python3 -c "import glob, os; p = sorted(glob.glob(os.path.expanduser('~/.codex/plugins/**/mindie-agent/scripts/bootstrap.py'), recursive=True)); print(p[-1] if p else '')")
+   PLUGIN_DATA_DIR="${PLUGIN_DATA:-${CODEX_HOME:-$HOME/.codex}/plugins/data/mindie-agent-mindie-agent}"
+   UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true uv run --no-project --python 3.13 python "$BOOT_PY" "$PLUGIN_DATA_DIR" status
    ```
+   - 紧接 `codex plugin add` 执行 `bootstrap.py "$PLUGIN_DATA_DIR" status`（内部构建锁定运行时并调用 `setup.py install`），确保受管运行时与 `~/.config/mindie-agent/codex.json` 在第 4 步核验和第 5 步交互式弹窗前已就绪。
 
-4. **核对插件安装状态**：
+4. **核对插件安装与共享授权状态**：
    ```sh
    codex plugin list --json
+   SETUP_PY=$(python3 -c "import glob, os; p = sorted(glob.glob(os.path.expanduser('~/.codex/plugins/**/mindie-agent/scripts/setup.py'), recursive=True)); print(p[-1] if p else '')")
+   uv run --no-project --python 3.13 python "$SETUP_PY" sharing --status
    ```
-   - 确认 `codex plugin list --json` 显示 `mindie-agent@mindie-agent` 版本为 `0.1.19` 且处于启用状态。
-   - 向用户汇报已验证的 GitHub 交互通道账号（`$GH_USER`），并告知用户：下次启动新的原生 Codex 会话时将自动触发 `SessionStart` 与 MCP 初始化（首次冷启动会通过 `uv sync --locked --no-editable` 在 `PLUGIN_DATA` 下构建隔离运行时，准备窗口最长 10 分钟），默认暴露 `mindie-remote-dev` 与 `mindie-tools`，知识接口仅由手动入口按需加载。
+   - 确认 `codex plugin list --json` 显示 `mindie-agent@mindie-agent` 版本为 `0.1.19` 且处于启用状态，并检查 `setup.py sharing --status` 返回的 JSON（含 `needs_onboarding_prompt` 状态）。
+   - 向用户汇报已验证的 GitHub 交互通道账号（`$GH_USER`），并告知用户：受管运行时已就绪，默认暴露 `mindie-remote-dev` 与 `mindie-tools`，知识接口仅由手动 `/mindie-agent`（或 `$mindie-agent`）入口按需加载。
 
-   验证成功后继续第 5 步，完成首次配置后一起汇报安装结果。
+   验证成功后立即继续第 5 步，完成首次交互式配置后一起汇报安装结果。
 
-5. **完成首次配置与开发工作区引导**：
-   - 向用户简要说明 [用户须知](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md)，随后按 [工作区配置指南](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md) 引导工作区选择：无论是否开启社区贡献，都提供**新建并初始化 `vllm-ascend-workspace`**、**复用已有工作区目录**或**保持当前目录**三种选择（已有确认记录时直接复用）。
-   - 若用户选择新建或复用工作区，按 [工作区配置指南](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md) 登记路径并核对结果。只有 Codex CLI、没有 Codex.app 时，用 `codex -C "<absolute-path>"` 作为成功路径，不要执行 `codex app`，也不要把缺少 Desktop 应用当成安装失败。已安装 Codex Desktop 时，可另外通过 **Add project** 打开工作区根目录（macOS 上可选 `codex app "<absolute-path>"`；Windows 上如需则在文件夹选择器中完成选择）。`codex app` 因未安装 App 失败时，改走 `codex -C` 并继续。随后调用工作区内的 `repo_init.py` 完成源码与远端分支初始化（直接复用前序已验证的 GitHub 登录与已有 Fork 配置）。
-   - 汇总汇报插件安装状态、工作区路径、宿主登记结果（CLI `codex -C` 和/或 Desktop **Add project**）与源码初始化状态（仅当 Desktop 登记仍有需用户在界面点击的尾步时一并说明）。
-   - **询问用户是否愿意给主仓点个 Star ⭐**：在汇报末尾主动询问用户：*“如果觉得 MindIE Agent 对你有帮助，需要我顺手帮你在 GitHub 上给主仓 `mindie-agent/mindie-agent` 点个 Star 吗？这能帮助项目更好地成长！⭐”* **严格授权原则**：仅当用户明确表示同意（如回复“好”、“可以”、“yes”等）时才执行以下命令点亮并校验主仓 Star，严禁未经用户同意自动静默执行：
-     ```sh
-     gh api --hostname github.com --silent -X PUT /user/starred/mindie-agent/mindie-agent && gh api --hostname github.com --silent /user/starred/mindie-agent/mindie-agent
-     ```
+5. **弹出原生交互式配置提问框（Step 5 Onboarding Popup）并执行绑定**：
+   - 当刚刚完成安装或 `setup.py sharing --status` 显示 `"needs_onboarding_prompt": true` 时，先简要说明 [用户须知](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md)，随后**立即调用 OpenAI Codex 原生 `request_user_input` 工具**（若当前执行模式未暴露该工具，则输出结构化编号选项并等待用户回复），一次性弹出以下 3 个首次配置问题：
+     1. **社区知识共享与自动故障上报**（`id: "community_sharing"`）：`Enable (Recommended)`（开启经验脱敏共享 PR 与故障自动上报） vs `Keep Local-Only Mode`（仅本地模式，关闭外发）
+     2. **GitHub Star ⭐ 支持**（`id: "github_star"`）：`Star on GitHub (Recommended)`（为主仓 `mindie-agent/mindie-agent` 点亮 Star ⭐） vs `Skip for now`（暂不操作）
+     3. **本地开发工作区 `vllm-ascend-workspace`**（`id: "workspace_setup"`）：`Initialize vllm-ascend-workspace (Recommended)`（新建并初始化协同工作区） vs `Keep current directory`（保持当前目录） vs `Use existing workspace directory`（复用已有工作区目录）
+   - 收到用户选择后，严格按以下顺序执行：
+     1. **先确定工作区路径 `WORKSPACE_ROOT`**：若用户选择新建或复用工作区，按 [工作区配置指南](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md) 初始化或解析路径并记录为 `WORKSPACE_ROOT`（保持当前目录则 `WORKSPACE_ROOT="$(pwd)"`）。只有 Codex CLI、没有 Codex.app 时，用 `codex -C "<absolute-path>"` 作为成功路径，不要把缺少 Desktop 应用当成安装失败。
+     2. **持久化统一贡献与共享设置**：
+        ```sh
+        # 若用户选择 Enable (Recommended)：
+        uv run --no-project --python 3.13 python "$SETUP_PY" sharing --enable --project-root "$WORKSPACE_ROOT"
+        # 若用户选择 Keep Local-Only Mode：
+        uv run --no-project --python 3.13 python "$SETUP_PY" sharing --disable
+        ```
+     3. **按用户授权执行 GitHub Star ⭐**（仅当用户明确选择了 `Star on GitHub (Recommended)` 时执行，严禁未经同意静默执行）：
+        ```sh
+        gh api --hostname github.com --silent -X PUT /user/starred/mindie-agent/mindie-agent && gh api --hostname github.com --silent /user/starred/mindie-agent/mindie-agent
+        ```
+   - 汇总汇报插件安装状态、共享与故障上报开关状态、工作区路径及 Star 状态。
 
 </details>
 
@@ -157,7 +179,7 @@ MindIE Agent 将交互能力收敛在 **`/mindie-agent`（或 `$mindie-agent`）
 
 ### 静默更新、安全卸载与已知限制
 
-- **后台静默更新**：后台维护线程按冷却周期异步检查兼容当前 Codex 版本的最高正式插件 Release 以及各官方共享组件仓库的正式 GitHub Release（参见 [`docs/releases/mindie-agent-codex-0.1.18.md`](docs/releases/mindie-agent-codex-0.1.18.md)），在操作锁外构建旁路锁定 `uv` 运行时并通过无模型探针校验，待后台服务空闲时退役旧服务并冷态原子切换绑定（不主动启动知识服务，完整保留已保存的统一贡献开关设置与会话手动 `/mindie-agent` 授权边界）。
+- **后台静默更新**：后台维护线程按冷却周期异步检查兼容当前 Codex 版本的最高正式插件 Release 以及各官方共享组件仓库的正式 GitHub Release（参见 [`docs/releases/mindie-agent-codex-0.1.19.md`](docs/releases/mindie-agent-codex-0.1.19.md)），在操作锁外构建旁路锁定 `uv` 运行时并通过无模型探针校验，待后台服务空闲时退役旧服务并冷态原子切换绑定（不主动启动知识服务，完整保留已保存的统一贡献开关设置与会话手动 `/mindie-agent` 授权边界）。
 - **安全卸载**：关闭正在使用插件的会话后，通过 Codex 原生命令卸载：
   ```sh
   codex plugin remove mindie-agent@mindie-agent --json
@@ -201,7 +223,7 @@ uv run --project plugins/mindie-agent --no-sync python tests/preflight.py
 uv run --project plugins/mindie-agent --no-sync python -m unittest discover -s tests -p 'test_*.py'
 ```
 
-- **发行版微基准测试（Release Microbenchmark）**：每个 `0.1.18` 插件 Release 均随附 `benchmark-results.json` 和 `benchmark-results.md`，按 [`benchmarks/release.json`](benchmarks/release.json) 测量 `public-transcript` 公开消息解析与隐藏推理过滤的耗时（单位 `us/op`）。该指标作为可复现的本地 CPU 微基准基线，与远端 A2/A3 NPU 实机集成验收及端到端 Agent 研发效率评估相互独立。
+- **发行版微基准测试（Release Microbenchmark）**：每个 `0.1.19` 插件 Release 均随附 `benchmark-results.json` 和 `benchmark-results.md`，按 [`benchmarks/release.json`](benchmarks/release.json) 测量 `public-transcript` 公开消息解析与隐藏推理过滤的耗时（单位 `us/op`）。该指标作为可复现的本地 CPU 微基准基线，与远端 A2/A3 NPU 实机集成验收及端到端 Agent 研发效率评估相互独立。
 
 ---
 

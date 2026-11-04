@@ -136,6 +136,30 @@ def run_configure(*args, reporter_status="running"):
     return subprocess.CompletedProcess(argv, code, out.getvalue(), err.getvalue())
 
 
+def run_sharing(*args, reporter_status="running", gh_identity=(None, None)):
+    argv = ["setup.py", "sharing", *map(str, args)]
+    out, err = io.StringIO(), io.StringIO()
+    code = 0
+    with (patch.object(sys, "argv", argv),
+          patch.object(sharing, "normalize_with_runtime", _in_process_normalize),
+          patch.object(sharing, "resolve_github_identity",
+                       side_effect=lambda _repo, account=None, fork=None: (
+                           account or gh_identity[0], fork or gh_identity[1])),
+          patch("mindie_diagnostics.reporting_commands.ensure", return_value={"status": reporter_status}),
+          contextlib.redirect_stdout(out),
+          contextlib.redirect_stderr(err)):
+        try:
+            setup_script.main()
+        except SystemExit as exc:
+            if isinstance(exc.code, int):
+                code = exc.code
+            else:
+                if exc.code:
+                    err.write(str(exc.code) + "\n")
+                code = 1
+    return subprocess.CompletedProcess(argv, code, out.getvalue(), err.getvalue())
+
+
 class SetupTests(unittest.TestCase):
     def test_product_contract_has_no_fixed_digest(self):
         declaration, _ = product_contract.product(ROOT)
@@ -620,6 +644,88 @@ class SetupTests(unittest.TestCase):
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(list(base.iterdir()), [])
+
+    def test_sharing_mutual_exclusivity_and_validation_preserve_consent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            config = base / "codex.json"
+            scope = base / "scope"
+            scope.mkdir()
+            installed = run_setup(sys.executable, "--config", config, "--root", base / "data")
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            consent_file = config.with_name("mindie-consent.json")
+            for invalid_args in (
+                ["--config", str(config)],
+                ["--config", str(config), "--enable", "--disable"],
+                ["--config", str(config), "--status", "--enable"],
+                ["--config", str(config), "--enable", "--repository", "invalid_repo", "--project-root", str(scope)],
+                ["--config", str(config), "--enable", "--project-root", str(base / "nonexistent")],
+                ["--config", str(config), "--enable", "--visibility", "private", "--project-root", str(scope)],
+            ):
+                with self.subTest(args=invalid_args):
+                    res = run_sharing(*invalid_args)
+                    self.assertEqual(res.returncode, 2, res.stderr)
+                    self.assertFalse(consent_file.exists())
+
+    def test_sharing_status_enable_and_disable_lifecycle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            config = base / "codex.json"
+            scope = base / "scope"
+            scope.mkdir()
+            installed = run_setup(sys.executable, "--config", config, "--root", base / "data")
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+
+            initial = run_sharing("--status", "--config", str(config))
+            self.assertEqual(initial.returncode, 0, initial.stderr)
+            status0 = json.loads(initial.stdout)
+            self.assertEqual(status0["schema"], "mindie-sharing-status/1")
+            self.assertEqual(status0["harness"], "codex")
+            self.assertIsNone(status0["consent_choice"])
+            self.assertFalse(status0["sharing_enabled"])
+            self.assertFalse(status0["reporting_enabled"])
+            self.assertTrue(status0["needs_onboarding_prompt"])
+
+            enabled = run_sharing(
+                "--enable",
+                "--config",
+                str(config),
+                "--project-root",
+                str(scope),
+                gh_identity=("alice", "alice/knowledge-vllm-ascend"),
+            )
+            self.assertEqual(enabled.returncode, 0, enabled.stderr)
+            after_enable = json.loads(run_sharing("--status", "--config", str(config)).stdout)
+            self.assertEqual(after_enable["consent_choice"], "contribute")
+            self.assertTrue(after_enable["sharing_enabled"])
+            self.assertTrue(after_enable["reporting_enabled"])
+            self.assertEqual(after_enable["account"], "alice")
+            self.assertEqual(after_enable["fork"], "alice/knowledge-vllm-ascend")
+            self.assertEqual(after_enable["project_roots"], [sharing.canonical_root(str(scope))])
+            self.assertFalse(after_enable["needs_onboarding_prompt"])
+
+            disabled = run_sharing("--disable", "--config", str(config))
+            self.assertEqual(disabled.returncode, 0, disabled.stderr)
+            after_disable = json.loads(run_sharing("--status", "--config", str(config)).stdout)
+            self.assertEqual(after_disable["consent_choice"], "disabled")
+            self.assertFalse(after_disable["sharing_enabled"])
+            self.assertFalse(after_disable["reporting_enabled"])
+            self.assertEqual(after_disable["fork"], "alice/knowledge-vllm-ascend")
+            self.assertFalse(after_disable["needs_onboarding_prompt"])
+
+            reenabled = run_sharing(
+                "--enable",
+                "--config",
+                str(config),
+                "--project-root",
+                str(scope),
+                gh_identity=("alice", "alice/knowledge-vllm-ascend"),
+            )
+            self.assertEqual(reenabled.returncode, 0, reenabled.stderr)
+            after_reenable = json.loads(run_sharing("--status", "--config", str(config)).stdout)
+            self.assertEqual(after_reenable["consent_choice"], "contribute")
+            self.assertTrue(after_reenable["sharing_enabled"])
+            self.assertTrue(after_reenable["reporting_enabled"])
 
 
 if __name__ == "__main__":

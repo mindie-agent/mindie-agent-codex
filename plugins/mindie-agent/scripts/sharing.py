@@ -27,6 +27,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import tempfile
 import time
 
@@ -482,4 +483,169 @@ def status(config_file=None, saved=None, *, adapter=None):
         first_use=unused,
         note="capture only processes material authorized after enabled_at; "
         "no disabled-period backfill",
+    )
+
+
+def resolve_github_identity(repository, *, account=None, fork=None):
+    """Best-effort GitHub login and fork resolution via `gh` when not explicitly passed."""
+    if fork or not shutil.which("gh"):
+        return account, fork
+    repo_name = repository.split("/", 1)[1]
+    try:
+        if not account:
+            res = run(
+                ["gh", "api", "--hostname", "github.com", "user", "--jq", ".login"],
+                "",
+                timeout=5.0,
+            )
+            login = res.stdout.strip()
+            if res.returncode == 0 and login and "/" not in login and NAME.fullmatch(login):
+                account = login
+        if account and not fork:
+            res = run(
+                [
+                    "gh",
+                    "api",
+                    "--hostname",
+                    "github.com",
+                    f"repos/{account}/{repo_name}",
+                    "--jq",
+                    ".full_name",
+                ],
+                "",
+                timeout=5.0,
+            )
+            found = res.stdout.strip()
+            if res.returncode == 0 and REPOSITORY.fullmatch(found):
+                fork = found
+            else:
+                fork_res = run(
+                    ["gh", "repo", "fork", repository, "--clone=false"],
+                    "",
+                    timeout=10.0,
+                )
+                if fork_res.returncode == 0:
+                    fork = f"{account}/{repo_name}"
+    except Exception:
+        pass
+    return account, fork
+
+
+def _read_consent_json(path):
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return dict(state="missing", choice=None, choice_revision=None)
+    except TimeoutError:
+        raise
+    except OSError:
+        return dict(state="unreadable", choice=None, choice_revision=None)
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return dict(state="corrupt", choice=None, choice_revision=None)
+    if not isinstance(data, dict) or data.get("schema") != "mindie-consent/1":
+        return dict(state="corrupt", choice=None, choice_revision=None)
+    choice = data.get("choice")
+    if choice is not None and choice not in {"contribute", "read-only", "later", "disabled"}:
+        return dict(state="corrupt", choice=None, choice_revision=None)
+    rev = data.get("choice_revision")
+    if rev is not None and (
+        not isinstance(rev, str)
+        or len(rev) != 32
+        or any(c not in "0123456789abcdef" for c in rev)
+    ):
+        return dict(state="corrupt", choice=None, choice_revision=None)
+    return dict(state="ok", choice=choice, choice_revision=rev)
+
+
+def cli_status(config_file=None, *, harness="codex"):
+    """Fast read-only status for `setup.py sharing --status`."""
+    config_file = Path(config_file or config_path()).expanduser().absolute()
+    try:
+        import consent
+
+        saved = consent.load(config_file)
+        comm_path = consent.shared_community_path_for(config_file)
+    except ModuleNotFoundError:
+        saved = _read_consent_json(config_file.parent / "mindie-consent.json")
+        comm_path = config_file.parent / "mindie-community.json"
+    consent_state = saved.get("state") or "missing"
+    consent_choice = saved.get("choice") if consent_state == "ok" else None
+    choice_revision = saved.get("choice_revision") if consent_state == "ok" else None
+    comm_state = "missing"
+    comm = {}
+    try:
+        raw = comm_path.read_text(encoding="utf-8")
+        comm = validate(json.loads(raw))
+        comm_state = "ok"
+    except FileNotFoundError:
+        comm_state = "missing"
+    except TimeoutError:
+        raise
+    except ValueError:
+        comm_state = "corrupt"
+    except OSError:
+        comm_state = "unreadable"
+    try:
+        from diagnostic_support import reporting_config_path
+
+        diag_path = reporting_config_path(config_file)
+    except Exception:
+        diag_path = config_file.parent / "diagnostics.json"
+    diag_enabled = False
+    try:
+        diag_raw = json.loads(diag_path.read_text(encoding="utf-8"))
+        if isinstance(diag_raw, dict):
+            diag_enabled = bool(
+                diag_raw.get("decision") == "enabled" or diag_raw.get("enabled") is True
+            )
+    except TimeoutError:
+        raise
+    except (OSError, ValueError):
+        diag_enabled = False
+    repair_required = (
+        consent_state in {"corrupt", "unreadable"}
+        or comm_state in {"corrupt", "unreadable"}
+    )
+    sharing_enabled = bool(
+        comm_state == "ok"
+        and comm.get("enabled") is True
+        and consent_state == "ok"
+        and consent_choice == "contribute"
+    )
+    reporting_enabled = bool(
+        diag_enabled
+        and consent_state == "ok"
+        and consent_choice == "contribute"
+        and bool(choice_revision)
+    )
+    if repair_required:
+        needs_onboarding_prompt = False
+    else:
+        needs_onboarding_prompt = bool(
+            consent_state == "missing"
+            or (
+                consent_state == "ok"
+                and (
+                    consent_choice not in {"contribute", "disabled"}
+                    or (consent_choice == "contribute" and not choice_revision)
+                )
+            )
+        )
+    return dict(
+        schema="mindie-sharing-status/1",
+        harness=harness,
+        consent_state=consent_state,
+        consent_choice=consent_choice,
+        choice_revision=choice_revision,
+        sharing_enabled=sharing_enabled,
+        community_enabled=sharing_enabled,
+        reporting_enabled=reporting_enabled,
+        repository=comm.get("repository") or "mindie-agent/knowledge-vllm-ascend",
+        fork=comm.get("fork"),
+        account=comm.get("account"),
+        project_roots=list(comm.get("project_roots") or []),
+        needs_onboarding_prompt=needs_onboarding_prompt,
+        repair_required=repair_required,
     )

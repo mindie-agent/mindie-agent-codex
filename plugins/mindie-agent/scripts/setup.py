@@ -32,7 +32,10 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bounded_process import run
-import consent
+try:
+    import consent
+except ModuleNotFoundError:
+    consent = None
 from runtime_probe import PROBE_MODULES
 import product_contract
 import sharing
@@ -353,48 +356,7 @@ def configure(args, parser):
         parser.error("saved setup state is damaged; configuration was not changed")
     with sharing.community_write_lock(config):
         community_config = sharing.configured_path(config)
-        # A damaged or non-conforming document fails here with its bytes
-        # preserved — a managed mutation is never an implicit repair by
-        # replacement. A parseable document is rewritten normally (explicit
-        # re-selection is the repair path); a missing file is a first
-        # configuration.
-        try:
-            raw = community_config.read_bytes()
-        except FileNotFoundError:
-            raw = None
-        except TimeoutError:
-            raise
-        except OSError as exc:
-            parser.error(
-                "community settings file is unreadable; inspect and repair "
-                f"the designated file explicitly ({type(exc).__name__})"
-            )
-        extensions = {}
-        old = {}
-        if raw is not None:
-            try:
-                old = json.loads(raw)
-            except ValueError:
-                parser.error(
-                    "community settings file is damaged; its bytes are "
-                    "preserved. Inspect and remove it explicitly before "
-                    "configuring again — a damaged authority is never "
-                    "silently replaced."
-                )
-            if not isinstance(old, dict) or old.get("schema") != sharing.SCHEMA:
-                parser.error(
-                    "community settings file is not a valid "
-                    "mindie-community-config/1 document; its bytes are "
-                    "preserved. Inspect and remove it explicitly before "
-                    "configuring again."
-                )
-            extensions = {
-                key: value
-                for key, value in old.items()
-                if key not in sharing.CORE_KEYS and key not in {
-                    "consent_config", "publication_contract_sha256",
-                }
-            }
+        old, extensions = _read_existing_community(community_config, parser)
         merged = sharing.normalize_with_runtime(
             {**extensions, **community}, python, config, previous=old
         )
@@ -428,15 +390,289 @@ def configure(args, parser):
         raise SystemExit(1)
 
 
+def _read_existing_community(community_config, parser):
+    try:
+        raw = community_config.read_bytes()
+    except FileNotFoundError:
+        return {}, {}
+    except TimeoutError:
+        raise
+    except OSError as exc:
+        parser.error(
+            "community settings file is unreadable; inspect and repair "
+            f"the designated file explicitly ({type(exc).__name__})"
+        )
+    try:
+        old = json.loads(raw)
+    except ValueError:
+        parser.error(
+            "community settings file is damaged; its bytes are preserved. "
+            "Inspect and remove it explicitly before configuring again."
+        )
+    if not isinstance(old, dict) or old.get("schema") != sharing.SCHEMA:
+        parser.error(
+            "community settings file is not a valid mindie-community-config/1 "
+            "document; its bytes are preserved."
+        )
+    extensions = {
+        key: value
+        for key, value in old.items()
+        if key not in sharing.CORE_KEYS
+        and key not in {"consent_config", "publication_contract_sha256"}
+    }
+    return old, extensions
+
+
+def sharing_command(args, parser):
+    """Unified `setup.py sharing --status|--enable|--disable` entry point."""
+    if sum(bool(flag) for flag in (args.status, args.enable, args.disable)) != 1:
+        parser.error("sharing requires exactly one of --status, --enable, or --disable")
+    config = args.config.expanduser().absolute()
+    if args.status:
+        print(json.dumps(sharing.cli_status(config, harness="codex"), indent=2))
+        return
+    saved = consent.load(config)
+    if saved["state"] in {"corrupt", "unreadable"}:
+        parser.error("saved setup state is damaged; configuration was not changed")
+    adapter = None
+    python = sys.executable
+    if config.is_file():
+        adapter = product_contract.read_json(config)[0]
+        python = adapter.get("python") or sys.executable
+    with sharing.community_write_lock(config):
+        try:
+            community_config = (
+                sharing.configured_path(config, adapter=adapter)
+                if adapter is not None
+                else consent.shared_community_path_for(config)
+            )
+        except sharing.SharingError as exc:
+            parser.error(str(exc))
+        old, extensions = _read_existing_community(community_config, parser)
+        if args.disable:
+            disabled_input = {
+                **extensions,
+                "schema": sharing.SCHEMA,
+                "enabled": False,
+                "generation": old.get("generation"),
+                "enabled_at": None,
+                "repository": old.get("repository"),
+                "branch": old.get("branch") or "main",
+                "project_roots": list(old.get("project_roots") or []),
+                "idle_seconds": old.get("idle_seconds", 300),
+            }
+            try:
+                structural = sharing.validate(disabled_input)
+                merged = sharing.normalize_with_runtime(
+                    structural,
+                    python,
+                    config if adapter is not None else None,
+                    previous=old or None,
+                )
+            except sharing.SharingError as exc:
+                parser.error(str(exc))
+            merged["consent_config"] = str(consent.consent_path_for(config))
+            consent.record_choice("disabled", config)
+            community_config.parent.mkdir(parents=True, exist_ok=True)
+            if merged != old:
+                sharing.write(community_config, merged)
+            from diagnostic_support import activate_reporting
+
+            reporting = activate_reporting(config)
+            print(
+                json.dumps(
+                    dict(
+                        status="configured"
+                        if reporting["status"] in {"running", "disabled"}
+                        else "degraded",
+                        configuration_status="configured",
+                        reporting=reporting,
+                        community_config=str(community_config),
+                        sharing="disabled",
+                        sharing_choice="disabled",
+                        repository=merged.get("repository"),
+                        project_roots=merged.get("project_roots", []),
+                    ),
+                    indent=2,
+                )
+            )
+            if reporting["status"] not in {"running", "disabled"}:
+                raise SystemExit(1)
+            return
+        repository = (
+            args.repository
+            or args.community_repository
+            or old.get("repository")
+            or "mindie-agent/knowledge-vllm-ascend"
+        )
+        if not isinstance(repository, str) or not sharing.REPOSITORY.fullmatch(repository):
+            parser.error("community repository must be owner/repo")
+        visibility = (
+            args.visibility
+            if args.visibility is not None
+            else (
+                args.community_visibility
+                if args.community_visibility is not None
+                else "public"
+            )
+        )
+        if visibility != "public":
+            parser.error(
+                "community sharing requires --visibility public; "
+                "no other visibility is supported"
+            )
+        branch = args.branch or args.community_branch or old.get("branch") or "main"
+        if (
+            not isinstance(branch, str)
+            or not sharing.NAME.fullmatch(branch)
+            or ".." in branch
+        ):
+            parser.error("community branch is invalid")
+        raw_roots = (args.project_root or []) + (args.community_project_root or [])
+        if not raw_roots:
+            raw_roots = list(old.get("project_roots") or [str(Path.cwd().resolve())])
+        roots = []
+        for root in raw_roots:
+            try:
+                canonical = sharing.canonical_root(str(Path(root).expanduser().absolute()))
+            except sharing.SharingError as exc:
+                parser.error(str(exc))
+            if not Path(canonical).is_dir():
+                parser.error("community project root does not exist: " + canonical)
+            if canonical not in roots:
+                roots.append(canonical)
+        if not roots:
+            parser.error("community sharing requires at least one --project-root")
+        account = args.account or args.community_account or old.get("account")
+        fork = args.fork or args.community_fork or old.get("fork")
+        if account is not None and (
+            not isinstance(account, str)
+            or "/" in account
+            or not sharing.NAME.fullmatch(account)
+        ):
+            parser.error("community account is invalid")
+        if fork is not None and (
+            not isinstance(fork, str) or not sharing.REPOSITORY.fullmatch(fork)
+        ):
+            parser.error("community fork must be owner/repo")
+        if not fork:
+            account, fork = sharing.resolve_github_identity(
+                repository, account=account, fork=fork
+            )
+        enabled_input = {
+            **extensions,
+            "schema": sharing.SCHEMA,
+            "enabled": True,
+            "generation": secrets.token_hex(16),
+            "enabled_at": time.time(),
+            "repository": repository,
+            "branch": branch,
+            "project_roots": roots,
+            "idle_seconds": old.get("idle_seconds", 300),
+            "visibility": "public",
+        }
+        if account:
+            enabled_input["account"] = account
+        if fork:
+            enabled_input["fork"] = fork
+        try:
+            structural = sharing.validate(enabled_input)
+            merged = sharing.normalize_with_runtime(
+                structural,
+                python,
+                config if adapter is not None else None,
+                previous=old or None,
+            )
+        except sharing.SharingError as exc:
+            parser.error(str(exc))
+        merged["consent_config"] = str(consent.consent_path_for(config))
+        community_config.parent.mkdir(parents=True, exist_ok=True)
+        if merged != old:
+            sharing.write(community_config, merged)
+    consent.record_choice("contribute", config)
+    from diagnostic_support import activate_reporting
+
+    reporting = activate_reporting(config)
+    print(
+        json.dumps(
+            dict(
+                status="configured" if reporting["status"] == "running" else "degraded",
+                configuration_status="configured",
+                reporting=reporting,
+                community_config=str(community_config),
+                sharing="enabled",
+                sharing_choice="contribute",
+                repository=merged["repository"],
+                fork=merged.get("fork"),
+                account=merged.get("account"),
+                project_roots=merged["project_roots"],
+                enabled_at=merged["enabled_at"],
+            ),
+            indent=2,
+        )
+    )
+    if reporting["status"] != "running":
+        raise SystemExit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "operation",
         nargs="?",
         default="install",
-        choices=["install", "configure"],
-        help="install writes a fresh configuration; configure records sharing "
+        choices=["install", "configure", "sharing"],
+        help="install writes a fresh configuration; configure/sharing records sharing "
         "settings on an existing installation",
+    )
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Print read-only sharing and onboarding status JSON (with `sharing`)",
+    )
+    parser.add_argument(
+        "--enable",
+        action="store_true",
+        help="Enable community sharing and fault reporting (with `sharing`)",
+    )
+    parser.add_argument(
+        "--disable",
+        action="store_true",
+        help="Disable community sharing and fault reporting (with `sharing`)",
+    )
+    parser.add_argument(
+        "--project-root",
+        action="append",
+        dest="project_root",
+        metavar="PATH",
+        help="Authorized local task scope; repeatable (with `sharing --enable`)",
+    )
+    parser.add_argument(
+        "--fork",
+        dest="fork",
+        metavar="OWNER/REPO",
+        help="Contributor-controlled fork for contribution branches (with `sharing --enable`)",
+    )
+    parser.add_argument(
+        "--account",
+        dest="account",
+        help="Explicit publishing account name (with `sharing --enable`)",
+    )
+    parser.add_argument(
+        "--repository",
+        dest="repository",
+        metavar="OWNER/REPO",
+        help="Content repository (default mindie-agent/knowledge-vllm-ascend with `sharing --enable`)",
+    )
+    parser.add_argument(
+        "--branch",
+        dest="branch",
+        help="Content branch (default main with `sharing --enable`)",
+    )
+    parser.add_argument(
+        "--visibility",
+        dest="visibility",
+        help="Contribution visibility (default public with `sharing --enable`)",
     )
     parser.add_argument(
         "--knowledge-python",
@@ -486,7 +722,9 @@ def main():
         "Headless install (the default) leaves sharing unconfigured/off.",
     )
     args = parser.parse_args()
-    if args.operation == "configure":
+    if args.operation == "sharing":
+        sharing_command(args, parser)
+    elif args.operation == "configure":
         configure(args, parser)
     else:
         install(args, parser)

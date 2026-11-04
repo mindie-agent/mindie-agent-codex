@@ -19,8 +19,23 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from mindie_knowledge import consent_store
 from session_gate import config_path
+
+try:
+    from mindie_knowledge import consent_store
+except ModuleNotFoundError:
+    try:
+        _py = json.loads(config_path().read_text(encoding="utf-8")).get("python")
+        if _py:
+            _root = Path(_py).parent.parent
+            for _sp in (_root / "Lib" / "site-packages", *_root.glob("lib/python*/site-packages")):
+                if _sp.is_dir():
+                    import sys as _sys
+
+                    _sys.path.insert(0, str(_sp))
+    except Exception:
+        pass
+    from mindie_knowledge import consent_store
 
 SCHEMA = consent_store.SCHEMA
 CHOICES = consent_store.CHOICES
