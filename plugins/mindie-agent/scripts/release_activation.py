@@ -293,4 +293,13 @@ def main(argv=None, stdin=None):
 
 
 if __name__ == "__main__":
-    print(json.dumps(main(), sort_keys=True))
+    try:
+        print(json.dumps(main(), sort_keys=True))
+    except TimeoutError:
+        raise
+    except Exception as exc:
+        from component_update import CatalogError, emit_catalog_error, typed_catalog_error
+        typed = typed_catalog_error(exc)
+        if typed is not exc or isinstance(typed, (CatalogError, FileNotFoundError)):
+            emit_catalog_error(typed)
+        raise

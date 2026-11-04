@@ -1,10 +1,12 @@
 """Component checks retain native ownership and the selected runtime on failure."""
+import io
 import json
 from pathlib import Path
 import sys
 import os
 import subprocess
 import shutil
+import urllib.error
 from importlib.metadata import version
 from unittest.mock import patch
 
@@ -259,3 +261,113 @@ def test_native_cold_launcher_does_not_change_the_hook_trusted_source_payload(tm
     assert result.stdout.strip() == '42'
     after = {str(p.relative_to(source)): p.read_bytes() for p in source.rglob('*') if p.is_file()}
     assert after == before
+
+
+def _http_error(status=403):
+    return urllib.error.HTTPError(
+        "https://api.github.com/repos/mindie-agent/knowledge/releases/latest",
+        status, "Forbidden", hdrs=None, fp=io.BytesIO(),
+    )
+
+
+def test_typed_catalog_error_rebuilds_http_malformed_and_host_misses():
+    from mindie_knowledge.releases_io import ReleaseFetchError
+
+    rebuilt = component_update.typed_catalog_error(_http_error(403))
+    assert isinstance(rebuilt, component_update.CatalogError)
+    assert rebuilt.code == "release_http_error"
+    assert rebuilt.category == "temporary_network"
+    assert rebuilt.status == 403
+
+    limited = component_update.typed_catalog_error(_http_error(429))
+    assert limited.category == "rate_limited"
+    assert limited.code == "release_http_error"
+
+    feed = ReleaseFetchError("invalid_release_json")
+    rebuilt = component_update.typed_catalog_error(feed)
+    assert rebuilt.code == "invalid_release_json"
+    assert rebuilt.category == "temporary_network"
+
+    child = RuntimeError("MindIE runtime failed; not retried")
+    child.returncode = 1
+    child.mindie_output = json.dumps({
+        "error": {"type": "ReleaseFetchError", "code": "release_http_error", "status": 403},
+    })
+    rebuilt = component_update.typed_catalog_error(child)
+    assert isinstance(rebuilt, component_update.CatalogError)
+    assert rebuilt.code == "release_http_error"
+    assert rebuilt.category == "temporary_network"
+    assert rebuilt.returncode == 1
+
+    host = RuntimeError("MindIE runtime failed; not retried")
+    host.mindie_output = json.dumps({"error": {"type": "CalledProcessError"}})
+    assert isinstance(component_update.typed_catalog_error(host), FileNotFoundError)
+
+    plain = RuntimeError("MindIE runtime failed; not retried")
+    assert component_update.typed_catalog_error(plain) is plain
+
+
+def test_discover_http_error_is_a_typed_catalog_miss(tmp_path):
+    with patch("mindie_knowledge.component_runtime.discover", side_effect=_http_error(403)), \
+            patch("mindie_knowledge.component_runtime.build") as build:
+        with pytest.raises(component_update.CatalogError) as caught:
+            component_update.prepare(SCRIPTS.parent, sys.executable, tmp_path)
+    assert caught.value.code == "release_http_error"
+    assert caught.value.category == "temporary_network"
+    assert caught.value.status == 403
+    build.assert_not_called()
+
+
+def test_select_main_emits_static_fetch_error_without_traceback(tmp_path, monkeypatch):
+    from mindie_knowledge.releases_io import ReleaseFetchError
+
+    stdout = io.StringIO()
+    err = ReleaseFetchError("release_http_error", status=403)
+    monkeypatch.setattr(sys, "argv", [
+        "component_update.py", str(SCRIPTS.parent), sys.executable, str(tmp_path), sys.executable,
+    ])
+    with patch.object(component_update, "prepare", side_effect=err), \
+            patch("sys.stdout", stdout):
+        with pytest.raises(SystemExit) as ctx:
+            component_update.main()
+    assert ctx.value.code == 1
+    assert json.loads(stdout.getvalue()) == {
+        "error": {"code": "release_http_error", "status": 403, "type": "CatalogError"},
+    }
+
+
+def test_check_rebuilds_child_fetch_code_from_process_stdout(tmp_path):
+    from bounded_process import ProcessResult
+
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps(dict(
+        python=sys.executable, product_validation=identity(SCRIPTS.parent),
+    )))
+    child = RuntimeError("MindIE runtime failed; not retried")
+    child.process_result = ProcessResult(
+        "completed",
+        json.dumps({"error": {"type": "ReleaseFetchError", "code": "release_http_error", "status": 403}}),
+        1,
+    )
+    runtime = dict(python=sys.executable, scripts=str(SCRIPTS), release=str(tmp_path / "candidate"))
+    with patch.object(component_update, "prepare", return_value=runtime), \
+            patch.object(component_update, "run", side_effect=child):
+        with pytest.raises(component_update.CatalogError) as caught:
+            component_update.check(config, SCRIPTS.parent, tmp_path / "data")
+    assert caught.value.code == "release_http_error"
+    assert caught.value.category == "temporary_network"
+    assert caught.value.process_result.returncode == 1
+
+
+def test_unclassified_helper_crash_stays_internal_runtimeerror(tmp_path):
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps(dict(
+        python=sys.executable, product_validation=identity(SCRIPTS.parent),
+    )))
+    crash = RuntimeError("MindIE runtime failed; not retried")
+    with patch.object(component_update, "prepare", side_effect=crash), \
+            patch.object(component_update, "run") as activate:
+        with pytest.raises(RuntimeError) as caught:
+            component_update.check(config, SCRIPTS.parent, tmp_path / "data")
+    assert caught.value is crash
+    activate.assert_not_called()
