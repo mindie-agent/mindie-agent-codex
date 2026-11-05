@@ -4,9 +4,9 @@
 
 | Component | Version | Source commit |
 | --- | --- | --- |
-| knowledge | 0.13.13 | `2a5840c` |
+| knowledge | 0.13.13 | `1f0c889cf6ec5243cdac310e0da3cb16fae98a17` |
 | remote-dev | 0.11.5 | `131b24533479e9cefc572144adccdcb345f70846` |
-| diagnostics | 0.5.7 | `f338788cecc56f7aff1dccab1d53426c9e28fe7f` |
+| diagnostics | 0.5.6 | `9b331956b00737dd6d8c956da3416316f2de1ddf` |
 | debugger | 0.1.0 | `e9406b2b178335190d5cb59dff4d6985894497ba` |
 | profiler | 0.5.6 | `79d97e75bff7351b0472b93c03b072c1cf47f5e7` |
 | sim | 0.9.3 | `dbadff04b60937a0722b0a227cdad01beed083cd` |
