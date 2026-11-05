@@ -24,8 +24,8 @@ The `mindie-remote-dev` MCP tools are available on demand in any session without
 
 ## 2. Stagnation Gate & De-Biased Exploration
 
-- When `assess_stagnation` reports three consecutive unimproved attempts on the same L3 branch (deduplicated by `run_id`, with no new fact or divergent layer), stop repeating that branch.
-- Call `knowledge_query(query=..., mode="explore", native_subcontext=True, ledger_entries=[...], bottleneck_summary={...}, goal=...)` and inspect `exploration_context.subagent_fact_pack` (`schema_version == "mindie-rsi-subagent-pack/1"` and `stripped_l3_ids`).
+- When `assess_stagnation` reports three consecutive unimproved attempts across 3 distinct candidate repair hashes (`candidate_sha256`) on the same `L3` branch in `logs/experiment-ledger.jsonl`, stop repeating that branch.
+- Call `knowledge_query(query=..., conditions={...}, token_budget=24000, native_subcontext=True, bottleneck_summary={...}, goal=...)` using the default `mode="reuse"` (do not pass `mode="explore"` manually); the routing engine inspects `logs/experiment-ledger.jsonl` and automatically promotes `requested_mode="reuse" -> effective_mode="explore"` (`auto_switched_from_reuse=True`), returning `exploration_context.subagent_fact_pack` (`schema_version == "mindie-rsi-subagent-pack/1"` and `stripped_l3_ids`).
 - Spawn a fresh native subagent seeded only with `subagent_fact_pack.prompt_brief` (L1 hard constraints + L2 bottleneck + L4 mutators + `conditional_avoid`, with prior L3 trajectory stripped).
 
 ## 3. Long-Horizon Continuation Ledger (`PROGRESS.md` + `experiment-ledger.jsonl`)
