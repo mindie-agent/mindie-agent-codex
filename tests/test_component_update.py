@@ -98,6 +98,10 @@ def test_plugin_upgrade_rebinds_a_core_component_even_when_pins_match_the_baseli
         "mindie-knowledge": "mindie-agent/knowledge",
         "remote-dev": "mindie-agent/remote-dev",
         "mindie-diagnostics": "mindie-agent/diagnostics",
+        "mindie-debugger": "mindie-agent/debugger",
+        "mindie-profiler": "mindie-agent/profiler",
+        "mindie-sim": "mindie-agent/sim",
+        "mindie-coordinator": "mindie-agent/coordinator",
     }
     selected = {name: dict(revision=revision, version=version(name), repository=repositories[name])
                 for name, revision in baseline["runtime"].items()}
@@ -127,6 +131,10 @@ def test_upgrade_drops_retired_mindie_bench_from_inherited_inventory_before_cata
         "mindie-knowledge": "mindie-agent/knowledge",
         "remote-dev": "mindie-agent/remote-dev",
         "mindie-diagnostics": "mindie-agent/diagnostics",
+        "mindie-debugger": "mindie-agent/debugger",
+        "mindie-profiler": "mindie-agent/profiler",
+        "mindie-sim": "mindie-agent/sim",
+        "mindie-coordinator": "mindie-agent/coordinator",
     }
     installed = {
         name: dict(revision=revision, version=version(name), repository=repositories[name])

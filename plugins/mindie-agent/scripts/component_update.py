@@ -200,7 +200,7 @@ def prepare(source, python, data, *, current_python=None, force=False, current_s
             and current_source == baseline["source_sha256"] and not needs_binding):
         return None
     pins = {name: row["revision"] for name, row in selection["runtime"].items()}
-    if pins == baseline["runtime"] and not needs_binding:
+    if (current_python is not None or not selection["changed"]) and pins == baseline["runtime"] and not needs_binding:
         return None
     artifact = build(source, data / "component-runtimes", baseline, selection["runtime"],
                      python=python, adapter_distribution="mindie-agent-codex",
