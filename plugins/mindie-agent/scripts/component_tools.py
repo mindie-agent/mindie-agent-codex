@@ -19,7 +19,11 @@
   and fixed arguments; it never installs or silently substitutes a runtime.
 """
 import json
+import os
+from pathlib import Path
 import shutil
+import sys
+import sysconfig
 
 from bounded_process import ProcessResult, run
 from capture_spool import Capture
@@ -125,7 +129,11 @@ def command(adapter, component):
         return configured
     if component == "diagnostics":
         return [adapter["python"], "-I", "-X", "utf8", "-m", "mindie_diagnostics.cli"]
-    executable = shutil.which("mindie-" + component)
+    name = "mindie-" + component
+    runtime_bins = [str(Path(adapter["python"]).parent)]
+    if Path(adapter["python"]) == Path(sys.executable):
+        runtime_bins.append(sysconfig.get_path("scripts"))
+    executable = shutil.which(name, path=os.pathsep.join(runtime_bins)) or shutil.which(name)
     if executable is None:
         raise FileNotFoundError(
             "mindie-" + component + " is not installed on PATH; install the component "

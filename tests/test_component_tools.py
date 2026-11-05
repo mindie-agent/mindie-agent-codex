@@ -180,7 +180,7 @@ def test_sim_preserves_real_cli_error_and_exit_status(sim_gate, tmp_path):
     assert value["stdout"] == ""
     error = json.loads(value["stderr"])
     assert error["status"] == "failed"
-    assert str(tmp_path / "absent.json") in error["error"]
+    assert str(tmp_path / "absent.json") in error["error"] or repr(str(tmp_path / "absent.json")) in error["error"]
 
 
 def test_sim_partial_study_keeps_success_and_failure_in_the_nonzero_cli_result(
@@ -246,3 +246,20 @@ def test_missing_component_is_an_explicit_failure_before_execution(component_gat
     assert result["isError"]
     assert result["process"]["execution"] == "not_started"
     assert result["process"]["automatic_retry"] is False
+
+
+def test_command_resolves_component_cli_from_adapter_runtime_bin(tmp_path, monkeypatch):
+    import component_tools
+
+    bin_dir = tmp_path / "runtime" / ("Scripts" if os.name == "nt" else "bin")
+    bin_dir.mkdir(parents=True)
+    exe_suffix = ".exe" if os.name == "nt" else ""
+    fake_python = bin_dir / ("python" + exe_suffix)
+    fake_sim = bin_dir / ("mindie-sim" + exe_suffix)
+    fake_python.write_text("", encoding="utf-8")
+    fake_sim.write_text("", encoding="utf-8")
+    if os.name != "nt":
+        fake_sim.chmod(0o755)
+    monkeypatch.setenv("PATH", "")
+    resolved = component_tools.command({"python": str(fake_python)}, "sim")
+    assert Path(resolved[0]).resolve() == fake_sim.resolve()
