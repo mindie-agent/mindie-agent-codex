@@ -4,7 +4,7 @@
 
 | Component | Version | Source commit |
 | --- | --- | --- |
-| knowledge | 0.13.13 | `1f0c889cf6ec5243cdac310e0da3cb16fae98a17` |
+| knowledge | 0.13.13 | `da64fe111d878f44b7efec6af6ca46d3f5887be6` |
 | remote-dev | 0.11.5 | `131b24533479e9cefc572144adccdcb345f70846` |
 | diagnostics | 0.5.6 | `9b331956b00737dd6d8c956da3416316f2de1ddf` |
 | debugger | 0.1.0 | `e9406b2b178335190d5cb59dff4d6985894497ba` |
