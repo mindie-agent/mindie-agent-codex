@@ -114,7 +114,7 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
    - 若在 **Linux 或 Windows WSL** 下使用后台知识服务，请额外执行 `systemctl --user show --property=Version` 确认 `systemd >= 254` 且启用了统一 cgroup v2 层级（WSL 内须使用 Linux 原生 `codex`、`git`、`uv` 与 `gh`，切勿跨 `/mnt/c` 混用 Windows 可执行文件）。
 
 2. **可选支持与贡献准备**：
-   安装过程不未经询问静默执行 Star 或 Fork；第 5 步通过原生交互弹窗询问用户是否开启社区贡献、是否点亮主仓 `mindie-agent/mindie-agent` Star ⭐ 以及工作区初始化选项。只有用户明确开启知识贡献后，才按需自动解析或创建目标知识仓的 Fork 并绑定到贡献配置。
+   安装过程不未经询问静默执行 Star 或 Fork；第 5 步通过原生交互弹窗询问用户工作区初始化选项、是否开启社区贡献，以及是否顺手给项目点个 Star ⭐。只有用户明确开启知识贡献后，才按需自动解析或创建目标知识仓的 Fork 并绑定到贡献配置。
 
 3. **添加插件市场、安装 `mindie-agent` 插件并预热锁定运行时**：
    ```sh
@@ -139,23 +139,23 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 
 5. **弹出原生交互式配置提问框（Step 5 Onboarding Popup）并执行绑定**：
    - 当刚刚完成安装或 `setup.py sharing --status` 显示 `"needs_onboarding_prompt": true` 时，先简要说明 [用户须知](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md)，随后**立即调用 OpenAI Codex 原生 `request_user_input` 工具**（若当前执行模式未暴露该工具，则输出结构化编号选项并等待用户回复），一次性弹出以下 3 个首次配置问题：
-     1. **社区知识共享与自动故障上报**（`id: "community_sharing"`）：`Enable (Recommended)`（开启经验脱敏共享 PR 与故障自动上报） vs `Keep Local-Only Mode`（仅本地模式，关闭外发）
-     2. **GitHub Star ⭐ 支持**（`id: "github_star"`）：`Star on GitHub (Recommended)`（为主仓 `mindie-agent/mindie-agent` 点亮 Star ⭐） vs `Skip for now`（暂不操作）
-     3. **本地开发工作区 `vllm-ascend-workspace`**（`id: "workspace_setup"`）：`Initialize vllm-ascend-workspace (Recommended)`（新建并初始化协同工作区） vs `Keep current directory`（保持当前目录） vs `Use existing workspace directory`（复用已有工作区目录）
+     1. **本地开发工作区 `vllm-ascend-workspace`**（`id: "workspace_setup"`）：`初始化 vllm-ascend-workspace (Recommended)`（新建并初始化协同工作区） vs `保持当前目录`（直接以当前目录作为工作区） vs `使用已有工作区目录`（绑定已有本地工作区目录）
+     2. **社区知识共享与自动故障上报**（`id: "community_sharing"`）：`开启社区共享与故障上报 (Recommended)`（开启经验脱敏共享 PR 与故障自动上报） vs `仅保持本地模式`（关闭外发共享与故障上报）
+     3. **顺手给 MindIE Agent 点个 GitHub Star 吗？ ⭐**（`id: "github_star"`）：`好，点个 Star ⭐ (Recommended)`（在 GitHub 上 star `mindie-agent/mindie-agent` 支持一下项目） vs `先不用`（直接开始使用）
    - 收到用户选择后，严格按以下顺序执行：
      1. **先确定工作区路径 `WORKSPACE_ROOT`**：若用户选择新建或复用工作区，按 [工作区配置指南](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md) 初始化或解析路径并记录为 `WORKSPACE_ROOT`（保持当前目录则 `WORKSPACE_ROOT="$(pwd)"`）。只有 Codex CLI、没有 Codex.app 时，用 `codex -C "<absolute-path>"` 作为成功路径，不要把缺少 Desktop 应用当成安装失败。
      2. **持久化统一贡献与共享设置**：
         ```sh
-        # 若用户选择 Enable (Recommended)：
+        # 若用户选择开启社区共享与故障上报：
         uv run --no-project --python 3.13 python "$SETUP_PY" sharing --enable --project-root "$WORKSPACE_ROOT"
-        # 若用户选择 Keep Local-Only Mode：
+        # 若用户选择仅保持本地模式：
         uv run --no-project --python 3.13 python "$SETUP_PY" sharing --disable
         ```
-     3. **按用户授权执行 GitHub Star ⭐**（仅当用户明确选择了 `Star on GitHub (Recommended)` 时执行，严禁未经同意静默执行）：
+     3. **按用户意愿点上 GitHub Star ⭐**（仅当用户明确选择了点个 Star 时执行，严禁未经同意静默执行）：
         ```sh
         gh api --hostname github.com --silent -X PUT /user/starred/mindie-agent/mindie-agent && gh api --hostname github.com --silent /user/starred/mindie-agent/mindie-agent
         ```
-   - 汇总汇报插件安装状态、共享与故障上报开关状态、工作区路径及 Star 状态。
+   - 汇总汇报插件安装状态、工作区路径、共享与故障上报开关状态及 Star 状态。
 
 </details>
 
