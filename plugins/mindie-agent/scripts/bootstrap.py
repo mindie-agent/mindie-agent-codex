@@ -6,6 +6,8 @@ Bootstraps the plugin's isolated `uv` virtual environment under `PLUGIN_DATA/run
 [Invariants]
 - Never installs editable packages or modifies an already published `runtime.json` if source/ABI differs.
 - Records preparation failures via stdlib `diagnostic_support.failure` before runtime packages exist.
+- Typed profile failures retain their configuration category instead of entering
+  the updater's internal-failure classifier.
 
 [Timeouts & Locks]
 - Acquires `exclusive_lock(release / "prepare.lock")` across bounded `uv sync` (`540.0s`), `readback` (`60.0s`), `probe`, and `runtime.json` publication.
@@ -41,7 +43,8 @@ def preparing(stage):
         if getattr(exc, "_mindie_prepare_reported", False):
             raise
         from diagnostic_support import failure
-        diagnostic = failure("runtime.prepare", stage, "update", exception=exc,
+        category = getattr(exc, "_mindie_prepare_category", "update")
+        diagnostic = failure("runtime.prepare", stage, category, exception=exc,
                              exit_code=getattr(getattr(exc, "process_result", None), "returncode", None))
         exc.mindie_diagnostic = diagnostic
         detail = f"MindIE runtime preparation failed at {stage}: {type(exc).__name__}"
