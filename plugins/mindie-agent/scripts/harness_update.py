@@ -8,6 +8,7 @@ Validates compatibility with the installed `codex --version` (`harness_version`)
 - Persists the binding before runtime preparation and sends that immutable bounded stdin snapshot to the activation child; local interrupted activation is reconciled by canonical readback under the existing lock, while native plugin/catalog unknowns stay unreplayed.
 - Retires only a settled prepared candidate older than the verified installed native version; it never suppresses an unconfirmed native external write.
 - Carries forward only previously user-approved hook trust entries via compare-and-swap (`NativeHooks`).
+- Preserves typed activation-helper failures and their exit facts; unstructured crashes remain internal.
 
 [Timeouts & Locks]
 - Enforces `timeout=15.0s` for `codex --version`, `timeout=300.0s` for `codex plugin install`, and `timeout=330.0s` for activation (outer 330s >= inner 300s session maintenance + 30s grace).
@@ -402,6 +403,8 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
             raise ValueError("activation control response is invalid")
         result.checked_stdout()
     except Exception as exc:
+        from component_update import typed_catalog_error
+        exc = typed_catalog_error(exc)
         result = getattr(exc, "process_result", result)
         pending["activation"] = _activation_result(value, result, expected)
         exc.native_effect = dict(stage="runtime_activation", activation=pending["activation"])
@@ -411,7 +414,7 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
             raise
         except (OSError, ValueError) as record_error:
             exc.receipt_error_type = type(record_error).__name__
-        raise
+        raise exc
     _store_activation(root, pending, value, result, expected)
     return value
 

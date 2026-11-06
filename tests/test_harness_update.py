@@ -288,6 +288,124 @@ class UpdateTests(unittest.TestCase):
                     activation=dict(status="not_started", expected_binding=update.runtime_binding(
                         json.loads(self.config.read_text()))))
 
+    def test_real_activation_helper_preserves_prerequisite_failure_and_old_binding(self):
+        self._activation_failure_event(missing_engine=True)
+
+    def test_real_activation_helper_unclassified_crash_stays_internal(self):
+        self._activation_failure_event(missing_engine=False)
+
+    def test_real_candidate_failure_keeps_usable_runtime_then_switches_after_repair(self):
+        from capture_config import prepare as capture_prepare, prepare_store
+        from consent import consent_path_for
+        from mindie_knowledge import consent_store
+        from native_context import service_launch_context
+
+        pending = self.prepared_candidate()
+        engine_path = self.root / "old.engine.json"
+        adapter = dict(
+            python=sys.executable, runtime_scripts=str(SCRIPTS),
+            engine_config=str(engine_path), product_validation={"native_version": "0.1.20"},
+            community_config=str(self.root / "community.json"),
+            admission_path=str(self.root / "admission.sqlite3"), domain_configs={},
+            native_context={"CODEX_HOME": self.env["CODEX_HOME"]})
+        env = dict(os.environ, **self.env)
+        env["MINDIE_AGENT_CONFIG"] = str(self.config)
+        Path(env["CODEX_HOME"]).mkdir(parents=True)
+        engine = dict(root=str(self.root / "knowledge"), domain="vllm-ascend",
+                      admission_path=adapter["admission_path"],
+                      community_config=adapter["community_config"],
+                      transcript_adapter=str(SCRIPTS / "codex_transcript.py"),
+                      product_validation=adapter["product_validation"],
+                      service_launch_context=service_launch_context(self.config, adapter),
+                      **capture_prepare(sys.executable, SCRIPTS))
+        prepare_store(sys.executable, SCRIPTS, engine)
+        engine_path.write_text(json.dumps(engine), encoding="utf-8", newline="\n")
+        self.config.write_text(json.dumps(adapter), encoding="utf-8", newline="\n")
+        consent = consent_path_for(self.config)
+        consent_store.record_choice(consent, "disabled")
+        original = self.config.read_bytes(), engine_path.read_bytes(), consent.read_bytes()
+        release = self.root / "candidate-release"
+        release.mkdir()
+        pending.update(
+            runtime=dict(python=sys.executable, scripts=str(SCRIPTS), release=str(release)),
+            activation=dict(status="not_started", expected_binding=update.runtime_binding(adapter)))
+
+        def status():
+            # Exercise the selected runtime's read-only public status helper.
+            value = json.loads(update.run(
+                [sys.executable, str(SCRIPTS / "bridge.py"), "--config", str(self.config), "status"],
+                "", env=env, timeout=10).checked_stdout())
+            self.assertEqual(value["configuration"]["status"], "ok")
+            self.assertEqual(value["service"]["status"], "not-running")
+            self.assertFalse(value["admission"]["enabled"])
+
+        status()
+        # The prepared candidate lost its receipt, while the old runtime works.
+        with self.assertRaises(RuntimeError) as caught:
+            update._prepare_and_activate(self.config, pending, env, self.state)
+        self.assertEqual(caught.exception.process_result.returncode, 1)
+        self.assertEqual((self.config.read_bytes(), engine_path.read_bytes(), consent.read_bytes()), original)
+        status()
+
+        validation = {"native_version": self.version}
+        (release / "runtime.json").write_text(json.dumps(dict(
+            python=sys.executable, validation=validation)), encoding="utf-8", newline="\n")
+        result = update._prepare_and_activate(self.config, pending, env, self.state)
+        self.assertEqual(result["status"], "active")
+        current = json.loads(self.config.read_text())
+        self.assertEqual(current["product_validation"], validation)
+        self.assertNotEqual(current["engine_config"], str(engine_path))
+        self.assertEqual((engine_path.read_bytes(), consent.read_bytes()), original[1:])
+        status()
+
+    def _activation_failure_event(self, *, missing_engine):
+        pending = self.prepared_candidate()
+        release = self.root / "candidate-release"
+        release.mkdir()
+        (release / "runtime.json").write_text(json.dumps(dict(
+            python=sys.executable, validation={})), encoding="utf-8", newline="\n")
+        adapter = json.loads(self.config.read_text())
+        adapter.update(python=sys.executable, runtime_scripts=str(SCRIPTS),
+                       product_validation={"native_version": "0.1.20"})
+        if missing_engine:
+            adapter["engine_config"] = str(self.root / "PRIVATE-missing-engine.json")
+        self.config.write_text(json.dumps(adapter), encoding="utf-8", newline="\n")
+        before = self.config.read_bytes()
+        pending.update(
+            runtime=dict(python=sys.executable, scripts=str(SCRIPTS), release=str(release)),
+            process=dict(execution="completed", returncode=0, cleanup_failed=False),
+            preparation=dict(execution="completed", returncode=0, cleanup_failed=False),
+            activation=dict(status="not_started", expected_binding=update.runtime_binding(adapter)))
+        (self.state / "native.json").write_text(json.dumps(pending), encoding="utf-8", newline="\n")
+        self.installed.return_value = dict(self.before, version=self.version)
+
+        # Use the real -I activation child. A missing engine emits the owned
+        # FileNotFoundError envelope; an unexpected KeyError has no envelope.
+        with patch.object(update, "_native_install") as install:
+            result = update.check(self.config, force=True)
+        install.assert_not_called()
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["stage"], "runtime_activation")
+        self.assertEqual(self.config.read_bytes(), before)
+        saved = json.loads((self.state / "native.json").read_text())
+        self.assertEqual(saved["activation"]["process"], dict(
+            execution="completed", returncode=1, cleanup_failed=False))
+        self.assertEqual(saved["activation"]["expected_binding"], update.runtime_binding(adapter))
+        logs = Path(os.environ["MINDIE_DIAGNOSTICS_ROOT"])
+        events = [json.loads(line) for path in logs.glob("events/*/*.jsonl")
+                  for line in path.read_text().splitlines()]
+        event = events[-1]
+        expected = (("FileNotFoundError", "prerequisite", "update_prerequisite_unavailable", False)
+                    if missing_engine else
+                    ("RuntimeError", "internal", "update_internal_failure", True))
+        self.assertEqual(result["error_type"], expected[0])
+        self.assertEqual(event["attributes"]["error_type"], expected[0])
+        self.assertEqual(event["attributes"]["category"], expected[1])
+        self.assertEqual(event["attributes"]["error_code"], expected[2])
+        self.assertIs(event["reportable"], expected[3])
+        self.assertEqual(event["attributes"]["exit_code"], 1)
+        self.assertNotIn("PRIVATE", json.dumps(event))
+
     def test_activation_unknown_writer_retries_with_immutable_attempt_snapshot(self):
         pending = self.prepared_candidate()
         pending["activation"].update(status="unknown", process=None)
