@@ -5,7 +5,9 @@ Fixed release entrypoint (`releases/<version>/entry.py`) that validates `runtime
 
 [Invariants]
 - `stop` never prepares an unconfigured installation and snapshots the active `adapter` binding before reading stdin.
-- Verifies `receipt["python"] == sys.executable`, `product_validation` consistency, and that the canonical `runtime_scripts` are this entry's scripts before dispatching.
+- Verifies `receipt["python"] == sys.executable` and profile consistency. A
+  cutover after launcher selection transfers startup to the committed release
+  before any operation dispatch; old and new runtime packages never mix.
 
 [Timeouts & Locks]
 - Acquires `update_lock(config)` (`blocking=True` except on `stop`) around profile validation and initialization.
@@ -13,6 +15,8 @@ Fixed release entrypoint (`releases/<version>/entry.py`) that validates `runtime
 - Session maintenance has a 300-second execution budget for reporter, feed,
   and knowledge readiness, followed by bounded owned-process cleanup.
 - Release dispatch to helper scripts is bounded at 120.0s.
+- A consumed explicit prompt is forwarded within 420s (300s maintenance plus
+  admission/entry and cleanup); unread MCP streams transfer without buffering.
 
 [Side-Effect Policy]
 - First-use `profile(..., prepare=True)` runs headless `setup.install` under `exclusive=True` `update_lock`; subsequent calls validate and dispatch without mutating config.
@@ -41,6 +45,7 @@ def read(path):
 
 class ProfileUnavailable(ValueError):
     """Static caller guidance for an unsupported or replaced installation."""
+    _mindie_prepare_category = "configuration"
 
 
 def _installed_profile(config, receipt, *, adapter=None):
@@ -81,6 +86,36 @@ def profile(release, source=None, *, prepare=True):
             with redirect_stdout(sys.stderr):
                 install(args, argparse.ArgumentParser(), validation=receipt["validation"])
         return _installed_profile(config, receipt)
+
+
+def replacement_entry(release, adapter):
+    """Activation publishes its immutable engine beside the runtime receipt."""
+    target = Path(adapter.get("component_release") or Path(adapter["engine_config"]).parent)
+    if (target.resolve() == release.resolve() or not (target / "entry.py").is_file()
+            or not (target / "runtime.json").is_file()):
+        raise ProfileUnavailable("installed profile points at another runtime without a prepared entry")
+    receipt = read(target / "runtime.json")
+    validation = adapter.get("product_validation", {})
+    if (receipt.get("python") != adapter["python"] or receipt.get("validation") != validation
+            or validation.get("schema") != "mindie-candidate-check/1"
+            or validation.get("status") != "validated"):
+        raise ProfileUnavailable("installed profile differs from its prepared runtime receipt")
+    return [adapter["python"], "-I", str(target / "entry.py")]
+
+
+def transfer_entry(command, args, environment):
+    command = [*command, args.role, *args.arguments]
+    if args.role == "user-prompt-submit":
+        # Ordinary prompts already returned. This explicit event was consumed
+        # before profile resolution; forward it once, before granting a lease.
+        from bounded_process import run
+        result = run(command, json.dumps(args.prompt_event), timeout=420.0,
+                     env=environment, allow_service=True, allowed_returncodes=None)
+        print(result.stderr, end="", file=sys.stderr)
+        print(result.checked_stdout(), end="")
+        return result.returncode
+    from windows_process import exec_or_wait
+    return exec_or_wait(command, environment)
 
 
 def session_start(config, *, session_id=None):
@@ -198,17 +233,25 @@ def main():
         with update_lock(config, blocking=args.role != 'stop'):
             # Bind before any helper side effect. MCP keeps this identity in
             # memory and reacquires the same lock for each request.
-            _installed_profile(config, read(args.release / "runtime.json"))
             adapter = read(config)
+            _installed_profile(config, read(args.release / "runtime.json"), adapter=adapter)
             if (Path(adapter.get("python", "")).absolute() != Path(sys.executable).absolute()
                     or Path(runtime_scripts(adapter)).resolve() != SCRIPTS.resolve()):
-                raise ProfileUnavailable("installed profile points at another runtime")
-            bind_explicit_config(config)
-            os.environ.update(runtime_env(config))
-            mcp = args.role in {'knowledge-mcp', 'remote-mcp', 'tools-mcp'} or (
-                args.role == 'bridge' and args.arguments[:1] == ['mcp'])
-            if not mcp:
-                return dispatch(args, config)
+                # The native facade selected this entry before activation
+                # acquired the lock. No business operation has started yet.
+                command = replacement_entry(args.release, adapter)
+                environment = runtime_env(config, adapter=adapter)
+            else:
+                command = None
+                bind_explicit_config(config)
+                os.environ.update(runtime_env(config))
+                mcp = args.role in {'knowledge-mcp', 'remote-mcp', 'tools-mcp'} or (
+                    args.role == 'bridge' and args.arguments[:1] == ['mcp'])
+                if not mcp:
+                    return dispatch(args, config)
+    if command is not None:
+        # Release the old operation lock before entering another interpreter.
+        return transfer_entry(command, args, environment)
     return dispatch(args, config)
 
 
