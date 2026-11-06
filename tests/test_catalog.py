@@ -125,6 +125,21 @@ class CatalogTests(unittest.TestCase):
         )
         self.assertEqual(stop["inputSchema"]["properties"]["force"]["type"], "boolean")
 
+    def test_native_gate_accepts_business_interpreter_probe_arguments(self):
+        from mcp_gate import Gate
+        arguments = {
+            "host": "example.invalid", "port": 22,
+            "distributions": ["vllm-ascend"],
+            "python_executable": "/business/venv/bin/python",
+            "python_candidates": ["/custom/bin/python"],
+            "required_distributions": ["torch", "torch-npu"],
+        }
+        name, accepted = Gate("remote")._tool_args({"params": {
+            "name": "remote_probe", "arguments": arguments,
+        }})
+        self.assertEqual(name, "remote_probe")
+        self.assertEqual(accepted, arguments)
+
     def test_remote_write_keeps_rejecting_timeout_keys(self):
         write = next(t for t in self.generated["remote"] if t["name"] == "remote_write")
         self.assertNotIn("timeout_ms", write["inputSchema"]["properties"])

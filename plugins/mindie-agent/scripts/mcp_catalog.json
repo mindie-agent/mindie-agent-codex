@@ -351,10 +351,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -444,10 +446,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -582,7 +586,7 @@
     },
     {
       "name": "remote_write",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Write a remote file with overwrite support and optional read-ledger concurrency checks. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Write a remote file with overwrite support and optional read-ledger concurrency checks. For source changes or rebuilds, discover the user's selected source checkout and a compatible interpreter; root/cwd and the local client directory do not identify installed sources. Use a new source directory or editable rebind when requested; otherwise retain existing sources and binding. A directory change does not imply deleting old sources or creating a new Python environment. Preserve affected baseline artifacts before overwriting native outputs; reuse them for Python-only edits and validate actual loading in a fresh process. Discovery and build helpers are optional: if they do not fit, use explicit paths, existing CLIs or task-local scripts through remote.bash or authorized native SSH. Preserve confirmed results and job references; observe uncertain writes before retrying and retain device/port ownership. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -605,10 +609,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -689,7 +695,7 @@
     },
     {
       "name": "remote_edit",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Edit a remote file with exact string replacement and optional read-ledger concurrency checks. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Edit a remote file with exact string replacement and optional read-ledger concurrency checks. For source changes or rebuilds, discover the user's selected source checkout and a compatible interpreter; root/cwd and the local client directory do not identify installed sources. Use a new source directory or editable rebind when requested; otherwise retain existing sources and binding. A directory change does not imply deleting old sources or creating a new Python environment. Preserve affected baseline artifacts before overwriting native outputs; reuse them for Python-only edits and validate actual loading in a fresh process. Discovery and build helpers are optional: if they do not fit, use explicit paths, existing CLIs or task-local scripts through remote.bash or authorized native SSH. Preserve confirmed results and job references; observe uncertain writes before retrying and retain device/port ownership. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -712,10 +718,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -800,7 +808,7 @@
     },
     {
       "name": "remote_multi_edit",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Apply multiple exact edits atomically to one remote file. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Apply multiple exact edits atomically to one remote file. For source changes or rebuilds, discover the user's selected source checkout and a compatible interpreter; root/cwd and the local client directory do not identify installed sources. Use a new source directory or editable rebind when requested; otherwise retain existing sources and binding. A directory change does not imply deleting old sources or creating a new Python environment. Preserve affected baseline artifacts before overwriting native outputs; reuse them for Python-only edits and validate actual loading in a fresh process. Discovery and build helpers are optional: if they do not fit, use explicit paths, existing CLIs or task-local scripts through remote.bash or authorized native SSH. Preserve confirmed results and job references; observe uncertain writes before retrying and retain device/port ownership. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -823,10 +831,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -911,7 +921,7 @@
     },
     {
       "name": "remote_bash",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Run a remote shell command with Bash-like semantics, logs, preview, and automatic yield, writable stdin and optional PTY. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Run a remote shell command with Bash-like semantics, logs, preview, and automatic yield, writable stdin and optional PTY. For source changes or rebuilds, discover the user's selected source checkout and a compatible interpreter; root/cwd and the local client directory do not identify installed sources. Use a new source directory or editable rebind when requested; otherwise retain existing sources and binding. A directory change does not imply deleting old sources or creating a new Python environment. Preserve affected baseline artifacts before overwriting native outputs; reuse them for Python-only edits and validate actual loading in a fresh process. Discovery and build helpers are optional: if they do not fit, use explicit paths, existing CLIs or task-local scripts through remote.bash or authorized native SSH. Preserve confirmed results and job references; observe uncertain writes before retrying and retain device/port ownership. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -934,10 +944,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -1071,10 +1083,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -1201,10 +1215,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -1389,10 +1405,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -1455,7 +1473,7 @@
     },
     {
       "name": "remote_apply_patch",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Apply a Codex apply_patch payload. Native apply_patch is freeform; over MCP the raw patch text is passed in `patch`. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Apply a Codex apply_patch payload. Native apply_patch is freeform; over MCP the raw patch text is passed in `patch`. For source changes or rebuilds, discover the user's selected source checkout and a compatible interpreter; root/cwd and the local client directory do not identify installed sources. Use a new source directory or editable rebind when requested; otherwise retain existing sources and binding. A directory change does not imply deleting old sources or creating a new Python environment. Preserve affected baseline artifacts before overwriting native outputs; reuse them for Python-only edits and validate actual loading in a fresh process. Discovery and build helpers are optional: if they do not fit, use explicit paths, existing CLIs or task-local scripts through remote.bash or authorized native SSH. Preserve confirmed results and job references; observe uncertain writes before retrying and retain device/port ownership. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "description": "Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias from the endpoint alias files, or a selector understood by a registered resolver. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default. The server validates the selector before connecting.",
@@ -1478,10 +1496,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -1553,10 +1573,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -1672,10 +1694,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -1772,10 +1796,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -1872,10 +1898,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -1951,10 +1979,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -2048,10 +2078,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -2122,10 +2154,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -2210,10 +2244,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -2294,10 +2330,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -2344,7 +2382,7 @@
     },
     {
       "name": "remote_probe",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Probe basic endpoint facts. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Probe endpoint Git/Python facts and installed-distribution source paths without workload imports. Use required_distributions to discover a compatible interpreter when several Pythons exist, or python_executable for an explicit choice; distributions adds source metadata. Preserve virtualenv identity. Metadata is not proof of ABI compatibility or actual native library loading. If a helper is unavailable or unsuitable, continue within the user's authorized scope using native file/shell/SSH tools or task-local scripts. Report the helper failure separately, reuse confirmed facts and jobs, and verify the result. Reconcile uncertain external writes and preserve device/port ownership; changing tools does not grant new authority. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -2367,10 +2405,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -2405,7 +2445,36 @@
             "items": {
               "type": "string"
             },
-            "description": "Explicit module imports to check; default empty."
+            "maxItems": 32,
+            "description": "Explicit module imports to check; default empty. Imports may initialize a workload; prefer distributions for source discovery."
+          },
+          "distributions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "description": "Installed distribution names, e.g. vllm and vllm-ascend. Reads versions, installation roots and direct_url.json editable source paths without importing frameworks. Missing metadata is reported, never guessed."
+          },
+          "python_executable": {
+            "type": "string",
+            "description": "Explicit absolute remote business interpreter, e.g. /venv/bin/python. Omitted without discovery uses python3 after the runtime profile. Explicit choices never fall back. Metadata inspection does not prove actual module loading."
+          },
+          "python_candidates": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "string"
+            },
+            "description": "Additional absolute remote interpreters. Discovery also checks active runtime/venv/Conda bindings, PATH and conventional image paths, bounded to 16 candidates. Different venv prefixes remain distinct."
+          },
+          "required_distributions": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "type": "string"
+            },
+            "description": "Enable discovery using required package metadata, e.g. torch and torch-npu. Select an eligible active binding or sole environment; several eligible environments are ambiguous. Metadata does not prove ABI compatibility or device readiness."
           },
           "diagnose_connection": {
             "type": "boolean",
@@ -2425,7 +2494,7 @@
     },
     {
       "name": "remote_exec_command",
-      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Runs a command in a PTY, returning output or a session ID for ongoing interaction (Codex exec_command). Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
+      "description": "General remote tool for every native Codex task; no MindIE activation needed. The host binds native task identity per call; one task cannot reach another task's remote jobs. Runs a command in a PTY, returning output or a session ID for ongoing interaction (Codex exec_command). For source changes or rebuilds, discover the user's selected source checkout and a compatible interpreter; root/cwd and the local client directory do not identify installed sources. Use a new source directory or editable rebind when requested; otherwise retain existing sources and binding. A directory change does not imply deleting old sources or creating a new Python environment. Preserve affected baseline artifacts before overwriting native outputs; reuse them for Python-only edits and validate actual loading in a fresh process. Discovery and build helpers are optional: if they do not fit, use explicit paths, existing CLIs or task-local scripts through remote.bash or authorized native SSH. Preserve confirmed results and job references; observe uncertain writes before retrying and retain device/port ownership. Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias or a resolver selector. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default.",
       "inputSchema": {
         "type": "object",
         "description": "Endpoint selection is conditional: for a direct SSH endpoint provide host and port together (port is the SSH port; for example 22; there is no implicit default). Alternatively provide an alias from the endpoint alias files, or a selector understood by a registered resolver. To use the configured default endpoint, omit endpoint selectors; a partial host/port selector does not use that default. The server validates the selector before connecting.",
@@ -2448,10 +2517,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -2567,10 +2638,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
@@ -2654,10 +2727,12 @@
           },
           "root": {
             "type": "string",
-            "default": "/"
+            "default": "/",
+            "description": "Remote file-operation boundary, not the source checkout. Defaults to /. Discover existing project paths on the selected endpoint before source edits or builds; the client's local working directory does not select remote sources."
           },
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute working directory on the selected remote endpoint. Defaults to endpoint cwd/root; set it to the existing source checkout for development."
           },
           "runtime_env": {
             "type": "boolean",
