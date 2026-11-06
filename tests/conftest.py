@@ -31,6 +31,8 @@ def isolate_host_environment(monkeypatch, tmp_path, request):
         "XDG_STATE_HOME": host / "xdg-state",
         "CODEX_HOME": host / "codex-home",
         "MINDIE_DIAGNOSTICS_ROOT": host / "diagnostics",
+        "MINDIE_CONFIG_HOME": host / "mindie-config",
+        "MINDIE_DATA_HOME": host / "mindie-data",
         "MINDIE_REMOTE_STATE_DIR": host / "remote",
     }
     for name, path in directories.items():

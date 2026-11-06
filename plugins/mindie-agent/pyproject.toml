@@ -19,7 +19,7 @@ dependencies = [
 
 [tool.uv.sources]
 mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "da64fe111d878f44b7efec6af6ca46d3f5887be6" }
-remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "131b24533479e9cefc572144adccdcb345f70846" }
+remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "aee4e71aa4e3298b35c2229bc57e5a822caff115" }
 mindie-diagnostics = { git = "https://github.com/mindie-agent/diagnostics", rev = "f338788cecc56f7aff1dccab1d53426c9e28fe7f" }
 mindie-debugger = { git = "https://github.com/mindie-agent/debugger", rev = "e9406b2b178335190d5cb59dff4d6985894497ba" }
 mindie-profiler = { git = "https://github.com/mindie-agent/profiler", rev = "79d97e75bff7351b0472b93c03b072c1cf47f5e7" }
@@ -31,7 +31,7 @@ mindie-coordinator = { git = "https://github.com/mindie-agent/coordinator", rev 
 override-dependencies = [
   "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@f338788cecc56f7aff1dccab1d53426c9e28fe7f",
   "mindie-sim @ git+https://github.com/mindie-agent/sim@dbadff04b60937a0722b0a227cdad01beed083cd",
-  "remote-dev @ git+https://github.com/mindie-agent/remote-dev@131b24533479e9cefc572144adccdcb345f70846",
+  "remote-dev @ git+https://github.com/mindie-agent/remote-dev@aee4e71aa4e3298b35c2229bc57e5a822caff115",
 ]
 
 [tool.setuptools]
