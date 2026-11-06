@@ -1,5 +1,6 @@
 """A canonical cutover between launcher selection and entry is not corruption."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -207,3 +208,44 @@ def test_transfer_preserves_the_selected_entry_failure(tmp_path, role):
     assert result.returncode == 17, result.stderr
     assert result.stderr == "selected-entry-failed\n"
     assert result.stdout == ""
+
+
+def test_transfer_preserves_utf8_event_at_the_native_input_byte_limit(tmp_path):
+    fixture = tmp_path / "read_event_fixture.py"
+    fixture.write_text(
+        "import hashlib,json,sys\n"
+        f"sys.path.insert(0,{str(SCRIPTS)!r})\n"
+        "from manual_entry import read_event\n"
+        "event=read_event(sys.stdin.buffer)\n"
+        "print(json.dumps({'session_id':event['session_id'],'metadata':event['metadata'],"
+        "'prompt_sha256':hashlib.sha256(event['prompt'].encode('utf-8')).hexdigest()}))\n",
+        encoding="utf-8", newline="\n")
+    code = ("import os,sys\nfrom types import SimpleNamespace\n"
+            f"sys.path.insert(0,{str(SCRIPTS)!r})\n"
+            "from entry import transfer_entry\nfrom manual_entry import read_event\n"
+            "args=SimpleNamespace(role='user-prompt-submit',arguments=[],"
+            "prompt_event=read_event(sys.stdin.buffer))\n"
+            f"raise SystemExit(transfer_entry([sys.executable,{str(fixture)!r}],args,dict(os.environ)))\n")
+    event = dict(hook_event_name="UserPromptSubmit", session_id="utf8-cutover",
+                 cwd=str(tmp_path), prompt="/mindie-agent ", metadata="中文🙂")
+    overhead = len(json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    remaining = 32 * 1024 * 1024 - overhead
+    event["prompt"] += "中" * (remaining // 3) + "x" * (remaining % 3)
+    payload = json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    assert len(payload) == 32 * 1024 * 1024
+
+    def launch(data):
+        return subprocess.run([sys.executable, "-I", "-c", code], input=data,
+                              capture_output=True, timeout=15,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+    result = launch(payload)
+    assert result.returncode == 0, result.stderr.decode("utf-8")
+    assert result.stderr == b""
+    assert json.loads(result.stdout) == dict(
+        session_id=event["session_id"], metadata=event["metadata"],
+        prompt_sha256=hashlib.sha256(event["prompt"].encode("utf-8")).hexdigest())
+    oversized = launch(payload + b" ")
+    assert oversized.returncode == 1
+    assert b"native prompt hook exceeds its byte budget" in oversized.stderr
+    assert oversized.stdout == b""

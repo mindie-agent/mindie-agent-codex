@@ -114,8 +114,10 @@ def transfer_entry(command, args, environment):
     if args.role == "user-prompt-submit":
         # Ordinary prompts already returned. This explicit event was consumed
         # before profile resolution; forward it once, before granting a lease.
+        # Keep Unicode in UTF-8 and omit added whitespace within the native byte budget.
         from bounded_process import run
-        result = run(command, json.dumps(args.prompt_event), timeout=420.0,
+        data = json.dumps(args.prompt_event, ensure_ascii=False, separators=(",", ":"))
+        result = run(command, data, timeout=420.0,
                      env=environment, allow_service=True, allowed_returncodes=None)
         print(result.stderr, end="", file=sys.stderr)
         print(result.checked_stdout(), end="")
