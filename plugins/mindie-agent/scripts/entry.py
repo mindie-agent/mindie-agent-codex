@@ -27,6 +27,7 @@ from contextlib import redirect_stdout
 import json
 import os
 from pathlib import Path
+import re
 import runpy
 import sys
 
@@ -89,13 +90,18 @@ def profile(release, source=None, *, prepare=True):
 
 
 def replacement_entry(release, adapter):
-    """Activation publishes its immutable engine beside the runtime receipt."""
-    target = Path(adapter.get("component_release") or Path(adapter["engine_config"]).parent)
+    """Use the canonical launcher's release identity, including first setup."""
+    validation = adapter.get("product_validation", {})
+    version = validation.get("native_version")
+    if not isinstance(version, str) or not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+!-]{0,79}", version):
+        raise ProfileUnavailable("installed profile points at another runtime with an invalid release identity")
+    home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    data = Path(os.environ.get("PLUGIN_DATA", home / "plugins/data/mindie-agent-mindie-agent"))
+    target = Path(adapter.get("component_release") or data / "releases" / version)
     if (target.resolve() == release.resolve() or not (target / "entry.py").is_file()
             or not (target / "runtime.json").is_file()):
         raise ProfileUnavailable("installed profile points at another runtime without a prepared entry")
     receipt = read(target / "runtime.json")
-    validation = adapter.get("product_validation", {})
     if (receipt.get("python") != adapter["python"] or receipt.get("validation") != validation
             or validation.get("schema") != "mindie-candidate-check/1"
             or validation.get("status") != "validated"):

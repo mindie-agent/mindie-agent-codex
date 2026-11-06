@@ -159,6 +159,17 @@ def test_component_cutover_uses_its_explicit_release(installation):
     assert json.loads(config.read_text(encoding="utf-8")) == adapter
 
 
+def test_first_profile_cutover_uses_the_release_identity_not_the_engine_directory(installation):
+    config, _data, _old, new = installation
+    engine = config.with_name("codex.engine.json")
+    Path(new[1]["engine_config"]).replace(engine)
+    adapter = dict(new[1], engine_config=str(engine))
+    result = launch_after_cutover(installation, "session-start", target=adapter)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stderr)["status"] == "inactive"
+    assert json.loads(config.read_text(encoding="utf-8")) == adapter
+
+
 @pytest.mark.parametrize("fault", ["missing_entry", "missing_receipt", "receipt_mismatch", "same_release"])
 def test_invalid_replacement_never_loops_or_dispatches(installation, fault):
     config, _data, old, new = installation
