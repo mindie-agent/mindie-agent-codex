@@ -107,6 +107,9 @@ def test_native_locked_runtime_and_mcp_discovery(monkeypatch, tmp_path):
         components = next(r for r in rows if "mindie-tools" in r["name"])
         assert remote["tools"]
         assert "remote_auth" in remote["tools"]
+        probe = remote["tools"]["remote_probe"]
+        assert {"distributions", "python_executable", "python_candidates", "required_distributions"} <= set(
+            probe["inputSchema"]["properties"])
         assert "diagnostics_status" in components["tools"]
         assert not any("knowledge_" in name for r in rows for name in r["tools"])
         print("native MCP discovery:", len(remote["tools"]), "remote tools,",
