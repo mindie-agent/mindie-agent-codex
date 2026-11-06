@@ -50,7 +50,7 @@ class CatalogTests(unittest.TestCase):
             if tool["name"] == "remote_auth"
         )["inputSchema"]["properties"]
         self.assertIn("password_env", authentication)
-        self.assertNotIn("password", authentication)
+        self.assertTrue(authentication["password"]["writeOnly"])
         apply_patch = next(
             tool for tool in self.generated["remote"]
             if tool["name"] == "remote_apply_patch"

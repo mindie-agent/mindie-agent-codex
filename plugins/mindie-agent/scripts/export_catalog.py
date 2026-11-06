@@ -293,4 +293,5 @@ if __name__ == "__main__":
     Path(__file__).with_name("mcp_catalog.json").write_text(
         json.dumps(catalog(), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
