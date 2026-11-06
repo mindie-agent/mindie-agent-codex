@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=77,<81"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "mindie-agent-codex"
-version = "0.1.22"
+version = "0.1.23"
 description = "Codex adapter for MindIE Agent"
 requires-python = ">=3.11"
 dependencies = [
@@ -34,15 +34,17 @@ override-dependencies = [
   "remote-dev @ git+https://github.com/mindie-agent/remote-dev@6a64da8be9ed7c0bb38c2ba57f539da9a43ddf34",
 ]
 
-[tool.setuptools]
-packages = ["mindie_codex", "mindie_codex.scripts"]
-package-dir = { mindie_codex = "." }
-include-package-data = false
-
-[tool.setuptools.package-data]
-mindie_codex = [
+[tool.hatch.build.targets.wheel]
+# Stream the payload into the wheel; a nested setuptools bdist staging tree
+# exceeds Windows relative-path limits at the native component-generation depth.
+only-include = [
+  "__init__.py", "scripts", "assets", "hooks", "skills", ".codex-plugin", ".mcp.json",
   "pyproject.toml", "uv.lock", "product-contract.json", "harness-compatibility.json",
-  ".codex-plugin/plugin.json", ".mcp.json",
-  "hooks/*.json", "skills/*/*.md", "skills/*/agents/*.yaml",
-  "skills/*/references/*.md", "skills/*/assets/*", "assets/*", "scripts/*.json"
+]
+sources = { "" = "mindie_codex" }
+
+[tool.hatch.build.targets.sdist]
+only-include = [
+  "__init__.py", "scripts", "assets", "hooks", "skills", ".codex-plugin", ".mcp.json",
+  "pyproject.toml", "uv.lock", "product-contract.json", "harness-compatibility.json",
 ]

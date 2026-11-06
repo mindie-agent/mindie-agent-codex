@@ -9,6 +9,7 @@ activation retain their own locks and deadlines.
 temporary generation. Does not query or change the operator's installation.
 """
 import json
+import os
 from pathlib import Path
 import sys
 import shutil
@@ -37,9 +38,10 @@ inventory = read_inventory(adapter["python"], timeout=15)
 from bootstrap import native_path
 from mindie_knowledge.filesystem import path_is_within
 
-# Match the default plugin-data depth without making uv's own project URI
-# longer than the native host's unrelated pytest profile directory.
-generation_parent = Path(__file__).resolve().parents[3]
+# Exercise the actual native data depth. A shorter checkout-relative fixture
+# hid a Windows failure while inheriting independently upgraded components.
+generation_parent = Path(os.environ['CODEX_HOME']) / 'plugins/data/mindie-agent-mindie-agent'
+generation_parent.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix="native-", dir=generation_parent) as directory:
     data = Path(directory)
     try:
