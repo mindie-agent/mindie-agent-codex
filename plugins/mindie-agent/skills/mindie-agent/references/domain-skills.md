@@ -51,7 +51,7 @@ The `mindie-remote-dev` MCP tools are available on demand in any session without
 ## 4. NPU Timing Mutual Exclusion & Profiler Discipline
 
 - **CPU Pre-Compilation (`npu_count=0`)**: Confirmed device-free build or inspection steps may run concurrently using per-slot cache directories (`MINDIE_SLOT_ID`, `ASCEND_CACHE_PATH`, `TORCHINDUCTOR_CACHE_DIR`, `TRITON_CACHE_DIR`).
-- **Exclusive Physical NPU Lease**: Any benchmark, attribution check, or `mindie_profiler` capture on the same physical NPU (or same Ascend A3 dual-Die package) must hold an exclusive `coordinator` lease and drain `/proc` process trees before the next run.
+- **Exclusive Physical NPU Lease**: Any benchmark, attribution check, or `mindie_profiler` capture on the same physical NPU (or same Ascend A3 dual-Die package) must hold an exclusive `coordinator` lease or an equivalent existing verified host reservation and drain `/proc` process trees before the next run.
 - **`mindie_profiler` Conventions**:
   - Pass explicit `--time-window START:END`, `--step-window STEP=START:END` / `--steps-file`, or `--full-range` (`--unit us|ns|ms`), plus explicit scene annotations (`--mode`, `--framework`, `--phase`, `--tp`, `--dp`, `--graph-mode`, `--clock-domain`, `--input-signature`).
   - `busy_union` and `kernel_sum` are non-additive (`host_gap = wall - busy_union`, `exposed_comm = comm_union - noncomm_union`), and `slowest_rank` is selected by wall `p50` across 7 semantic blocks (`Attention`, `MoE`, `Comm`, `Norm`, `Copy_Layout`, `Host_Gap`, `Unclassified`).

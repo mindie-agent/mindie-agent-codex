@@ -145,7 +145,7 @@ FAILURE_HINTS = {
     "timeout": "The deadline expired and the outcome may be unknown; inspect side effects and any capture receipt before another attempt.",
     "cancelled": "The call was cancelled and the outcome may be unknown; inspect side effects and any capture receipt before another attempt.",
     "output_limit": "Output exceeded the hard cap; inspect any available partial capture receipt. Use an output-file option when supported for large results.",
-    "component_not_installed": "Install the mindie component or configure component_commands for it in the adapter; nothing was started.",
+    "component_not_installed": "Nothing was started. Continue independent task steps or use equivalent authorized host-native tools. Install this optional component only if the task still needs it.",
     "cleanup_failed": "The process outcome is recorded but owned-process cleanup failed; do not repeat the operation.",
     "duplicate_request": "This request id was already admitted; it was not executed again. Use a new request only for a new operation.",
     "runtime_unavailable": "The runtime process could not be run; check the installation with the doctor tooling before retrying.",

@@ -575,7 +575,8 @@ if __name__ == "__main__":
             stage, execution = "routing", "not_started"
         message = (
             "Knowledge query unavailable: a configured feed has no verified installed snapshot. "
-            "The query did not run; inspect the feed sync result. No automatic retry."
+            "The query did not run. Continue from available code, documentation and native tools; "
+            "inspect feed sync only if the task still needs this knowledge. No automatic retry."
             if feed_unavailable else
             f"Knowledge request rejected before execution: {str(exc)[:300]}. No automatic retry."
             if routing_error else
