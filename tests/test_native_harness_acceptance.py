@@ -19,7 +19,8 @@ from release_metadata import require_harness
 
 
 def invoke(argv, *, env, timeout=60):
-    result = subprocess.run(argv, env=env, capture_output=True, text=True,
+    # Fixture helpers own UTF-8 JSON and diagnostics even on a legacy-codepage host.
+    result = subprocess.run(argv, env={**env, 'PYTHONIOENCODING': 'utf-8'}, capture_output=True, text=True,
                             encoding="utf-8", timeout=timeout)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)

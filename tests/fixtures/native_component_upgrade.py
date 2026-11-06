@@ -9,7 +9,6 @@ activation retain their own locks and deadlines.
 temporary generation. Does not query or change the operator's installation.
 """
 import json
-import os
 from pathlib import Path
 import sys
 import shutil
@@ -38,12 +37,13 @@ inventory = read_inventory(adapter["python"], timeout=15)
 from bootstrap import native_path
 from mindie_knowledge.filesystem import path_is_within
 
-# Exercise the actual native data depth. A shorter checkout-relative fixture
-# hid a Windows failure while inheriting independently upgraded components.
-generation_parent = Path(os.environ['CODEX_HOME']) / 'plugins/data/mindie-agent-mindie-agent'
-generation_parent.mkdir(parents=True, exist_ok=True)
+# Use the production plugin-data layout below an owned home. Pytest's deeply
+# nested case/profile name must not add a second artificial native profile.
+generation_parent = Path(__file__).resolve().parents[3]
 with tempfile.TemporaryDirectory(prefix="native-", dir=generation_parent) as directory:
-    data = Path(directory)
+    owned = Path(directory)
+    data = owned / 'home/.codex/plugins/data/mindie-agent-mindie-agent'
+    data.mkdir(parents=True)
     try:
         with patch("mindie_knowledge.component_runtime.discover",
                    return_value=dict(changed=False, runtime=inventory)):
@@ -57,5 +57,5 @@ with tempfile.TemporaryDirectory(prefix="native-", dir=generation_parent) as dir
                 == adapter["product_validation"]["native_version"])
         print(json.dumps(dict(status="active", component_rebound=True)))
     finally:
-        assert path_is_within(data, generation_parent)
-        shutil.rmtree(native_path(data))
+        assert path_is_within(owned, generation_parent)
+        shutil.rmtree(native_path(owned))
