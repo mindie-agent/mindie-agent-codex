@@ -119,8 +119,10 @@ def transfer_entry(command, args, environment):
         data = json.dumps(args.prompt_event, ensure_ascii=False, separators=(",", ":"))
         result = run(command, data, timeout=420.0,
                      env=environment, allow_service=True, allowed_returncodes=None)
-        print(result.stderr, end="", file=sys.stderr)
-        print(result.checked_stdout(), end="")
+        # These streams were already decoded from UTF-8 pipes. A second text
+        # newline conversion on Windows would turn CRLF into CRCRLF.
+        sys.stderr.buffer.write(result.stderr.encode("utf-8"))
+        sys.stdout.buffer.write(result.checked_stdout().encode("utf-8"))
         return result.returncode
     from windows_process import exec_or_wait
     return exec_or_wait(command, environment)

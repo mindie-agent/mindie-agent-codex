@@ -17,6 +17,13 @@ sys.path.insert(0, str(SCRIPTS))
 from bootstrap import publish_entry
 
 
+def share_dependency_sites(library, directories):
+    # Dependencies such as pywin32 need their own .pth paths and bootstrap.
+    Path(library, "locked-dependencies.pth").write_text(
+        "import site; " + "; ".join(f"site.addsitedir({str(path)!r})" for path in directories) + "\n",
+        encoding="utf-8", newline="\n")
+
+
 @pytest.fixture
 def installation(tmp_path):
     data = tmp_path / "data"
@@ -27,8 +34,9 @@ def installation(tmp_path):
     context = builder.ensure_directories(runtime)
     # Both fixture runtimes use the exact locked dependencies; the second
     # interpreter has its own executable/prefix and imports fresh modules.
-    Path(context.lib_path, "locked-dependencies.pth").write_text(
-        "\n".join(site.getsitepackages()) + "\nimport fixture_runtime_probe\n",
+    share_dependency_sites(context.lib_path, site.getsitepackages())
+    Path(context.lib_path, "runtime-probe.pth").write_text(
+        "import fixture_runtime_probe\n",
         encoding="utf-8", newline="\n")
     Path(context.lib_path, "fixture_runtime_probe.py").write_text(
         "import json,sys\nfrom pathlib import Path\n"
@@ -249,3 +257,54 @@ def test_transfer_preserves_utf8_event_at_the_native_input_byte_limit(tmp_path):
     assert oversized.returncode == 1
     assert b"native prompt hook exceeds its byte budget" in oversized.stderr
     assert oversized.stdout == b""
+
+
+def test_shared_dependency_site_runs_its_path_and_bootstrap_hooks(tmp_path):
+    runtime = tmp_path / "runtime"
+    builder = venv.EnvBuilder(with_pip=False, symlinks=os.name != "nt")
+    builder.create(runtime)
+    context = builder.ensure_directories(runtime)
+    dependency = tmp_path / "dependency-site"
+    extensions = dependency / "native-extensions"
+    extensions.mkdir(parents=True)
+    # The same installation shape as pywin32: import paths plus startup work
+    # are declared by the dependency's own .pth rather than its root directory.
+    (dependency / "dependency.pth").write_text(
+        "native-extensions\nimport fixture_dependency_bootstrap\n", encoding="utf-8", newline="\n")
+    (extensions / "fixture_dependency_bootstrap.py").write_text(
+        "import os\nos.environ['FIXTURE_DEPENDENCY_READY']='initialized'\n",
+        encoding="utf-8", newline="\n")
+    def launch():
+        return subprocess.run(
+            [context.env_exe, "-I", "-c", "import os; print(os.environ['FIXTURE_DEPENDENCY_READY'])"],
+            capture_output=True, text=True, encoding="utf-8", timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+    Path(context.lib_path, "locked-dependencies.pth").write_text(
+        str(dependency) + "\n", encoding="utf-8", newline="\n")
+    uninitialized = launch()
+    assert uninitialized.returncode == 1
+    assert "FIXTURE_DEPENDENCY_READY" in uninitialized.stderr
+    share_dependency_sites(context.lib_path, [dependency])
+    result = launch()
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "initialized\n"
+    assert result.stderr == ""
+
+
+def test_transfer_preserves_pipe_bytes_through_crlf_text_streams(tmp_path):
+    output, error = "结果\r\n继续\n".encode("utf-8"), b"selected-entry-failed\r\n"
+    fixture = tmp_path / "pipe_output_fixture.py"
+    fixture.write_text(
+        f"import sys\nsys.stdout.buffer.write({output!r})\nsys.stderr.buffer.write({error!r})\n"
+        "raise SystemExit(17)\n", encoding="utf-8", newline="\n")
+    code = ("import os,sys\nfrom types import SimpleNamespace\n"
+            "sys.stdout.reconfigure(newline='\\r\\n');sys.stderr.reconfigure(newline='\\r\\n')\n"
+            f"sys.path.insert(0,{str(SCRIPTS)!r})\nfrom entry import transfer_entry\n"
+            "args=SimpleNamespace(role='user-prompt-submit',arguments=[],prompt_event={})\n"
+            f"raise SystemExit(transfer_entry([sys.executable,{str(fixture)!r}],args,dict(os.environ)))\n")
+    result = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, timeout=10,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert result.returncode == 17, result.stderr
+    assert result.stdout == output
+    assert result.stderr == error
