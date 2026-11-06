@@ -84,9 +84,9 @@ def test_native_locked_runtime_and_mcp_discovery(monkeypatch, tmp_path):
         "from bootstrap import ensure_runtime;"
         "p,s,r=ensure_runtime(sys.argv[1],sys.argv[2]);"
         "print(json.dumps({'python':str(p),'scripts':str(s),'release':str(r)}))")
-    runtime = invoke([sys.executable, "-I", "-B", "-c", code, str(source), str(data)],
+    runtime = invoke([sys.executable, "-I", "-X", "utf8", "-B", "-c", code, str(source), str(data)],
                      env=env, timeout=930)
-    invoke([runtime["python"], "-I", str(Path(runtime["scripts"]) / "setup.py"),
+    invoke([runtime["python"], "-I", "-X", "utf8", str(Path(runtime["scripts"]) / "setup.py"),
             "install", "--knowledge-python", runtime["python"],
             "--config", env["MINDIE_AGENT_CONFIG"], "--root", str(tmp_path / "knowledge"),
             "--no-public-feed"], env=env, timeout=120)
@@ -115,7 +115,7 @@ def test_native_locked_runtime_and_mcp_discovery(monkeypatch, tmp_path):
         print("native MCP discovery:", len(remote["tools"]), "remote tools,",
               len(components["tools"]), "component tools; thread", thread)
     upgraded = invoke([
-        runtime["python"], "-I", str(ROOT / "tests/fixtures/native_component_upgrade.py"),
+        runtime["python"], "-I", "-X", "utf8", str(ROOT / "tests/fixtures/native_component_upgrade.py"),
         env["MINDIE_AGENT_CONFIG"], str(source), sys.executable,
     ], env=env, timeout=900)
     assert upgraded == dict(status="active", component_rebound=True)
