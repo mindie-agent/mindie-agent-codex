@@ -63,9 +63,13 @@ def emit_error(exception):
         if type(status) is int and 100 <= status <= 599:
             error["status"] = status
     from diagnostic_support import build_metadata, failure
+    original_evidence = evidence(exception)
+    # Classification may rebuild the exception; record the original traceback
+    # before the parent reuses this incident and discards its wrapper evidence.
+    typed.mindie_failure_evidence = original_evidence
     diagnostic = failure("release.update", "runtime_activation", "update", exception=typed, exit_code=1)
     print(json.dumps(dict(schema=SCHEMA, kind="catalog" if catalog else "exception",
-                          error=error, build=build_metadata(), evidence=evidence(exception),
+                          error=error, build=build_metadata(), evidence=original_evidence,
                           diagnostic=diagnostic), sort_keys=True))
 
 
