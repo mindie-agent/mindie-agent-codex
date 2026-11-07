@@ -403,8 +403,8 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
             raise ValueError("activation control response is invalid")
         result.checked_stdout()
     except Exception as exc:
-        from component_update import typed_catalog_error
-        exc = typed_catalog_error(exc)
+        from activation_diagnostics import child_error
+        exc = child_error(exc)
         result = getattr(exc, "process_result", result)
         pending["activation"] = _activation_result(value, result, expected)
         exc.native_effect = dict(stage="runtime_activation", activation=pending["activation"])
@@ -415,6 +415,8 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
         except (OSError, ValueError) as record_error:
             exc.receipt_error_type = type(record_error).__name__
         raise exc
+    from activation_diagnostics import incomplete
+    value = incomplete(value)
     _store_activation(root, pending, value, result, expected)
     return value
 

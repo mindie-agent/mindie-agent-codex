@@ -159,7 +159,10 @@ def failure(operation, stage, category, *, exception=None, revision=None,
     inner = reference({"diagnostic": getattr(exception, "mindie_diagnostic", None)})
     if inner is not None:
         return inner
-    build = build_metadata()
+    child_build = getattr(exception, "mindie_failure_build", None)
+    build = _project_build(child_build) if isinstance(child_build, dict) else {}
+    if not build:
+        build = build_metadata()
     explicit = _hex(revision, 40)
     try:
         raw = _record()(
@@ -168,6 +171,8 @@ def failure(operation, stage, category, *, exception=None, revision=None,
             revision=explicit or build.get("revision"),
             version=build.get("version"),
             elapsed_ms=elapsed_ms, exit_code=exit_code, reportable=reportable,
+            source_root=Path(__file__).parent,
+            evidence=getattr(exception, "mindie_failure_evidence", None),
         )
         if not isinstance(raw, dict):
             raise TypeError("invalid diagnostic result")
