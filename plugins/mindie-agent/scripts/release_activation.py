@@ -182,8 +182,11 @@ def activate(config, prepared, *, control_seconds=CONTROL_SECONDS):
     retired = None
 
     def incomplete(**details):
-        return dict(status="incomplete", stage=stage, service=state,
-                    unavailable_seconds=time.monotonic() - started, **details)
+        from diagnostic_support import build_metadata
+        from activation_diagnostics import incomplete as record_incomplete
+        return record_incomplete(dict(status="incomplete", stage=stage, service=state,
+                                      diagnostic_build=build_metadata(),
+                                      unavailable_seconds=time.monotonic() - started, **details))
 
     def probe(engine, value):
         return _probe(value, min(1., max(.01, deadline - time.monotonic())),
@@ -238,7 +241,8 @@ def activate(config, prepared, *, control_seconds=CONTROL_SECONDS):
             except TimeoutError:
                 raise
             except (OSError, ValueError) as exc:
-                return incomplete(error_type=type(exc).__name__,
+                from activation_diagnostics import evidence
+                return incomplete(error_type=type(exc).__name__, diagnostic_evidence=evidence(exc),
                                   domain_restoration=restore_changed(domains, timeout=max(0, deadline - time.monotonic())))
             return dict(status="active", unavailable_seconds=time.monotonic() - started)
     except BlockingIOError:
@@ -250,7 +254,8 @@ def activate(config, prepared, *, control_seconds=CONTROL_SECONDS):
     except (OSError, ValueError, RuntimeError) as exc:
         # The candidate's ready observation survives a separate local write
         # failure. Never convert this to not_started or restore the old owner.
-        return incomplete(error_type=type(exc).__name__)
+        from activation_diagnostics import evidence
+        return incomplete(error_type=type(exc).__name__, diagnostic_evidence=evidence(exc))
 
 
 def _attempt_expected(stream=None):
@@ -295,11 +300,7 @@ def main(argv=None, stdin=None):
 if __name__ == "__main__":
     try:
         print(json.dumps(main(), sort_keys=True))
-    except TimeoutError:
-        raise
     except Exception as exc:
-        from component_update import CatalogError, emit_catalog_error, typed_catalog_error
-        typed = typed_catalog_error(exc)
-        if typed is not exc or isinstance(typed, (CatalogError, FileNotFoundError)):
-            emit_catalog_error(typed)
+        from activation_diagnostics import emit_error
+        emit_error(exc)
         raise

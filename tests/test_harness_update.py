@@ -380,8 +380,9 @@ class UpdateTests(unittest.TestCase):
         self.installed.return_value = dict(self.before, version=self.version)
 
         # Use the real -I activation child. A missing engine emits the owned
-        # FileNotFoundError envelope; an unexpected KeyError has no envelope.
-        with patch.object(update, "_native_install") as install:
+        # FileNotFoundError envelope; an unexpected KeyError keeps safe owned stack evidence.
+        with patch.object(update, "_native_install") as install, \
+                patch.object(update, "runtime_env", return_value=dict(os.environ, **self.env)):
             result = update.check(self.config, force=True)
         install.assert_not_called()
         self.assertEqual(result["status"], "failed")
@@ -399,12 +400,44 @@ class UpdateTests(unittest.TestCase):
                     if missing_engine else
                     ("RuntimeError", "internal", "update_internal_failure", True))
         self.assertEqual(result["error_type"], expected[0])
-        self.assertEqual(event["attributes"]["error_type"], expected[0])
+        # The child records its actual exception before the generic parent
+        # wrapper is constructed. New parents reuse the one child incident.
+        self.assertEqual(event["attributes"]["error_type"], "FileNotFoundError" if missing_engine else "KeyError")
+        self.assertEqual(len(events), 1)
         self.assertEqual(event["attributes"]["category"], expected[1])
         self.assertEqual(event["attributes"]["error_code"], expected[2])
         self.assertIs(event["reportable"], expected[3])
         self.assertEqual(event["attributes"]["exit_code"], 1)
         self.assertNotIn("PRIVATE", json.dumps(event))
+        from mindie_diagnostics.bundle import export_issue_event
+        public = export_issue_event(event)
+        attributes = public["attributes"]
+        self.assertIn("FileNotFoundError" if missing_engine else "KeyError",
+                      attributes["exception_chain"])
+        self.assertTrue(any(frame["module"] == "mindie_agent_codex.release_activation"
+                            and frame["function"] == "prepare"
+                            for frame in attributes["stack_frames"]))
+        self.assertNotIn(str(self.root), json.dumps(public))
+        self.assertNotIn("stderr", json.dumps(public))
+        if not missing_engine:
+            from mindie_diagnostics.ingestion import ingest
+            from mindie_diagnostics.outbox import Outbox
+            from mindie_diagnostics.integration import configure_reporting
+            policy = Path(os.environ["MINDIE_DIAGNOSTICS_CONFIG"])
+            configure_reporting(True, config=policy, roots=[str(logs)])
+            # Simulate the previously released parent, which understands only
+            # catalog envelopes. The child event must still reach the queue.
+            import activation_diagnostics
+            from component_update import typed_catalog_error
+            with patch.object(update, "runtime_env", return_value=dict(os.environ, **self.env)), \
+                    patch.object(activation_diagnostics, "child_error", side_effect=typed_catalog_error):
+                update.check(self.config, force=True)
+            queue = Outbox(self.root / "activation-queue.db")
+            self.assertEqual(ingest(logs, queue, config=policy)["enqueued"], 1)
+            from mindie_diagnostics.reporter import issue_payload
+            payload = issue_payload(queue.claim()["payload"])
+            self.assertIn("mindie_agent_codex.release_activation", json.dumps(payload))
+            self.assertNotIn(str(self.root), json.dumps(payload))
 
     def test_activation_unknown_writer_retries_with_immutable_attempt_snapshot(self):
         pending = self.prepared_candidate()
