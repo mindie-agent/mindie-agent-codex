@@ -10,7 +10,8 @@ All plugin scripts live under `plugins/mindie-agent/scripts/` and include standa
 
 | Layer | Script | Role & Key Responsibilities |
 | :--- | :--- | :--- |
-| **Native Entry & Bootstrap** | `native_entry.py` | Renders `hooks/hooks.json` and `.mcp.json` commands using an inline Python launcher that delegates to `bootstrap.py`. |
+| **Native Entry & Bootstrap** | `native_entry.py` | Renders `hooks/hooks.json` and `.mcp.json` commands that invoke `hook_launcher.py` (hooks via `${PLUGIN_ROOT}`; MCP via a short path locator because Codex does not expand `${PLUGIN_ROOT}` in `.mcp.json`). |
+| | `hook_launcher.py` | Selects the prepared release, first-run bootstrap, or MCP migration source and dispatches `runpy` into that entry. |
 | | `bootstrap.py` | Resolves/prepares the isolated Python runtime (`bootstrap_runtime.py`) and dispatches `entry`, `mcp-gate`, `remote-bridge`, or `bridge`. |
 | **Host Hook Lifecycle** | `entry.py` | Native hook & CLI entry controller (`session-start`, `user-prompt-submit`, `stop`, `bridge`). Ordinary prompts on `user-prompt-submit` return `{}` immediately before resolving the profile. |
 | | `manual_entry.py` | Handles explicit `/mindie-agent` and `$mindie-agent` (`$mindie-agent:mindie-agent`) gestures on `UserPromptSubmit` for main sessions (`not event.get("agent_id")`), granting `Admission.activate` (`entry_enabled=1`) or revoking registered domain leases on `/mindie-agent deactivate`. |
@@ -31,14 +32,14 @@ All plugin scripts live under `plugins/mindie-agent/scripts/` and include standa
 ### Call Graph
 
 ```text
-Codex Host Hook (SessionStart / UserPromptSubmit / Stop) ──► native_entry inline command
-  └─► bootstrap.py ──► entry.py (session-start / user-prompt-submit / stop / bridge)
+Codex Host Hook (SessionStart / UserPromptSubmit / Stop) ──► hook_launcher.py
+  └─► bootstrap.py / installed entry.py (session-start / user-prompt-submit / stop / bridge)
         ├─► manual_entry.py (UserPromptSubmit: /mindie-agent | $mindie-agent ──► Admission.activate)
         ├─► session_maintenance.py (SessionStart: diagnostic_maintenance; skips service/feed when inactive)
         └─► bridge.py ──► admission_ops.py / service_client.py / codex_transcript.py / agent_diagnostics.py
 
-Codex Host MCP Client (stdio JSON-RPC) ──► native_entry inline command
-  └─► bootstrap.py ──► mcp_gate.py
+Codex Host MCP Client (stdio JSON-RPC) ──► hook_launcher.py
+  └─► bootstrap.py / installed entry.py ──► mcp_gate.py
         ├─► RemoteReceipts (<config>.remote-receipts.sqlite3, WAL + busy_timeout=5000)
         ├─► component_tools.py (profiler, sim, coordinator and local diagnostics)
         └─► remote_dev.mcp.server (remote-dev tools; available without /mindie-agent)
@@ -71,7 +72,8 @@ Codex Host MCP Client (stdio JSON-RPC) ──► native_entry inline command
 - **Timeout Hierarchy (`outer_timeout >= sum(inner_budgets) + cleanup_grace`)**:
   - `bounded_process.run` enforces explicit wall-clock deadlines and kills the entire child process group / Windows Job Object on timeout before draining pipes.
   - `STOP_DRAIN (15.0s) >= STOP_GRACE (12.0s) + 3.0s` in `entry.py` / `bridge.py`.
-  - Cold-start runtime preparation (`BOOTSTRAP_TOTAL = 540.0s`) runs only when explicitly triggered and uses stage markers (`bootstrap.preparing`).
+  - Cold-start runtime preparation (`BOOTSTRAP_TOTAL = 540.0s` inside the 900s baseline) runs only when explicitly triggered and uses stage markers (`bootstrap.preparing`).
+  - Host hook outer timeouts cover inner budgets plus `uv` startup and cleanup: SessionStart 1320s, UserPromptSubmit 1440s, Stop 240s.
 - **Four `v0.0.2` Iron Rules**:
   1. **Lightweight SQLite Connections**: `agent_diagnostics.py` and `mcp_gate.py` (`RemoteReceipts`) open SQLite with `PRAGMA journal_mode=WAL`, `PRAGMA synchronous=NORMAL`, `PRAGMA busy_timeout=5000`, and `CREATE TABLE IF NOT EXISTS`. Never run `.owner` / `.authority.json` sidecar `lstat` ceremonies or `PRAGMA table_info` / `sqlite_master` schema reflection on every operation.
   2. **Honest External Receipts**: Reserve `unknown` receipts for uncertain remote execution; never turn a succeeded remote call into `isError=True` over a local receipt write error, and never brick local state into permanent `fault`.

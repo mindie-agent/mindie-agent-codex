@@ -88,12 +88,19 @@ def adapter_check(source):
     hooks = read_json(plugin / "hooks/hooks.json")[0]["hooks"]
     if set(hooks) != {"SessionStart", "UserPromptSubmit", "Stop", "Interrupt"} or any(len(v) != 1 for v in hooks.values()):
         raise ValueError("one SessionStart, UserPromptSubmit, Stop and Interrupt hook group is required")
-    prompt = hooks["UserPromptSubmit"][0]["hooks"]
-    if len(prompt) != 1 or prompt[0].get("type") != "command":
-        raise ValueError("one native manual-entry command is required")
-    entries = hooks["Stop"][0]["hooks"]
-    if len(entries) != 1 or "timeout" in entries[0]:
-        raise ValueError("Stop must not impose an execution deadline")
+    from native_entry import SESSION_START_TIMEOUT, STOP_TIMEOUT, USER_PROMPT_TIMEOUT
+    required = (
+        ("SessionStart", SESSION_START_TIMEOUT),
+        ("UserPromptSubmit", USER_PROMPT_TIMEOUT),
+        ("Stop", STOP_TIMEOUT),
+    )
+    for event, minimum in required:
+        entries = hooks[event][0]["hooks"]
+        if len(entries) != 1 or entries[0].get("type") != "command":
+            raise ValueError("one native " + event + " command is required")
+        timeout = entries[0].get("timeout")
+        if not isinstance(timeout, int) or timeout < minimum:
+            raise ValueError(event + " hook timeout must cover inner budgets and cleanup")
     expected_interrupt = [
         dict(type="mcp_tool", server=server, tool="mindie_interrupt",
              input=dict(thread_id="${session_id}", turn_id="${turn_id}"),
@@ -125,6 +132,7 @@ def adapter_check(source):
         "knowledge_cli.py",
         "component_tools.py",
         "bootstrap.py",
+        "hook_launcher.py",
         "component_update.py",
         "bridge.py",
         "bridge_commands.py",

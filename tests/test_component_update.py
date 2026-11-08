@@ -256,6 +256,7 @@ def test_native_cold_launcher_does_not_change_the_hook_trusted_source_payload(tm
     scripts.mkdir(parents=True)
     (scripts / 'helper.py').write_text('VALUE = 42\n')
     (scripts / 'bootstrap.py').write_text("import helper\nprint(helper.VALUE)\n")
+    shutil.copy2(SCRIPTS / 'hook_launcher.py', scripts / 'hook_launcher.py')
     arguments = native_entry.command_args('0.1.2', 'knowledge-mcp')
     flags = arguments[arguments.index('python') + 1:]
     before = {str(p.relative_to(source)): p.read_bytes() for p in source.rglob('*') if p.is_file()}

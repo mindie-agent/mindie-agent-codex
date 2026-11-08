@@ -13,7 +13,6 @@ from unittest.mock import patch
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
-import native_entry
 import release_migration
 from update_lock import file_lock, update_lock
 
@@ -44,14 +43,21 @@ def old_config(config, version):
 
 
 class LauncherRoutingTests(unittest.TestCase):
-    def run_launcher(self, root, code, role):
+    def run_launcher(self, root, role, *, seed="0.1.10", name="mindie-agent", marketplace="mindie-agent"):
         env = dict(os.environ, CODEX_HOME=str(Path(root) / "home"),
                    PLUGIN_DATA=str(Path(root) / "data"),
                    PLUGIN_ROOT=str(Path(root) / "plugin"),
                    MINDIE_AGENT_CONFIG=str(Path(root) / "codex.json"),
                    MARK=str(Path(root) / "mark"))
-        return subprocess.run([sys.executable, "-c", code, role],
-                              capture_output=True, text=True, env=env, timeout=20)
+        argv = [sys.executable, str(SCRIPTS / "hook_launcher.py")]
+        if name != "mindie-agent":
+            argv.extend(["--name", name])
+        if marketplace != "mindie-agent":
+            argv.extend(["--marketplace", marketplace])
+        if seed is not None:
+            argv.extend(["--seed", seed])
+        argv.append(role)
+        return subprocess.run(argv, capture_output=True, text=True, env=env, timeout=20)
 
     def test_newer_seed_routes_startup_roles_to_migration_bootstrap(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -62,8 +68,7 @@ class LauncherRoutingTests(unittest.TestCase):
                 "Path(os.environ['MARK']).write_text(json.dumps(sys.argv[1:]))\n")
             (root / "codex.json").write_text(json.dumps(
                 dict(python=sys.executable, product_validation=dict(native_version="0.1.8"))))
-            code = native_entry.hook_launcher_code(seed_version="0.1.10")
-            result = self.run_launcher(root, code, "tools-mcp")
+            result = self.run_launcher(root, "tools-mcp")
             self.assertEqual(result.returncode, 0, result.stderr)
             argv = json.loads((root / "mark").read_text())
             self.assertEqual(argv[-2:], ["migrate", "tools-mcp"])
@@ -84,11 +89,10 @@ class LauncherRoutingTests(unittest.TestCase):
                 "Path(os.environ['MARK']).write_text(json.dumps(sys.argv[1:]))\n")
             (root / "codex.json").write_text(json.dumps(
                 dict(python=sys.executable, product_validation=validation)))
-            code = native_entry.hook_launcher_code(seed_version="0.1.10")
             for role in ("stop", "user-prompt-submit", "session-start"):
                 with self.subTest(role=role):
                     (root / "mark").unlink(missing_ok=True)
-                    result = self.run_launcher(root, code, role)
+                    result = self.run_launcher(root, role)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(json.loads((root / "mark").read_text()), [role])
 
@@ -102,8 +106,7 @@ class LauncherRoutingTests(unittest.TestCase):
                 "Path(os.environ['MARK']).write_text(json.dumps(sys.argv[1:]))\n")
             (root / "codex.json").write_text(json.dumps(
                 dict(python=sys.executable, product_validation=dict(native_version="0.1.8"))))
-            code = native_entry.hook_launcher_code(seed_version="0.1.10")
-            result = self.run_launcher(root, code, "tools-mcp")
+            result = self.run_launcher(root, "tools-mcp")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads((root / "mark").read_text()),
                              ["migrate", "tools-mcp"])
@@ -119,14 +122,15 @@ class LauncherRoutingTests(unittest.TestCase):
                 "Path(os.environ['MARK']).write_text(json.dumps(sys.argv[1:]))\n")
             (root / "codex.json").write_text(json.dumps(
                 dict(python=sys.executable, product_validation=dict(native_version="0.1.8"))))
-            code = native_entry.hook_launcher_code(
-                name="other-plugin", marketplace="other-market", seed_version="0.1.10")
             env = dict(os.environ, CODEX_HOME=str(home),
                        MINDIE_AGENT_CONFIG=str(root / "codex.json"),
                        MARK=str(root / "mark"))
             env.pop("PLUGIN_ROOT", None)
-            result = subprocess.run([sys.executable, "-c", code, "tools-mcp"],
-                                    capture_output=True, text=True, env=env, timeout=20)
+            result = subprocess.run(
+                [sys.executable, str(SCRIPTS / "hook_launcher.py"),
+                 "--name", "other-plugin", "--marketplace", "other-market",
+                 "--seed", "0.1.10", "tools-mcp"],
+                capture_output=True, text=True, env=env, timeout=20)
             self.assertEqual(result.returncode, 0, result.stderr)
             argv = json.loads((root / "mark").read_text())
             self.assertIn(str(source), argv)
@@ -146,8 +150,7 @@ class LauncherRoutingTests(unittest.TestCase):
                 "Path(os.environ['MARK']).write_text(json.dumps(sys.argv[1:]))\n")
             (root / "codex.json").write_text(json.dumps(
                 dict(python=sys.executable, product_validation=validation)))
-            code = native_entry.hook_launcher_code(seed_version="0.1.10")
-            result = self.run_launcher(root, code, "tools-mcp")
+            result = self.run_launcher(root, "tools-mcp")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads((root / "mark").read_text()), ["tools-mcp"])
 
