@@ -61,6 +61,7 @@ POSIX_LAUNCHER_RESOLVE = (
     '_hl="$PLUGIN_ROOT/scripts/hook_launcher.py"; '
     'if [ ! -f "$_hl" ]; then _hl="$PLUGIN_DATA/hook_launcher.py"; fi; ')
 PS_LAUNCHER_RESOLVE = (
+    "$ProgressPreference = 'SilentlyContinue'; "
     "$ErrorActionPreference = 'SilentlyContinue'; "
     "$root = [string]$env:PLUGIN_ROOT; $hl = ''; "
     "if ($root) { $hl = Join-Path $root 'scripts/hook_launcher.py' }; "

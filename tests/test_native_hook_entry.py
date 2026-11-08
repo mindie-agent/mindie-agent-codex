@@ -124,8 +124,15 @@ class NativeHookEntryTests(unittest.TestCase):
             + native_entry.UV_STARTUP_SECONDS + native_entry.CLEANUP_GRACE_SECONDS)
         self.assertIn('[ -s "$_err" ]', stop["command"])
         stop_windows = base64.b64decode(stop["commandWindows"].split()[-1]).decode("utf-16le")
+        self.assertTrue(
+            stop_windows.startswith("$ProgressPreference = 'SilentlyContinue'"),
+            stop_windows[:80])
         self.assertIn("$hasErr", stop_windows)
         self.assertIn("$failed -or $hasErr", stop_windows)
+        prompt_windows = base64.b64decode(prompt["commandWindows"].split()[-1]).decode("utf-16le")
+        self.assertTrue(
+            prompt_windows.startswith("$ProgressPreference = 'SilentlyContinue'"),
+            prompt_windows[:80])
         self.assertGreaterEqual(
             native_entry.STOP_TIMEOUT,
             native_entry.STOP_DISPATCH_SECONDS + native_entry.UV_STARTUP_SECONDS
