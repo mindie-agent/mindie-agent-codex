@@ -65,9 +65,17 @@ class NativeHookEntryTests(unittest.TestCase):
         self.assertIn("hook_launcher.py", locator)
         for role in ("session-start", "user-prompt-submit", "stop"):
             command = native_entry.hook_commands(role)["command"]
-            self.assertNotIn("python -c", command)
-            self.assertNotIn(" -c ", command)
             self.assertIn("hook_launcher.py", command)
+            self.assertIn("${PLUGIN_DATA}/hook_launcher.py", command)
+            self.assertNotIn("migrate", command)
+            self.assertNotIn("version_key", command)
+            self.assertNotIn("select_entry", command)
+        start_cmd = native_entry.hook_commands("session-start")["command"]
+        prompt_cmd = native_entry.hook_commands("user-prompt-submit")["command"]
+        self.assertNotIn("python -c", start_cmd)
+        self.assertNotIn(" -c ", start_cmd)
+        self.assertNotIn("python -c", prompt_cmd)
+        self.assertNotIn(" -c ", prompt_cmd)
         source = (SCRIPTS / "hook_launcher.py").read_text(encoding="utf-8")
         self.assertIn("migrate", source)
         self.assertIn("version_key", source)
@@ -102,7 +110,8 @@ class NativeHookEntryTests(unittest.TestCase):
         self.assertGreaterEqual(stop["timeout"], native_entry.STOP_TIMEOUT)
         self.assertGreaterEqual(
             native_entry.SESSION_START_TIMEOUT,
-            native_entry.BASELINE_RUNTIME_SECONDS + native_entry.SESSION_MAINTENANCE_SECONDS
+            native_entry.BASELINE_RUNTIME_SECONDS + native_entry.PROFILE_SETUP_SECONDS
+            + native_entry.SESSION_MAINTENANCE_SECONDS
             + native_entry.UV_STARTUP_SECONDS + native_entry.CLEANUP_GRACE_SECONDS)
         self.assertGreaterEqual(
             native_entry.USER_PROMPT_TIMEOUT,

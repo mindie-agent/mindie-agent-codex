@@ -153,6 +153,7 @@ class StopHookTests(unittest.TestCase):
                 self.assertEqual(stage.read_text(encoding="utf-8"), f"bridge-exiting-{code}")
                 if code != 0:
                     self.assertIn("capture failure", self.last_result.stderr)
+                    self.assertIn("capture failure", json.loads(self.last_result.stdout)["systemMessage"])
 
     def test_success_still_delivers_event_once(self):
         with tempfile.TemporaryDirectory() as root:
@@ -193,12 +194,41 @@ class StopHookTests(unittest.TestCase):
             (scripts / "runtime.json").write_text(json.dumps(
                 dict(python=sys.executable, validation=validation)))
             self.assertIn("hook_launcher.py", STOP["command"])
+            self.assertIn("${PLUGIN_DATA}/hook_launcher.py", STOP["command"])
             self.assertEqual(STOP["timeout"], native_entry.STOP_TIMEOUT)
             commands = stop_hook_commands(
                 [sys.executable, str(PLUGIN / "scripts/hook_launcher.py"), "stop"])
             event = self.run_stop(plugin, commands=commands, PLUGIN_DATA=str(data),
                                   HOOK_TEST_RECEIVED=str(received), MINDIE_AGENT_CONFIG=str(config),
                                   PLUGIN_ROOT=str(PLUGIN))
+            self.assertEqual([json.loads(line) for line in received.read_text().splitlines()], [event])
+
+    def test_evicted_plugin_cache_uses_durable_launcher(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            missing = root / "missing cache"
+            data = root / "plugin data"
+            data.mkdir()
+            shutil.copy2(PLUGIN / "scripts/hook_launcher.py", data / "hook_launcher.py")
+            release = data / "releases/0.0.1"
+            release.mkdir(parents=True)
+            received = root / "received.jsonl"
+            (release / "entry.py").write_text(
+                "import os, sys\n"
+                "with open(os.environ['HOOK_TEST_RECEIVED'], 'a') as stream:\n"
+                "    stream.write(sys.stdin.read() + '\\n')\n"
+            )
+            validation = dict(schema="mindie-candidate-check/1", status="validated",
+                              native_version="0.0.1")
+            config = root / "adapter.json"
+            config.write_text(json.dumps(dict(python=sys.executable, product_validation=validation)))
+            (release / "runtime.json").write_text(json.dumps(
+                dict(python=sys.executable, validation=validation)))
+            commands = stop_hook_commands([sys.executable, "$_hl", "stop"])
+            self.assertIn("${PLUGIN_DATA}/hook_launcher.py", commands["command"])
+            event = self.run_stop(
+                missing, commands=commands, PLUGIN_DATA=str(data),
+                HOOK_TEST_RECEIVED=str(received), MINDIE_AGENT_CONFIG=str(config))
             self.assertEqual([json.loads(line) for line in received.read_text().splitlines()], [event])
 
     def test_real_bridge_missing_config_does_not_write_state(self):
@@ -223,6 +253,7 @@ class StopHookTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("boom-detail", result.stderr)
         message = json.loads(result.stdout)["systemMessage"]
+        self.assertIn("boom-detail", message)
         self.assertIn("(exit 7)", message)
         self.assertIn("MindIE Stop helper failed", message)
 

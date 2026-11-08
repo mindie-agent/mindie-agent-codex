@@ -10,12 +10,13 @@ UserPromptSubmit, Stop, Interrupt and the MCP servers.
 - `Stop` and every hook remain stable canonical facades and never start migration; only MCP startup may route to the newer seed controller.
 - `Interrupt` dispatches `mindie_interrupt` with exact `thread_id`/`turn_id` to the remote and deterministic-component MCP servers (`timeout=3s`).
 - Hook and MCP commands invoke `scripts/hook_launcher.py` rather than inlining the selector state machine as `python -c`.
+- After plugin-cache eviction, hooks resolve `PLUGIN_DATA/hook_launcher.py` (published with the release) when `${PLUGIN_ROOT}/scripts/hook_launcher.py` is gone.
 
 - Knowledge is private to the manual Skill; its server is absent from the default MCP manifest.
 
 [Timeouts & Locks]
 - MCP `startup_timeout_sec=2760` covers baseline preparation, component inheritance, the bounded 900s migration/lock-drain window, and cleanup without altering tool-call deadlines.
-- SessionStart, UserPromptSubmit and Stop each declare an outer hook timeout covering inner budgets, `uv` startup and cleanup.
+- SessionStart, UserPromptSubmit and Stop each declare an outer hook timeout covering inner budgets, first-use profile setup, `uv` startup and cleanup.
 
 [Side-Effect Policy]
 - Importing this module is side-effect free; `write_manifests(root)` updates `hooks/hooks.json` and `.mcp.json`.
@@ -31,8 +32,11 @@ import shlex
 # reserve) + 130 process/cleanup reserve.
 MCP_STARTUP_SECONDS = 2760
 
-# Inner budgets owned by bootstrap.py / entry.py.
+# Inner budgets owned by bootstrap.py / entry.py / setup.py.
 BASELINE_RUNTIME_SECONDS = 900
+# First-use profile(..., prepare=True) -> setup.install: scanner 15s,
+# store 30s, domain catalog 90s, reporter activation 90s.
+PROFILE_SETUP_SECONDS = 15 + 30 + 90 + 90
 SESSION_MAINTENANCE_SECONDS = 300
 PROMPT_FORWARD_SECONDS = 420  # 300s maintenance + admission/entry + cleanup
 STOP_DISPATCH_SECONDS = 120
@@ -41,7 +45,7 @@ CLEANUP_GRACE_SECONDS = 60
 
 # outer >= sum(inner) + uv_startup + cleanup_grace
 SESSION_START_TIMEOUT = (
-    BASELINE_RUNTIME_SECONDS + SESSION_MAINTENANCE_SECONDS
+    BASELINE_RUNTIME_SECONDS + PROFILE_SETUP_SECONDS + SESSION_MAINTENANCE_SECONDS
     + UV_STARTUP_SECONDS + CLEANUP_GRACE_SECONDS)
 USER_PROMPT_TIMEOUT = (
     BASELINE_RUNTIME_SECONDS + PROMPT_FORWARD_SECONDS
@@ -49,16 +53,34 @@ USER_PROMPT_TIMEOUT = (
 STOP_TIMEOUT = (
     STOP_DISPATCH_SECONDS + UV_STARTUP_SECONDS + CLEANUP_GRACE_SECONDS)
 
-PLUGIN_LAUNCHER = "${PLUGIN_ROOT}/scripts/hook_launcher.py"
+PLUGIN_LAUNCHER = "$_hl"
+POSIX_LAUNCHER_RESOLVE = (
+    '_hl="${PLUGIN_ROOT}/scripts/hook_launcher.py"; '
+    'if [ ! -f "$_hl" ]; then _hl="${PLUGIN_DATA}/hook_launcher.py"; fi; ')
+PS_LAUNCHER_RESOLVE = (
+    "$hl = Join-Path $env:PLUGIN_ROOT 'scripts/hook_launcher.py'; "
+    "if (-not (Test-Path -LiteralPath $hl)) { "
+    "$hl = Join-Path $env:PLUGIN_DATA 'hook_launcher.py' }; ")
+_FAILURE_ENCODER = (
+    "import json,pathlib,sys\n"
+    "st,path,prefix=sys.argv[1],sys.argv[2],sys.argv[3]\n"
+    "err=pathlib.Path(path).read_text(encoding='utf-8',errors='replace')[:800].strip()\n"
+    "msg=prefix+' (exit '+st+')'\n"
+    "print(json.dumps({'systemMessage':(msg+chr(10)+err) if err else msg}))\n"
+)
 
 
 def posix_arg(value):
+    if value == "$_hl":
+        return '"$_hl"'
     if value.startswith("${PLUGIN_ROOT}/"):
         return '"${PLUGIN_ROOT}"' + shlex.quote(value[len("${PLUGIN_ROOT}"):])
     return shlex.quote(value)
 
 
 def ps_arg(value):
+    if value == "$_hl":
+        return "$hl"
     if value.startswith("${PLUGIN_ROOT}/"):
         return "(Join-Path $env:PLUGIN_ROOT '" + value[len("${PLUGIN_ROOT}/"):].replace("'", "''") + "')"
     return "'" + value.replace("'", "''") + "'"
@@ -108,6 +130,7 @@ def mcp_locator_code(*, name="mindie-agent", marketplace="mindie-agent", seed_ve
         "cands=[]\n"
         "root=os.environ.get('PLUGIN_ROOT')\n"
         "if root:cands.append(Path(root)/'scripts'/'hook_launcher.py')\n"
+        "cands.append(data/'hook_launcher.py')\n"
         "if seed:cands.append(data/'releases'/seed/'hook_launcher.py')\n"
         "if config.is_file():\n"
         " a=load(config);v=a.get('product_validation',{}).get('native_version')\n"
@@ -132,16 +155,39 @@ def _failure_json_parts(failure):
     return left, right
 
 
+def _posix_failure_json(failure):
+    """Stdout JSON must carry helper stderr: Codex drops stderr when Stop exits 0."""
+    left, right = _failure_json_parts(failure)
+    fallback = "printf '%s\\n' " + shlex.quote(left) + '"$_st"' + shlex.quote(right)
+    return (
+        "python3 -c " + shlex.quote(_FAILURE_ENCODER) + " \"$_st\" \"$_err\" "
+        + shlex.quote(failure) + " || " + fallback
+    )
+
+
+def _ps_failure_json(failure):
+    prefix = failure.replace("'", "''")
+    return (
+        "$detail = ((Get-Content -LiteralPath $errFile -Raw -ErrorAction SilentlyContinue) + '').Trim(); "
+        "$msg = '" + prefix + " (exit ' + $code + ')'; "
+        "if ($detail) { $msg = $msg + [char]10 + $detail }; "
+        "[Console]::Out.WriteLine((@{systemMessage=$msg} | ConvertTo-Json -Compress))"
+    )
+
+
 def neutral_hook_commands(argv, *, failure="MindIE Stop helper failed; capture completion is unconfirmed; no automatic retry.",
                           keep_stderr=False, pass_exit=False):
     """Keep Stop protocol-neutral while exposing helper failures.
 
     Codex treats Stop exit code 2 as a request to continue the conversation,
     and Python uses 2 for missing scripts, so Stop itself stays `exit 0`.
-    Helper stderr is replayed on failure and the host JSON names the helper
-    exit status. SessionStart may pass the helper exit through.
+    Helper stderr is copied into the host JSON (and replayed) on failure so
+    the detail remains visible after that protocol exit. SessionStart may
+    pass the helper exit through.
     """
     argv = [str(value) for value in argv]
+    resolve = POSIX_LAUNCHER_RESOLVE if "$_hl" in argv else ""
+    resolve_ps = PS_LAUNCHER_RESOLVE if "$_hl" in argv else ""
     left, right = _failure_json_parts(failure)
     posix_json = (
         "printf '%s\\n' " + shlex.quote(left) + '"$_st"' + shlex.quote(right)
@@ -151,40 +197,40 @@ def neutral_hook_commands(argv, *, failure="MindIE Stop helper failed; capture c
     exit_stmt = "exit \"$_st\"; " if pass_exit else ""
     if keep_stderr:
         posix = (
-            posix_cmd + " >/dev/null; _st=$?; "
+            resolve + posix_cmd + " >/dev/null; _st=$?; "
             + "if [ \"$_st\" -ne 0 ]; then " + warning + posix_json + "; " + exit_stmt
             + "else printf '{}\\n'; fi"
         )
     else:
         posix = (
-            "_err=$(mktemp) || exit 1; " + posix_cmd + " >/dev/null 2>\"$_err\"; _st=$?; "
-            + "if [ \"$_st\" -ne 0 ]; then cat \"$_err\" >&2; rm -f \"$_err\"; "
-            + warning + posix_json + "; " + exit_stmt
+            resolve + "_err=$(mktemp) || exit 1; " + posix_cmd + " >/dev/null 2>\"$_err\"; _st=$?; "
+            + "if [ \"$_st\" -ne 0 ]; then cat \"$_err\" >&2; "
+            + _posix_failure_json(failure) + "; rm -f \"$_err\"; " + exit_stmt
             + "else rm -f \"$_err\"; printf '{}\\n'; fi"
         )
-
-    def ps_json():
-        return ("[Console]::Out.WriteLine('"
-                + left.replace("'", "''") + "' + $code + '"
-                + right.replace("'", "''") + "')")
 
     warning_ps = ("[Console]::Error.WriteLine(" + ps_arg(failure) + "); " if keep_stderr else "")
     exit_ps = "exit $code" if pass_exit else "exit 0"
     invoke = " ".join(ps_arg(arg) for arg in argv)
     if keep_stderr:
         body = (
-            "$ProgressPreference = 'SilentlyContinue'; $failed = $false; $code = 0; try { & "
+            resolve_ps
+            + "$ProgressPreference = 'SilentlyContinue'; $failed = $false; $code = 0; try { & "
             + invoke + " 1>$null; $code = $LASTEXITCODE; $failed = ($code -ne 0) } catch { $failed = $true; $code = 1 }; "
-            + "if ($failed) { " + warning_ps + ps_json()
+            + "if ($failed) { " + warning_ps
+            + "[Console]::Out.WriteLine('"
+            + left.replace("'", "''") + "' + $code + '"
+            + right.replace("'", "''") + "')"
             + " } else { [Console]::Out.WriteLine('{}') }; " + exit_ps
         )
     else:
         body = (
-            "$ProgressPreference = 'SilentlyContinue'; $failed = $false; $code = 0; "
+            resolve_ps
+            + "$ProgressPreference = 'SilentlyContinue'; $failed = $false; $code = 0; "
             "$errFile = [System.IO.Path]::GetTempFileName(); try { & "
             + invoke + " 1>$null 2>$errFile; $code = $LASTEXITCODE; $failed = ($code -ne 0) } catch { $failed = $true; $code = 1 }; "
             + "if ($failed) { Get-Content -LiteralPath $errFile -ErrorAction SilentlyContinue | "
-            + "ForEach-Object { [Console]::Error.WriteLine($_) }; " + warning_ps + ps_json()
+            + "ForEach-Object { [Console]::Error.WriteLine($_) }; " + warning_ps + _ps_failure_json(failure)
             + " } else { [Console]::Out.WriteLine('{}') }; "
             + "Remove-Item -LiteralPath $errFile -ErrorAction SilentlyContinue; " + exit_ps
         )
@@ -198,8 +244,9 @@ def hook_commands(role, **names):
     if role == "user-prompt-submit":
         # Preserve the hook's one JSON response: only an explicit entry may
         # attach knowledge context. Ordinary prompts emit exactly {}.
-        body = "& " + " ".join(ps_arg(arg) for arg in arguments) + "; exit $LASTEXITCODE"
-        return dict(command=" ".join(posix_arg(arg) for arg in arguments),
+        body = (PS_LAUNCHER_RESOLVE + "& " + " ".join(ps_arg(arg) for arg in arguments)
+                + "; exit $LASTEXITCODE")
+        return dict(command=POSIX_LAUNCHER_RESOLVE + " ".join(posix_arg(arg) for arg in arguments),
                     commandWindows="powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "
                     + base64.b64encode(body.encode("utf-16le")).decode("ascii"),
                     # Cold baseline (900s) + explicit-entry forward (420s) +

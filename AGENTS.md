@@ -73,7 +73,7 @@ Codex Host MCP Client (stdio JSON-RPC) ──► hook_launcher.py
   - `bounded_process.run` enforces explicit wall-clock deadlines and kills the entire child process group / Windows Job Object on timeout before draining pipes.
   - `STOP_DRAIN (15.0s) >= STOP_GRACE (12.0s) + 3.0s` in `entry.py` / `bridge.py`.
   - Cold-start runtime preparation (`BOOTSTRAP_TOTAL = 540.0s` inside the 900s baseline) runs only when explicitly triggered and uses stage markers (`bootstrap.preparing`).
-  - Host hook outer timeouts cover inner budgets plus `uv` startup and cleanup: SessionStart 1320s, UserPromptSubmit 1440s, Stop 240s.
+  - Host hook outer timeouts cover inner budgets plus `uv` startup and cleanup: SessionStart 1545s (900 baseline + 225 first-use profile setup + 300 maintenance + 60 uv + 60 cleanup), UserPromptSubmit 1440s, Stop 240s.
 - **Four `v0.0.2` Iron Rules**:
   1. **Lightweight SQLite Connections**: `agent_diagnostics.py` and `mcp_gate.py` (`RemoteReceipts`) open SQLite with `PRAGMA journal_mode=WAL`, `PRAGMA synchronous=NORMAL`, `PRAGMA busy_timeout=5000`, and `CREATE TABLE IF NOT EXISTS`. Never run `.owner` / `.authority.json` sidecar `lstat` ceremonies or `PRAGMA table_info` / `sqlite_master` schema reflection on every operation.
   2. **Honest External Receipts**: Reserve `unknown` receipts for uncertain remote execution; never turn a succeeded remote call into `isError=True` over a local receipt write error, and never brick local state into permanent `fault`.

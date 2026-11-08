@@ -258,7 +258,7 @@ def publish_entry(python, scripts, release):
 
 
 def _publish_hook_launcher(scripts, release):
-    """Keep a durable copy so MCP can locate the selector after cache eviction."""
+    """Keep durable copies so hooks/MCP can locate the selector after cache eviction."""
     source = Path(scripts) / "hook_launcher.py"
     if not source.is_file():
         return
@@ -267,16 +267,22 @@ def _publish_hook_launcher(scripts, release):
     if target.exists():
         if target.read_text(encoding="utf-8") != text:
             raise ValueError("immutable release launcher differs")
+    else:
+        temporary = Path(release) / "hook_launcher.py.tmp"
+        temporary.write_text(text, encoding="utf-8", newline="\n")
+        try:
+            os.link(temporary, target)
+        except FileExistsError:
+            if target.read_text(encoding="utf-8") != text:
+                raise ValueError("immutable release launcher differs")
+        finally:
+            temporary.unlink()
+    if Path(release).parent.name != "releases":
         return
-    temporary = Path(release) / "hook_launcher.py.tmp"
-    temporary.write_text(text, encoding="utf-8", newline="\n")
-    try:
-        os.link(temporary, target)
-    except FileExistsError:
-        if target.read_text(encoding="utf-8") != text:
-            raise ValueError("immutable release launcher differs")
-    finally:
-        temporary.unlink()
+    durable = Path(release).parent.parent / "hook_launcher.py"
+    staging = Path(release) / "hook_launcher.durable.tmp"
+    staging.write_text(text, encoding="utf-8", newline="\n")
+    os.replace(staging, durable)
 
 
 def main():

@@ -84,6 +84,7 @@ class RuntimeTests(unittest.TestCase):
         commands = native_entry.hook_commands('session-start')
         self.assertNotIn('2>&1', commands['command'])
         self.assertIn('2>"$_err"', native_entry.hook_commands('stop')['command'])
+        self.assertIn("${PLUGIN_DATA}/hook_launcher.py", native_entry.hook_commands('stop')['command'])
         self.assertIn('exit "$_st"', commands['command'])
         self.assertNotIn('exit "$_st"', native_entry.hook_commands('stop')['command'])
 
@@ -144,6 +145,11 @@ class RuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'immutable release entry'):
                 bootstrap.publish_entry(Path('/different/python'),SCRIPTS,release)
             self.assertEqual(target.read_bytes(),original)
+        with tempfile.TemporaryDirectory() as directory:
+            data=Path(directory); nested=data/'releases'/'0.0.1'; nested.mkdir(parents=True)
+            bootstrap.publish_entry(Path(sys.executable),SCRIPTS,nested)
+            self.assertEqual((data / "hook_launcher.py").read_text(encoding="utf-8"),
+                             (SCRIPTS / "hook_launcher.py").read_text(encoding="utf-8"))
 
     def test_existing_completed_runtime_never_repairs_corruption(self):
         with tempfile.TemporaryDirectory() as directory:
