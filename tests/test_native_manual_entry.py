@@ -125,11 +125,19 @@ def test_generated_native_hook_grants_once_and_keeps_ordinary_turns_context_free
                        PLUGIN_ROOT=str(SCRIPTS.parent))
     authority = Admission(tmp_path / "admission.sqlite3")
     commands = native_entry.hook_commands("user-prompt-submit")
-    production = commands["commandWindows" if os.name == "nt" else "command"]
+    production = commands["command"]
     assert "hook_launcher.py" in production
     assert "--offline" in production
     assert "--no-python-downloads" in production
     assert commands["timeout"] == native_entry.USER_PROMPT_TIMEOUT
+    if os.name == "nt":
+        import base64
+        windows = commands["commandWindows"]
+        assert "-EncodedCommand" in windows
+        body = base64.b64decode(windows.split()[-1]).decode("utf-16le")
+        assert "hook_launcher.py" in body
+        assert "--offline" in body
+        assert "--no-python-downloads" in body
     # Production UPS uses `uv --python 3.13 --offline`; this case drives the
     # same launcher with the test interpreter so grant-once is hermetic.
     argv = [sys.executable, str(SCRIPTS / "hook_launcher.py"), "user-prompt-submit"]

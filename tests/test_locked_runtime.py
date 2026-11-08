@@ -84,7 +84,8 @@ class RuntimeTests(unittest.TestCase):
         commands = native_entry.hook_commands('session-start')
         self.assertNotIn('2>&1', commands['command'])
         self.assertIn('2>"$_err"', native_entry.hook_commands('stop')['command'])
-        self.assertIn("${PLUGIN_DATA}/hook_launcher.py", native_entry.hook_commands('stop')['command'])
+        self.assertIn("$PLUGIN_DATA/hook_launcher.py", native_entry.hook_commands('stop')['command'])
+        self.assertNotIn("${PLUGIN_ROOT}", native_entry.hook_commands('stop')['command'])
         self.assertIn('exit "$_st"', commands['command'])
         self.assertNotIn('exit "$_st"', native_entry.hook_commands('stop')['command'])
 

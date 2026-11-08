@@ -1,4 +1,5 @@
 """Native Hook commands retain identity while the installed binding changes."""
+import base64
 import json
 import os
 from pathlib import Path
@@ -66,7 +67,10 @@ class NativeHookEntryTests(unittest.TestCase):
         for role in ("session-start", "user-prompt-submit", "stop"):
             command = native_entry.hook_commands(role)["command"]
             self.assertIn("hook_launcher.py", command)
-            self.assertIn("${PLUGIN_DATA}/hook_launcher.py", command)
+            self.assertIn("$PLUGIN_DATA/hook_launcher.py", command)
+            self.assertNotIn("${PLUGIN_ROOT}", command)
+            self.assertNotIn("${PLUGIN_DATA}", command)
+            self.assertNotIn("\n", command)
             self.assertNotIn("migrate", command)
             self.assertNotIn("version_key", command)
             self.assertNotIn("select_entry", command)
@@ -119,6 +123,9 @@ class NativeHookEntryTests(unittest.TestCase):
             + native_entry.PROMPT_FORWARD_SECONDS
             + native_entry.UV_STARTUP_SECONDS + native_entry.CLEANUP_GRACE_SECONDS)
         self.assertIn('[ -s "$_err" ]', stop["command"])
+        stop_windows = base64.b64decode(stop["commandWindows"].split()[-1]).decode("utf-16le")
+        self.assertIn("$hasErr", stop_windows)
+        self.assertIn("$failed -or $hasErr", stop_windows)
         self.assertGreaterEqual(
             native_entry.STOP_TIMEOUT,
             native_entry.STOP_DISPATCH_SECONDS + native_entry.UV_STARTUP_SECONDS

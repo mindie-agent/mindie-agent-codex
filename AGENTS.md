@@ -10,7 +10,7 @@ All plugin scripts live under `plugins/mindie-agent/scripts/` and include standa
 
 | Layer | Script | Role & Key Responsibilities |
 | :--- | :--- | :--- |
-| **Native Entry & Bootstrap** | `native_entry.py` | Renders `hooks/hooks.json` and `.mcp.json` commands that invoke `hook_launcher.py` (hooks via `${PLUGIN_ROOT}`; MCP via a short path locator because Codex does not expand `${PLUGIN_ROOT}` in `.mcp.json`). |
+| **Native Entry & Bootstrap** | `native_entry.py` | Renders `hooks/hooks.json` and `.mcp.json` commands that invoke `hook_launcher.py` (hooks via the `$PLUGIN_ROOT` / `$PLUGIN_DATA` environment variables Codex sets; MCP via a short path locator because Codex does not expand `${PLUGIN_ROOT}` in `.mcp.json`). |
 | | `hook_launcher.py` | Selects the prepared release, first-run bootstrap, or MCP migration source and dispatches `runpy` into that entry. |
 | | `bootstrap.py` | Resolves/prepares the isolated Python runtime (`bootstrap_runtime.py`) and dispatches `entry`, `mcp-gate`, `remote-bridge`, or `bridge`. |
 | **Host Hook Lifecycle** | `entry.py` | Native hook & CLI entry controller (`session-start`, `user-prompt-submit`, `stop`, `bridge`). Ordinary prompts on `user-prompt-submit` return `{}` immediately before resolving the profile. |

@@ -10,7 +10,7 @@ UserPromptSubmit, Stop, Interrupt and the MCP servers.
 - `Stop` and every hook remain stable canonical facades and never start migration; only MCP startup may route to the newer seed controller.
 - `Interrupt` dispatches `mindie_interrupt` with exact `thread_id`/`turn_id` to the remote and deterministic-component MCP servers (`timeout=3s`).
 - Hook and MCP commands invoke `scripts/hook_launcher.py` rather than inlining the selector state machine as `python -c`.
-- After plugin-cache eviction, hooks resolve `PLUGIN_DATA/hook_launcher.py` (published with the release) when `${PLUGIN_ROOT}/scripts/hook_launcher.py` is gone.
+- After plugin-cache eviction, hooks resolve `$PLUGIN_DATA/hook_launcher.py` (published with the release) when `$PLUGIN_ROOT/scripts/hook_launcher.py` is gone. POSIX commands read those Codex env vars at shell runtime (`"$PLUGIN_ROOT"`), not the `${PLUGIN_ROOT}` manifest token Codex rewrites in `hooks/list`.
 
 - Knowledge is private to the manual Skill; its server is absent from the default MCP manifest.
 
@@ -54,19 +54,26 @@ STOP_TIMEOUT = (
     STOP_DISPATCH_SECONDS + UV_STARTUP_SECONDS + CLEANUP_GRACE_SECONDS)
 
 PLUGIN_LAUNCHER = "$_hl"
+# Use "$PLUGIN_ROOT" / "$PLUGIN_DATA" (shell env) rather than ${PLUGIN_ROOT}.
+# Codex substitutes the braced manifest token when listing hooks, so a literal
+# ${PLUGIN_ROOT} never matches hooks.json and breaks trust identity checks.
 POSIX_LAUNCHER_RESOLVE = (
-    '_hl="${PLUGIN_ROOT}/scripts/hook_launcher.py"; '
-    'if [ ! -f "$_hl" ]; then _hl="${PLUGIN_DATA}/hook_launcher.py"; fi; ')
+    '_hl="$PLUGIN_ROOT/scripts/hook_launcher.py"; '
+    'if [ ! -f "$_hl" ]; then _hl="$PLUGIN_DATA/hook_launcher.py"; fi; ')
 PS_LAUNCHER_RESOLVE = (
-    "$hl = Join-Path $env:PLUGIN_ROOT 'scripts/hook_launcher.py'; "
-    "if (-not (Test-Path -LiteralPath $hl)) { "
+    "$ErrorActionPreference = 'SilentlyContinue'; "
+    "$root = [string]$env:PLUGIN_ROOT; $hl = ''; "
+    "if ($root) { $hl = Join-Path $root 'scripts/hook_launcher.py' }; "
+    "if (-not $hl -or -not (Test-Path -LiteralPath $hl)) { "
     "$hl = Join-Path $env:PLUGIN_DATA 'hook_launcher.py' }; ")
+# Single-line, double-quoted Python so shlex.quote wraps it in one pair of
+# single quotes. Newlines inside `python3 -c` are rewritten by hooks/list.
 _FAILURE_ENCODER = (
-    "import json,pathlib,sys\n"
-    "st,path,prefix=sys.argv[1],sys.argv[2],sys.argv[3]\n"
-    "err=pathlib.Path(path).read_text(encoding='utf-8',errors='replace')[:800].strip()\n"
-    "msg=prefix+' (exit '+st+')'\n"
-    "print(json.dumps({'systemMessage':(msg+chr(10)+err) if err else msg}))\n"
+    "import json,pathlib,sys;"
+    "st,path,prefix=sys.argv[1],sys.argv[2],sys.argv[3];"
+    "err=pathlib.Path(path).read_text(encoding=\"utf-8\",errors=\"replace\")[:800].strip();"
+    "msg=prefix+\" (exit \"+st+\")\";"
+    "print(json.dumps({\"systemMessage\":(msg+chr(10)+err) if err else msg}))"
 )
 
 
@@ -113,7 +120,8 @@ def mcp_locator_code(*, name="mindie-agent", marketplace="mindie-agent", seed_ve
 
     Codex expands `${PLUGIN_ROOT}` in hook commands but not in `.mcp.json`
     args, so MCP keeps this short path finder and falls back to the durable
-    published release copy after plugin-cache eviction.
+    published release copy after plugin-cache eviction. Hook commands avoid
+    that manifest token and read the `PLUGIN_ROOT` environment variable.
     """
     return (
         "import os,runpy,sys,json\nfrom pathlib import Path\n"

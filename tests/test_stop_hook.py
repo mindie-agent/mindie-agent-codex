@@ -85,6 +85,22 @@ def run_owned_hook(argv, event, *, shell, env, timeout):
 class StopHookTests(unittest.TestCase):
     host_shell = None
 
+    def run_shell(self, commands, *, env=None, timeout=10):
+        """Dispatch the host-native wrapper: POSIX sh, cmd.exe EncodedCommand, or pwsh."""
+        env = {**os.environ, **(env or {})}
+        if os.name == "nt":
+            command = commands["commandWindows"]
+            if self.host_shell:
+                encoded = command.split("-EncodedCommand ", 1)[1]
+                argv = [self.host_shell, "-NoLogo", "-NoProfile", "-NonInteractive",
+                        "-EncodedCommand", encoded]
+                return subprocess.run(argv, capture_output=True, text=True,
+                                      timeout=timeout, env=env)
+            return subprocess.run(command, shell=True, capture_output=True, text=True,
+                                  timeout=timeout, env=env)
+        return subprocess.run(commands["command"], shell=True, capture_output=True,
+                              text=True, timeout=timeout, env=env)
+
     def run_stop(self, plugin, *, python=None, failed=False, configured=False, commands=None, **env):
         event = {"session_id": "hook-regression", "last_assistant_message": "Done"}
         commands = commands or (STOP if configured else stop_hook_commands(
@@ -193,7 +209,9 @@ class StopHookTests(unittest.TestCase):
             (scripts / "runtime.json").write_text(json.dumps(
                 dict(python=sys.executable, validation=validation)))
             self.assertIn("hook_launcher.py", STOP["command"])
-            self.assertIn("${PLUGIN_DATA}/hook_launcher.py", STOP["command"])
+            self.assertIn("$PLUGIN_DATA/hook_launcher.py", STOP["command"])
+            self.assertNotIn("${PLUGIN_ROOT}", STOP["command"])
+            self.assertNotIn("${PLUGIN_DATA}", STOP["command"])
             self.assertEqual(STOP["timeout"], native_entry.STOP_TIMEOUT)
             commands = stop_hook_commands(
                 [sys.executable, str(PLUGIN / "scripts/hook_launcher.py"), "stop"])
@@ -224,7 +242,8 @@ class StopHookTests(unittest.TestCase):
             (release / "runtime.json").write_text(json.dumps(
                 dict(python=sys.executable, validation=validation)))
             commands = stop_hook_commands([sys.executable, "$_hl", "stop"])
-            self.assertIn("${PLUGIN_DATA}/hook_launcher.py", commands["command"])
+            self.assertIn("$PLUGIN_DATA/hook_launcher.py", commands["command"])
+            self.assertNotIn("${PLUGIN_ROOT}", commands["command"])
             event = self.run_stop(
                 missing, commands=commands, PLUGIN_DATA=str(data),
                 HOOK_TEST_RECEIVED=str(received), MINDIE_AGENT_CONFIG=str(config))
@@ -246,9 +265,7 @@ class StopHookTests(unittest.TestCase):
     def test_stop_wrapper_keeps_exit_zero_and_helper_stderr(self):
         commands = stop_hook_commands(
             [sys.executable, "-c", "import sys; print('boom-detail', file=sys.stderr); raise SystemExit(7)"])
-        result = subprocess.run(
-            commands["command"], shell=True, capture_output=True, text=True, timeout=10,
-            env=os.environ)
+        result = self.run_shell(commands)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("boom-detail", result.stderr)
         message = json.loads(result.stdout)["systemMessage"]
@@ -260,9 +277,7 @@ class StopHookTests(unittest.TestCase):
         commands = stop_hook_commands(
             [sys.executable, "-c",
              "import sys; print('silent-fail', file=sys.stderr); raise SystemExit(0)"])
-        result = subprocess.run(
-            commands["command"], shell=True, capture_output=True, text=True, timeout=10,
-            env=os.environ)
+        result = self.run_shell(commands)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("silent-fail", result.stderr)
         message = json.loads(result.stdout)["systemMessage"]
@@ -274,9 +289,7 @@ class StopHookTests(unittest.TestCase):
             [sys.executable, "-c", "import sys; print('prep-detail', file=sys.stderr); raise SystemExit(7)"],
             keep_stderr=True, pass_exit=True,
             failure="MindIE session preparation failed; inspect the reported stage and local diagnostics; no automatic retry.")
-        result = subprocess.run(
-            commands["command"], shell=True, capture_output=True, text=True, timeout=10,
-            env=os.environ)
+        result = self.run_shell(commands)
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertIn("prep-detail", result.stderr)
         self.assertIn("(exit 7)", json.loads(result.stdout)["systemMessage"])

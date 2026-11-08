@@ -199,6 +199,31 @@ class NativeHooks:
             error.process_result = getattr(cleanup, "process_result", None)
 
 
+def _plugin_data_dir():
+    data = os.environ.get("PLUGIN_DATA")
+    if data:
+        return data
+    home = os.environ.get("CODEX_HOME")
+    if home:
+        return str(Path(home) / "plugins/data" / PLUGIN.replace("@", "-"))
+    return None
+
+
+def _listed_commands(command, source):
+    """Commands Codex may return from hooks/list after ${PLUGIN_ROOT} substitution."""
+    forms = {command}
+    roots = {str(Path(source)), str(Path(source).resolve())}
+    data = _plugin_data_dir()
+    for root in roots:
+        expanded = command.replace("${PLUGIN_ROOT}", root)
+        forms.add(expanded)
+        if data:
+            forms.add(expanded.replace("${PLUGIN_DATA}", data))
+    if data:
+        forms.add(command.replace("${PLUGIN_DATA}", data))
+    return forms
+
+
 def _own_handler(hook, source):
     event = EVENTS.get(hook.get("eventName"))
     if event is None:
@@ -233,8 +258,11 @@ def _own_handler(hook, source):
         raise ValueError("selected plugin hook envelope is ambiguous")
     value = commands[0]["hooks"][0]
     expected = value.get("commandWindows", value.get("command")) if os.name == "nt" else value.get("command")
-    if hook.get("command") != expected:
-        raise ValueError("native hook command differs from the installed payload")
+    live = hook.get("command")
+    if live != expected and live not in _listed_commands(expected, source):
+        raise ValueError(
+            "native hook command differs from the installed payload "
+            f"({event}: listed {live!r:.160} vs payload {expected!r:.160})")
     return True
 
 
