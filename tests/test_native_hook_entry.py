@@ -115,8 +115,10 @@ class NativeHookEntryTests(unittest.TestCase):
             + native_entry.UV_STARTUP_SECONDS + native_entry.CLEANUP_GRACE_SECONDS)
         self.assertGreaterEqual(
             native_entry.USER_PROMPT_TIMEOUT,
-            native_entry.BASELINE_RUNTIME_SECONDS + native_entry.PROMPT_FORWARD_SECONDS
+            native_entry.BASELINE_RUNTIME_SECONDS + native_entry.PROFILE_SETUP_SECONDS
+            + native_entry.PROMPT_FORWARD_SECONDS
             + native_entry.UV_STARTUP_SECONDS + native_entry.CLEANUP_GRACE_SECONDS)
+        self.assertIn('[ -s "$_err" ]', stop["command"])
         self.assertGreaterEqual(
             native_entry.STOP_TIMEOUT,
             native_entry.STOP_DISPATCH_SECONDS + native_entry.UV_STARTUP_SECONDS

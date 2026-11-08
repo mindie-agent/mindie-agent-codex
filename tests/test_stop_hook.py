@@ -148,12 +148,11 @@ class StopHookTests(unittest.TestCase):
                     f"stage.write_text('bridge-exiting-{code}', encoding='utf-8')\n"
                     f"raise SystemExit({code})\n"
                 )
-                self.run_stop(plugin, python=sys.executable, failed=code != 0,
+                self.run_stop(plugin, python=sys.executable, failed=True,
                               HOOK_TEST_STAGE=str(stage))
                 self.assertEqual(stage.read_text(encoding="utf-8"), f"bridge-exiting-{code}")
-                if code != 0:
-                    self.assertIn("capture failure", self.last_result.stderr)
-                    self.assertIn("capture failure", json.loads(self.last_result.stdout)["systemMessage"])
+                self.assertIn("capture failure", self.last_result.stderr)
+                self.assertIn("capture failure", json.loads(self.last_result.stdout)["systemMessage"])
 
     def test_success_still_delivers_event_once(self):
         with tempfile.TemporaryDirectory() as root:
@@ -256,6 +255,19 @@ class StopHookTests(unittest.TestCase):
         self.assertIn("boom-detail", message)
         self.assertIn("(exit 7)", message)
         self.assertIn("MindIE Stop helper failed", message)
+
+    def test_stop_exit_zero_with_stderr_emits_system_message(self):
+        commands = stop_hook_commands(
+            [sys.executable, "-c",
+             "import sys; print('silent-fail', file=sys.stderr); raise SystemExit(0)"])
+        result = subprocess.run(
+            commands["command"], shell=True, capture_output=True, text=True, timeout=10,
+            env=os.environ)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("silent-fail", result.stderr)
+        message = json.loads(result.stdout)["systemMessage"]
+        self.assertIn("silent-fail", message)
+        self.assertIn("(exit 0)", message)
 
     def test_session_start_wrapper_preserves_helper_exit_and_stderr(self):
         commands = stop_hook_commands(

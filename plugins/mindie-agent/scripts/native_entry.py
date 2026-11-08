@@ -16,7 +16,7 @@ UserPromptSubmit, Stop, Interrupt and the MCP servers.
 
 [Timeouts & Locks]
 - MCP `startup_timeout_sec=2760` covers baseline preparation, component inheritance, the bounded 900s migration/lock-drain window, and cleanup without altering tool-call deadlines.
-- SessionStart, UserPromptSubmit and Stop each declare an outer hook timeout covering inner budgets, first-use profile setup, `uv` startup and cleanup.
+- SessionStart, UserPromptSubmit and Stop each declare an outer hook timeout covering inner budgets, first-use profile setup where that path can run, `uv` startup and cleanup.
 
 [Side-Effect Policy]
 - Importing this module is side-effect free; `write_manifests(root)` updates `hooks/hooks.json` and `.mcp.json`.
@@ -48,7 +48,7 @@ SESSION_START_TIMEOUT = (
     BASELINE_RUNTIME_SECONDS + PROFILE_SETUP_SECONDS + SESSION_MAINTENANCE_SECONDS
     + UV_STARTUP_SECONDS + CLEANUP_GRACE_SECONDS)
 USER_PROMPT_TIMEOUT = (
-    BASELINE_RUNTIME_SECONDS + PROMPT_FORWARD_SECONDS
+    BASELINE_RUNTIME_SECONDS + PROFILE_SETUP_SECONDS + PROMPT_FORWARD_SECONDS
     + UV_STARTUP_SECONDS + CLEANUP_GRACE_SECONDS)
 STOP_TIMEOUT = (
     STOP_DISPATCH_SECONDS + UV_STARTUP_SECONDS + CLEANUP_GRACE_SECONDS)
@@ -204,7 +204,7 @@ def neutral_hook_commands(argv, *, failure="MindIE Stop helper failed; capture c
     else:
         posix = (
             resolve + "_err=$(mktemp) || exit 1; " + posix_cmd + " >/dev/null 2>\"$_err\"; _st=$?; "
-            + "if [ \"$_st\" -ne 0 ]; then cat \"$_err\" >&2; "
+            + "if [ \"$_st\" -ne 0 ] || [ -s \"$_err\" ]; then cat \"$_err\" >&2; "
             + _posix_failure_json(failure) + "; rm -f \"$_err\"; " + exit_stmt
             + "else rm -f \"$_err\"; printf '{}\\n'; fi"
         )
@@ -229,7 +229,8 @@ def neutral_hook_commands(argv, *, failure="MindIE Stop helper failed; capture c
             + "$ProgressPreference = 'SilentlyContinue'; $failed = $false; $code = 0; "
             "$errFile = [System.IO.Path]::GetTempFileName(); try { & "
             + invoke + " 1>$null 2>$errFile; $code = $LASTEXITCODE; $failed = ($code -ne 0) } catch { $failed = $true; $code = 1 }; "
-            + "if ($failed) { Get-Content -LiteralPath $errFile -ErrorAction SilentlyContinue | "
+            + "$hasErr = ((Get-Item -LiteralPath $errFile -ErrorAction SilentlyContinue).Length -gt 0); "
+            + "if ($failed -or $hasErr) { Get-Content -LiteralPath $errFile -ErrorAction SilentlyContinue | "
             + "ForEach-Object { [Console]::Error.WriteLine($_) }; " + warning_ps + _ps_failure_json(failure)
             + " } else { [Console]::Out.WriteLine('{}') }; "
             + "Remove-Item -LiteralPath $errFile -ErrorAction SilentlyContinue; " + exit_ps
@@ -249,8 +250,8 @@ def hook_commands(role, **names):
         return dict(command=POSIX_LAUNCHER_RESOLVE + " ".join(posix_arg(arg) for arg in arguments),
                     commandWindows="powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "
                     + base64.b64encode(body.encode("utf-16le")).decode("ascii"),
-                    # Cold baseline (900s) + explicit-entry forward (420s) +
-                    # uv startup and owned cleanup.
+                    # Cold baseline (900s) + first-use profile setup (225s) +
+                    # explicit-entry forward (420s) + uv startup and owned cleanup.
                     timeout=USER_PROMPT_TIMEOUT, statusMessage="MindIE Agent")
     if role == "stop":
         return dict(neutral_hook_commands(arguments, keep_stderr=False, pass_exit=False),
