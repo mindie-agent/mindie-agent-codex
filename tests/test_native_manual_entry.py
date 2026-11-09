@@ -104,10 +104,18 @@ def test_generated_native_hook_grants_once_and_keeps_ordinary_turns_context_free
     (release / "runtime.json").write_text(json.dumps(dict(python=sys.executable, validation=validation)))
     publish_entry(sys.executable, SCRIPTS, release)
     engine = tmp_path / "engine.json"
-    from tests.process_fixtures import public_engine_config, stop_owned_knowledge_service
-    request.addfinalizer(lambda: stop_owned_knowledge_service(engine))
-    engine.write_text(json.dumps(public_engine_config(
-        tmp_path / "corpus", admission_path=str(tmp_path / "admission.sqlite3"),
+    from tests.process_fixtures import stop_owned_knowledge_service
+    def _cleanup():
+        if engine.is_file():
+            try:
+                stop_owned_knowledge_service(engine)
+            except Exception:
+                return
+    request.addfinalizer(_cleanup)
+    engine.write_text(json.dumps(dict(
+        domain="test", root=str(tmp_path / "corpus"),
+        admission_path=str(tmp_path / "admission.sqlite3"),
+        transcript_adapter=str(SCRIPTS / "codex_transcript.py"),
         product_validation=validation)))
     config = tmp_path / "adapter.json"
     config.write_text(json.dumps(dict(
@@ -117,12 +125,27 @@ def test_generated_native_hook_grants_once_and_keeps_ordinary_turns_context_free
                        PLUGIN_ROOT=str(SCRIPTS.parent))
     authority = Admission(tmp_path / "admission.sqlite3")
     commands = native_entry.hook_commands("user-prompt-submit")
-    command = commands["commandWindows" if os.name == "nt" else "command"]
+    production = commands["command"]
+    assert "hook_launcher.py" in production
+    assert "--offline" in production
+    assert "--no-python-downloads" in production
+    assert commands["timeout"] == native_entry.USER_PROMPT_TIMEOUT
+    if os.name == "nt":
+        import base64
+        windows = commands["commandWindows"]
+        assert "-EncodedCommand" in windows
+        body = base64.b64decode(windows.split()[-1]).decode("utf-16le")
+        assert "hook_launcher.py" in body
+        assert "--offline" in body
+        assert "--no-python-downloads" in body
+    # Production UPS uses `uv --python 3.13 --offline`; this case drives the
+    # same launcher with the test interpreter so grant-once is hermetic.
+    argv = [sys.executable, str(SCRIPTS / "hook_launcher.py"), "user-prompt-submit"]
     token = None
     for prompt in ("Download Kimi", "/mindie-agent tune KDA", "Continue tuning"):
         event = dict(hook_event_name="UserPromptSubmit", session_id="native-session",
                      turn_id=prompt.split()[0].strip("/"), cwd=str(tmp_path), prompt=prompt)
-        result = subprocess.run(command, shell=True, input=json.dumps(event), text=True,
+        result = subprocess.run(argv, input=json.dumps(event), text=True,
                                 capture_output=True, env=environment, timeout=15)
         assert result.returncode == 0, result.stderr
         response = json.loads(result.stdout)

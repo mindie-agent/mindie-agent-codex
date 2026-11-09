@@ -9,11 +9,14 @@ UserPromptSubmit, Stop, Interrupt and the MCP servers.
 - The remote-dev MCP launcher carries the literal `REMOTE_DEV_HARNESS_PROFILE=codex` env value; the native profile is never read from tool arguments.
 - `Stop` and every hook remain stable canonical facades and never start migration; only MCP startup may route to the newer seed controller.
 - `Interrupt` dispatches `mindie_interrupt` with exact `thread_id`/`turn_id` to the remote and deterministic-component MCP servers (`timeout=3s`).
+- Hook and MCP commands invoke `scripts/hook_launcher.py` rather than inlining the selector state machine as `python -c`.
+- After plugin-cache eviction, hooks resolve `$PLUGIN_DATA/hook_launcher.py` (published with the release) when `$PLUGIN_ROOT/scripts/hook_launcher.py` is gone. POSIX commands read those Codex env vars at shell runtime (`"$PLUGIN_ROOT"`), not the `${PLUGIN_ROOT}` manifest token Codex rewrites in `hooks/list`.
 
 - Knowledge is private to the manual Skill; its server is absent from the default MCP manifest.
 
 [Timeouts & Locks]
 - MCP `startup_timeout_sec=2760` covers baseline preparation, component inheritance, the bounded 900s migration/lock-drain window, and cleanup without altering tool-call deadlines.
+- SessionStart, UserPromptSubmit and Stop each declare an outer hook timeout covering inner budgets, first-use profile setup where that path can run, `uv` startup and cleanup.
 
 [Side-Effect Policy]
 - Importing this module is side-effect free; `write_manifests(root)` updates `hooks/hooks.json` and `.mcp.json`.
@@ -29,184 +32,243 @@ import shlex
 # reserve) + 130 process/cleanup reserve.
 MCP_STARTUP_SECONDS = 2760
 
+# Inner budgets owned by bootstrap.py / entry.py / setup.py.
+BASELINE_RUNTIME_SECONDS = 900
+# First-use profile(..., prepare=True) -> setup.install: scanner 15s,
+# store 30s, domain catalog 90s, reporter activation 90s.
+PROFILE_SETUP_SECONDS = 15 + 30 + 90 + 90
+SESSION_MAINTENANCE_SECONDS = 300
+PROMPT_FORWARD_SECONDS = 420  # 300s maintenance + admission/entry + cleanup
+STOP_DISPATCH_SECONDS = 120
+UV_STARTUP_SECONDS = 60
+CLEANUP_GRACE_SECONDS = 60
 
-def launcher_code(version, *, name="mindie-agent", marketplace="mindie-agent"):
-    return hook_launcher_code(name=name, marketplace=marketplace, seed_version=version)
+# outer >= sum(inner) + uv_startup + cleanup_grace
+SESSION_START_TIMEOUT = (
+    BASELINE_RUNTIME_SECONDS + PROFILE_SETUP_SECONDS + SESSION_MAINTENANCE_SECONDS
+    + UV_STARTUP_SECONDS + CLEANUP_GRACE_SECONDS)
+USER_PROMPT_TIMEOUT = (
+    BASELINE_RUNTIME_SECONDS + PROFILE_SETUP_SECONDS + PROMPT_FORWARD_SECONDS
+    + UV_STARTUP_SECONDS + CLEANUP_GRACE_SECONDS)
+STOP_TIMEOUT = (
+    STOP_DISPATCH_SECONDS + UV_STARTUP_SECONDS + CLEANUP_GRACE_SECONDS)
+
+PLUGIN_LAUNCHER = "$_hl"
+# Use "$PLUGIN_ROOT" / "$PLUGIN_DATA" (shell env) rather than ${PLUGIN_ROOT}.
+# Codex substitutes the braced manifest token when listing hooks, so a literal
+# ${PLUGIN_ROOT} never matches hooks.json and breaks trust identity checks.
+POSIX_LAUNCHER_RESOLVE = (
+    '_hl="$PLUGIN_ROOT/scripts/hook_launcher.py"; '
+    'if [ ! -f "$_hl" ]; then _hl="$PLUGIN_DATA/hook_launcher.py"; fi; ')
+PS_LAUNCHER_RESOLVE = (
+    "$ProgressPreference = 'SilentlyContinue'; "
+    "$ErrorActionPreference = 'SilentlyContinue'; "
+    "$root = [string]$env:PLUGIN_ROOT; $hl = ''; "
+    "if ($root) { $hl = Join-Path $root 'scripts/hook_launcher.py' }; "
+    "if (-not $hl -or -not (Test-Path -LiteralPath $hl)) { "
+    "$hl = Join-Path $env:PLUGIN_DATA 'hook_launcher.py' }; ")
+# Single-line, double-quoted Python so shlex.quote wraps it in one pair of
+# single quotes. Newlines inside `python3 -c` are rewritten by hooks/list.
+_FAILURE_ENCODER = (
+    "import json,pathlib,sys;"
+    "st,path,prefix=sys.argv[1],sys.argv[2],sys.argv[3];"
+    "err=pathlib.Path(path).read_text(encoding=\"utf-8\",errors=\"replace\")[:800].strip();"
+    "msg=prefix+\" (exit \"+st+\")\";"
+    "print(json.dumps({\"systemMessage\":(msg+chr(10)+err) if err else msg}))"
+)
+
+
+def posix_arg(value):
+    if value == "$_hl":
+        return '"$_hl"'
+    if value.startswith("${PLUGIN_ROOT}/"):
+        return '"${PLUGIN_ROOT}"' + shlex.quote(value[len("${PLUGIN_ROOT}"):])
+    return shlex.quote(value)
+
+
+def ps_arg(value):
+    if value == "$_hl":
+        return "$hl"
+    if value.startswith("${PLUGIN_ROOT}/"):
+        return "(Join-Path $env:PLUGIN_ROOT '" + value[len("${PLUGIN_ROOT}/"):].replace("'", "''") + "')"
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _offline_args(role):
+    if role in {"stop", "user-prompt-submit"}:
+        return ["--offline", "--no-python-downloads"]
+    return []
+
+
+def _uv_python(role):
+    return ["uv", "--native-tls", "run", "--no-project", *_offline_args(role),
+            "--python", "3.13", "python", "-B"]
+
+
+def _launcher_flags(*, name="mindie-agent", marketplace="mindie-agent", seed_version=None):
+    flags = []
+    if name != "mindie-agent":
+        flags.extend(["--name", name])
+    if marketplace != "mindie-agent":
+        flags.extend(["--marketplace", marketplace])
+    if seed_version is not None:
+        flags.extend(["--seed", seed_version])
+    return flags
+
+
+def mcp_locator_code(*, name="mindie-agent", marketplace="mindie-agent", seed_version):
+    """Locate `hook_launcher.py` without inlining the selector state machine.
+
+    Codex expands `${PLUGIN_ROOT}` in hook commands but not in `.mcp.json`
+    args, so MCP keeps this short path finder and falls back to the durable
+    published release copy after plugin-cache eviction. Hook commands avoid
+    that manifest token and read the `PLUGIN_ROOT` environment variable.
+    """
+    return (
+        "import os,runpy,sys,json\nfrom pathlib import Path\n"
+        "def load(p):\n"
+        " with p.open('rb') as f:b=f.read(65537)\n"
+        " if len(b)>65536:raise ValueError('MindIE metadata exceeds its byte bound')\n"
+        " v=json.loads(b)\n"
+        " if not isinstance(v,dict):raise ValueError('MindIE metadata must be an object')\n"
+        " return v\n"
+        "home=Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex')))\n"
+        f"data=Path(os.environ.get('PLUGIN_DATA',str(home/'plugins/data'/{(name + '-' + marketplace)!r})))\n"
+        "config=Path(os.environ.get('MINDIE_AGENT_CONFIG',str(Path.home()/'.config/mindie-agent/codex.json'))).expanduser().absolute()\n"
+        f"seed={seed_version!r}\n"
+        "cands=[]\n"
+        "root=os.environ.get('PLUGIN_ROOT')\n"
+        "if root:cands.append(Path(root)/'scripts'/'hook_launcher.py')\n"
+        "cands.append(data/'hook_launcher.py')\n"
+        "if seed:cands.append(data/'releases'/seed/'hook_launcher.py')\n"
+        "if config.is_file():\n"
+        " a=load(config);v=a.get('product_validation',{}).get('native_version')\n"
+        " if a.get('component_release'):cands.append(Path(a['component_release'])/'hook_launcher.py')\n"
+        " elif isinstance(v,str):cands.append(data/'releases'/v/'hook_launcher.py')\n"
+        f"cands.append(Path(os.environ.get('PLUGIN_ROOT',str(home/'plugins/cache'/{marketplace!r}/{name!r}/(seed or 'unprepared'))))/'scripts'/'hook_launcher.py')\n"
+        "p=next((c for c in cands if c.is_file()),None)\n"
+        "if p is None:raise RuntimeError('MindIE launcher is unavailable')\n"
+        "sys.argv=[str(p),*sys.argv[1:]]\n"
+        "runpy.run_path(str(p),run_name='__main__')"
+    )
 
 
 def command_args(version, role, **names):
-    return ["uv", "--native-tls", "run", "--no-project",
-            *(["--offline", "--no-python-downloads"] if role == "stop" else []),
-            "--python", "3.13", "python", "-B",
-            "-c", launcher_code(version, **names), role]
+    return [*_uv_python(role), "-c", mcp_locator_code(seed_version=version, **names),
+            *_launcher_flags(seed_version=version, **names), role]
 
 
-def _stable_hook_launcher_code(*, name="mindie-agent", marketplace="mindie-agent", seed_version=None):
-    """Select only the prepared entry named by the canonical installed binding."""
+def _failure_json_parts(failure):
+    encoded = json.dumps({"systemMessage": failure + " (exit PLACEHOLDER)"})
+    left, right = encoded.split("PLACEHOLDER")
+    return left, right
+
+
+def _posix_failure_json(failure):
+    """Stdout JSON must carry helper stderr: Codex drops stderr when Stop exits 0."""
+    left, right = _failure_json_parts(failure)
+    fallback = "printf '%s\\n' " + shlex.quote(left) + '"$_st"' + shlex.quote(right)
     return (
-        "import os,sys,json,re,runpy\nfrom pathlib import Path\n"
-        "def read(p):\n"
-        " if not p.is_file():raise ValueError('MindIE metadata must be regular')\n"
-        " with p.open('rb') as f:\n"
-        "  raw=f.read(65537)\n"
-        " if len(raw)>65536:raise ValueError('MindIE metadata exceeds its byte bound')\n"
-        " value=json.loads(raw)\n"
-        " if not isinstance(value,dict):raise ValueError('MindIE metadata must be an object')\n"
-        " return value\n"
-        "home=Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex')))\n"
-        f"data=Path(os.environ.get('PLUGIN_DATA',str(home/'plugins/data'/{(name + '-' + marketplace)!r})))\n"
-        "config=Path(os.environ.get('MINDIE_AGENT_CONFIG',str(Path.home()/'.config/mindie-agent/codex.json'))).expanduser().absolute()\n"
-        "args=sys.argv[1:]\n"
-        "if config.exists():\n"
-        " adapter=read(config);validation=adapter['product_validation'];version=validation['native_version']\n"
-        " if not isinstance(version,str) or not re.fullmatch('[0-9A-Za-z][0-9A-Za-z.+!-]{0,79}',version):raise ValueError('MindIE release identity is invalid')\n"
-        " release=Path(adapter['component_release']) if adapter.get('component_release') else data/'releases'/version\n"
-        " receipt=read(release/'runtime.json');entry=release/'entry.py'\n"
-        " if receipt['python']!=adapter['python'] or receipt['validation']!=validation or validation.get('status')!='validated' or validation.get('schema')!='mindie-candidate-check/1':raise ValueError('MindIE installed runtime receipt differs')\n"
-        "else:\n"
-        f" seed={seed_version!r};fixed=data/'releases'/seed/'entry.py' if seed else None\n"
-        " if fixed is not None and fixed.is_file():entry=fixed\n"
-        " else:\n"
-        "  if args[:1]==['stop']:raise RuntimeError('MindIE runtime is not prepared; start a new native session')\n"
-        f"  source=Path(os.environ.get('PLUGIN_ROOT',str(home/'plugins/cache'/{marketplace!r}/{name!r}/(seed or 'unprepared'))))\n"
-        "  entry=source/'scripts/bootstrap.py';args=[str(data),'--source',str(source),*args]\n"
-        "if not entry.is_file():raise RuntimeError('MindIE installed entry is unavailable')\n"
-        "sys.path.insert(0,str(entry.parent));sys.argv=[str(entry),*args]\n"
-        "runpy.run_path(str(entry),run_name='__main__')"
+        "python3 -c " + shlex.quote(_FAILURE_ENCODER) + " \"$_st\" \"$_err\" "
+        + shlex.quote(failure) + " || " + fallback
     )
 
 
-
-def _migration_launcher_code(*, name="mindie-agent", marketplace="mindie-agent", seed_version=None):
-    """Select only the prepared entry named by the canonical installed binding.
-
-    A newer installed seed may first migrate the canonical binding, but only on
-    startup/MCP roles. Stop and ordinary prompt hooks stay on the stable old
-    facade. Once migration is chosen, the old canonical entry is never a
-    fallback.
-    """
+def _ps_failure_json(failure):
+    prefix = failure.replace("'", "''")
     return (
-        "import os,sys,json,re,runpy\nfrom pathlib import Path\n"
-        "def read(p):\n"
-        " if not p.is_file():raise ValueError('MindIE metadata must be regular')\n"
-        " with p.open('rb') as f:\n"
-        "  raw=f.read(65537)\n"
-        " if len(raw)>65536:raise ValueError('MindIE metadata exceeds its byte bound')\n"
-        " value=json.loads(raw)\n"
-        " if not isinstance(value,dict):raise ValueError('MindIE metadata must be an object')\n"
-        " return value\n"
-        "home=Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex')))\n"
-        f"data=Path(os.environ.get('PLUGIN_DATA',str(home/'plugins/data'/{(name + '-' + marketplace)!r})))\n"
-        "config=Path(os.environ.get('MINDIE_AGENT_CONFIG',str(Path.home()/'.config/mindie-agent/codex.json'))).expanduser().absolute()\n"
-        "args=sys.argv[1:]\n"
-        f"seed={seed_version!r}\n"
-        "role=args[0] if args else ''\n"
-        "def vkey(v):\n"
-        " m=re.fullmatch(r'[0-9]+(?:\\.[0-9]+)*',v)\n"
-        " return tuple(int(x) for x in m.group(0).split('.')) if m else None\n"
-        "migrate=False\n"
-        "if config.exists():\n"
-        " adapter=read(config);validation=adapter['product_validation'];version=validation['native_version']\n"
-        " if not isinstance(version,str) or not re.fullmatch('[0-9A-Za-z][0-9A-Za-z.+!-]{0,79}',version):raise ValueError('MindIE release identity is invalid')\n"
-        " if seed and (role in ('remote-mcp','tools-mcp','knowledge-mcp') or (role=='bridge' and args[1:2]==['mcp'])):\n"
-        "  a,b=vkey(version),vkey(seed)\n"
-        "  migrate=a is not None and b is not None and b>a\n"
-        " if migrate:\n"
-        f"  source=Path(os.environ.get('PLUGIN_ROOT',str(home/'plugins/cache'/{marketplace!r}/{name!r}/seed)))\n"
-        "  bootstrap=source/'scripts/bootstrap.py'\n"
-        "  if bootstrap.is_file():entry=bootstrap;args=[str(data),'--source',str(source),'migrate',*args]\n"
-        "  else:\n"
-        "   entry=data/'releases'/seed/'entry.py'\n"
-        "   if not entry.is_file():raise RuntimeError('MindIE migration source is unavailable')\n"
-        "   args=['migrate',*args]\n"
-        " else:\n"
-        "  release=Path(adapter['component_release']) if adapter.get('component_release') else data/'releases'/version\n"
-        "  receipt=read(release/'runtime.json');entry=release/'entry.py'\n"
-        "  if receipt['python']!=adapter['python'] or receipt['validation']!=validation or validation.get('status')!='validated' or validation.get('schema')!='mindie-candidate-check/1':raise ValueError('MindIE installed runtime receipt differs')\n"
-        "else:\n"
-        f" seed={seed_version!r};fixed=data/'releases'/seed/'entry.py' if seed else None\n"
-        " if fixed is not None and fixed.is_file():entry=fixed\n"
-        " else:\n"
-        "  if args[:1]==['stop']:raise RuntimeError('MindIE runtime is not prepared; start a new native session')\n"
-        f"  source=Path(os.environ.get('PLUGIN_ROOT',str(home/'plugins/cache'/{marketplace!r}/{name!r}/(seed or 'unprepared'))))\n"
-        "  entry=source/'scripts/bootstrap.py';args=[str(data),'--source',str(source),*args]\n"
-        "if not entry.is_file():raise RuntimeError('MindIE installed entry is unavailable')\n"
-        "sys.path.insert(0,str(entry.parent));sys.argv=[str(entry),*args]\n"
-        "runpy.run_path(str(entry),run_name='__main__')"
+        "$detail = ((Get-Content -LiteralPath $errFile -Raw -ErrorAction SilentlyContinue) + '').Trim(); "
+        "$msg = '" + prefix + " (exit ' + $code + ')'; "
+        "if ($detail) { $msg = $msg + [char]10 + $detail }; "
+        "[Console]::Out.WriteLine((@{systemMessage=$msg} | ConvertTo-Json -Compress))"
     )
-
-
-
-def hook_launcher_code(*, name="mindie-agent", marketplace="mindie-agent", seed_version=None):
-    """Use the byte-stable hook facade unless this is a seeded MCP launcher."""
-    if seed_version is None:
-        return _stable_hook_launcher_code(name=name, marketplace=marketplace)
-    return _migration_launcher_code(name=name, marketplace=marketplace,
-                                    seed_version=seed_version)
 
 
 def neutral_hook_commands(argv, *, failure="MindIE Stop helper failed; capture completion is unconfirmed; no automatic retry.",
-                          keep_stderr=False):
-    """Keep Stop neutral while exposing failures before diagnostics can start.
+                          keep_stderr=False, pass_exit=False):
+    """Keep Stop protocol-neutral while exposing helper failures.
 
-    Codex accepts a Windows-specific command override. The POSIX command and
-    its Windows counterpart discard helper protocol output, but expose a fixed
-    Stop warning through the native hook JSON when the helper fails. Missing executables or scripts cannot
-    leave an incident in the Python diagnostic channel.
+    Codex treats Stop exit code 2 as a request to continue the conversation,
+    and Python uses 2 for missing scripts, so Stop itself stays `exit 0`.
+    Helper stderr is copied into the host JSON (and replayed) on failure so
+    the detail remains visible after that protocol exit. SessionStart may
+    pass the helper exit through.
     """
     argv = [str(value) for value in argv]
-    def posix_arg(value):
-        if value.startswith("${PLUGIN_ROOT}/"):
-            return '"${PLUGIN_ROOT}"' + shlex.quote(value[len('${PLUGIN_ROOT}'):])
-        return shlex.quote(value)
-    failure_output = json.dumps({"systemMessage": failure})
-    posix = ("if ! " + " ".join(posix_arg(arg) for arg in argv)
-             + (" >/dev/null" if keep_stderr else " >/dev/null 2>&1")
-             + "; then "
-             + ("printf '%s\\n' " + shlex.quote(failure) + " >&2; " if keep_stderr else "")
-             + "printf '%s\\n' " + shlex.quote(failure_output)
-             + "; else printf '{}\\n'; fi")
-    # Native Codex can dispatch Windows hooks through PowerShell. CMD's
-    # `& echo` becomes a background job there and loses the event on stdin.
-    # An encoded PowerShell command has one unambiguous argv under either
-    # host shell; the child inherits stdin and every exit remains neutral.
-    def ps_arg(value):
-        if value.startswith("${PLUGIN_ROOT}/"):
-            return "(Join-Path $env:PLUGIN_ROOT '" + value[len('${PLUGIN_ROOT}/'):].replace("'", "''") + "')"
-        return "'" + value.replace("'", "''") + "'"
-    warning = ("[Console]::Error.WriteLine(" + ps_arg(failure) + "); " if keep_stderr else "")
-    # Join-Path may auto-load its module and serialize first-use progress to
-    # stderr. Progress is not a helper failure; keep the actual error channel.
-    body = ("$ProgressPreference = 'SilentlyContinue'; $failed = $false; try { & "
-            + " ".join(ps_arg(arg) for arg in argv)
-            + (" 1>$null" if keep_stderr else " 1>$null 2>$null")
-            + "; $failed = ($LASTEXITCODE -ne 0) } catch { $failed = $true }; "
-            + "if ($failed) { " + warning + "[Console]::Out.WriteLine(" + ps_arg(failure_output)
-            + ") } else { [Console]::Out.WriteLine('{}') }; exit 0")
+    resolve = POSIX_LAUNCHER_RESOLVE if "$_hl" in argv else ""
+    resolve_ps = PS_LAUNCHER_RESOLVE if "$_hl" in argv else ""
+    left, right = _failure_json_parts(failure)
+    posix_json = (
+        "printf '%s\\n' " + shlex.quote(left) + '"$_st"' + shlex.quote(right)
+    )
+    posix_cmd = " ".join(posix_arg(arg) for arg in argv)
+    warning = ("printf '%s\\n' " + shlex.quote(failure) + " >&2; ") if keep_stderr else ""
+    exit_stmt = "exit \"$_st\"; " if pass_exit else ""
+    if keep_stderr:
+        posix = (
+            resolve + posix_cmd + " >/dev/null; _st=$?; "
+            + "if [ \"$_st\" -ne 0 ]; then " + warning + posix_json + "; " + exit_stmt
+            + "else printf '{}\\n'; fi"
+        )
+    else:
+        posix = (
+            resolve + "_err=$(mktemp) || exit 1; " + posix_cmd + " >/dev/null 2>\"$_err\"; _st=$?; "
+            + "if [ \"$_st\" -ne 0 ] || [ -s \"$_err\" ]; then cat \"$_err\" >&2; "
+            + _posix_failure_json(failure) + "; rm -f \"$_err\"; " + exit_stmt
+            + "else rm -f \"$_err\"; printf '{}\\n'; fi"
+        )
 
-    windows = "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " + base64.b64encode(body.encode("utf-16le")).decode("ascii")
+    warning_ps = ("[Console]::Error.WriteLine(" + ps_arg(failure) + "); " if keep_stderr else "")
+    exit_ps = "exit $code" if pass_exit else "exit 0"
+    invoke = " ".join(ps_arg(arg) for arg in argv)
+    if keep_stderr:
+        body = (
+            resolve_ps
+            + "$ProgressPreference = 'SilentlyContinue'; $failed = $false; $code = 0; try { & "
+            + invoke + " 1>$null; $code = $LASTEXITCODE; $failed = ($code -ne 0) } catch { $failed = $true; $code = 1 }; "
+            + "if ($failed) { " + warning_ps
+            + "[Console]::Out.WriteLine('"
+            + left.replace("'", "''") + "' + $code + '"
+            + right.replace("'", "''") + "')"
+            + " } else { [Console]::Out.WriteLine('{}') }; " + exit_ps
+        )
+    else:
+        body = (
+            resolve_ps
+            + "$ProgressPreference = 'SilentlyContinue'; $failed = $false; $code = 0; "
+            "$errFile = [System.IO.Path]::GetTempFileName(); try { & "
+            + invoke + " 1>$null 2>$errFile; $code = $LASTEXITCODE; $failed = ($code -ne 0) } catch { $failed = $true; $code = 1 }; "
+            + "$hasErr = ((Get-Item -LiteralPath $errFile -ErrorAction SilentlyContinue).Length -gt 0); "
+            + "if ($failed -or $hasErr) { Get-Content -LiteralPath $errFile -ErrorAction SilentlyContinue | "
+            + "ForEach-Object { [Console]::Error.WriteLine($_) }; " + warning_ps + _ps_failure_json(failure)
+            + " } else { [Console]::Out.WriteLine('{}') }; "
+            + "Remove-Item -LiteralPath $errFile -ErrorAction SilentlyContinue; " + exit_ps
+        )
+    windows = "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " + base64.b64encode(
+        body.encode("utf-16le")).decode("ascii")
     return {"command": posix, "commandWindows": windows, "statusMessage": "MindIE Agent"}
 
 
 def hook_commands(role, **names):
-    arguments = ["uv", "--native-tls", "run", "--no-project",
-                 *(["--offline", "--no-python-downloads"] if role == "stop" else []),
-                 "--python", "3.13", "python", "-B", "-c", hook_launcher_code(**names), role]
+    arguments = [*_uv_python(role), PLUGIN_LAUNCHER, *_launcher_flags(**names), role]
     if role == "user-prompt-submit":
         # Preserve the hook's one JSON response: only an explicit entry may
         # attach knowledge context. Ordinary prompts emit exactly {}.
-        body = "& " + " ".join("'" + str(arg).replace("'", "''") + "'" for arg in arguments)
-        body += "; exit $LASTEXITCODE"
-        return dict(command=shlex.join(arguments), commandWindows=
-                    "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "
+        body = (PS_LAUNCHER_RESOLVE + "& " + " ".join(ps_arg(arg) for arg in arguments)
+                + "; exit $LASTEXITCODE")
+        return dict(command=POSIX_LAUNCHER_RESOLVE + " ".join(posix_arg(arg) for arg in arguments),
+                    commandWindows="powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "
                     + base64.b64encode(body.encode("utf-16le")).decode("ascii"),
-                    # Cold preparation (540s), maintenance (300s), admission
-                    # and process cleanup fit inside this native deadline.
-                    timeout=1380, statusMessage="MindIE Agent")
+                    # Cold baseline (900s) + first-use profile setup (225s) +
+                    # explicit-entry forward (420s) + uv startup and owned cleanup.
+                    timeout=USER_PROMPT_TIMEOUT, statusMessage="MindIE Agent")
     if role == "stop":
-        return neutral_hook_commands(arguments)
-    return neutral_hook_commands(arguments, keep_stderr=True,
-        failure="MindIE session preparation failed; inspect the reported stage and local diagnostics; no automatic retry.")
+        return dict(neutral_hook_commands(arguments, keep_stderr=False, pass_exit=False),
+                    timeout=STOP_TIMEOUT)
+    return dict(neutral_hook_commands(
+        arguments, keep_stderr=True, pass_exit=True,
+        failure="MindIE session preparation failed; inspect the reported stage and local diagnostics; no automatic retry."),
+        timeout=SESSION_START_TIMEOUT)
 
 
 def write_manifests(root):

@@ -150,6 +150,18 @@ class HookTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "readback differs"):
                 native_hooks.preserve("/native", {}, self.root, self.approved)
 
+    def test_own_handler_accepts_codex_expanded_plugin_root(self):
+        path = self.root / "hooks/hooks.json"
+        command = '_hl="${PLUGIN_ROOT}/scripts/hook_launcher.py"; uv run "$_hl" stop'
+        value = json.loads(path.read_text())
+        value["hooks"]["Stop"][0]["hooks"][0]["command"] = command
+        path.write_text(json.dumps(value))
+        row = dict(self.rows[1], command=command.replace("${PLUGIN_ROOT}", str(self.root)))
+        self.assertTrue(native_hooks._own_handler(row, self.root))
+        row["command"] = "other command"
+        with self.assertRaisesRegex(ValueError, "native hook command differs"):
+            native_hooks._own_handler(row, self.root)
+
     def test_missing_or_changed_source_never_receives_trust(self):
         original = copy.deepcopy(self.rows)
         for change in ("missing", "command", "source"):

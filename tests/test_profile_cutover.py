@@ -79,7 +79,7 @@ def launch_after_cutover(installation, role, payload="", *, target=None):
     code = (
         "import runpy,sys;from pathlib import Path\n"
         f"sys.path.insert(0,{str(SCRIPTS)!r})\n"
-        "from native_entry import hook_launcher_code\n"
+        "from hook_launcher import launch\n"
         "from release_activation import _atomic\n"
         "original=runpy.run_path\n"
         "def cutover(path,**kw):\n"
@@ -88,7 +88,7 @@ def launch_after_cutover(installation, role, payload="", *, target=None):
         " runpy.run_path=original\n"
         " return original(path,**kw)\n"
         "runpy.run_path=cutover\n"
-        "exec(hook_launcher_code())\n"
+        "launch()\n"
     )
     return subprocess.run(
         [sys.executable, "-I", "-B", "-c", code, role], input=payload,

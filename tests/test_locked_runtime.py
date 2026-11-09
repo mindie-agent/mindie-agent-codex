@@ -83,7 +83,11 @@ class RuntimeTests(unittest.TestCase):
     def test_session_hook_keeps_diagnostics_while_stop_stays_neutral(self):
         commands = native_entry.hook_commands('session-start')
         self.assertNotIn('2>&1', commands['command'])
-        self.assertIn('2>&1', native_entry.hook_commands('stop')['command'])
+        self.assertIn('2>"$_err"', native_entry.hook_commands('stop')['command'])
+        self.assertIn("$PLUGIN_DATA/hook_launcher.py", native_entry.hook_commands('stop')['command'])
+        self.assertNotIn("${PLUGIN_ROOT}", native_entry.hook_commands('stop')['command'])
+        self.assertIn('exit "$_st"', commands['command'])
+        self.assertNotIn('exit "$_st"', native_entry.hook_commands('stop')['command'])
 
     def test_short_stop_cannot_download_or_prepare(self):
         args=native_entry.command_args('0.0.1','stop')
@@ -91,9 +95,10 @@ class RuntimeTests(unittest.TestCase):
         self.assertNotIn('--offline',native_entry.command_args('0.0.1','knowledge-mcp'))
         with tempfile.TemporaryDirectory() as directory:
             env={'CODEX_HOME':directory}
-            with patch.dict(os.environ,env),patch.object(sys,'argv',['loader','stop']):
+            import hook_launcher
+            with patch.dict(os.environ,env),patch.object(sys,'argv',['loader','--seed','0.0.1','stop']):
                 with self.assertRaisesRegex(RuntimeError,'not prepared'):
-                    exec(native_entry.launcher_code('0.0.1'))
+                    hook_launcher.launch()
             self.assertEqual(list(Path(directory).iterdir()),[])
 
     def test_native_startup_and_component_call_windows_cover_inner_budgets(self):
@@ -122,10 +127,11 @@ class RuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             home=Path(directory); fixed=home/'plugins/data/mindie-agent-mindie-agent/releases/0.0.1/entry.py'
             fixed.parent.mkdir(parents=True);fixed.write_text("RESULT='fixed'\n")
+            import hook_launcher
             with patch.dict(os.environ,{'CODEX_HOME':directory}), \
-                 patch.object(sys,'argv',['loader','stop']), \
+                 patch.object(sys,'argv',['loader','--seed','0.0.1','stop']), \
                  patch('runpy.run_path',return_value={}) as run:
-                exec(native_entry.launcher_code('0.0.1'))
+                hook_launcher.launch()
             self.assertEqual(run.call_args.args[0],str(fixed))
 
     def test_publish_entry_is_immutable_and_has_no_current_selection(self):
@@ -134,10 +140,17 @@ class RuntimeTests(unittest.TestCase):
             target=bootstrap.publish_entry(Path(sys.executable),SCRIPTS,release)
             original=target.read_bytes()
             self.assertNotIn(b'current',original)
+            self.assertEqual((release / "hook_launcher.py").read_text(encoding="utf-8"),
+                             (SCRIPTS / "hook_launcher.py").read_text(encoding="utf-8"))
             bootstrap.publish_entry(Path(sys.executable),SCRIPTS,release)
             with self.assertRaisesRegex(ValueError,'immutable release entry'):
                 bootstrap.publish_entry(Path('/different/python'),SCRIPTS,release)
             self.assertEqual(target.read_bytes(),original)
+        with tempfile.TemporaryDirectory() as directory:
+            data=Path(directory); nested=data/'releases'/'0.0.1'; nested.mkdir(parents=True)
+            bootstrap.publish_entry(Path(sys.executable),SCRIPTS,nested)
+            self.assertEqual((data / "hook_launcher.py").read_text(encoding="utf-8"),
+                             (SCRIPTS / "hook_launcher.py").read_text(encoding="utf-8"))
 
     def test_existing_completed_runtime_never_repairs_corruption(self):
         with tempfile.TemporaryDirectory() as directory:

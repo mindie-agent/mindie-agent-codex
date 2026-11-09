@@ -1,4 +1,5 @@
 """Native Hook commands retain identity while the installed binding changes."""
+import base64
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
+import hook_launcher
 import native_entry
 
 
@@ -44,18 +46,43 @@ class NativeHookEntryTests(unittest.TestCase):
                 patch.object(sys, "path", list(sys.path)), \
                 patch("runpy.run_path", side_effect=lambda path, **kw: calls.append(
                     (path, list(sys.argv), kw))):
-            exec(native_entry.hook_launcher_code(), {})
+            hook_launcher.launch()
         return calls
 
     def test_hook_facade_has_no_migration_routing_but_mcp_does(self):
-        stable = native_entry.hook_launcher_code(seed_version=None)
-        seeded = native_entry.hook_launcher_code(seed_version="0.1.10")
-        self.assertNotIn("migrate", stable)
-        self.assertNotIn("vkey", stable)
-        self.assertIn("migrate", seeded)
-        self.assertIn("vkey", seeded)
-        self.assertNotIn("migrate", native_entry.hook_commands("session-start")["command"])
-        self.assertIn("migrate", native_entry.command_args("0.1.10", "tools-mcp")[-2])
+        start = native_entry.hook_commands("session-start")["command"]
+        mcp = native_entry.command_args("0.1.10", "tools-mcp")
+        self.assertIn("hook_launcher.py", start)
+        self.assertNotIn("--seed", start)
+        self.assertNotIn("migrate", start)
+        self.assertNotIn(" -c ", start)
+        self.assertIn("--seed", mcp)
+        self.assertIn("0.1.10", mcp)
+        locator = native_entry.mcp_locator_code(seed_version="0.1.10")
+        self.assertLess(len(locator), 2000)
+        self.assertNotIn("migrate", locator)
+        self.assertNotIn("version_key", locator)
+        self.assertNotIn("select_entry", locator)
+        self.assertIn("hook_launcher.py", locator)
+        for role in ("session-start", "user-prompt-submit", "stop"):
+            command = native_entry.hook_commands(role)["command"]
+            self.assertIn("hook_launcher.py", command)
+            self.assertIn("$PLUGIN_DATA/hook_launcher.py", command)
+            self.assertNotIn("${PLUGIN_ROOT}", command)
+            self.assertNotIn("${PLUGIN_DATA}", command)
+            self.assertNotIn("\n", command)
+            self.assertNotIn("migrate", command)
+            self.assertNotIn("version_key", command)
+            self.assertNotIn("select_entry", command)
+        start_cmd = native_entry.hook_commands("session-start")["command"]
+        prompt_cmd = native_entry.hook_commands("user-prompt-submit")["command"]
+        self.assertNotIn("python -c", start_cmd)
+        self.assertNotIn(" -c ", start_cmd)
+        self.assertNotIn("python -c", prompt_cmd)
+        self.assertNotIn(" -c ", prompt_cmd)
+        source = (SCRIPTS / "hook_launcher.py").read_text(encoding="utf-8")
+        self.assertIn("migrate", source)
+        self.assertIn("version_key", source)
 
     def test_hook_commands_do_not_change_with_release_but_mcp_keeps_fixed_entry(self):
         (self.source / ".codex-plugin").mkdir(parents=True)
@@ -76,6 +103,46 @@ class NativeHookEntryTests(unittest.TestCase):
         self.assertNotIn("env", servers["mindie-tools"])
         self.assertIn("--offline", native_entry.hook_commands("stop")["command"])
         self.assertIn("--no-python-downloads", native_entry.hook_commands("stop")["command"])
+        self.assertIn("--offline", native_entry.hook_commands("user-prompt-submit")["command"])
+        self.assertIn("--no-python-downloads", native_entry.hook_commands("user-prompt-submit")["command"])
+        self.assertNotIn("--offline", native_entry.hook_commands("session-start")["command"])
+        start = native_entry.hook_commands("session-start")
+        prompt = native_entry.hook_commands("user-prompt-submit")
+        stop = native_entry.hook_commands("stop")
+        self.assertGreaterEqual(start["timeout"], native_entry.SESSION_START_TIMEOUT)
+        self.assertGreaterEqual(prompt["timeout"], native_entry.USER_PROMPT_TIMEOUT)
+        self.assertGreaterEqual(stop["timeout"], native_entry.STOP_TIMEOUT)
+        self.assertGreaterEqual(
+            native_entry.SESSION_START_TIMEOUT,
+            native_entry.BASELINE_RUNTIME_SECONDS + native_entry.PROFILE_SETUP_SECONDS
+            + native_entry.SESSION_MAINTENANCE_SECONDS
+            + native_entry.UV_STARTUP_SECONDS + native_entry.CLEANUP_GRACE_SECONDS)
+        self.assertGreaterEqual(
+            native_entry.USER_PROMPT_TIMEOUT,
+            native_entry.BASELINE_RUNTIME_SECONDS + native_entry.PROFILE_SETUP_SECONDS
+            + native_entry.PROMPT_FORWARD_SECONDS
+            + native_entry.UV_STARTUP_SECONDS + native_entry.CLEANUP_GRACE_SECONDS)
+        self.assertIn('[ -s "$_err" ]', stop["command"])
+        stop_windows = base64.b64decode(stop["commandWindows"].split()[-1]).decode("utf-16le")
+        self.assertTrue(
+            stop_windows.startswith("$ProgressPreference = 'SilentlyContinue'"),
+            stop_windows[:80])
+        self.assertIn("$hasErr", stop_windows)
+        self.assertIn("$failed -or $hasErr", stop_windows)
+        prompt_windows = base64.b64decode(prompt["commandWindows"].split()[-1]).decode("utf-16le")
+        self.assertTrue(
+            prompt_windows.startswith("$ProgressPreference = 'SilentlyContinue'"),
+            prompt_windows[:80])
+        self.assertGreaterEqual(
+            native_entry.STOP_TIMEOUT,
+            native_entry.STOP_DISPATCH_SECONDS + native_entry.UV_STARTUP_SECONDS
+            + native_entry.CLEANUP_GRACE_SECONDS)
+        self.assertNotIn("2>&1", start["command"])
+        self.assertIn('2>"$_err"', stop["command"])
+        self.assertIn('cat "$_err" >&2', stop["command"])
+        self.assertIn('exit "$_st"', start["command"])
+        self.assertNotIn('exit "$_st"', stop["command"])
+        self.assertIn("(exit ", stop["command"])
 
     def test_interrupt_hooks_target_public_connections_with_exact_identity(self):
         from mcp_gate import INTERRUPT_TOOL
