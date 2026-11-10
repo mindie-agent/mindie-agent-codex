@@ -508,6 +508,49 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(result["execution"], "not_started")
         self.assertEqual(self.config.read_bytes(), before)
 
+        def retry(argv, payload, **kwargs):
+            if argv[0] == "uv":
+                self.assertNotIn("runtime", recovered)
+                self.assertEqual(recovered["activation"]["expected_binding"],
+                                 update.runtime_binding(advanced))
+                return ProcessResult("completed", json.dumps(runtime), 0)
+            self.assertEqual(json.loads(payload)["expected_binding"],
+                             update.runtime_binding(advanced))
+            return ProcessResult("completed",
+                                 '{"status":"deferred","reason":"operation_busy"}', 0)
+
+        with patch.object(update, "run", side_effect=retry) as run:
+            update._prepare_and_activate(self.config, recovered, self.env, self.state)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(self.config.read_bytes(), before)
+
+    def test_failed_local_preparation_refreshes_the_floor_before_rebuilding(self):
+        pending = self.prepared_candidate()
+        pending.pop("runtime")
+        pending["stage"] = "installed"
+        pending["preparation"] = dict(
+            execution="completed", returncode=1, cleanup_failed=False)
+        advanced = json.loads(self.config.read_text())
+        advanced["component_commands"] = {
+            "sim": ["/external/python", "-m", "mindie_sim"]}
+        self.config.write_text(json.dumps(advanced))
+        runtime = dict(python=sys.executable, scripts=str(SCRIPTS), release=str(self.root))
+
+        def child(argv, payload, **kwargs):
+            if argv[0] == "uv":
+                saved = json.loads((self.state / "native.json").read_text())
+                self.assertEqual(saved["activation"]["expected_binding"],
+                                 update.runtime_binding(advanced))
+                return ProcessResult("completed", json.dumps(runtime), 0)
+            self.assertEqual(json.loads(payload)["expected_binding"],
+                             update.runtime_binding(advanced))
+            return ProcessResult("completed",
+                                 '{"status":"deferred","reason":"operation_busy"}', 0)
+
+        with patch.object(update, "run", side_effect=child) as run:
+            update._prepare_and_activate(self.config, pending, self.env, self.state)
+        self.assertEqual(run.call_count, 2)
+
     def test_legacy_local_preparation_is_rebuilt_before_adopting_a_current_binding(self):
         pending = self.prepared_candidate()
         pending["activation"] = {"status": "not_started"}

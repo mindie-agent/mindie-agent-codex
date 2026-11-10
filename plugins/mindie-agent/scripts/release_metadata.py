@@ -37,8 +37,16 @@ def compatibility(source):
 def metadata(source, revision):
     if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("release source requires a full immutable commit")
+    from native_entry import command_args
+    root = package_root(source)
+    version = native_version(source)
+    servers = read_json(root / ".mcp.json")[0]["mcpServers"]
+    for name, role in (("mindie-remote-dev", "remote-mcp"), ("mindie-tools", "tools-mcp")):
+        expected = command_args(version, role)
+        if [servers[name]["command"], *servers[name]["args"]] != expected:
+            raise ValueError("native MCP entry does not target this release; regenerate native manifests")
     return dict(
-        schema="mindie-plugin-release/1", version=native_version(source),
+        schema="mindie-plugin-release/1", version=version,
         source=dict(repository=REPOSITORY, sha=revision),
         compatibility=compatibility(source),
     )

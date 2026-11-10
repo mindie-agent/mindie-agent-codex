@@ -282,6 +282,19 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
                         reason="legacy_activation_helper", execution="not_started")
         previous = pending.get("activation", {})
         expected = previous.get("expected_binding")
+        rejected = (
+            previous.get("reason") == "installation_changed"
+            and previous.get("execution") == "not_started"
+            and previous.get("process") == dict(
+                execution="completed", returncode=0, cleanup_failed=False)
+        )
+        if (("runtime" not in pending and previous.get("status") == "not_started")
+                or rejected):
+            # A failed local build or a settled CAS rejection has published no
+            # binding. Rebuild against today's floor instead of retrying the
+            # same stale snapshot forever. An unresolved activation keeps its
+            # original immutable attempt below.
+            previous, expected = dict(status="not_started"), None
         if not isinstance(expected, dict):
             if previous and previous != {"status": "not_started"}:
                 raise ValueError("activation attempt lacks its expected runtime binding")

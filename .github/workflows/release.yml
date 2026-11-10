@@ -1,18 +1,19 @@
 name: release
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
+  actions: read
+  checks: read
+  deployments: read
 
 jobs:
   release:
-    uses: mindie-agent/mindie-bench/.github/workflows/publish-release.yml@484b80621aaf9293c559786d0ef2174c79a0dbb4
+    uses: mindie-agent/mindie-bench/.github/workflows/publish-release.yml@main
     with:
-      benchmark-ref: 484b80621aaf9293c559786d0ef2174c79a0dbb4
-      release-notes-path: docs/releases/mindie-agent-codex-0.1.25.md
+      release-notes-path: docs/releases/mindie-agent-codex-0.1.26.md
       version-files: |
         plugins/mindie-agent/pyproject.toml
         plugins/mindie-agent/.codex-plugin/plugin.json

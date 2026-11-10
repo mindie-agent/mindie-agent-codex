@@ -144,3 +144,13 @@ jobs:
           uv run --project plugins/mindie-agent --no-sync python -c 'import subprocess,sys; subprocess.run(["uv","pip","install","--python",sys.executable,"pytest==9.1.1"],check=True)'
       - name: Native plugin, hook trust, SessionStart and MCP acceptance
         run: uv run --project plugins/mindie-agent --no-sync python -m pytest -q -s --tb=short tests/test_native_harness_acceptance.py
+
+  release-ready:
+    name: release-ready
+    needs: [adapter, native-harness]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: python -c 'import json,os; assert all(job["result"] == "success" for job in json.loads(os.environ["RESULTS"]).values()), "required CI failed or was skipped"'

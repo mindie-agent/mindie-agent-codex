@@ -101,6 +101,11 @@ class NativeHookEntryTests(unittest.TestCase):
         self.assertNotIn("REMOTE_DEV_HARNESS_PROFILE",
                          servers["mindie-remote-dev"]["env_vars"])
         self.assertNotIn("env", servers["mindie-tools"])
+        import release_metadata
+        (self.source / "pyproject.toml").write_text('[project]\nversion="0.0.3"\n')
+        (self.source / ".codex-plugin/plugin.json").write_text(json.dumps(dict(version="0.0.3")))
+        with self.assertRaisesRegex(ValueError, "MCP entry does not target this release"):
+            release_metadata.metadata(self.source, "a" * 40)
         self.assertIn("--offline", native_entry.hook_commands("stop")["command"])
         self.assertIn("--no-python-downloads", native_entry.hook_commands("stop")["command"])
         self.assertIn("--offline", native_entry.hook_commands("user-prompt-submit")["command"])
