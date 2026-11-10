@@ -7,6 +7,7 @@ This maintenance release closes delivery gaps between publication, independent c
 - A failed local runtime preparation reads the current binding when rebuilt. A settled CAS rejection that explicitly performed no activation can also prepare again. Unreconciled native installations and activations retain their original immutable attempt and are never blindly replayed.
 - Publication validates the native MCP entry's target version, preventing a plugin version bump from shipping stale generated entries. Native entries are regenerated for this release.
 - The baseline uses formal component sources. Plugin upgrades continue to inherit independently upgraded components and external standard sim/profiler bindings without downgrades.
+- The sim/profiler bootstrap pins advance to the exact `0.9.10` / `0.5.11` source commits. Publication requires their complete formal artifacts and released-client validation first.
 - Protected-main dispatch runs the shared publisher. A complete private draft must pass real old-updater generation builds and native-host acceptance before downloaded-byte verification, immutable tag creation and formal publication. Fresh old installations repeat upgrades against the public source afterward.
 - Native acceptance starts from formal plugin `0.1.23`, covering independently upgraded components, external interpreter bindings, preservation of the explicitly disabled Hook and fresh native MCP tool discovery. Staged and public-source reports remain distinct.
 
