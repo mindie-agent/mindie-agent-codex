@@ -459,12 +459,10 @@ def _native_settled(pending):
         return False
     source_path = Path(source)
     if not source_path.exists():
-        # Native plugin installation evicts the obsolete payload after a
-        # newer native version is installed. A settled prepared receipt may
-        # therefore outlive its source cache; the recorded metadata, completed
-        # native output, preparation, and trust remain the retirement evidence.
-        # Installed-stage receipts still require their source.
-        return pending.get("stage") == "prepared"
+        # A newer native install evicts old payloads even when their local
+        # preparation failed. Completed native output, settled preparation
+        # and hook trust above remain evidence after that cache eviction.
+        return True
     try:
         if native_version(source) != metadata.get("version"):
             return False

@@ -5,6 +5,7 @@
 This maintenance release closes delivery gaps between publication, independent component updates and native plugin activation. Components continue to follow the latest formal release while preserving installed and externally bound standard-component version floors.
 
 - A failed local runtime preparation reads the current binding when rebuilt. A settled CAS rejection that explicitly performed no activation can also prepare again. Unreconciled native installations and activations retain their original immutable attempt and are never blindly replayed.
+- A confirmed native installation with settled local preparation can retire its preserved receipt after a newer native version evicts the old source cache. Failed local preparation no longer becomes permanent `unknown` merely because that cache was removed; normal release discovery continues.
 - Publication validates the native MCP entry's target version, preventing a plugin version bump from shipping stale generated entries. Native entries are regenerated for this release.
 - The baseline uses formal component sources. Plugin upgrades continue to inherit independently upgraded components and external standard sim/profiler bindings without downgrades.
 - The sim/profiler bootstrap pins advance to the exact `0.9.10` / `0.5.11` source commits. Publication requires their complete formal artifacts and released-client validation first.
