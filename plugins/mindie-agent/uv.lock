@@ -16,7 +16,7 @@ resolution-markers = [
 [manifest]
 overrides = [
     { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=25182e651860fb354a78968fe6b7590f14b14593" },
-    { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=d71ab7479da1df86bc397d635b23ee214cbfa47c" },
+    { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=f0f76b0b56830a0315c108efe90bcf131d3701ce" },
     { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=6a64da8be9ed7c0bb38c2ba57f539da9a43ddf34" },
 ]
 
@@ -2061,8 +2061,8 @@ requires-dist = [
     { name = "mindie-debugger", git = "https://github.com/mindie-agent/debugger?rev=e9406b2b178335190d5cb59dff4d6985894497ba" },
     { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=25182e651860fb354a78968fe6b7590f14b14593" },
     { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=ac4a89e993c89deba5a4a629e1cd89d61e57c843" },
-    { name = "mindie-profiler", git = "https://github.com/mindie-agent/profiler?rev=968909942da1706f4bf579eb77c17aa9131bb50b" },
-    { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=d71ab7479da1df86bc397d635b23ee214cbfa47c" },
+    { name = "mindie-profiler", git = "https://github.com/mindie-agent/profiler?rev=f7dbca5e643db52807e12649e02291069f3d9d82" },
+    { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=f0f76b0b56830a0315c108efe90bcf131d3701ce" },
     { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=6a64da8be9ed7c0bb38c2ba57f539da9a43ddf34" },
 ]
 
@@ -2103,7 +2103,7 @@ dependencies = [
 [[package]]
 name = "mindie-profiler"
 version = "0.5.11"
-source = { git = "https://github.com/mindie-agent/profiler?rev=968909942da1706f4bf579eb77c17aa9131bb50b#968909942da1706f4bf579eb77c17aa9131bb50b" }
+source = { git = "https://github.com/mindie-agent/profiler?rev=f7dbca5e643db52807e12649e02291069f3d9d82#f7dbca5e643db52807e12649e02291069f3d9d82" }
 dependencies = [
     { name = "mindie-sim" },
 ]
@@ -2111,7 +2111,7 @@ dependencies = [
 [[package]]
 name = "mindie-sim"
 version = "0.9.10"
-source = { git = "https://github.com/mindie-agent/sim?rev=d71ab7479da1df86bc397d635b23ee214cbfa47c#d71ab7479da1df86bc397d635b23ee214cbfa47c" }
+source = { git = "https://github.com/mindie-agent/sim?rev=f0f76b0b56830a0315c108efe90bcf131d3701ce#f0f76b0b56830a0315c108efe90bcf131d3701ce" }
 dependencies = [
     { name = "ijson" },
 ]
