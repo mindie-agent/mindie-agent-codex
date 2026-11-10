@@ -715,20 +715,24 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(json.loads(archived[0].read_text()), pending)
         self.assertEqual(json.loads((self.state / "native.json").read_text())["stage"], "superseded")
 
-    def test_stale_installed_candidate_with_evicted_source_is_not_retired(self):
+    def test_stale_failed_local_preparation_with_evicted_source_is_retired(self):
         pending = dict(self.stale_candidate(), stage="installed")
+        pending.pop("runtime", None)
+        pending["preparation"] = dict(
+            execution="completed", returncode=1, cleanup_failed=False)
         Path(pending["source"]).rename(self.root / "evicted-installed-source")
         (self.state / "native.json").write_text(json.dumps(pending))
         self.installed.return_value = dict(self.before, version=self.next_patch_version())
-        with patch("mindie_knowledge.releases_io.fetch_releases") as fetch, \
+        with patch("mindie_knowledge.releases_io.fetch_releases", return_value=[]) as fetch, \
                 patch.object(update, "_native_install") as install:
             value = update.check(self.config)
-        self.assertEqual(value["status"], "unknown")
-        self.assertEqual(value["stage"], "installed")
-        fetch.assert_not_called()
+        self.assertEqual(value["status"], "no_compatible_release")
+        fetch.assert_called_once()
         install.assert_not_called()
-        self.assertEqual(json.loads((self.state / "native.json").read_text()), pending)
-        self.assertFalse(list(self.state.glob("superseded-*.json")))
+        archived = list(self.state.glob("superseded-*.json"))
+        self.assertEqual(len(archived), 1)
+        self.assertEqual(json.loads(archived[0].read_text()), pending)
+        self.assertEqual(json.loads((self.state / "native.json").read_text())["stage"], "superseded")
 
     def test_stale_candidate_with_unsettled_native_writer_is_not_retired(self):
         pending = dict(self.prepared_candidate(),
