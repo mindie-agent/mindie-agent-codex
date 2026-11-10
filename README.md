@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.24-0F766E.svg" alt="Release v0.1.24"></a>
-  <a href="plugins/mindie-agent/harness-compatibility.json"><img src="https://img.shields.io/badge/Codex_CLI-0.153.4_%7C_%3E%3D0.162.0-10A37F.svg" alt="Codex CLI 0.153.4 | >=0.162.0"></a>
+  <a href="plugins/mindie-agent/harness-compatibility.json"><img src="https://img.shields.io/badge/Codex_CLI-0.153.4_%7C_%3E%3D0.162.0--alpha.2-10A37F.svg" alt="Codex CLI 0.153.4 | >=0.162.0-alpha.2"></a>
   <a href="plugins/mindie-agent/pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
 </p>
@@ -107,9 +107,9 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
    codex --version
    ```
    - **硬性门禁（严禁跳过或静默忽略，且严禁修改宿主机全局或系统级 Git 配置）**：若未安装 `gh`，请先协助安装（macOS：`brew install gh`；Windows：`winget install --id GitHub.cli`；Ubuntu / WSL：`sudo apt update && sudo apt install -y gh`）。账号读取成功时复用已有认证；需要登录时按 [GitHub 登录引导](plugins/mindie-agent/skills/mindie-agent/references/github-authentication.md) 选择方式：普通网络使用浏览器，企业网络或浏览器授权受阻时优先 Token。已有 Token 就在 `gh` 隐藏输入提示中粘贴（或使用已提供的私有文件），没有则引导创建。仅使用进程级 `GIT_CONFIG_COUNT`（及企业证书场景下的 `UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true`）验证传输通道，切勿污染宿主机全局 Git 配置。
-   - 确认 `codex --version` 落在兼容声明记录的宿主版本内（声明于 [`plugins/mindie-agent/harness-compatibility.json`](plugins/mindie-agent/harness-compatibility.json)，与页首徽章 `Codex CLI 0.153.4 | >=0.162.0` 一致；不按操作系统把精确版本排除在外）：
-     - 精确版本 `codex-cli 0.153.4`，以及范围 `>=0.162.0-alpha.17.2` 且 `<=0.999.999`（含预发布）：macOS、原生 Windows、Linux / Windows WSL 均适用。
-     - macOS 上 Homebrew `codex` `0.153.4`（无需 Codex.app）在声明内；alpha 行仍然有效，包括 `0.162.0-alpha.17.2` 与 `0.164.0-alpha.11.1`。
+   - 确认 `codex --version` 落在兼容声明记录的宿主版本内（声明于 [`plugins/mindie-agent/harness-compatibility.json`](plugins/mindie-agent/harness-compatibility.json)，与页首徽章 `Codex CLI 0.153.4 | >=0.162.0-alpha.2` 一致；不按操作系统把精确版本排除在外）：
+     - 精确版本 `codex-cli 0.153.4`，以及范围 `>=0.162.0-alpha.2` 且 `<=0.999.999`（含预发布）：macOS、原生 Windows、Linux / Windows WSL 均适用。
+     - macOS 上 Homebrew `codex` `0.153.4`（无需 Codex.app）在声明内；alpha 行仍然有效，包括 `0.162.0-alpha.2` 与 `0.164.0-alpha.11.1`。
      - Linux / Windows WSL 上已记录的稳定版本还包括 `0.162.1` 与 `0.164.0`（新增版本的无模型验收范围见 [接口证据](docs/harness-interfaces.zh.md)）。
    - 若在 **Linux 或 Windows WSL** 下使用后台知识服务，请额外执行 `systemctl --user show --property=Version` 确认 `systemd >= 254` 且启用了统一 cgroup v2 层级（WSL 内须使用 Linux 原生 `codex`、`git`、`uv` 与 `gh`，切勿跨 `/mnt/c` 混用 Windows 可执行文件）。
 
@@ -160,8 +160,8 @@ MindIE Agent 采用**「领域知识与 Skill 手动按需触发 + 远端开发�
 </details>
 
 #### 环境要求说明
-- **基础依赖与硬性指标**：`git`、`uv`、已登录认证的 **`gh`（GitHub CLI）**，以及已登录且支持原生插件的 `codex` CLI。宿主版本以 [`plugins/mindie-agent/harness-compatibility.json`](plugins/mindie-agent/harness-compatibility.json) 为准：精确 `0.153.4` 与 `>=0.162.0-alpha.17.2`（含预发布，至 `0.999.999`）在 macOS、原生 Windows、Linux / WSL 上均有效。
-- **macOS**：Homebrew 或其他方式安装的 `codex` CLI 即可（`0.153.4` 与上述范围内的 alpha，含 `0.162.0-alpha.17.2`、`0.164.0-alpha.11.1`）。没有 Codex.app 时，工作区用 `codex -C`，不要求 `codex app`。
+- **基础依赖与硬性指标**：`git`、`uv`、已登录认证的 **`gh`（GitHub CLI）**，以及已登录且支持原生插件的 `codex` CLI。宿主版本以 [`plugins/mindie-agent/harness-compatibility.json`](plugins/mindie-agent/harness-compatibility.json) 为准：精确 `0.153.4` 与 `>=0.162.0-alpha.2`（含预发布，至 `0.999.999`）在 macOS、原生 Windows、Linux / WSL 上均有效。
+- **macOS**：Homebrew 或其他方式安装的 `codex` CLI 即可（`0.153.4` 与上述范围内的 alpha，含 `0.162.0-alpha.2`、`0.164.0-alpha.11.1`）。没有 Codex.app 时，工作区用 `codex -C`，不要求 `codex app`。
 - **原生 Windows**：由 Git for Windows 提供远端开发所需的 SSH 客户端。
 - **Linux 与 Windows WSL**：在 WSL 内请使用 Linux 原生 `codex`、`git`、`uv` 与 `gh`（配置、SQLite 与运行时均保存在 Linux 文件系统内）。后台知识服务依赖用户态 `systemd --user`（`systemd >= 254`）；若不可用，知识服务会明确报错，但独立的 `mindie-remote-dev` 远端工具集仍可正常使用。
 

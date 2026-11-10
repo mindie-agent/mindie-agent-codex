@@ -9,7 +9,7 @@
       "include_prerelease": false
     },
     {
-      "minimum": "0.162.0-alpha.17.2",
+      "minimum": "0.162.0-alpha.2",
       "maximum": "0.999.999",
       "maximum_inclusive": true,
       "include_prerelease": true
@@ -39,7 +39,7 @@
           "include_prerelease": false
         },
         {
-          "minimum": "0.162.0-alpha.17.2",
+          "minimum": "0.162.0-alpha.2",
           "maximum": "0.999.999",
           "maximum_inclusive": true,
           "include_prerelease": true
@@ -57,7 +57,8 @@
         "https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/cli/src/main.rs",
         "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/cli/src/main.rs",
         "docs/releases/mindie-agent-codex-0.1.14.md#native-host-compatibility",
-        "docs/harness-interfaces.md#codex-0166-acceptance"
+        "docs/harness-interfaces.md#codex-0166-acceptance",
+        "docs/harness-interfaces.md#codex-0162-alpha2-acceptance"
       ]
     },
     "native.plugin.install": {
@@ -69,7 +70,7 @@
           "include_prerelease": false
         },
         {
-          "minimum": "0.162.0-alpha.17.2",
+          "minimum": "0.162.0-alpha.2",
           "maximum": "0.999.999",
           "maximum_inclusive": true,
           "include_prerelease": true
@@ -85,7 +86,8 @@
         "https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/cli/src/plugin_cmd.rs",
         "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/cli/src/plugin_cmd.rs",
         "docs/releases/mindie-agent-codex-0.1.14.md#native-host-compatibility",
-        "docs/harness-interfaces.md#codex-0166-acceptance"
+        "docs/harness-interfaces.md#codex-0166-acceptance",
+        "docs/harness-interfaces.md#codex-0162-alpha2-acceptance"
       ]
     },
     "native.marketplace.local": {
@@ -97,7 +99,7 @@
           "include_prerelease": false
         },
         {
-          "minimum": "0.162.0-alpha.17.2",
+          "minimum": "0.162.0-alpha.2",
           "maximum": "0.999.999",
           "maximum_inclusive": true,
           "include_prerelease": true
@@ -113,7 +115,8 @@
         "https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core-plugins/src/marketplace.rs",
         "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/core-plugins/src/marketplace.rs",
         "docs/releases/mindie-agent-codex-0.1.14.md#native-host-compatibility",
-        "docs/harness-interfaces.md#codex-0166-acceptance"
+        "docs/harness-interfaces.md#codex-0166-acceptance",
+        "docs/harness-interfaces.md#codex-0162-alpha2-acceptance"
       ]
     },
     "native.legacy-mcp": {
@@ -125,7 +128,7 @@
           "include_prerelease": false
         },
         {
-          "minimum": "0.162.0-alpha.17.2",
+          "minimum": "0.162.0-alpha.2",
           "maximum": "0.999.999",
           "maximum_inclusive": true,
           "include_prerelease": true
@@ -142,7 +145,8 @@
         "https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core-plugins/src/loader.rs",
         "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/core-plugins/src/loader.rs",
         "docs/releases/mindie-agent-codex-0.1.14.md#native-host-compatibility",
-        "docs/harness-interfaces.md#codex-0166-acceptance"
+        "docs/harness-interfaces.md#codex-0166-acceptance",
+        "docs/harness-interfaces.md#codex-0162-alpha2-acceptance"
       ]
     },
     "native.plugin-paths": {
@@ -154,7 +158,7 @@
           "include_prerelease": false
         },
         {
-          "minimum": "0.162.0-alpha.17.2",
+          "minimum": "0.162.0-alpha.2",
           "maximum": "0.999.999",
           "maximum_inclusive": true,
           "include_prerelease": true
@@ -175,7 +179,8 @@
         "https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/hooks/src/engine/discovery.rs",
         "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/hooks/src/engine/discovery.rs",
         "docs/releases/mindie-agent-codex-0.1.14.md#native-host-compatibility",
-        "docs/harness-interfaces.md#codex-0166-acceptance"
+        "docs/harness-interfaces.md#codex-0166-acceptance",
+        "docs/harness-interfaces.md#codex-0162-alpha2-acceptance"
       ]
     },
     "native.hook-envelope": {
@@ -187,7 +192,7 @@
           "include_prerelease": false
         },
         {
-          "minimum": "0.162.0-alpha.17.2",
+          "minimum": "0.162.0-alpha.2",
           "maximum": "0.999.999",
           "maximum_inclusive": true,
           "include_prerelease": true
@@ -204,7 +209,8 @@
         "https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/hooks/src/events/stop.rs",
         "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/hooks/src/events/stop.rs",
         "docs/releases/mindie-agent-codex-0.1.14.md#native-host-compatibility",
-        "docs/harness-interfaces.md#codex-0166-acceptance"
+        "docs/harness-interfaces.md#codex-0166-acceptance",
+        "docs/harness-interfaces.md#codex-0162-alpha2-acceptance"
       ]
     },
     "native.mcp-identity": {
@@ -216,7 +222,7 @@
           "include_prerelease": false
         },
         {
-          "minimum": "0.162.0-alpha.17.2",
+          "minimum": "0.162.0-alpha.2",
           "maximum": "0.999.999",
           "maximum_inclusive": true,
           "include_prerelease": true
@@ -232,7 +238,8 @@
         "https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/mcp_connection_manager.rs",
         "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/core/src/mcp_connection_manager.rs",
         "docs/releases/mindie-agent-codex-0.1.14.md#native-host-compatibility",
-        "docs/harness-interfaces.md#codex-0166-acceptance"
+        "docs/harness-interfaces.md#codex-0166-acceptance",
+        "docs/harness-interfaces.md#codex-0162-alpha2-acceptance"
       ]
     },
     "native.transcript": {
@@ -244,7 +251,7 @@
           "include_prerelease": false
         },
         {
-          "minimum": "0.162.0-alpha.17.2",
+          "minimum": "0.162.0-alpha.2",
           "maximum": "0.999.999",
           "maximum_inclusive": true,
           "include_prerelease": true
@@ -261,7 +268,8 @@
         "https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/protocol/src/protocol.rs",
         "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/protocol/src/protocol.rs",
         "docs/releases/mindie-agent-codex-0.1.14.md#native-host-compatibility",
-        "docs/harness-interfaces.md#codex-0166-acceptance"
+        "docs/harness-interfaces.md#codex-0166-acceptance",
+        "docs/harness-interfaces.md#codex-0162-alpha2-acceptance"
       ]
     },
     "native.summary-exec": {
@@ -273,7 +281,7 @@
           "include_prerelease": false
         },
         {
-          "minimum": "0.162.0-alpha.17.2",
+          "minimum": "0.162.0-alpha.2",
           "maximum": "0.999.999",
           "maximum_inclusive": true,
           "include_prerelease": true
@@ -290,7 +298,8 @@
         "https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/exec/src/lib.rs",
         "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/exec/src/lib.rs",
         "docs/releases/mindie-agent-codex-0.1.14.md#native-host-compatibility",
-        "docs/harness-interfaces.md#codex-0166-acceptance"
+        "docs/harness-interfaces.md#codex-0166-acceptance",
+        "docs/harness-interfaces.md#codex-0162-alpha2-acceptance"
       ]
     },
     "native.hook-management": {
@@ -302,7 +311,7 @@
           "include_prerelease": false
         },
         {
-          "minimum": "0.162.0-alpha.17.2",
+          "minimum": "0.162.0-alpha.2",
           "maximum": "0.999.999",
           "maximum_inclusive": true,
           "include_prerelease": true
@@ -323,7 +332,8 @@
         "https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/app-server-protocol/src/protocol/common.rs",
         "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/app-server-protocol/src/protocol/common.rs",
         "docs/releases/mindie-agent-codex-0.1.14.md#native-host-compatibility",
-        "docs/harness-interfaces.md#codex-0166-acceptance"
+        "docs/harness-interfaces.md#codex-0166-acceptance",
+        "docs/harness-interfaces.md#codex-0162-alpha2-acceptance"
       ]
     },
     "native.interrupt-hook": {
@@ -335,7 +345,7 @@
           "include_prerelease": false
         },
         {
-          "minimum": "0.162.0-alpha.17.2",
+          "minimum": "0.162.0-alpha.2",
           "maximum": "0.999.999",
           "maximum_inclusive": true,
           "include_prerelease": true
@@ -360,7 +370,8 @@
         "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/hooks/src/events/interrupt.rs",
         "https://github.com/openai/codex/blob/740e5af33c71225640e0c1c1555c514c2c93ab74/codex-rs/hooks/src/engine/mcp_runner.rs",
         "docs/releases/mindie-agent-codex-0.1.14.md#native-host-compatibility",
-        "docs/harness-interfaces.md#codex-0166-acceptance"
+        "docs/harness-interfaces.md#codex-0166-acceptance",
+        "docs/harness-interfaces.md#codex-0162-alpha2-acceptance"
       ]
     },
     "native.hook-user-prompt": {
@@ -372,7 +383,7 @@
           "include_prerelease": false
         },
         {
-          "minimum": "0.162.0-alpha.17.2",
+          "minimum": "0.162.0-alpha.2",
           "maximum": "0.999.999",
           "maximum_inclusive": true,
           "include_prerelease": true
@@ -390,7 +401,8 @@
       "evidence_refs": [
         "https://learn.chatgpt.com/docs/hooks#userpromptsubmit",
         "docs/releases/mindie-agent-codex-0.1.14.md#native-host-compatibility",
-        "docs/harness-interfaces.md#codex-0166-acceptance"
+        "docs/harness-interfaces.md#codex-0166-acceptance",
+        "docs/harness-interfaces.md#codex-0162-alpha2-acceptance"
       ]
     }
   }

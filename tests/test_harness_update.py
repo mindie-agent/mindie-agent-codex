@@ -899,18 +899,53 @@ class UpdateTests(unittest.TestCase):
                 patch.object(update, "harness_version", return_value="0.154.0"):
             with self.assertRaisesRegex(ValueError, "does not support"):
                 release_metadata.require_harness(SCRIPTS.parent)
-        for version in ("0.153.4", "0.162.1", "0.164.0", "0.166.0", "0.166.0-alpha.5.1",
+        for version in ("0.153.4", "0.162.0-alpha.2", "0.162.0-alpha.3",
+                        "0.162.0-alpha.17.2", "0.162.1", "0.164.0", "0.166.0", "0.166.0-alpha.5.1",
                         "0.166.1", "0.167.0-alpha.1", "0.199.0"):
             with self.subTest(version=version), \
                     patch("native_context.capture", return_value=dict(MINDIE_CODEX_BIN="/native")), \
                     patch.object(update, "harness_version", return_value=version):
                 self.assertEqual(release_metadata.require_harness(SCRIPTS.parent), version)
-        for version in ("0.153.3", "0.154.0", "1.0.0-alpha.1", "1.0.0"):
+        for version in ("0.153.3", "0.154.0", "0.162.0-alpha.1",
+                        "0.162.0-alpha.1.99", "1.0.0-alpha.1", "1.0.0"):
             with self.subTest(version=version), \
                     patch("native_context.capture", return_value=dict(MINDIE_CODEX_BIN="/native")), \
                     patch.object(update, "harness_version", return_value=version):
                 with self.assertRaisesRegex(ValueError, "does not support"):
                     release_metadata.require_harness(SCRIPTS.parent)
+
+    def test_desktop_alpha2_selects_declared_release(self):
+        from mindie_knowledge.releases import select_release
+
+        selected = select_release(
+            [self.release], repository=release_metadata.REPOSITORY,
+            harness_name="codex", harness_version="0.162.0-alpha.2")
+        self.assertEqual(selected["status"], "candidate")
+        self.assertEqual(selected["candidate"], self.release)
+
+    def test_newer_hosts_reuse_same_plugin_release_across_patch_minor_and_prerelease(self):
+        from mindie_knowledge.releases import select_release
+
+        # Future host versions must use the interval, without adding releases
+        # or exact-version entries to the plugin's compatibility declaration.
+        for minor in (162, 163, 199):
+            for patch_version in (1, 3, 17):
+                for suffix in ("-alpha.1", "-alpha.17.2", "-beta.1", "-rc.1", ""):
+                    version = f"0.{minor}.{patch_version}{suffix}"
+                    with self.subTest(version=version), \
+                            patch("native_context.capture", return_value=dict(MINDIE_CODEX_BIN="/native")), \
+                            patch.object(update, "harness_version", return_value=version):
+                        self.assertEqual(release_metadata.require_harness(SCRIPTS.parent), version)
+                        selected = select_release(
+                            [self.release], repository=release_metadata.REPOSITORY,
+                            harness_name="codex", harness_version=version)
+                        self.assertEqual(selected["status"], "candidate")
+                        self.assertEqual(selected["candidate"], self.release)
+                        current = select_release(
+                            [self.release], repository=release_metadata.REPOSITORY,
+                            harness_name="codex", harness_version=version,
+                            installed_version=self.version)
+                        self.assertEqual(current["status"], "up_to_date")
 
     def test_trigger_refresh_backoff_and_process_fast_path(self):
         path = self.state / "status.json"

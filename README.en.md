@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.24-0F766E.svg" alt="Release v0.1.24"></a>
-  <a href="plugins/mindie-agent/harness-compatibility.json"><img src="https://img.shields.io/badge/Codex_CLI-0.153.4_%7C_%3E%3D0.162.0-10A37F.svg" alt="Codex CLI 0.153.4 | >=0.162.0"></a>
+  <a href="plugins/mindie-agent/harness-compatibility.json"><img src="https://img.shields.io/badge/Codex_CLI-0.153.4_%7C_%3E%3D0.162.0--alpha.2-10A37F.svg" alt="Codex CLI 0.153.4 | >=0.162.0-alpha.2"></a>
   <a href="plugins/mindie-agent/pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
 </p>
@@ -107,9 +107,9 @@ If you are an AI Agent asked by the user to install this plugin, execute the fol
    codex --version
    ```
    - **Hard Gate (Never skip or silently ignore, and never mutate global or system-wide host Git config)**: If `gh` is missing, assist the user in installing it first (macOS: `brew install gh`; Windows: `winget install --id GitHub.cli`; Ubuntu / WSL: `sudo apt update && sudo apt install -y gh`). Reuse a working account. Otherwise follow [GitHub Sign-In](plugins/mindie-agent/skills/mindie-agent/references/github-authentication.md): browser login on ordinary networks, or token login on enterprise networks / blocked browser authorization. Use an existing token in the hidden `gh` prompt (or a supplied private file), or guide token creation. Verify transport strictly with process-scoped `GIT_CONFIG_COUNT` (and `UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true` on enterprise TLS networks) without mutating global host Git config.
-   - Verify `codex --version` falls inside a host version recorded in the compatibility declaration (declared in [`plugins/mindie-agent/harness-compatibility.json`](plugins/mindie-agent/harness-compatibility.json), matching the page badge `Codex CLI 0.153.4 | >=0.162.0`; do not exclude an exact version by operating system):
-     - Exact `codex-cli 0.153.4`, and the range `>=0.162.0-alpha.17.2` through `<=0.999.999` (prereleases included), apply on macOS, native Windows, and Linux / Windows WSL.
-     - macOS Homebrew `codex` `0.153.4` is in range without Codex.app. The alpha rows remain valid, including `0.162.0-alpha.17.2` and `0.164.0-alpha.11.1`.
+   - Verify `codex --version` falls inside a host version recorded in the compatibility declaration (declared in [`plugins/mindie-agent/harness-compatibility.json`](plugins/mindie-agent/harness-compatibility.json), matching the page badge `Codex CLI 0.153.4 | >=0.162.0-alpha.2`; do not exclude an exact version by operating system):
+     - Exact `codex-cli 0.153.4`, and the range `>=0.162.0-alpha.2` through `<=0.999.999` (prereleases included), apply on macOS, native Windows, and Linux / Windows WSL.
+     - macOS Homebrew `codex` `0.153.4` is in range without Codex.app. The alpha rows remain valid, including `0.162.0-alpha.2` and `0.164.0-alpha.11.1`.
      - Recorded Linux / Windows WSL stable versions also include `0.162.1` and `0.164.0` (see [interface evidence](docs/harness-interfaces.md) for the new model-free acceptance scope).
    - On **Linux or Windows WSL**, if the background knowledge service will be used, also run `systemctl --user show --property=Version` to verify `systemd >= 254` with unified cgroup v2 is reachable (inside WSL, use Linux-native `codex`, `git`, `uv`, and `gh` rather than Windows binaries across `/mnt/c`).
 
@@ -160,8 +160,8 @@ If you are an AI Agent asked by the user to install this plugin, execute the fol
 </details>
 
 #### Environment Notes
-- **Prerequisites (Hard Requirements)**: `git`, `uv`, an authenticated **`gh` (GitHub CLI)**, and an authenticated `codex` CLI with native plugin support. Host versions follow [`plugins/mindie-agent/harness-compatibility.json`](plugins/mindie-agent/harness-compatibility.json): exact `0.153.4` and `>=0.162.0-alpha.17.2` (prereleases included, through `0.999.999`) are valid on macOS, native Windows, and Linux / WSL.
-- **macOS**: A Homebrew or otherwise installed `codex` CLI is sufficient (`0.153.4` and in-range alphas, including `0.162.0-alpha.17.2` and `0.164.0-alpha.11.1`). Without Codex.app, open the workspace with `codex -C`; `codex app` is not required.
+- **Prerequisites (Hard Requirements)**: `git`, `uv`, an authenticated **`gh` (GitHub CLI)**, and an authenticated `codex` CLI with native plugin support. Host versions follow [`plugins/mindie-agent/harness-compatibility.json`](plugins/mindie-agent/harness-compatibility.json): exact `0.153.4` and `>=0.162.0-alpha.2` (prereleases included, through `0.999.999`) are valid on macOS, native Windows, and Linux / WSL.
+- **macOS**: A Homebrew or otherwise installed `codex` CLI is sufficient (`0.153.4` and in-range alphas, including `0.162.0-alpha.2` and `0.164.0-alpha.11.1`). Without Codex.app, open the workspace with `codex -C`; `codex app` is not required.
 - **Native Windows**: Git for Windows supplies the SSH client used by `mindie-remote-dev`.
 - **Linux & Windows WSL**: Inside WSL, use Linux-native `codex`, `git`, `uv`, and `gh` with profile, SQLite, and runtime files stored on the Linux filesystem. Service-backed knowledge operations require a reachable `systemd --user` manager (`>= 254`); if unavailable, the knowledge service reports an explicit error while `mindie-remote-dev` continues to work normally.
 
