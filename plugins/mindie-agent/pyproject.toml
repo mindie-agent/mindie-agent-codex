@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mindie-agent-codex"
-version = "0.1.25"
+version = "0.1.26"
 description = "Codex adapter for MindIE Agent"
 requires-python = ">=3.11"
 dependencies = [
@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "3c478a19b5542b38520c7f98b87a07f37e305021" }
+mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "ac4a89e993c89deba5a4a629e1cd89d61e57c843" }
 remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "6a64da8be9ed7c0bb38c2ba57f539da9a43ddf34" }
 mindie-diagnostics = { git = "https://github.com/mindie-agent/diagnostics", rev = "25182e651860fb354a78968fe6b7590f14b14593" }
 mindie-debugger = { git = "https://github.com/mindie-agent/debugger", rev = "e9406b2b178335190d5cb59dff4d6985894497ba" }
