@@ -2,7 +2,7 @@
 
 <a href="harness-interfaces.zh.md">中文</a> | <b>English</b> · <a href="README.en.md">Documentation Index</a>
 
-[`plugins/mindie-agent/harness-compatibility.json`](../plugins/mindie-agent/harness-compatibility.json) is the machine-checked registry of OpenAI Codex CLI interfaces used by `mindie-agent-codex`. The registry includes the previously verified hosts and two additional stable versions, `0.162.1` and `0.164.0` (the latest official stable release checked on 2026-10-26). Each is an exact version; untested patch releases and prereleases remain excluded.
+[`plugins/mindie-agent/harness-compatibility.json`](../plugins/mindie-agent/harness-compatibility.json) is the machine-checked registry of OpenAI Codex CLI interfaces used by `mindie-agent-codex`. It declares exact `0.153.4` and `>=0.162.0-alpha.2 <=0.999.999`, including prereleases. The evidence below records the particular hosts exercised; the declared range does not mean every intervening version has a separate acceptance run.
 
 On WSL Linux, both added versions pass `tests/test_native_harness_acceptance.py` against the real executable: local marketplace installation and readback, all five bundled hooks, config compare-and-swap, preservation of trusted and explicitly disabled handlers, locked runtime preparation, a native SessionStart, and discovery of 22 remote tools and 5 component tools without enabling knowledge capture. CI repeats these model-free checks on Ubuntu for both versions. This evidence does not claim paid model-turn, remote NPU, or Windows/macOS acceptance for the newly added hosts.
 
@@ -13,6 +13,39 @@ In CI, `plugins/mindie-agent/scripts/release_metadata.py` verifies that every re
 ---
 
 ## Native management
+
+### Codex 0.162 alpha.2 acceptance
+
+On 2026-11-10, the official Windows executable `0.162.0-alpha.2` passed
+`test_native_plugin_hooks_and_config_cas`: native marketplace installation,
+five hooks, trust/config CAS, and preservation of an explicitly disabled hook.
+The locked-runtime acceptance also passed SessionStart, discovery of 23 remote
+tools and six component tools, and component generation build, validation and
+binding cutover. The test profiles isolate HOME, CODEX_HOME and MindIE state;
+these checks do not run a model turn or an NPU workload.
+Its immutable upstream commit is
+[`74e804deeb1241d5fe699b31fb319f7d46454c42`](https://github.com/openai/codex/commit/74e804deeb1241d5fe699b31fb319f7d46454c42).
+The [protocol](https://github.com/openai/codex/blob/74e804deeb1241d5fe699b31fb319f7d46454c42/codex-rs/app-server-protocol/src/protocol/common.rs)
+provides `hooks/list`, `config/read`, and `config/value/write`; the
+[MCP implementation](https://github.com/openai/codex/blob/74e804deeb1241d5fe699b31fb319f7d46454c42/codex-rs/core/src/mcp_tool_call.rs)
+and [Interrupt hook](https://github.com/openai/codex/blob/74e804deeb1241d5fe699b31fb319f7d46454c42/codex-rs/hooks/src/events/interrupt.rs)
+retain the adapter's native identity and cancellation interfaces.
+
+The previous `alpha.17.2` lower bound excluded this host before installation
+or release selection. All consumed interface intervals now start at
+`alpha.2`. Regression tests exercise both first installation and formal
+release selection; versions below that boundary remain rejected. Native CI
+includes `alpha.2` on Ubuntu and Windows. The product R4 gate also retains
+verified lower baselines alongside future-version probes, while R5 inspects
+both the running Desktop executable and saved `native_context`.
+
+The forward range introduced in `0.1.17` remains in effect: it already
+accepted `0.162.3-alpha.17.2` before this lower-bound correction. Compatibility
+is an interval, not a list of tested host versions. Regression coverage checks
+45 combinations of later patch/minor versions and alpha, beta, rc or stable
+versions against the same plugin release, including first installation and
+selection with an already-installed plugin. Adding a tested host must not
+raise the minimum unless a consumed interface actually requires that change.
 
 ### Codex 0.166 acceptance
 

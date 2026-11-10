@@ -102,8 +102,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        codex: ["0.162.1", "0.164.0", "0.166.0"]
+        codex: ["0.162.0-alpha.2", "0.162.1", "0.164.0", "0.166.0"]
         include:
+          - os: windows-latest
+            codex: "0.162.0-alpha.2"
           - os: windows-latest
             codex: "0.166.0"
     runs-on: ${{ matrix.os }}

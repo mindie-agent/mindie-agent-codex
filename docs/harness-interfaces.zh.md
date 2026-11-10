@@ -2,7 +2,7 @@
 
 <b>中文</b> | <a href="harness-interfaces.md">English</a> · <a href="README.md">返回文档索引</a>
 
-[`plugins/mindie-agent/harness-compatibility.json`](../plugins/mindie-agent/harness-compatibility.json) 是插件所使用的 Codex 宿主接口的机器可读注册表。`0.1.15` 新增精确版本 `0.166.0` 和 `0.166.0-alpha.5.1`，此前声明继续保留；完整范围以该注册表为准。最初 `v0.0.2` 的两项验收基线为：
+[`plugins/mindie-agent/harness-compatibility.json`](../plugins/mindie-agent/harness-compatibility.json) 是插件所使用的 Codex 宿主接口的机器可读注册表。当前声明精确版本 `0.153.4` 与 `>=0.162.0-alpha.2 <=0.999.999`（含预发布）。以下证据区分已实际验收的宿主；声明区间不表示区间内每个版本均单独完成验收。最初 `v0.0.2` 的两项验收基线为：
 - **`0.153.4`**（对应官方上游源码提交 `3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`）
 - **`0.162.0-alpha.17.2`**（对应官方上游源码提交 `740e5af33c71225640e0c1c1555c514c2c93ab74`）
 
@@ -11,6 +11,14 @@
 ---
 
 ## Native management {#native-management}
+
+### Codex 0.162 alpha.2 原生验收
+
+2026-11-10，使用官方 Windows 二进制 `0.162.0-alpha.2`，通过 `test_native_plugin_hooks_and_config_cas`：原生市场安装、5 条 Hook、信任配置 CAS 与保留用户显式禁用状态。锁定运行时验收同时通过 SessionStart、23 个远端工具与 6 个组件工具发现，以及组件新代构建、校验和绑定切换。测试隔离 HOME、CODEX_HOME 与 MindIE 状态，不运行模型轮次或 NPU 工作负载。该宿主对应不可变上游提交 [`74e804deeb1241d5fe699b31fb319f7d46454c42`](https://github.com/openai/codex/commit/74e804deeb1241d5fe699b31fb319f7d46454c42)。其[协议定义](https://github.com/openai/codex/blob/74e804deeb1241d5fe699b31fb319f7d46454c42/codex-rs/app-server-protocol/src/protocol/common.rs)包含 `hooks/list`、`config/read` 与 `config/value/write`；[MCP 实现](https://github.com/openai/codex/blob/74e804deeb1241d5fe699b31fb319f7d46454c42/codex-rs/core/src/mcp_tool_call.rs)和 [Interrupt Hook](https://github.com/openai/codex/blob/74e804deeb1241d5fe699b31fb319f7d46454c42/codex-rs/hooks/src/events/interrupt.rs)保留插件使用的原生身份与取消接口。
+
+此前 `alpha.17.2` 下限导致该宿主在安装或发行版选择前被排除。所有已使用接口的声明下限统一扩展至 `alpha.2`，并通过首次安装与正式发行版选择回归验证；低于此边界的版本仍被拒绝。原生 CI 增加 Ubuntu 与 Windows 的 `alpha.2`。产品 R4 门禁在未来版本探针之外保留已验证最低基线，R5 同时检查当前桌面内核和配置中的 `native_context`。
+
+`0.1.17` 引入的前向区间一直有效，在本次下限修正前就已接受 `0.162.3-alpha.17.2`。兼容声明是区间，已验收版本只是测试样本。回归以同一个插件发行版覆盖 45 种后续 patch/minor 与 alpha、beta、rc、稳定版本组合，同时检查首次安装和已有插件的发行版选择。新增验收样本不能自动提高兼容下限，只有实际使用的接口新增最低要求时才调整边界。
 
 ### Codex 0.166 原生验收
 
