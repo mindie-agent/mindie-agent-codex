@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import sys
 import threading
+from semantic_version import Version
 
 from bounded_process import run
 from session_gate import runtime_binding, runtime_env, runtime_scripts
@@ -18,6 +19,7 @@ from remote_dev.mcp.catalog_refresh import file_revision
 HERE = Path(__file__).resolve().parent
 _cache = {}
 _lock = threading.Lock()
+CATALOG_HELPER_VERSION = Version("0.1.28")
 
 
 def _binding_revision(value):
@@ -58,6 +60,11 @@ def _local(value):
             and Path(runtime_scripts(value)).resolve() == HERE)
 
 
+def _supports_catalog_helper(value):
+    version = value.get("product_validation", {}).get("native_version")
+    return version is not None and Version(version) >= CATALOG_HELPER_VERSION
+
+
 def tools(surface, config, bundled):
     try:
         return _tools(surface, config, bundled)
@@ -76,7 +83,8 @@ def _tools(surface, config, bundled):
     key = _binding_revision(value)
     with _lock:
         if surface not in _cache or _cache[surface][0] != key:
-            if surface == "remote":
+            if surface == "remote" and not _supports_catalog_helper(value):
+                # Older complete helpers publish only their packaged snapshot.
                 catalog = json.loads(
                     (Path(runtime_scripts(value)) / "mcp_catalog.json").read_text(encoding="utf-8"))["remote"]
             else:

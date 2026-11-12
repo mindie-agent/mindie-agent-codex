@@ -162,7 +162,8 @@ def call(payload):
             from component_tools import catalog
             return catalog()
         if surface == "remote":
-            return json.loads(Path(__file__).with_name("mcp_catalog.json").read_text(encoding="utf-8"))["remote"]
+            from export_catalog import catalog
+            return catalog()["remote"]
         raise ValueError("private knowledge catalog is not public MCP discovery")
     if payload["surface"] == "remote":
         return remote(payload)

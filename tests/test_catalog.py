@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import unittest
@@ -45,7 +46,9 @@ class CatalogTests(unittest.TestCase):
                     required=[generation], additionalProperties=False))
                 (scripts / "mcp_catalog.json").write_text(
                     json.dumps(dict(remote=[tool])), encoding="utf-8", newline="\n")
-                bindings[generation] = dict(python=sys.executable, runtime_scripts=str(scripts))
+                bindings[generation] = dict(
+                    python=sys.executable, runtime_scripts=str(scripts),
+                    product_validation=dict(native_version="0.1.27"))
             config = root / "adapter.json"
             config.write_text(json.dumps(bindings["old"]), encoding="utf-8", newline="\n")
             read_text = Path.read_text
@@ -70,6 +73,42 @@ class CatalogTests(unittest.TestCase):
                 selected = gate.tools[0]
                 self.assertEqual(selected["description"], "new")
                 self.assertEqual(selected["inputSchema"]["required"], ["new"])
+
+    def test_component_generation_uses_installed_remote_schema_over_baseline_snapshot(self):
+        import live_catalog
+        from mcp_gate import Gate
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts = root / "selected"
+            scripts.mkdir()
+            for source in SCRIPTS.glob("*.py"):
+                shutil.copyfile(source, scripts / source.name)
+            baseline = json.loads(json.dumps(self.checked_in))
+            old_probe = next(tool for tool in baseline["remote"] if tool["name"] == "remote_probe")
+            old_probe["description"] = "previous component baseline"
+            old_probe["inputSchema"]["properties"].pop("python_candidates", None)
+            snapshot = scripts / "mcp_catalog.json"
+            snapshot.write_text(
+                json.dumps(baseline), encoding="utf-8", newline="\n")
+            original_snapshot = snapshot.read_bytes()
+            config = root / "adapter.json"
+            config.write_text(json.dumps(dict(
+                python=sys.executable, runtime_scripts=str(scripts),
+                product_validation=dict(native_version="0.1.28"))),
+                encoding="utf-8", newline="\n")
+            with patch.dict(os.environ, MINDIE_AGENT_CONFIG=str(config)), \
+                    patch.dict(live_catalog._cache, clear=True):
+                gate = Gate("remote")
+                probe = next(tool for tool in gate.tools if tool["name"] == "remote_probe")
+                self.assertIn("python_candidates", probe["inputSchema"]["properties"])
+                self.assertNotEqual(probe["description"], "previous component baseline")
+                name, arguments = gate._tool_args(dict(params=dict(
+                    name="remote_probe", arguments=dict(host="auth.example", port=22,
+                                                        python_candidates=["/business/python"]))))
+                self.assertEqual(name, "remote_probe")
+                self.assertEqual(arguments["python_candidates"], ["/business/python"])
+                self.assertEqual(snapshot.read_bytes(), original_snapshot)
 
     def test_every_tool_fails_closed_on_undeclared_keys(self):
         for surface in ("knowledge", "remote"):
