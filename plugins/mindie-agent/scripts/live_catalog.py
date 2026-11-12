@@ -2,6 +2,7 @@
 
 [Role] Keep descriptors and component validation paired with the active helper.
 [Invariants] Discovery needs no knowledge grant or native task attachment.
+Cache keys and descriptors come from the same selected binding.
 [Timeouts & Locks] 15s catalog helper; component inner deadline plus 30s grace.
 [Side-Effect Policy] Read-only discovery; calls run once under Gate's update lock.
 """
@@ -19,12 +20,16 @@ _cache = {}
 _lock = threading.Lock()
 
 
+def _binding_revision(value):
+    return json.dumps(runtime_binding(value), sort_keys=True), file_revision(
+        Path(value.get("runtime_scripts") or HERE) / "mcp_catalog.json")
+
+
 def revision(config):
     if not Path(config).exists():
         return None
     value = json.loads(Path(config).read_text(encoding="utf-8"))
-    return json.dumps(runtime_binding(value), sort_keys=True), file_revision(
-        Path(value.get("runtime_scripts") or HERE) / "mcp_catalog.json")
+    return _binding_revision(value)
 
 
 def _selected(config, *, required=False):
@@ -68,7 +73,7 @@ def _tools(surface, config, bundled):
     value = _selected(config)
     if value is None or surface != "remote" and _local(value):
         return bundled
-    key = revision(config)
+    key = _binding_revision(value)
     with _lock:
         if surface not in _cache or _cache[surface][0] != key:
             if surface == "remote":
