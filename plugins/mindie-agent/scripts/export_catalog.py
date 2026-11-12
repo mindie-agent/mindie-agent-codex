@@ -1,15 +1,16 @@
-"""Build-time schema snapshot; discovery must not import the business runtime.
+"""Build baseline snapshots and read-only schemas for a selected runtime.
 
 [Role]
 Generates `mcp_catalog.json` containing the static `knowledge` (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`) and the exact Codex-profile `remote` tool set returned by `remote_dev.mcp.schemas.harness_catalog("codex")` for `mcp_gate.py`.
 
 [Invariants]
 - The remote set is not a hand-maintained whitelist; it is the same `harness_catalog` payload the MCP server serves, so discovery cannot drift from dispatch.
+- A selected-runtime catalog helper reuses the factory without remote work or knowledge activation.
 - Enforces `additionalProperties: false` on all exported tool input schemas so `mcp_gate.py` can reject undeclared arguments before runtime dispatch.
 - Never advertises internal operations (`knowledge_attach`) or retired tools (`knowledge_use`, `knowledge_judge`).
 
 [Timeouts & Locks]
-- Build-time helper; no runtime locks or timeouts.
+- The pure factory acquires no locks; runtime discovery is bounded by its caller's 15s helper deadline.
 
 [Side-Effect Policy]
 - Importing is side-effect free; `__main__` writes `mcp_catalog.json`.
