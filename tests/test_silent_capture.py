@@ -184,6 +184,14 @@ class SilentCaptureTests(unittest.TestCase):
         self.wake.assert_not_called()
 
     def test_real_stdio_delivers_pending_fault_once_on_natural_call(self):
+        from update_trigger import directory
+        updates = directory(self.config)
+        updates.mkdir()
+        # Capture delivery owns no native installation; keep independent
+        # maintenance outside this isolated real-stdio conversation.
+        (updates / "status.json").write_text(json.dumps(dict(
+            status="current", checked_at=time.time(), last_successful_check=time.time())),
+            encoding="utf-8", newline="\n")
         agent_diagnostics.enqueue('mindie-knowledge', 'capture', 'summary', 'worker_failed',
                                   dict(incident_id='a'*32, logging_failed=False))
         frames = [dict(jsonrpc='2.0', id=1, method='initialize', params={}),
