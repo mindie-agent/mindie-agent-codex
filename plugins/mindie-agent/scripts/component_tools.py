@@ -47,6 +47,7 @@ DESCRIPTIONS = {
         "or ['analyze', '--root', '/capture', '--full-range']. Commands: inventory, analyze, "
         "correlate, compare, sql, camodel, and kernels. Use ['--help'] to inspect options "
         "and --output for large reports."
+        " Offline analysis of existing captures requires no device lease or managed task binding."
     ),
     "sim": (
         "Compute Ascend hardware bounds (A2/A3/A5), operator/graph/serving latency, HBM capacity "
@@ -59,12 +60,16 @@ DESCRIPTIONS = {
         "'--mode', 'pd'], ['skew', '/case.json'], or ['graph', '/case.json', '--phase', "
         "'prefill', '--tokens', '32']. Use ['--help'] to inspect options and --output for "
         "large reports."
+        " Simulation calculations require no device allocation or managed task binding."
     ),
     "coordinator": (
         "Manage Ascend host inventory, probe CPU/RAM/NPU capacity, bind containers, "
         "and acquire/inspect/release NPU and service-port leases through "
         "mindie-coordinator. Pass CLI argv, e.g. ['hosts', '--action', 'list'] "
         "or ['probe', '--json', '{\"action\":\"hosts\"}']. Use ['--help'] to inspect options."
+        " Host inventory, probes, containers and bare-metal leases need no managed "
+        "task binding or knowledge activation. Omit context_file for these independent "
+        "operations; inspect resources before acquiring a lease."
     ),
     "debugger": (
         "Ascend NPU fault triage (`triage`, `decode-code`), ACLGraph/NPUGraph capture/replay & buffer-address "
