@@ -27,6 +27,28 @@ def invoke(argv, *, env, timeout=60):
 
 @pytest.mark.skipif(not os.environ.get("MINDIE_TEST_CODEX_BIN"),
                     reason="set MINDIE_TEST_CODEX_BIN for native acceptance")
+def test_native_same_turn_catalog_refresh():
+    native = os.environ["MINDIE_TEST_CODEX_BIN"]
+    features = subprocess.run(
+        [native, "features", "list"], capture_output=True, text=True, encoding="utf-8",
+        timeout=10, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ).stdout
+    if not any(line.split()[:1] == ["mcp_tool_list_changed"] for line in features.splitlines()):
+        pytest.skip("native host has no MCP list-change capability; native reload boundary applies")
+    with NativeHooks(native, dict(os.environ)) as api:
+        assert api.enable_catalog_refresh()["status"] == "enabled"
+        assert api.enable_catalog_refresh()["changed"] is False
+    report = invoke(
+        [sys.executable, str(ROOT / "tests/native_catalog_acceptance.py")],
+        env=dict(os.environ, MINDIE_CODEX_NATIVE=native), timeout=100,
+    )
+    assert report[0]["descriptions"] == [["before"], ["before"]]
+    assert report[1]["descriptions"] == [["before"], ["after"]]
+    assert all(row["native_tool_calls"] == 1 and row["same_turn"] for row in report)
+
+
+@pytest.mark.skipif(not os.environ.get("MINDIE_TEST_CODEX_BIN"),
+                    reason="set MINDIE_TEST_CODEX_BIN for native acceptance")
 def test_native_plugin_hooks_and_config_cas(monkeypatch, tmp_path):
     native = os.environ["MINDIE_TEST_CODEX_BIN"]
     monkeypatch.setenv("MINDIE_CODEX_BIN", native)

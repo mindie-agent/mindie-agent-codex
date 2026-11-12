@@ -54,6 +54,11 @@ STOP_TIMEOUT = (
     STOP_DISPATCH_SECONDS + UV_STARTUP_SECONDS + CLEANUP_GRACE_SECONDS)
 
 PLUGIN_LAUNCHER = "$_hl"
+PS_PROTOCOL_ENCODING = (
+    "$OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
+    "[Console]::OutputEncoding = $OutputEncoding; [Console]::InputEncoding = $OutputEncoding; "
+    "$env:PYTHONIOENCODING = 'utf-8'; "
+)
 # Use "$PLUGIN_ROOT" / "$PLUGIN_DATA" (shell env) rather than ${PLUGIN_ROOT}.
 # Codex substitutes the braced manifest token when listing hooks, so a literal
 # ${PLUGIN_ROOT} never matches hooks.json and breaks trust identity checks.
@@ -244,6 +249,7 @@ def neutral_hook_commands(argv, *, failure="MindIE Stop helper failed; capture c
             + " } else { [Console]::Out.WriteLine('{}') }; "
             + "Remove-Item -LiteralPath $errFile -ErrorAction SilentlyContinue; " + exit_ps
         )
+    body = PS_PROTOCOL_ENCODING + body
     windows = "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " + base64.b64encode(
         body.encode("utf-16le")).decode("ascii")
     return {"command": posix, "commandWindows": windows, "statusMessage": "MindIE Agent"}
@@ -254,7 +260,7 @@ def hook_commands(role, **names):
     if role == "user-prompt-submit":
         # Preserve the hook's one JSON response: only an explicit entry may
         # attach knowledge context. Ordinary prompts emit exactly {}.
-        body = (PS_LAUNCHER_RESOLVE + "& " + " ".join(ps_arg(arg) for arg in arguments)
+        body = (PS_PROTOCOL_ENCODING + PS_LAUNCHER_RESOLVE + "& " + " ".join(ps_arg(arg) for arg in arguments)
                 + "; exit $LASTEXITCODE")
         return dict(command=POSIX_LAUNCHER_RESOLVE + " ".join(posix_arg(arg) for arg in arguments),
                     commandWindows="powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "
@@ -307,8 +313,8 @@ def write_manifests(root):
             # 600s native Bash poll + 60s helper grace + bounded cleanup.
             server["tool_timeout_sec"] = 720
         if role == "tools-mcp":
-            # 300s maximum component deadline + owned-process cleanup grace.
-            server["tool_timeout_sec"] = 330
+            # 300s component + 30s selected-helper envelope + native drain.
+            server["tool_timeout_sec"] = 360
         servers[name] = server
 
     (root / ".mcp.json").write_text(json.dumps({"mcpServers": servers}, indent=2) + "\n",

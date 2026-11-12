@@ -32,8 +32,25 @@ EVENTS = {"sessionStart": "SessionStart", "userPromptSubmit": "UserPromptSubmit"
           "stop": "Stop", "interrupt": "Interrupt"}
 
 
+def configure_catalog_refresh():
+    """Secondary configuration receipt; never undo a completed installation."""
+    native = os.environ.get("MINDIE_CODEX_BIN") or os.environ.get("CODEX_APP_RUNTIME_CLI_PATH")
+    home = os.environ.get("CODEX_HOME")
+    if not native or not home:
+        return dict(status="unavailable", reason="native_management_context_missing",
+                    automatic_refresh=False)
+    try:
+        with NativeHooks(native, dict(os.environ)) as api:
+            return api.enable_catalog_refresh()
+    except Exception as exc:
+        return dict(status="failed", error_type=type(exc).__name__,
+                    receipt_warning="Native tool refresh configuration is unconfirmed",
+                    receipt_unconfirmed=True, automatic_refresh=False)
+
+
 class NativeHooks:
     def __init__(self, native, env):
+        self.native, self.env = native, env
         self.home = Path(env["CODEX_HOME"])
         self.serial = 0
         self.responses = queue.Queue()
@@ -167,6 +184,30 @@ class NativeHooks:
                 raise error
             raise ValueError("native selected marketplace readback differs")
         return dict(status="selected", changed=True, response_lost=error is not None)
+
+    def enable_catalog_refresh(self):
+        """Enable native list-change handling through the public config CAS."""
+        from bounded_process import run
+        features = run([self.native, "features", "list"], "", timeout=10, env=self.env).checked_stdout()
+        if not any(line.split()[:1] == ["mcp_tool_list_changed"] for line in features.splitlines()):
+            return dict(status="unsupported", automatic_refresh=False)
+        config, layer, target = self.user_config()
+        if (config.get("config", {}).get("features") or {}).get("mcp_tool_list_changed") is True:
+            return dict(status="enabled", changed=False, applies="native_reload_boundary")
+        error = None
+        try:
+            self.call("config/value/write", dict(
+                keyPath="features.mcp_tool_list_changed", value=True, mergeStrategy="replace",
+                expectedVersion=layer["version"], filePath=str(target)))
+        except (TimeoutError, OSError, ValueError, RuntimeError) as exc:
+            error = exc
+        observed, _, _ = self.user_config()
+        if (observed.get("config", {}).get("features") or {}).get("mcp_tool_list_changed") is not True:
+            if error is not None:
+                raise error
+            raise ValueError("native tool catalog refresh configuration was not accepted")
+        return dict(status="enabled", changed=True, response_lost=error is not None,
+                    applies="native_reload_boundary")
 
     def close(self):
         if self.process is None:

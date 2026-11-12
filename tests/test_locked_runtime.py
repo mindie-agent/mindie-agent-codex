@@ -114,7 +114,7 @@ class RuntimeTests(unittest.TestCase):
             if name == "mindie-tools":
                 maximum = max(tool["inputSchema"]["properties"]["timeout_ms"]["maximum"]
                               for tool in catalog()) / 1000
-                self.assertGreaterEqual(server["tool_timeout_sec"], maximum + 6)
+                self.assertGreaterEqual(server["tool_timeout_sec"], maximum + 30 + 6)
             else:
                 # The host default (60s) cannot cover the 600s native Bash
                 # poll plus helper grace and bounded cleanup.
@@ -655,6 +655,9 @@ class RuntimeTests(unittest.TestCase):
             old, new = root / "old", root / "new"
             old.mkdir(); new.mkdir()
             for path, text in ((old, "old"), (new, "new")):
+                catalog = json.loads((SCRIPTS / "mcp_catalog.json").read_text(encoding="utf-8"))
+                catalog["remote"][0]["description"] = text
+                (path / "mcp_catalog.json").write_text(json.dumps(catalog), encoding="utf-8")
                 (path / "runtime_call.py").write_text(
                     "import json,sys;print(json.dumps({'content':[{'type':'text','text':" + repr(text)
                     + "}],'structuredContent':{'python':sys.executable,'helper':__file__}}))")
@@ -671,10 +674,12 @@ class RuntimeTests(unittest.TestCase):
                 request = {"id": 1, "params": {"name": "remote_read", "arguments": {"host": "fixture", "path": "/"}}}
                 first = gate.call(request, cli_identity=("task", None))
                 self.assertEqual(first["content"][0]["text"], "old")
+                self.assertEqual(gate.tools[0]["description"], "old")
                 config.write_text(json.dumps(dict(original, runtime_scripts=str(new))))
                 request["id"] = 2
                 second = gate.call(request, cli_identity=("task", None))
                 self.assertEqual(second["content"][0]["text"], "new")
+                self.assertEqual(gate.tools[0]["description"], "new")
                 self.assertEqual(second["structuredContent"]["helper"], str(new / "runtime_call.py"))
                 self.assertEqual(second["structuredContent"]["python"], os.path.abspath(sys.executable))
 
@@ -691,6 +696,25 @@ class RuntimeTests(unittest.TestCase):
                 with patch.object(gate, "_remote_call", return_value={"isError": False}) as dispatch:
                     self.assertEqual(gate.call({}), {"isError": False})
                     dispatch.assert_called_once()
+
+    def test_unavailable_selected_catalog_is_not_an_unknown_remote_write(self):
+        import mcp_gate
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selected = root / "selected"
+            selected.mkdir()
+            (selected / "mcp_catalog.json").write_text("{incomplete")
+            config = root / "adapter.json"
+            config.write_text(json.dumps(dict(python=sys.executable, runtime_scripts=str(selected))))
+            with patch.dict(os.environ, {"MINDIE_AGENT_CONFIG": str(config)}):
+                gate = mcp_gate.Gate("remote")
+                result = gate.call({"id": 1, "params": {
+                    "name": "remote_read", "arguments": {"host": "fixture", "path": "/"},
+                }}, cli_identity=("native-task", None))
+            self.assertTrue(result["isError"])
+            self.assertEqual(result["structuredContent"]["execution"], "not_started")
+            self.assertEqual(result["structuredContent"]["stage"], "catalog_discovery")
+            self.assertEqual(gate._remote_receipts, {})
 
     def test_entry_rejects_distinct_venv_paths_with_same_base_interpreter(self):
         with tempfile.TemporaryDirectory() as directory:

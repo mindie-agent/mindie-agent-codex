@@ -284,6 +284,15 @@ class StopHookTests(unittest.TestCase):
         self.assertIn("silent-fail", message)
         self.assertIn("(exit 0)", message)
 
+    def test_localized_helper_failure_remains_valid_protocol_json(self):
+        commands = stop_hook_commands([
+            sys.executable, "-c",
+            "import sys; print('\\u9519\\u8bef\\u8be6\\u60c5', file=sys.stderr); raise SystemExit(7)",
+        ])
+        result = self.run_shell(commands)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("\u9519\u8bef\u8be6\u60c5", json.loads(result.stdout)["systemMessage"])
+
     def test_session_start_wrapper_preserves_helper_exit_and_stderr(self):
         commands = stop_hook_commands(
             [sys.executable, "-c", "import sys; print('prep-detail', file=sys.stderr); raise SystemExit(7)"],

@@ -291,10 +291,15 @@ def main(argv=None, stdin=None):
     try:
         prepared = prepare(config, release, blocking=blocking, expected_binding=expected)
     except InstallationChanged:
-        return _reconcile_published_target(config, release, receipt)
+        result = _reconcile_published_target(config, release, receipt)
     except BlockingIOError:
         return dict(status="deferred", reason="operation_busy", execution="not_started")
-    return activate(config, prepared)
+    else:
+        result = activate(config, prepared)
+    if result.get("status") == "active":
+        from native_hooks import configure_catalog_refresh
+        result["tool_catalog_refresh"] = configure_catalog_refresh()
+    return result
 
 
 if __name__ == "__main__":
