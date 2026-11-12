@@ -1,4 +1,4 @@
-"""Static discovery plus host-identity-bound, bounded, one-shot runtime calls.
+"""Selected catalogs plus host-identity-bound, bounded, one-shot runtime calls.
 
 [Role]
 Implements the JSON-RPC MCP server gate (`Gate`, `serve`) for public `remote`/`components` and private `knowledge` surfaces, including native `mindie_interrupt` cancellation and `RemoteReceipts` replay protection.
@@ -15,7 +15,7 @@ Implements the JSON-RPC MCP server gate (`Gate`, `serve`) for public `remote`/`c
 - Uses shared `update_lock` around bounded runtime subprocess dispatch (per-tool remote budget derived from the native inner wait plus 60s grace, knowledge `45.0s`, distill helper budget). Tools whose accepted arguments include `timeout_ms` and that have no native wait get an inner `timeout_ms` inside that budget. SQLite WAL mode with `busy_timeout=5000` for `RemoteReceipts`, and per-request cancellation events triggered by `notifications/cancelled` or `mindie_interrupt`.
 
 [Side-Effect Policy]
-- `initialize` and `tools/list` are pure in-memory catalog reads (`mcp_catalog.json`) that never touch disk or start services.
+- `initialize` and `tools/list` read selected release catalogs without knowledge activation or service admission.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -198,12 +198,23 @@ def call_failure(exc):
     if code in ("invalid_arguments", "component_not_installed"):
         execution = "not_started"
     else:
-        execution = process.execution if process is not None else "unknown"
+        execution = ("not_started" if getattr(exc, "request_not_started", False)
+                     else process.execution if process is not None else "unknown")
     structured = dict(code=code, execution=execution, automatic_retry=False)
+    if getattr(exc, "request_not_started", False):
+        structured.update(stage=getattr(exc, "request_stage", "admission"),
+                          error_type=type(exc).__name__)
     field = getattr(exc, "field", None)
     if code == "invalid_arguments" and isinstance(field, str) and field.isidentifier():
         structured["field"] = field
     message = FAILURE_MESSAGES[code] + ". " + FAILURE_HINTS[code] + " No automatic retry."
+    if (getattr(exc, "request_not_started", False)
+            and code in {"internal_error", "runtime_unavailable", "timeout"}):
+        message = (
+            "MindIE helper unavailable before this request started. Continue independent "
+            "authorized native tools or scripts; repair the reported local stage for this helper. "
+            "Repeating knowledge activation cannot repair runtime selection or native identity."
+        )
     result = dict(failure(message), structuredContent=structured)
     partial = getattr(exc, "partial", None)
     if isinstance(partial, dict):
@@ -413,14 +424,20 @@ class Gate:
         self.sessions = Sessions() if surface == "knowledge" else None
         if surface == "components":
             from component_tools import catalog
-            self.tools = catalog()
+            self._tools = catalog()
         else:
-            self.tools = json.loads(CATALOG.read_text(encoding='utf-8'))[surface]
+            self._tools = json.loads(CATALOG.read_text(encoding='utf-8'))[surface]
         self.connection_id = uuid.uuid4().hex
         self._remote_receipts = {}
         self.config = config_path()
 
+    @property
+    def tools(self):
+        from live_catalog import tools
+        return tools(self.surface, self.config, self._tools)
+
     def call(self, request, cancel=None, *, timeout=None, cli_identity=None):
+        dispatched = False
         try:
             with ExitStack() as lock:
                 try:
@@ -430,16 +447,20 @@ class Gate:
                 if self.config != config_path():
                     raise ValueError("this MCP process is bound to another installation profile")
                 if self.surface == "remote":
+                    dispatched = True
                     return self._remote_call(request, cancel, timeout, cli_identity)
                 # Discovery creates no capture state. Task identity comes from
                 # the native metadata or the trusted CLI, never tool arguments.
                 session = native_identity(request) if cli_identity is None else cli_identity[0]
                 if self.surface == "components":
-                    from component_tools import execute
-                    name, arguments = self._tool_args(request)
-                    return execute(name, arguments, session, cancel=cancel, timeout=timeout)
+                    from live_catalog import component_call
+                    dispatched = True
+                    return component_call(request, session, self.config, cancel=cancel, timeout=timeout)
+                dispatched = True
                 return self._call(request, session, cancel, timeout=timeout)
         except Exception as exc:
+            if not dispatched:
+                exc.request_not_started = True
             return call_failure(exc)
 
     def _tool_args(self, request):
@@ -557,6 +578,8 @@ class Gate:
             return result
         except Exception as exc:
             # No traceback, credentials, model wakeup, reconnect loop or replay.
+            if stage == "admission":
+                exc.request_not_started = True
             result = call_failure(exc)
             if stage in ("helper_run", "helper_response") and not (
                 cancel is not None and cancel.is_set()
@@ -641,6 +664,8 @@ class Gate:
             return result
         except Exception as exc:
             # No traceback, credentials, model wakeup, reconnect loop or replay.
+            if stage == "admission":
+                exc.request_not_started = True
             result = call_failure(exc)
             if stage in ("helper_run", "helper_response") and not (
                 cancel is not None and cancel.is_set()
@@ -663,129 +688,8 @@ class Gate:
 
 
 def serve(surface):
-    from importlib.metadata import version
-    adapter_version = version("mindie-agent-codex")
-    gate = Gate(surface)
-    output_lock, pending_lock = threading.Lock(), threading.Lock()
-    pending = {}
-    capacity = threading.BoundedSemaphore(4)
-    executor = ThreadPoolExecutor(max_workers=4)
-    from update_trigger import Maintenance
-    maintenance = Maintenance(gate.config)
-    maintenance.trigger()
-
-    def send(value):
-        with output_lock:
-            sys.stdout.buffer.write((json.dumps(value, ensure_ascii=False) + "\n").encode("utf-8"))
-            sys.stdout.buffer.flush()
-
-    def respond(identifier, result):
-        send(dict(jsonrpc="2.0", id=identifier, result=result))
-
-    def execute(message, cancel):
-        try:
-            from diagnostic_support import attach_pending, acknowledge_pending
-            result = attach_pending(gate.call(message, cancel))
-            respond(message["id"], result)
-            acknowledge_pending(result)
-        finally:
-            with pending_lock:
-                pending.pop(message["id"], None)
-            capacity.release()
-
-    try:
-        while True:
-            raw = sys.stdin.buffer.readline()
-            if not raw:
-                break
-            try:
-                message = json.loads(raw)
-                if not isinstance(message, dict):
-                    raise ValueError("JSON-RPC object required")
-                method, identifier = message.get("method"), message.get("id")
-                if method == "notifications/cancelled":
-                    with pending_lock:
-                        call = pending.get(
-                            (message.get("params") or {}).get("requestId")
-                        )
-                        if call:
-                            call[0].set()
-                    continue
-                if identifier is None:
-                    continue
-                if type(identifier) not in (str, int) or (
-                    isinstance(identifier, str) and len(identifier) > 256
-                ):
-                    raise ValueError("Invalid request identity")
-                if method == "initialize":
-                    respond(
-                        identifier,
-                        dict(
-                            protocolVersion="2025-11-25",
-                            capabilities={"tools": {}},
-                            serverInfo=dict(name="mindie-" + surface, version=adapter_version),
-                        ),
-                    )
-                elif method == "ping":
-                    respond(identifier, {})
-                elif method == "tools/list":
-                    # A shared MCP connection cannot publish one chat's private
-                    # grant to all other chats. Manual entry uses knowledge_cli.
-                    respond(identifier, dict(tools=[] if surface == "knowledge" else gate.tools))
-                elif method == "tools/call":
-                    if (message.get("params") or {}).get("name") == INTERRUPT_TOOL:
-                        try:
-                            with pending_lock:
-                                if identifier in pending:
-                                    raise ValueError("Duplicate native interrupt request identity")
-                                result = interrupt_turn(message, pending)
-                        except ValueError as exc:
-                            result = call_failure(exc)
-                        respond(identifier, result)
-                        continue
-                    try:
-                        identity = native_turn_identity(message)
-                    except ValueError as exc:
-                        respond(identifier, call_failure(exc))
-                        continue
-                    maintenance.trigger()
-                    with pending_lock:
-                        if (
-                            identifier in pending
-                            or not capacity.acquire(blocking=False)
-                        ):
-                            respond(
-                                identifier,
-                                failure(
-                                    "MCP duplicate/capacity limit; not executed, do not retry automatically"
-                                ),
-                            )
-                            continue
-                        event = threading.Event()
-                        pending[identifier] = event, identity
-                    executor.submit(execute, message, event)
-                else:
-                    send(
-                        dict(
-                            jsonrpc="2.0",
-                            id=identifier,
-                            error=dict(code=-32601, message="Unsupported method"),
-                        )
-                    )
-            except (ValueError, TypeError, AttributeError):
-                send(
-                    dict(
-                        jsonrpc="2.0",
-                        id=None,
-                        error=dict(code=-32600, message="Invalid MCP request"),
-                    )
-                )
-    finally:
-        maintenance.close()
-        with pending_lock:
-            for event, _ in pending.values():
-                event.set()
-        executor.shutdown(wait=True)
+    from mcp_transport import serve as transport_serve
+    return transport_serve(surface, sys.modules[__name__])
 
 
 if __name__ == "__main__":

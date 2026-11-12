@@ -194,6 +194,11 @@ def _select_catalog(native, env, root, pending):
     try:
         with NativeHooks(native, env) as api:
             outcome = api.select_catalog(root / "catalog")
+            try:
+                pending["tool_catalog_refresh"] = api.enable_catalog_refresh()
+            except Exception as exc:
+                pending["tool_catalog_refresh"] = dict(
+                    status="failed", error_type=type(exc).__name__, automatic_retry=False)
     except Exception as exc:
         pending["error_type"] = type(exc).__name__
         process = getattr(exc, "process_result", None)

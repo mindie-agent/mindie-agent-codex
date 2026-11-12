@@ -274,11 +274,14 @@ def install(args, parser, *, validation=None):
         sharing.write(community_config, community)
     from diagnostic_support import activate_reporting
     reporting = activate_reporting(config)
+    from native_hooks import configure_catalog_refresh
+    tool_catalog_refresh = configure_catalog_refresh()
     print(
         json.dumps(
             dict(
                 status="configured" if reporting["status"] in {"running", "disabled", "needs_choice"} else "degraded",
                 reporting=reporting,
+                tool_catalog_refresh=tool_catalog_refresh,
                 config=str(config),
                 engine_config=str(engine_config),
                 community_config=str(community_config),

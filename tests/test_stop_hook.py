@@ -29,7 +29,7 @@ import windows_process
 def run_owned_hook(argv, event, *, shell, env, timeout):
     """Keep a timed-out host shell from leaking its nested PowerShell child."""
     options = dict(stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                   stderr=subprocess.PIPE, text=True, shell=shell, env=env)
+                   stderr=subprocess.PIPE, text=True, encoding="utf-8", shell=shell, env=env)
     if os.name == "nt":
         process = windows_process.spawn(argv, **options)
     else:
@@ -95,11 +95,11 @@ class StopHookTests(unittest.TestCase):
                 argv = [self.host_shell, "-NoLogo", "-NoProfile", "-NonInteractive",
                         "-EncodedCommand", encoded]
                 return subprocess.run(argv, capture_output=True, text=True,
-                                      timeout=timeout, env=env)
+                                      encoding="utf-8", timeout=timeout, env=env)
             return subprocess.run(command, shell=True, capture_output=True, text=True,
-                                  timeout=timeout, env=env)
+                                  encoding="utf-8", timeout=timeout, env=env)
         return subprocess.run(commands["command"], shell=True, capture_output=True,
-                              text=True, timeout=timeout, env=env)
+                              text=True, encoding="utf-8", timeout=timeout, env=env)
 
     def run_stop(self, plugin, *, python=None, failed=False, configured=False, commands=None, **env):
         event = {"session_id": "hook-regression", "last_assistant_message": "Done"}
@@ -283,6 +283,16 @@ class StopHookTests(unittest.TestCase):
         message = json.loads(result.stdout)["systemMessage"]
         self.assertIn("silent-fail", message)
         self.assertIn("(exit 0)", message)
+
+    def test_localized_helper_failure_remains_valid_protocol_json(self):
+        commands = stop_hook_commands([
+            sys.executable, "-c",
+            "import sys; print('\\u9519\\u8bef\\u8be6\\u60c5', file=sys.stderr); raise SystemExit(7)",
+        ])
+        result = self.run_shell(commands)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("\u9519\u8bef\u8be6\u60c5", result.stderr)
+        self.assertIn("\u9519\u8bef\u8be6\u60c5", json.loads(result.stdout)["systemMessage"])
 
     def test_session_start_wrapper_preserves_helper_exit_and_stderr(self):
         commands = stop_hook_commands(

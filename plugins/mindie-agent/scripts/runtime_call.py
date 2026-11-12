@@ -156,8 +156,26 @@ def finish_outcome(config, session, token, succeeded):
 
 
 def call(payload):
+    if payload["surface"] == "catalog":
+        surface = payload["catalog_surface"]
+        if surface == "components":
+            from component_tools import catalog
+            return catalog()
+        if surface == "remote":
+            return json.loads(Path(__file__).with_name("mcp_catalog.json").read_text(encoding="utf-8"))["remote"]
+        raise ValueError("private knowledge catalog is not public MCP discovery")
     if payload["surface"] == "remote":
         return remote(payload)
+    if payload["surface"] == "components":
+        from component_tools import execute
+        from mcp_gate import call_failure
+        if payload.get("native_session_verified") is not True:
+            raise ValueError("MindIE runtime identity mismatch")
+        try:
+            return execute(payload["name"], payload["arguments"], payload["mindie_session_id"],
+                           timeout=payload.get("timeout"))
+        except Exception as exc:
+            return call_failure(exc)
     config = json.loads(config_path().read_text(encoding='utf-8'))
     args, name = payload["arguments"], payload["name"]
     if name in {"knowledge_query", "knowledge_explain"}:
