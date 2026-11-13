@@ -303,13 +303,16 @@ def main():
 if __name__ == '__main__':
     try:
         raise SystemExit(main())
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
+        if isinstance(exc, SystemExit) and exc.code in (None, 0):
+            raise
         if isinstance(exc, ProfileUnavailable):
             print(str(exc), file=sys.stderr)
         if not getattr(exc, "_mindie_prepare_reported", False):
             from diagnostic_support import failure
             failure('entry.prepare', 'release-entry', 'configuration',
-                    exception=exc, reportable=False)
+                    exception=exc, reportable=False,
+                    exit_code=exc.code if isinstance(exc, SystemExit) and type(exc.code) is int else None)
             print(f'MindIE release entry failed: {type(exc).__name__}; inspect local diagnostics.', file=sys.stderr)
         if _ACTIVE_ARGS is not None and _ACTIVE_ARGS.role == 'user-prompt-submit':
             from manual_entry import prompt_failure_response, record_entry_status, requested
@@ -328,5 +331,9 @@ if __name__ == '__main__':
                     error_type=type(exc).__name__,
                 )
                 print(json.dumps(prompt_failure_response(stage, type(exc).__name__)))
-                raise SystemExit(0)
+            else:
+                print("{}")
+            raise SystemExit(0)
+        if isinstance(exc, SystemExit):
+            raise
         raise SystemExit(1)

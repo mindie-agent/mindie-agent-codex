@@ -261,41 +261,53 @@ def neutral_hook_commands(argv, *, failure="MindIE Stop helper failed; capture c
 def hook_commands(role, **names):
     arguments = [*_uv_python(role), PLUGIN_LAUNCHER, *_launcher_flags(**names), role]
     if role == "user-prompt-submit":
-        # Preserve the hook's one JSON response: only an explicit entry may
-        # attach knowledge context, and ordinary prompts emit {}. If the outer
-        # uv/launcher command crashes before Python can emit JSON, inspect any
-        # unread stdin so ordinary prompts still emit {} (P2.1) and only
-        # explicit /mindie-agent gestures surface a UI systemMessage.
+        # Preserve the hook's one JSON response: capture stdin before dispatch so
+        # even crashes or nonzero exits after Python consumes stdin still emit a
+        # visible systemMessage on explicit /mindie-agent gestures while keeping
+        # ordinary prompts completely silent ({}, P2.1).
         left, right = _failure_json_parts(
             "MindIE UserPromptSubmit launcher failed; inspect local diagnostics and do not repeat /mindie-agent in a loop.")
+        posix_event = r'(^|[{,][[:space:]]*)"hook_event_name"[[:space:]]*:[[:space:]]*"UserPromptSubmit"'
+        posix_agent = r'(^|[{,][[:space:]]*)"agent_id"[[:space:]]*:[[:space:]]*"[^"]'
         posix_gesture = (
-            r'"prompt"[[:space:]]*:[[:space:]]*"([[:space:]]|\\ufeff)*'
-            r'(/mindie-agent|\$mindie-agent|\[\$mindie-agent\]|\[@mindie-agent\])'
+            r'(^|[{,][[:space:]]*)"prompt"[[:space:]]*:[[:space:]]*"([[:space:]]|\\[nrt]|\\ufeff|\\uFEFF)*'
+            r'(/mindie-agent|\$mindie-agent(:mindie-agent)?'
+            r'|\[\$mindie-agent(:mindie-agent)?\]\(([^"\\)]|\\[^nr])+\)'
+            r'|\[@mindie-agent\]\(plugin://mindie-agent@([^"\\)]|\\[^nr])+\))'
+            r'("|[[:space:]]|\\[nrt])'
         )
-        posix_agent = r'"agent_id"[[:space:]]*:[[:space:]]*"'
         posix_cmd = " ".join(posix_arg(arg) for arg in arguments)
         posix = (
-            POSIX_LAUNCHER_RESOLVE + posix_cmd + "; _st=$?; "
-            + "if [ \"$_st\" -ne 0 ]; then _in=$(dd bs=4096 count=1 2>/dev/null); "
-            + "if printf '%s' \"$_in\" | grep -Eq " + shlex.quote(posix_gesture)
-            + " && ! printf '%s' \"$_in\" | grep -Eq " + shlex.quote(posix_agent)
+            POSIX_LAUNCHER_RESOLVE
+            + "_in=$(head -c33554433; printf x); _in=${_in%x}; "
+            + "_out=$(printf '%s' \"$_in\" | " + posix_cmd + "); _st=$?; "
+            + "if [ \"$_st\" -eq 0 ]; then "
+            + "if [ -n \"$_out\" ]; then printf '%s\\n' \"$_out\"; else printf '{}\\n'; fi; "
+            + "elif printf '%s' \"$_in\" | LC_ALL=C grep -Eq " + shlex.quote(posix_event)
+            + " && printf '%s' \"$_in\" | LC_ALL=C grep -Eq " + shlex.quote(posix_gesture)
+            + " && ! printf '%s' \"$_in\" | LC_ALL=C grep -Eq " + shlex.quote(posix_agent)
             + "; then printf '%s\\n' " + shlex.quote(left) + '"$_st"' + shlex.quote(right)
-            + "; else printf '{}\\n'; fi; fi; exit 0"
+            + "; else printf '{}\\n'; fi; exit 0"
         )
         ps_gesture = (
-            r'"prompt"\s*:\s*"(?:\s|\\ufeff|\ufeff)*'
-            r'(?:/mindie-agent|\$mindie-agent|\[\$mindie-agent\]|\[@mindie-agent\])'
+            r'^[\s\uFEFF]*(?:/mindie-agent|\$mindie-agent(?::mindie-agent)?'
+            r'|\[\$mindie-agent(?::mindie-agent)?\]\([^\r\n)]+\)'
+            r'|\[@mindie-agent\]\(plugin://mindie-agent@[^\r\n)]+\))(?=\s|$)'
         )
         body = (
             PS_PROTOCOL_ENCODING + PS_LAUNCHER_RESOLVE
-            + "$failed = $false; $code = 0; try { & "
-            + " ".join(ps_arg(arg) for arg in arguments)
-            + "; $code = $LASTEXITCODE; $failed = ($code -ne 0) } catch { $failed = $true; $code = 1 }; "
-            + "if ($failed) { $raw = ''; try { $buf = New-Object char[] 4096; $n = [Console]::In.Read($buf, 0, 4096); "
-            + "if ($n -gt 0) { $raw = -join $buf[0..($n-1)] } } catch {}; "
-            + "if (($raw -match '" + ps_gesture.replace("'", "''") + "') -and ($raw -notmatch '\"agent_id\"\\s*:\\s*\"')) { "
-            + "[Console]::Out.WriteLine('" + left.replace("'", "''") + "' + $code + '" + right.replace("'", "''") + "') "
-            + "} else { [Console]::Out.WriteLine('{}') } }; exit 0"
+            + "$inText = [Console]::In.ReadToEnd(); "
+            + "$failed = $false; $code = 0; $out = ''; try { "
+            + "$out = ($inText | & " + " ".join(ps_arg(arg) for arg in arguments) + " | Out-String).Trim(); "
+            + "$code = $LASTEXITCODE; $failed = ($code -ne 0) } catch { $failed = $true; $code = 1 }; "
+            + "if (-not $failed) { if ($out) { [Console]::Out.WriteLine($out) } else { [Console]::Out.WriteLine('{}') } } "
+            + "else { $explicit = $false; try { $ev = $inText | ConvertFrom-Json; "
+            + "if ($null -ne $ev -and $ev.hook_event_name -eq 'UserPromptSubmit' -and (-not $ev.agent_id) "
+            + "-and ($ev.prompt -is [string]) -and ($ev.prompt -match '" + ps_gesture.replace("'", "''") + "')) { "
+            + "$explicit = $true } } catch {}; "
+            + "if ($explicit) { [Console]::Out.WriteLine('"
+            + left.replace("'", "''") + "' + $code + '" + right.replace("'", "''") + "') } "
+            + "else { [Console]::Out.WriteLine('{}') } }; exit 0"
         )
         return dict(command=posix,
                     commandWindows="powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "

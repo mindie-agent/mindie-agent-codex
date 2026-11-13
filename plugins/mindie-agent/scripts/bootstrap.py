@@ -39,13 +39,20 @@ def preparing(stage):
     """The existing stdlib diagnostic path works before runtime dependencies exist."""
     try:
         yield
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
+        if isinstance(exc, SystemExit) and exc.code in (None, 0):
+            raise
         if getattr(exc, "_mindie_prepare_reported", False):
             raise
         from diagnostic_support import failure
         category = getattr(exc, "_mindie_prepare_category", "update")
+        exit_code = (
+            exc.code
+            if isinstance(exc, SystemExit) and type(exc.code) is int
+            else getattr(getattr(exc, "process_result", None), "returncode", None)
+        )
         diagnostic = failure("runtime.prepare", stage, category, exception=exc,
-                             exit_code=getattr(getattr(exc, "process_result", None), "returncode", None))
+                             exit_code=exit_code)
         exc.mindie_diagnostic = diagnostic
         detail = f"MindIE runtime preparation failed at {stage}: {type(exc).__name__}"
         from product_contract import CandidateValidationError
@@ -349,9 +356,9 @@ if __name__ == "__main__":
             raise SystemExit(0)
         with preparing("bootstrap"):
             main()
-    except SystemExit:
-        raise
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
+        if isinstance(exc, SystemExit) and exc.code in (None, 0):
+            raise
         if _PROMPT_EVENT is not None:
             from manual_entry import prompt_failure_response, record_entry_status
             config = Path(os.environ.get(
@@ -368,4 +375,6 @@ if __name__ == "__main__":
             )
             print(json.dumps(prompt_failure_response(stage, type(exc).__name__)))
             raise SystemExit(0)
+        if isinstance(exc, SystemExit):
+            raise
         raise SystemExit(1)

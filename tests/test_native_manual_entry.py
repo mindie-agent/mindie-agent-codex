@@ -482,3 +482,114 @@ def test_windows_headless_powershell_51_user_prompt_submit_utf8_no_console_error
     response = json.loads(stdout)
     assert response["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
     assert Admission(admission_file).knowledge_lease("win-ps51-session") is not None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX sh outer-hook verification")
+def test_outer_hook_preserves_canonical_gesture_and_post_read_failures(tmp_path):
+    commands = native_entry.hook_commands("user-prompt-submit")
+    # Missing PLUGIN_ROOT forces the outer launcher invocation to fail nonzero after reading or before launch.
+    missing_env = dict(
+        os.environ,
+        HOME=str(tmp_path),
+        CODEX_HOME=str(tmp_path / "codex"),
+        MINDIE_AGENT_CONFIG=str(tmp_path / "codex.json"),
+        PLUGIN_ROOT=str(tmp_path / "missing-plugin-root"),
+        PLUGIN_DATA=str(tmp_path / "data"),
+        MINDIE_DIAGNOSTICS_ROOT=str(tmp_path / "diag"),
+        MINDIE_DIAGNOSTICS_CONFIG=str(tmp_path / "diag/diagnostics.json"),
+    )
+    for prompt, extra, should_surface in (
+        ("/mindie-agent-other", {}, False),
+        ("/mindie-agent:other", {}, False),
+        ("$mindie-agent:other", {}, False),
+        ("ordinary {\"prompt\": \"/mindie-agent\"}", {}, False),
+        ("/mindie-agent help", {"agent_id": "sub-1"}, False),
+        ("/mindie-agent", {}, True),
+        ("$mindie-agent:mindie-agent help", {}, True),
+        ("[$mindie-agent:mindie-agent](/a/SKILL.md) hi", {}, True),
+        ("[@mindie-agent](plugin://mindie-agent@mindie-agent)", {}, True),
+    ):
+        payload = dict(hook_event_name="UserPromptSubmit", session_id="s-1", cwd=str(tmp_path), prompt=prompt, **extra)
+        res = subprocess.run(
+            ["/bin/sh", "-c", commands["command"]],
+            input=json.dumps(payload),
+            text=True,
+            capture_output=True,
+            env=missing_env,
+            timeout=10,
+        )
+        assert res.returncode == 0
+        parsed = json.loads(res.stdout)
+        if should_surface:
+            assert "systemMessage" in parsed, (prompt, parsed)
+        else:
+            assert parsed == {}, (prompt, parsed)
+
+    # Injecting SystemExit(1) inside setup.install AFTER entry.py consumes stdin must still surface failure.
+    release = tmp_path / "releases/0.1.30"
+    release.mkdir(parents=True)
+    validation = dict(schema="mindie-candidate-check/1", status="validated", native_version="0.1.30")
+    (release / "runtime.json").write_text(
+        json.dumps(dict(python=sys.executable, validation=validation)), encoding="utf-8"
+    )
+    driver = (
+        f"import sys; sys.path.insert(0, {str(SCRIPTS)!r})\n"
+        "import setup, runpy\n"
+        "setup.install = lambda *a, **kw: (_ for _ in ()).throw(SystemExit(1))\n"
+        f"sys.argv = [{str(SCRIPTS / 'entry.py')!r}, '--release', {str(release)!r}, 'user-prompt-submit']\n"
+        f"runpy.run_path({str(SCRIPTS / 'entry.py')!r}, run_name='__main__')\n"
+    )
+    run_env = dict(
+        os.environ,
+        HOME=str(tmp_path),
+        CODEX_HOME=str(tmp_path / "codex"),
+        MINDIE_AGENT_CONFIG=str(tmp_path / "uncreated/codex.json"),
+        MINDIE_DIAGNOSTICS_ROOT=str(tmp_path / "diag"),
+        MINDIE_DIAGNOSTICS_CONFIG=str(tmp_path / "diag/diagnostics.json"),
+    )
+    explicit = dict(hook_event_name="UserPromptSubmit", session_id="s-exit", cwd=str(tmp_path), prompt="/mindie-agent help")
+    completed = subprocess.run(
+        [sys.executable, "-c", driver],
+        input=json.dumps(explicit),
+        text=True,
+        capture_output=True,
+        env=run_env,
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+    surfaced = json.loads(completed.stdout)
+    assert "profile-binding" in surfaced["systemMessage"]
+    assert "SystemExit" in surfaced["systemMessage"]
+
+
+def test_knowledge_cli_describe_preserves_inactive_stage_and_not_started(tmp_path, monkeypatch, capsys):
+    import knowledge_cli
+
+    config = tmp_path / "codex.json"
+    admission_file = tmp_path / "admission.sqlite3"
+    config.write_text(
+        json.dumps(dict(
+            python=sys.executable,
+            runtime_scripts=str(SCRIPTS),
+            admission_path=str(admission_file),
+        )),
+        encoding="utf-8",
+    )
+    manual_entry.record_entry_status(
+        config,
+        stage="profile-binding",
+        status="failed",
+        session_id="cli-session-1",
+        error_type="ProfileUnavailable",
+    )
+    monkeypatch.setenv("MINDIE_AGENT_CONFIG", str(config))
+    monkeypatch.setenv("CODEX_THREAD_ID", "cli-session-1")
+    rc = knowledge_cli.main(["describe"])
+    assert rc == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["isError"] is True
+    assert out["structuredContent"]["code"] == "knowledge_inactive"
+    assert out["structuredContent"]["stage"] == "authorization"
+    assert out["structuredContent"]["execution"] == "not_started"
+    assert "profile-binding (ProfileUnavailable)" in out["structuredContent"]["message"]
+    assert "do not repeat /mindie-agent in a loop" in out["content"][0]["text"]

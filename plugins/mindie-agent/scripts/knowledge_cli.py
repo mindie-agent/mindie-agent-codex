@@ -20,22 +20,27 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from admission_ops import admission, native_session, read_config
-from mcp_gate import Gate, call_failure
+from mcp_gate import Gate, InvalidToolArguments, call_failure
 from runtime_call import KnowledgeInactive
 
 
 def invoke(operation, arguments):
-    session = native_session()
-    if operation == "describe":
-        config = read_config()
-        if admission(config).knowledge_lease(session) is None:
-            from admission_ops import config_path
-            from manual_entry import explain_inactive_session
-            raise KnowledgeInactive(explain_inactive_session(
-                config_path(), session, admission_path=config.get("admission_path")))
-    gate = Gate("knowledge")
-    if operation == "describe":
-        return dict(tools=gate.tools)
+    try:
+        session = native_session()
+        if operation == "describe":
+            config = read_config()
+            if admission(config).knowledge_lease(session) is None:
+                from admission_ops import config_path
+                from manual_entry import explain_inactive_session
+                raise KnowledgeInactive(explain_inactive_session(
+                    config_path(), session, admission_path=config.get("admission_path")))
+        gate = Gate("knowledge")
+        if operation == "describe":
+            return dict(tools=gate.tools)
+    except Exception as exc:
+        exc.request_not_started = True
+        exc.request_stage = "admission"
+        raise
     return gate.call(dict(id="knowledge-cli", params=dict(name=operation, arguments=arguments)),
                      cli_identity=(session, None))
 
@@ -44,14 +49,34 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     try:
         if len(argv) != 1:
-            raise ValueError("one knowledge operation or describe is required")
+            raise InvalidToolArguments("one knowledge operation or describe is required")
         arguments = {}
         if argv[0] != "describe":
             raw = sys.stdin.buffer.read(1024 * 1024 + 1)
             if len(raw) > 1024 * 1024:
-                raise ValueError("knowledge arguments exceed 1 MiB")
-            arguments = json.loads(raw)
+                raise InvalidToolArguments("knowledge arguments exceed 1 MiB")
+            try:
+                arguments = json.loads(raw)
+            except ValueError as exc:
+                raise InvalidToolArguments("knowledge arguments must be valid JSON") from exc
         result = invoke(argv[0], arguments)
+    except KnowledgeInactive as exc:
+        explanation = str(exc)[:300]
+        result = dict(
+            content=[dict(
+                type="text",
+                text=f"Knowledge request rejected before execution: {explanation}. No automatic retry.",
+            )],
+            isError=True,
+            structuredContent=dict(
+                component="mindie-agent-codex",
+                stage="authorization",
+                code="knowledge_inactive",
+                execution="not_started",
+                automatic_retry=False,
+                message=explanation,
+            ),
+        )
     except Exception as exc:
         result = call_failure(exc)
     sys.stdout.buffer.write((json.dumps(result, ensure_ascii=False) + "\n").encode("utf-8"))
