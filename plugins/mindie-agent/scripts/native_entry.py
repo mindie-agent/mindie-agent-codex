@@ -267,15 +267,16 @@ def hook_commands(role, **names):
         # ordinary prompts completely silent ({}, P2.1).
         left, right = _failure_json_parts(
             "MindIE UserPromptSubmit launcher failed; inspect local diagnostics and do not repeat /mindie-agent in a loop.")
-        unicode_ws = [chr(cp) for cp in range(128, 0x10000) if chr(cp).isspace() or cp == 0xFEFF]
-        ws_lit = "|".join(unicode_ws)
-        ws_esc = "|".join(rf"\\u{cp:04x}|\\u{cp:04X}" for cp in range(128, 0x10000) if chr(cp).isspace() or cp == 0xFEFF)
-        ws_unit = f"([[:space:]]|\x1c|\x1d|\x1e|\x1f|\\\\[bfnrt]|\\\\u00(0[9a-dA-D]|1[c-fC-F]|20)|{ws_lit}|{ws_esc})"
+        unicode_ws_cps = [cp for cp in range(128, 0x10000) if chr(cp).isspace()]
+        ws_lit = "|".join(chr(cp) for cp in unicode_ws_cps)
+        ws_esc = "|".join(rf"\\u{cp:04x}|\\u{cp:04X}" for cp in unicode_ws_cps)
+        ws_unit = f"([[:space:]]|\x1c|\x1d|\x1e|\x1f|\\\\[fnrt]|\\\\u00(0[9a-dA-D]|1[c-fC-F]|20)|{ws_lit}|{ws_esc})"
+        prefix_unit = f"({ws_unit}|\ufeff|\\\\u[fF][eE][fF][fF])"
         posix_event = r'(^|[{,][[:space:]]*)"hook_event_name"[[:space:]]*:[[:space:]]*"UserPromptSubmit"'
         posix_agent = r'(^|[{,][[:space:]]*)"agent_id"[[:space:]]*:[[:space:]]*"[^"]'
         posix_gesture = (
             r'(^|[{,][[:space:]]*)"prompt"[[:space:]]*:[[:space:]]*"'
-            + ws_unit + "*"
+            + prefix_unit + "*"
             + r'(/mindie-agent|\$mindie-agent(:mindie-agent)?'
             + r'|\[\$mindie-agent(:mindie-agent)?\]\(([^"\\)]|\\[^nr])+\)'
             + r'|\[@mindie-agent\]\(plugin://mindie-agent@([^"\\)]|\\[^nr])+\))'

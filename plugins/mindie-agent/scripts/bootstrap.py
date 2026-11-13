@@ -40,7 +40,9 @@ def preparing(stage):
     try:
         yield
     except (Exception, SystemExit) as exc:
-        if isinstance(exc, SystemExit) and exc.code in (None, 0):
+        if isinstance(exc, SystemExit) and (
+            exc.code in (None, 0) or getattr(exc, "_mindie_forwarded_child", False)
+        ):
             raise
         if getattr(exc, "_mindie_prepare_reported", False):
             raise
@@ -357,7 +359,9 @@ if __name__ == "__main__":
         with preparing("bootstrap"):
             main()
     except (Exception, SystemExit) as exc:
-        if isinstance(exc, SystemExit) and exc.code in (None, 0):
+        if isinstance(exc, SystemExit) and (
+            exc.code in (None, 0) or getattr(exc, "_mindie_forwarded_child", False)
+        ):
             raise
         if _PROMPT_EVENT is not None:
             from manual_entry import prompt_failure_response, record_entry_status

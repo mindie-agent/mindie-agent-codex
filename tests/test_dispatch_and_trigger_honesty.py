@@ -318,3 +318,54 @@ def test_windows_assign_job_falls_back_when_breakaway_forbidden():
     assert calls[0] & 0x00000800
     assert calls[1] == windows_process._JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
     assert fake_proc._mindie_windows_job[1] == 101
+
+
+def test_runtime_call_preserves_outcome_unconfirmed_on_mutating_request_rejected(tmp_path):
+    """A generic RequestRejected during an already-transmitted distill RPC must keep outcome_unconfirmed."""
+    admission_file = tmp_path / "admission.sqlite3"
+    engine_file = tmp_path / "engine.json"
+    config_file = tmp_path / "codex.json"
+    engine_file.write_text(
+        json.dumps(dict(domain="test", root=str(tmp_path / "corpus"), admission_path=str(admission_file))),
+        encoding="utf-8",
+    )
+    config_file.write_text(
+        json.dumps(dict(admission_path=str(admission_file), engine_config=str(engine_file))),
+        encoding="utf-8",
+    )
+    adm = Admission(admission_file)
+    adm.activate("session-distill", project_root=str(tmp_path))
+    env = _isolated_env(tmp_path, config_file)
+    driver = (
+        f"import runpy, sys; sys.path.insert(0, {str(SCRIPTS)!r})\n"
+        "from unittest.mock import patch\n"
+        "from mindie_knowledge.loop.transport import RequestRejected\n"
+        "with patch('service_client.connect', return_value=object()), "
+        "patch('runtime_call._active_lease_token', return_value='tok-1'), "
+        "patch('runtime_call.resolve_lease', return_value={'session': 'session-distill'}), "
+        "patch('runtime_call.finish_outcome'), "
+        "patch('mindie_knowledge.loop.transport.rpc', side_effect=RequestRejected('Expecting value: line 1 column 1 (char 0)')):\n"
+        f"    runpy.run_path({str(SCRIPTS / 'runtime_call.py')!r}, run_name='__main__')\n"
+    )
+    payload = dict(
+        surface="knowledge",
+        name="knowledge_distill",
+        arguments={"inputs": []},
+        mindie_session_id="session-distill",
+        native_session_verified=True,
+    )
+    res = subprocess.run(
+        [sys.executable, "-I", "-c", driver],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=10,
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    assert out["isError"] is True
+    assert out["structuredContent"]["stage"] == "operation"
+    assert out["structuredContent"]["execution"] == "outcome_unconfirmed"
+    assert out["structuredContent"]["automatic_retry"] is False
+    assert "execution=outcome_unconfirmed" in out["content"][0]["text"]

@@ -610,9 +610,24 @@ if __name__ == "__main__":
         except ImportError:
             request_rejected = False
         else:
+            raw_reject_code = getattr(exc, "error_code", None)
+            # Only read-only calls or explicit pre-mutation reference/cursor rejections
+            # prove execution never began; generic invalid_request (default read_rejected)
+            # on a mutating RPC can originate from a started worker's JSONDecodeError.
             request_rejected = (
                 isinstance(exc, _RequestRejected)
-                and getattr(exc, "error_code", None) != "material_corrupt"
+                and raw_reject_code != "material_corrupt"
+                and (
+                    execution == "not_started"
+                    or raw_reject_code in {
+                        "reference_invalid",
+                        "outside_domain",
+                        "removed_or_superseded",
+                        "withdrawn",
+                        "continuation_invalid",
+                        "continuation_expired",
+                    }
+                )
             )
         lease_required = isinstance(exc, LeaseRequired)
         knowledge_inactive = isinstance(exc, KnowledgeInactive)

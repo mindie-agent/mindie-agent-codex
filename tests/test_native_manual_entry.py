@@ -502,6 +502,9 @@ def test_outer_hook_preserves_canonical_gesture_and_post_read_failures(tmp_path)
         ("/mindie-agent-other", {}, False),
         ("/mindie-agent:other", {}, False),
         ("/Mindie-Agent help", {}, False),
+        ("/mindie-agent\ufeffhelp", {}, False),
+        ("\b/mindie-agent help", {}, False),
+        ("/mindie-agent\bhelp", {}, False),
         ("$mindie-agent:other", {}, False),
         ("ordinary {\"prompt\": \"/mindie-agent\"}", {}, False),
         ("/mindie-agent help", {"agent_id": "sub-1"}, False),
@@ -610,6 +613,35 @@ def test_outer_hook_preserves_canonical_gesture_and_post_read_failures(tmp_path)
     assert handled_res.returncode == 1
     assert "MindIE release entry failed" not in handled_res.stderr
     assert not list(clean_diag.rglob("*.jsonl"))
+
+    # A Windows exec_or_wait forwarded child SystemExit(1) must NOT manufacture a false bootstrap/entry diagnostic.
+    win_diag = tmp_path / "win-diag"
+    win_driver = (
+        f"import sys; sys.path.insert(0, {str(SCRIPTS)!r})\n"
+        "import bootstrap\n"
+        "from pathlib import Path\n"
+        "fwd = SystemExit(1)\n"
+        "fwd._mindie_forwarded_child = True\n"
+        "try:\n"
+        "    with bootstrap.preparing('bootstrap'):\n"
+        "        raise fwd\n"
+        "except SystemExit as exc:\n"
+        "    assert exc.code == 1 and getattr(exc, '_mindie_forwarded_child', False)\n"
+    )
+    win_res = subprocess.run(
+        [sys.executable, "-c", win_driver],
+        text=True,
+        capture_output=True,
+        env=dict(
+            run_env,
+            MINDIE_DIAGNOSTICS_ROOT=str(win_diag),
+            MINDIE_DIAGNOSTICS_CONFIG=str(win_diag / "d.json"),
+        ),
+        timeout=10,
+    )
+    assert win_res.returncode == 0, win_res.stderr
+    assert "MindIE runtime preparation failed" not in win_res.stderr
+    assert not list(win_diag.rglob("*.jsonl"))
 
 
 def test_knowledge_cli_describe_preserves_inactive_stage_and_not_started(tmp_path, monkeypatch, capsys):

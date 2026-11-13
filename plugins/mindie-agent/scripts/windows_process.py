@@ -49,7 +49,9 @@ def exec_or_wait(command, env):
                 cleanup_error.returncode = returncode
                 cleanup_error.add_note("Native entry completed with exit code " + str(returncode))
                 raise
-    raise SystemExit(returncode)
+    forwarded = SystemExit(returncode)
+    forwarded._mindie_forwarded_child = True
+    raise forwarded
 
 
 def spawn(command, *, allow_service=False, **kwargs):

@@ -304,7 +304,9 @@ if __name__ == '__main__':
     try:
         _rc = main()
     except (Exception, SystemExit) as exc:
-        if isinstance(exc, SystemExit) and exc.code in (None, 0):
+        if isinstance(exc, SystemExit) and (
+            exc.code in (None, 0) or getattr(exc, "_mindie_forwarded_child", False)
+        ):
             raise
         if isinstance(exc, ProfileUnavailable):
             print(str(exc), file=sys.stderr)
