@@ -263,25 +263,39 @@ def hook_commands(role, **names):
     if role == "user-prompt-submit":
         # Preserve the hook's one JSON response: only an explicit entry may
         # attach knowledge context, and ordinary prompts emit {}. If the outer
-        # uv/launcher command crashes before Python can emit JSON, return a UI
-        # systemMessage so the failure is visible instead of silently dropped.
+        # uv/launcher command crashes before Python can emit JSON, inspect any
+        # unread stdin so ordinary prompts still emit {} (P2.1) and only
+        # explicit /mindie-agent gestures surface a UI systemMessage.
         left, right = _failure_json_parts(
             "MindIE UserPromptSubmit launcher failed; inspect local diagnostics and do not repeat /mindie-agent in a loop.")
+        posix_gesture = (
+            r'"prompt"[[:space:]]*:[[:space:]]*"([[:space:]]|\\ufeff)*'
+            r'(/mindie-agent|\$mindie-agent|\[\$mindie-agent\]|\[@mindie-agent\])'
+        )
+        posix_agent = r'"agent_id"[[:space:]]*:[[:space:]]*"'
         posix_cmd = " ".join(posix_arg(arg) for arg in arguments)
         posix = (
             POSIX_LAUNCHER_RESOLVE + posix_cmd + "; _st=$?; "
-            + "if [ \"$_st\" -ne 0 ]; then printf '%s\\n' "
-            + shlex.quote(left) + '"$_st"' + shlex.quote(right)
-            + "; fi; exit 0"
+            + "if [ \"$_st\" -ne 0 ]; then _in=$(dd bs=4096 count=1 2>/dev/null); "
+            + "if printf '%s' \"$_in\" | grep -Eq " + shlex.quote(posix_gesture)
+            + " && ! printf '%s' \"$_in\" | grep -Eq " + shlex.quote(posix_agent)
+            + "; then printf '%s\\n' " + shlex.quote(left) + '"$_st"' + shlex.quote(right)
+            + "; else printf '{}\\n'; fi; fi; exit 0"
+        )
+        ps_gesture = (
+            r'"prompt"\s*:\s*"(?:\s|\\ufeff|\ufeff)*'
+            r'(?:/mindie-agent|\$mindie-agent|\[\$mindie-agent\]|\[@mindie-agent\])'
         )
         body = (
             PS_PROTOCOL_ENCODING + PS_LAUNCHER_RESOLVE
             + "$failed = $false; $code = 0; try { & "
             + " ".join(ps_arg(arg) for arg in arguments)
             + "; $code = $LASTEXITCODE; $failed = ($code -ne 0) } catch { $failed = $true; $code = 1 }; "
-            + "if ($failed) { [Console]::Out.WriteLine('"
-            + left.replace("'", "''") + "' + $code + '" + right.replace("'", "''")
-            + "') }; exit 0"
+            + "if ($failed) { $raw = ''; try { $buf = New-Object char[] 4096; $n = [Console]::In.Read($buf, 0, 4096); "
+            + "if ($n -gt 0) { $raw = -join $buf[0..($n-1)] } } catch {}; "
+            + "if (($raw -match '" + ps_gesture.replace("'", "''") + "') -and ($raw -notmatch '\"agent_id\"\\s*:\\s*\"')) { "
+            + "[Console]::Out.WriteLine('" + left.replace("'", "''") + "' + $code + '" + right.replace("'", "''") + "') "
+            + "} else { [Console]::Out.WriteLine('{}') } }; exit 0"
         )
         return dict(command=posix,
                     commandWindows="powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "

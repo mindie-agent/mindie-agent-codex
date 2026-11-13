@@ -23,9 +23,12 @@ import time
 
 from session_gate import IDENTITY
 
-ENTRY_STATUS_SCHEMA = "mindie-manual-entry/1"
+ENTRY_STATUS_SCHEMA = "mindie-manual-entry/2"
+_MAX_SESSION_RECEIPTS = 16
+_UNSCOPED_FAILURE_TTL = 300.0
 _STAGE = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
 _ERROR_TYPE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
+_DIGEST = re.compile(r"[0-9a-f]{16}\Z")
 # Match explicit start-of-prompt /mindie-agent, $mindie-agent, and Codex
 # Composer's linked skill/plugin pill forms (plus optional leading UTF-8 BOM).
 GESTURE = re.compile(
@@ -48,8 +51,45 @@ def _session_digest(session):
     return hashlib.sha256(session.encode("utf-8")).hexdigest()[:16]
 
 
+def _valid_entry(item):
+    return (
+        isinstance(item, dict)
+        and item.get("status") in {"authorized", "deactivated", "failed"}
+        and type(item.get("updated_at")) in (int, float)
+        and math.isfinite(item["updated_at"])
+    )
+
+
+def _load_status_store(target):
+    try:
+        if not target.is_file():
+            return {"schema": ENTRY_STATUS_SCHEMA, "sessions": {}}
+        with target.open("rb") as stream:
+            raw = stream.read(16385)
+        if len(raw) > 16384:
+            return {"schema": ENTRY_STATUS_SCHEMA, "sessions": {}}
+        value = json.loads(raw.decode("utf-8"))
+    except TimeoutError:
+        raise
+    except (OSError, ValueError, TypeError):
+        return {"schema": ENTRY_STATUS_SCHEMA, "sessions": {}}
+    if not isinstance(value, dict) or value.get("schema") != ENTRY_STATUS_SCHEMA:
+        return {"schema": ENTRY_STATUS_SCHEMA, "sessions": {}}
+    raw_sessions = value.get("sessions")
+    sessions = {}
+    if isinstance(raw_sessions, dict):
+        for key, item in raw_sessions.items():
+            if isinstance(key, str) and _DIGEST.fullmatch(key) and _valid_entry(item):
+                sessions[key] = item
+    store = {"schema": ENTRY_STATUS_SCHEMA, "sessions": sessions}
+    unscoped = value.get("unscoped_failure")
+    if _valid_entry(unscoped) and unscoped.get("status") == "failed":
+        store["unscoped_failure"] = unscoped
+    return store
+
+
 def record_entry_status(config_file, *, stage, status, session_id=None, error_type=None):
-    """Persist a sanitized manual-entry receipt when the config directory exists."""
+    """Persist a session-keyed manual-entry receipt when the config directory exists."""
     if status not in {"authorized", "deactivated", "failed"}:
         return
     target = entry_status_path(config_file)
@@ -61,19 +101,30 @@ def record_entry_status(config_file, *, stage, status, session_id=None, error_ty
         if isinstance(error_type, str) and _ERROR_TYPE.fullmatch(error_type)
         else None
     )
-    payload = dict(
-        schema=ENTRY_STATUS_SCHEMA,
+    entry = dict(
         updated_at=time.time(),
         stage=safe_stage,
         status=status,
-        session_sha256=_session_digest(session_id),
         error_type=safe_error,
     )
+    store = _load_status_store(target)
+    digest = _session_digest(session_id)
+    if digest is not None:
+        sessions = dict(store["sessions"])
+        sessions[digest] = entry
+        if len(sessions) > _MAX_SESSION_RECEIPTS:
+            ordered = sorted(sessions.items(), key=lambda pair: pair[1]["updated_at"])
+            sessions = dict(ordered[-_MAX_SESSION_RECEIPTS:])
+        store["sessions"] = sessions
+    elif status == "failed":
+        store["unscoped_failure"] = entry
+    else:
+        return
     temporary = None
     try:
         descriptor, temporary = tempfile.mkstemp(prefix=target.name + ".", dir=target.parent)
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-            json.dump(payload, stream, sort_keys=True)
+            json.dump(store, stream, sort_keys=True)
             stream.flush()
         os.replace(temporary, target)
     except TimeoutError:
@@ -89,27 +140,17 @@ def record_entry_status(config_file, *, stage, status, session_id=None, error_ty
                 pass
 
 
-def read_entry_status(config_file):
-    target = entry_status_path(config_file)
-    try:
-        if not target.is_file():
-            return None
-        with target.open("rb") as stream:
-            raw = stream.read(4097)
-        if len(raw) > 4096:
-            return None
-        value = json.loads(raw.decode("utf-8"))
-    except TimeoutError:
-        raise
-    except (OSError, ValueError, TypeError):
-        return None
-    if (not isinstance(value, dict)
-            or value.get("schema") != ENTRY_STATUS_SCHEMA
-            or value.get("status") not in {"authorized", "deactivated", "failed"}
-            or type(value.get("updated_at")) not in (int, float)
-            or not math.isfinite(value["updated_at"])):
-        return None
-    return value
+def read_entry_status(config_file, session_id=None):
+    store = _load_status_store(entry_status_path(config_file))
+    if session_id is None:
+        return store if (store["sessions"] or "unscoped_failure" in store) else None
+    digest = _session_digest(session_id)
+    if digest is not None and digest in store["sessions"]:
+        return store["sessions"][digest]
+    unscoped = store.get("unscoped_failure")
+    if unscoped is not None and 0 <= time.time() - unscoped["updated_at"] <= _UNSCOPED_FAILURE_TTL:
+        return dict(unscoped, unscoped=True)
+    return None
 
 
 def prompt_failure_response(stage, error_type):
@@ -153,11 +194,9 @@ def _unwritable_state_hint(config_file, admission_path=None):
 
 def explain_inactive_session(config_file, session, *, admission_path=None):
     """Return a stage-specific Inactive message (<260 chars) without leaking paths or IDs."""
-    digest = _session_digest(session)
-    receipt = read_entry_status(config_file) if config_file is not None else None
+    receipt = read_entry_status(config_file, session_id=session) if config_file is not None else None
     if receipt is not None:
         status = receipt.get("status")
-        recorded_session = receipt.get("session_sha256")
         stage = receipt.get("stage")
         stage = stage if isinstance(stage, str) and _STAGE.fullmatch(stage) else "entry"
         error_type = receipt.get("error_type")
@@ -166,22 +205,23 @@ def explain_inactive_session(config_file, session, *, admission_path=None):
             if isinstance(error_type, str) and _ERROR_TYPE.fullmatch(error_type)
             else "RuntimeError"
         )
-        if status == "failed" and (recorded_session is None or recorded_session == digest):
+        if status == "failed":
+            prefix = "a recent /mindie-agent hook" if receipt.get("unscoped") else "/mindie-agent"
             return (
-                f"Knowledge is not authorized in this session: the last /mindie-agent hook "
-                f"failed at {stage} ({error_type}); inspect status/permissions, do not repeat "
+                f"Knowledge is not authorized in this session: {prefix} failed at "
+                f"{stage} ({error_type}); inspect status/permissions, do not repeat "
                 "/mindie-agent in a loop, and continue with native/deterministic tools"
             )
-        if status == "deactivated" and recorded_session == digest:
+        if status == "deactivated":
             return (
                 "Knowledge is not authorized in this session: /mindie-agent was deactivated; "
                 "send /mindie-agent only to re-enable, or continue with native/deterministic tools"
             )
-        if status == "authorized" and recorded_session and digest and recorded_session != digest:
+        if status == "authorized":
             return (
-                "Knowledge is not authorized in this session (session_mismatch: /mindie-agent "
-                "authorized another CODEX_THREAD_ID); do not repeat /mindie-agent in a loop; "
-                "use the top-level session or continue with native/deterministic tools"
+                "Knowledge is not authorized in this session (admission_mismatch: /mindie-agent "
+                "ran for this session, but the active admission store has no matching lease; "
+                "inspect config/cwd, do not resend in a loop, and continue with native tools)"
             )
     if config_file is not None and _unwritable_state_hint(config_file, admission_path=admission_path):
         return (
@@ -190,9 +230,9 @@ def explain_inactive_session(config_file, session, *, admission_path=None):
             "a loop; continue with native/deterministic tools"
         )
     return (
-        "Knowledge is not authorized in this session (no /mindie-agent hook receipt; send "
-        "/mindie-agent at prompt start, or if already sent in this turn, UserPromptSubmit did "
-        "not run—do not resend in a loop; continue with native/deterministic tools)"
+        "Knowledge is not authorized in this session (no /mindie-agent receipt for this "
+        "session; send /mindie-agent interactively, or if already sent here, UserPromptSubmit "
+        "did not run for this session—do not resend in a loop; continue with native tools)"
     )
 
 

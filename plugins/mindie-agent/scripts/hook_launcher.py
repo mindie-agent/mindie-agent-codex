@@ -188,19 +188,41 @@ def _record_launcher_failure(session_id, error_type):
         if isinstance(session_id, str) and _IDENTITY.fullmatch(session_id)
         else None
     )
-    payload = dict(
-        schema="mindie-manual-entry/1",
+    entry = dict(
         updated_at=time.time(),
         stage="hook-launcher",
         status="failed",
-        session_sha256=digest,
         error_type=error_type,
     )
+    store = {"schema": "mindie-manual-entry/2", "sessions": {}}
+    try:
+        if target.is_file():
+            raw = target.read_bytes()
+            if len(raw) <= 16384:
+                loaded = json.loads(raw.decode("utf-8"))
+                if (isinstance(loaded, dict)
+                        and loaded.get("schema") == "mindie-manual-entry/2"
+                        and isinstance(loaded.get("sessions"), dict)):
+                    store["sessions"] = dict(loaded["sessions"])
+                    if isinstance(loaded.get("unscoped_failure"), dict):
+                        store["unscoped_failure"] = loaded["unscoped_failure"]
+    except (OSError, ValueError, TypeError):
+        pass
+    if digest is not None:
+        store["sessions"][digest] = entry
+        if len(store["sessions"]) > 16:
+            ordered = sorted(
+                store["sessions"].items(),
+                key=lambda pair: pair[1].get("updated_at", 0) if isinstance(pair[1], dict) else 0,
+            )
+            store["sessions"] = dict(ordered[-16:])
+    else:
+        store["unscoped_failure"] = entry
     temporary = None
     try:
         descriptor, temporary = tempfile.mkstemp(prefix=target.name + ".", dir=target.parent)
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-            json.dump(payload, stream, sort_keys=True)
+            json.dump(store, stream, sort_keys=True)
             stream.flush()
         os.replace(temporary, target)
     except TimeoutError:
@@ -230,12 +252,12 @@ def _report_prompt_launcher_failure(exc):
         and isinstance(event.get("prompt"), str)
         and _GESTURE.match(event["prompt"]) is not None
     )
-    error_type = type(exc).__name__
-    print(f"MindIE hook launcher failed: {error_type}", file=sys.stderr)
     if not explicit:
-        # Passive Default (P2.1): ordinary prompts remain context-free.
+        # Passive Default (P2.1): ordinary prompts remain completely silent and context-free.
         print("{}")
         raise SystemExit(0)
+    error_type = type(exc).__name__
+    print(f"MindIE hook launcher failed: {error_type}", file=sys.stderr)
     _record_launcher_failure(event.get("session_id"), error_type)
     print(json.dumps(dict(
         systemMessage=(

@@ -95,8 +95,36 @@ def test_runtime_call_preserves_not_started_and_service_host_facts(tmp_path):
     assert host_shaped["structuredContent"]["service_error"] == {
         "stage": "interpreter",
         "code": "interpreter_path_unsupported",
+        "startup_uncertain": False,
     }
     assert "interpreter:interpreter_path_unsupported" in host_shaped["content"][0]["text"]
+
+    # 2b. ServiceHostError(uncertain=True) still keeps requested RPC execution='not_started'
+    # while surfacing startup_uncertain=True on service_error.
+    uncertain_driver = (
+        f"import sys; sys.path.insert(0, {str(SCRIPTS)!r})\n"
+        "from unittest.mock import patch\n"
+        "from mindie_knowledge.loop.service_host import ServiceHostError\n"
+        "import runpy\n"
+        "with patch('service_client.connect', side_effect=ServiceHostError('launch_attempt_mismatch', stage='readiness', uncertain=True)):\n"
+        f"    runpy.run_path({str(SCRIPTS / 'runtime_call.py')!r}, run_name='__main__')\n"
+    )
+    uncertain_err = subprocess.run(
+        [sys.executable, "-I", "-c", uncertain_driver],
+        input=json.dumps(query_payload),
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=10,
+    )
+    uncertain_shaped = json.loads(uncertain_err.stdout)
+    assert uncertain_shaped["structuredContent"]["stage"] == "service-start"
+    assert uncertain_shaped["structuredContent"]["execution"] == "not_started"
+    assert uncertain_shaped["structuredContent"]["service_error"] == {
+        "stage": "readiness",
+        "code": "launch_attempt_mismatch",
+        "startup_uncertain": True,
+    }
 
     # 3. Read-only knowledge_query RPC failure stays execution='not_started', while mutating
     # knowledge_feedback RPC failure reports execution='outcome_unconfirmed'.
@@ -138,6 +166,56 @@ def test_runtime_call_preserves_not_started_and_service_host_facts(tmp_path):
     mutate_shaped = json.loads(mutate_err.stdout)
     assert mutate_shaped["structuredContent"]["stage"] == "operation"
     assert mutate_shaped["structuredContent"]["execution"] == "outcome_unconfirmed"
+
+    # 4. Pre-RPC distill budget error and server-confirmed RequestRejected stay execution='not_started'.
+    distill_pre_driver = (
+        f"import sys; sys.path.insert(0, {str(SCRIPTS)!r})\n"
+        "from unittest.mock import patch\n"
+        "import runpy\n"
+        "with patch('service_client.connect', return_value=object()), "
+        "patch('mindie_knowledge.loop.summary_budget.distill_rpc_timeout', side_effect=AttributeError('missing')):\n"
+        f"    runpy.run_path({str(SCRIPTS / 'runtime_call.py')!r}, run_name='__main__')\n"
+    )
+    distill_payload = dict(
+        surface="knowledge",
+        name="knowledge_distill",
+        arguments={"inputs": []},
+        mindie_session_id="session-1",
+        native_session_verified=True,
+    )
+    distill_err = subprocess.run(
+        [sys.executable, "-I", "-c", distill_pre_driver],
+        input=json.dumps(distill_payload),
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=10,
+    )
+    distill_shaped = json.loads(distill_err.stdout)
+    assert distill_shaped["structuredContent"]["execution"] == "not_started"
+
+    rejected_driver = (
+        f"import sys; sys.path.insert(0, {str(SCRIPTS)!r})\n"
+        "from unittest.mock import patch\n"
+        "from mindie_knowledge.loop.transport import RequestRejected\n"
+        "import runpy\n"
+        "with patch('service_client.connect', return_value=object()), "
+        "patch('mindie_knowledge.loop.transport.rpc', side_effect=RequestRejected('unknown unit ref', error_code='reference_invalid')):\n"
+        f"    runpy.run_path({str(SCRIPTS / 'runtime_call.py')!r}, run_name='__main__')\n"
+    )
+    rejected_err = subprocess.run(
+        [sys.executable, "-I", "-c", rejected_driver],
+        input=json.dumps(mutate_payload),
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=10,
+    )
+    rejected_shaped = json.loads(rejected_err.stdout)
+    assert rejected_shaped["structuredContent"]["stage"] == "operation"
+    assert rejected_shaped["structuredContent"]["execution"] == "not_started"
+    assert rejected_shaped["structuredContent"]["code"] == "reference_invalid"
+    assert "unknown unit ref" in rejected_shaped["structuredContent"]["message"]
 
 
 def test_update_trigger_lock_contention_does_not_record_fault(tmp_path):

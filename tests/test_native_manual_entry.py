@@ -292,17 +292,24 @@ def test_stage_specific_inactive_diagnostics_prevent_infinite_resend_loop(tmp_pa
     assert "ProfileUnavailable" in message
     assert "do not repeat /mindie-agent in a loop" in message
 
-    # Session mismatch: UserPromptSubmit authorized thread-top-1, but shell runs under child-subagent.
+    # Independent session B must NOT inherit or misinterpret session A's authorization receipt.
     manual_entry.record_entry_status(
         config, stage="authorize", status="authorized", session_id="thread-top-1"
     )
-    monkeypatch.setenv("CODEX_THREAD_ID", "child-subagent")
+    monkeypatch.setenv("CODEX_THREAD_ID", "independent-chat-b")
+    with pytest.raises(bridge.Inactive) as other_chat_exc:
+        bridge.activate("activate")
+    assert "session_mismatch" not in str(other_chat_exc.value)
+    assert "no /mindie-agent receipt for this session" in str(other_chat_exc.value)
+    with pytest.raises(knowledge_cli.KnowledgeInactive) as cli_other_exc:
+        knowledge_cli.invoke("describe", {})
+    assert "session_mismatch" not in str(cli_other_exc.value)
+
+    # Same session with an authorized hook receipt but no lease in the active store reports admission_mismatch.
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread-top-1")
     with pytest.raises(bridge.Inactive) as mismatch_exc:
         bridge.activate("activate")
-    assert "session_mismatch" in str(mismatch_exc.value)
-    with pytest.raises(knowledge_cli.KnowledgeInactive) as cli_exc:
-        knowledge_cli.invoke("describe", {})
-    assert "session_mismatch" in str(cli_exc.value)
+    assert "admission_mismatch" in str(mismatch_exc.value)
 
 
 def test_hook_launcher_failure_keeps_ordinary_prompt_passive_and_surfaces_explicit_gesture(tmp_path):
@@ -349,9 +356,58 @@ def test_hook_launcher_failure_keeps_ordinary_prompt_passive_and_surfaces_explic
     payload = json.loads(res_explicit.stdout)
     assert "hook-launcher" in payload["systemMessage"]
     assert "JSONDecodeError" in payload["systemMessage"]
-    receipt = manual_entry.read_entry_status(config)
+    receipt = manual_entry.read_entry_status(config, session_id="thread-1")
     assert receipt["stage"] == "hook-launcher"
     assert receipt["status"] == "failed"
+
+    # Outer POSIX shell hook wrapper & bootstrap.py must keep ordinary prompts {} with zero writes.
+    if os.name != "nt":
+        import native_entry
+        missing_env = dict(
+            env,
+            CODEX_PLUGIN_ROOT=str(tmp_path / "missing-plugin"),
+            PLUGIN_DATA=str(tmp_path / "missing-data"),
+        )
+        cmd = native_entry.hook_commands("user-prompt-submit")["command"]
+        shell_ord = subprocess.run(
+            ["/bin/sh", "-c", cmd],
+            input=json.dumps(ordinary),
+            text=True,
+            capture_output=True,
+            env=missing_env,
+            timeout=10,
+        )
+        assert shell_ord.returncode == 0
+        assert json.loads(shell_ord.stdout) == {}
+
+        shell_exp = subprocess.run(
+            ["/bin/sh", "-c", cmd],
+            input=json.dumps(explicit),
+            text=True,
+            capture_output=True,
+            env=missing_env,
+            timeout=10,
+        )
+        assert shell_exp.returncode == 0
+        assert "UserPromptSubmit launcher failed" in json.loads(shell_exp.stdout)["systemMessage"]
+
+    boot_diag = tmp_path / "boot-diag"
+    boot_env = dict(
+        env,
+        MINDIE_DIAGNOSTICS_ROOT=str(boot_diag),
+        MINDIE_DIAGNOSTICS_CONFIG=str(boot_diag / "diagnostics.json"),
+    )
+    boot_ord = subprocess.run(
+        [sys.executable, str(SCRIPTS / "bootstrap.py"), str(tmp_path / "unwritable/file"), "user-prompt-submit"],
+        input=json.dumps(ordinary),
+        text=True,
+        capture_output=True,
+        env=boot_env,
+        timeout=10,
+    )
+    assert boot_ord.returncode == 0
+    assert json.loads(boot_ord.stdout) == {}
+    assert not boot_diag.exists()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows headless PowerShell 5.1 regression")

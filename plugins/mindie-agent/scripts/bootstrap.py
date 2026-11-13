@@ -286,7 +286,56 @@ def _publish_hook_launcher(scripts, release):
     os.replace(staging, durable)
 
 
+_PROMPT_GUARDED = False
+_PROMPT_EVENT = None
+
+
+def _restore_stdin_bytes(raw):
+    if len(raw) <= 4096:
+        reader, writer = os.pipe()
+        try:
+            os.write(writer, raw)
+        finally:
+            os.close(writer)
+        try:
+            os.dup2(reader, 0)
+        finally:
+            os.close(reader)
+        return
+    with tempfile.TemporaryFile() as stream:
+        stream.write(raw)
+        stream.flush()
+        stream.seek(0)
+        os.dup2(stream.fileno(), 0)
+
+
+def _guard_passive_prompt():
+    """Return False and emit {} for passive prompts before any runtime/diagnostic write."""
+    global _PROMPT_GUARDED, _PROMPT_EVENT
+    if _PROMPT_GUARDED:
+        return True
+    _PROMPT_GUARDED = True
+    if "user-prompt-submit" not in sys.argv[2:] or "migrate" in sys.argv[2:]:
+        return True
+    raw = sys.stdin.buffer.read(32 * 1024 * 1024 + 1)
+    if len(raw) <= 32 * 1024 * 1024:
+        try:
+            event = json.loads(raw)
+        except (ValueError, TypeError):
+            event = None
+        if isinstance(event, dict):
+            from manual_entry import requested
+            if not requested(event):
+                print("{}")
+                return False
+            _PROMPT_EVENT = event
+    _restore_stdin_bytes(raw)
+    return True
+
+
 def main():
+    if not _guard_passive_prompt():
+        return
     source = Path(__file__).resolve().parents[1]
     data = Path(sys.argv[1])
     python, scripts, release = ensure_runtime(source, data)
@@ -296,36 +345,27 @@ def main():
 
 if __name__ == "__main__":
     try:
+        if not _guard_passive_prompt():
+            raise SystemExit(0)
         with preparing("bootstrap"):
             main()
+    except SystemExit:
+        raise
     except Exception as exc:
-        if "user-prompt-submit" in sys.argv[2:] and "migrate" not in sys.argv[2:]:
-            try:
-                from manual_entry import (
-                    prompt_failure_response,
-                    read_event,
-                    record_entry_status,
-                    requested,
-                )
-                event = read_event(sys.stdin.buffer)
-            except Exception:
-                event = None
-            if isinstance(event, dict):
-                if not requested(event):
-                    print("{}")
-                    raise SystemExit(0)
-                config = Path(os.environ.get(
-                    "MINDIE_AGENT_CONFIG",
-                    Path.home() / ".config/mindie-agent/codex.json",
-                )).expanduser().absolute()
-                stage = getattr(exc, "_mindie_prepare_stage", None) or "bootstrap"
-                record_entry_status(
-                    config,
-                    stage=stage,
-                    status="failed",
-                    session_id=event.get("session_id"),
-                    error_type=type(exc).__name__,
-                )
-                print(json.dumps(prompt_failure_response(stage, type(exc).__name__)))
-                raise SystemExit(0)
+        if _PROMPT_EVENT is not None:
+            from manual_entry import prompt_failure_response, record_entry_status
+            config = Path(os.environ.get(
+                "MINDIE_AGENT_CONFIG",
+                Path.home() / ".config/mindie-agent/codex.json",
+            )).expanduser().absolute()
+            stage = getattr(exc, "_mindie_prepare_stage", None) or "bootstrap"
+            record_entry_status(
+                config,
+                stage=stage,
+                status="failed",
+                session_id=_PROMPT_EVENT.get("session_id"),
+                error_type=type(exc).__name__,
+            )
+            print(json.dumps(prompt_failure_response(stage, type(exc).__name__)))
+            raise SystemExit(0)
         raise SystemExit(1)

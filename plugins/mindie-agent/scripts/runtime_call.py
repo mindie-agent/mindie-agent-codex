@@ -267,9 +267,6 @@ def call(payload):
     _DISPATCH_STATE["execution"] = "not_started"
     connection = connect(selected)
     _DISPATCH_STATE["stage"] = "operation"
-    _DISPATCH_STATE["execution"] = (
-        "not_started" if name in _READ_ONLY_KNOWLEDGE else "outcome_unconfirmed"
-    )
     if name == "knowledge_attach":
         # Admission is owned by the existing lease; startup needs no
         # second attach protocol or duplicate session registry.
@@ -292,11 +289,16 @@ def call(payload):
                 identity["_session_verified"] = True
             else:
                 identity["_activation"] = token
+            rpc_args = dict(args, **identity)
+            rpc_timeout = distill_rpc_timeout() if name == "knowledge_distill" else None
+            _DISPATCH_STATE["execution"] = (
+                "not_started" if name in _READ_ONLY_KNOWLEDGE else "outcome_unconfirmed"
+            )
             value = rpc(
                 connection,
                 name.removeprefix("knowledge_"),
-                dict(args, **identity),
-                timeout=distill_rpc_timeout() if name == "knowledge_distill" else None,
+                rpc_args,
+                timeout=rpc_timeout,
             )
             is_error = False
             if name == "knowledge_distill":
@@ -603,6 +605,15 @@ if __name__ == "__main__":
             domain_route_error = False
         else:
             domain_route_error = isinstance(exc, DomainRouteError)
+        try:
+            from mindie_knowledge.loop.transport import RequestRejected as _RequestRejected
+        except ImportError:
+            request_rejected = False
+        else:
+            request_rejected = (
+                isinstance(exc, _RequestRejected)
+                and getattr(exc, "error_code", None) != "material_corrupt"
+            )
         lease_required = isinstance(exc, LeaseRequired)
         knowledge_inactive = isinstance(exc, KnowledgeInactive)
         routing_error = lease_required or domain_route_error or knowledge_inactive
@@ -613,8 +624,11 @@ if __name__ == "__main__":
         elif routing_error:
             stage, execution = "routing", "not_started"
         elif service_host_error:
-            stage = "service-start"
-            execution = "outcome_unconfirmed" if getattr(exc, "uncertain", False) else "not_started"
+            # Service startup failed before any RPC was transmitted; keep
+            # requested-operation execution=not_started and surface startup_uncertain separately.
+            stage, execution = "service-start", "not_started"
+        elif request_rejected:
+            stage, execution = "operation", "not_started"
         message = (
             "Knowledge query unavailable: a configured feed has no verified installed snapshot. "
             "The query did not run. Continue from available code, documentation and native tools; "
@@ -622,6 +636,8 @@ if __name__ == "__main__":
             if feed_unavailable else
             f"Knowledge request rejected before execution: {str(exc)[:300]}. No automatic retry."
             if routing_error else
+            f"Knowledge request rejected: {str(exc)[:240]}. No automatic retry."
+            if request_rejected else
             f"MindIE {stage}: ServiceHostError ({exc.stage}:{exc.code}); execution={execution}; no automatic retry."
             if service_host_error else
             f"MindIE {stage}: {type(exc).__name__}; execution={execution}; no automatic retry."
@@ -645,8 +661,20 @@ if __name__ == "__main__":
                 "lease_required" if lease_required else "domain_routing_rejected"
             )
             shaped["structuredContent"]["message"] = str(exc)[:300]
+        elif request_rejected:
+            raw_code = getattr(exc, "error_code", None)
+            shaped["structuredContent"]["code"] = (
+                raw_code
+                if isinstance(raw_code, str) and raw_code.isidentifier() and raw_code.islower()
+                else "request_rejected"
+            )
+            shaped["structuredContent"]["message"] = str(exc)[:240]
         elif service_host_error:
-            shaped["structuredContent"]["service_error"] = dict(stage=exc.stage, code=exc.code)
+            shaped["structuredContent"]["service_error"] = dict(
+                stage=exc.stage,
+                code=exc.code,
+                startup_uncertain=bool(getattr(exc, "uncertain", False)),
+            )
         diagnostic = reference({"diagnostic": getattr(exc, "mindie_diagnostic", None)})
         # RequestRejected derives ValueError. MaintenanceCancelled may derive
         # RuntimeError; match the class name statically so discovery does not
