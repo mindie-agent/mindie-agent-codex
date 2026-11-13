@@ -61,8 +61,10 @@ PS_PROTOCOL_ENCODING = (
     "$ProgressPreference = 'SilentlyContinue'; "
     "$ErrorActionPreference = 'SilentlyContinue'; "
     "$OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
-    "try { [Console]::OutputEncoding = $OutputEncoding; [Console]::InputEncoding = $OutputEncoding } catch {}; "
+    "try { [Console]::InputEncoding = $OutputEncoding } catch {}; "
+    "try { [Console]::OutputEncoding = $OutputEncoding } catch {}; "
     "$env:PYTHONIOENCODING = 'utf-8'; "
+    "$env:PYTHONUTF8 = '1'; "
 )
 # Use "$PLUGIN_ROOT" / "$PLUGIN_DATA" (shell env) rather than ${PLUGIN_ROOT}.
 # Codex substitutes the braced manifest token when listing hooks, so a literal
@@ -302,18 +304,29 @@ def hook_commands(role, **names):
         )
         body = (
             PS_PROTOCOL_ENCODING + PS_LAUNCHER_RESOLVE
-            + "$inText = [Console]::In.ReadToEnd(); "
+            + "$inStream = [Console]::OpenStandardInput(); "
+            + "$ms = [System.IO.MemoryStream]::new(); $buf = [byte[]]::new(65536); "
+            + "while ($ms.Length -lt 33554433) { "
+            + "$take = [Math]::Min($buf.Length, 33554433 - [int]$ms.Length); "
+            + "$n = $inStream.Read($buf, 0, $take); if ($n -le 0) { break }; "
+            + "$ms.Write($buf, 0, $n) }; "
+            + "$inBytes = $ms.ToArray(); $inText = $OutputEncoding.GetString($inBytes); "
+            + "$sendText = if ($inText.EndsWith(\"`r`n\")) { $inText.Substring(0, $inText.Length - 2) } "
+            + "elseif ($inText.EndsWith(\"`n\")) { $inText.Substring(0, $inText.Length - 1) } else { $inText }; "
             + "$failed = $false; $code = 0; $out = ''; try { "
-            + "$out = ($inText | & " + " ".join(ps_arg(arg) for arg in arguments) + " | Out-String).Trim(); "
+            + "$out = ($sendText | & " + " ".join(ps_arg(arg) for arg in arguments) + " | Out-String).Trim(); "
             + "$code = $LASTEXITCODE; $failed = ($code -ne 0) } catch { $failed = $true; $code = 1 }; "
-            + "if (-not $failed) { if ($out) { [Console]::Out.WriteLine($out) } else { [Console]::Out.WriteLine('{}') } } "
+            + "$resp = '{}'; "
+            + "if (-not $failed) { if ($out) { $resp = $out } } "
             + "else { $explicit = $false; try { $ev = $inText | ConvertFrom-Json; "
             + "if ($null -ne $ev -and $ev.hook_event_name -eq 'UserPromptSubmit' -and (-not $ev.agent_id) "
             + "-and ($ev.prompt -is [string]) -and ($ev.prompt -cmatch '" + ps_gesture.replace("'", "''") + "')) { "
             + "$explicit = $true } } catch {}; "
-            + "if ($explicit) { [Console]::Out.WriteLine('"
-            + left.replace("'", "''") + "' + $code + '" + right.replace("'", "''") + "') } "
-            + "else { [Console]::Out.WriteLine('{}') } }; exit 0"
+            + "if ($explicit) { $resp = '"
+            + left.replace("'", "''") + "' + $code + '" + right.replace("'", "''") + "' } }; "
+            + "$outStream = [Console]::OpenStandardOutput(); "
+            + "$outBytes = $OutputEncoding.GetBytes($resp + \"`n\"); "
+            + "$outStream.Write($outBytes, 0, $outBytes.Length); $outStream.Flush(); exit 0"
         )
         return dict(command=posix,
                     commandWindows="powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "

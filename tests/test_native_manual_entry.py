@@ -458,11 +458,13 @@ def test_windows_headless_powershell_51_user_prompt_submit_utf8_no_console_error
         MINDIE_DIAGNOSTICS_ROOT=str(tmp_path / "diag"),
         MINDIE_DIAGNOSTICS_CONFIG=str(tmp_path / "diag/diagnostics.json"),
     )
+    unicode_cwd = tmp_path / "中文目录"
+    unicode_cwd.mkdir()
     event = dict(
         hook_event_name="UserPromptSubmit",
         session_id="win-ps51-session",
-        cwd=str(tmp_path),
-        prompt="/mindie-agent 中文算子分析",
+        cwd=str(unicode_cwd),
+        prompt="\ufeff\u3000/mindie-agent 中文算子分析",
     )
     proc = windows_process.spawn(
         [str(ps51), "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
@@ -481,7 +483,9 @@ def test_windows_headless_powershell_51_user_prompt_submit_utf8_no_console_error
     assert "OutputEncoding" not in stderr
     response = json.loads(stdout)
     assert response["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
-    assert Admission(admission_file).knowledge_lease("win-ps51-session") is not None
+    lease = Admission(admission_file).knowledge_lease("win-ps51-session")
+    assert lease is not None
+    assert Path(lease["project_root"]).resolve() == unicode_cwd.resolve()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX sh outer-hook verification")
@@ -675,3 +679,72 @@ def test_knowledge_cli_describe_preserves_inactive_stage_and_not_started(tmp_pat
     assert out["structuredContent"]["execution"] == "not_started"
     assert "profile-binding (ProfileUnavailable)" in out["structuredContent"]["message"]
     assert "do not repeat /mindie-agent in a loop" in out["content"][0]["text"]
+
+
+def test_entry_preserves_committed_authorization_when_receipt_write_times_out(tmp_path):
+    release = tmp_path / "releases/0.1.30"
+    release.mkdir(parents=True)
+    validation = dict(schema="mindie-candidate-check/1", status="validated", native_version="0.1.30")
+    (release / "runtime.json").write_text(
+        json.dumps(dict(python=sys.executable, validation=validation)), encoding="utf-8"
+    )
+    admission_file = tmp_path / "adm.sqlite3"
+    engine_file = tmp_path / "engine.json"
+    config_file = tmp_path / "codex.json"
+    engine_file.write_text(
+        json.dumps(dict(
+            transcript_adapter=str(SCRIPTS / "codex_transcript.py"),
+            product_validation=validation,
+            admission_path=str(admission_file),
+        )),
+        encoding="utf-8",
+    )
+    config_file.write_text(
+        json.dumps(dict(
+            python=sys.executable,
+            runtime_scripts=str(SCRIPTS),
+            engine_config=str(engine_file),
+            admission_path=str(admission_file),
+            product_validation=validation,
+        )),
+        encoding="utf-8",
+    )
+    driver = (
+        f"import runpy, sys; sys.path.insert(0, {str(SCRIPTS)!r})\n"
+        "from unittest.mock import patch\n"
+        "import bounded_process, manual_entry\n"
+        "ok_res = bounded_process.ProcessResult(stdout='', stderr='', returncode=0, execution='completed', cleanup=[])\n"
+        f"sys.argv = [{str(SCRIPTS / 'entry.py')!r}, '--release', {str(release)!r}, 'user-prompt-submit']\n"
+        "with patch.object(manual_entry, 'record_entry_status', side_effect=TimeoutError('receipt timeout')), "
+        "patch.object(bounded_process, 'run', return_value=ok_res) as maint_mock:\n"
+        f"    runpy.run_path({str(SCRIPTS / 'entry.py')!r}, run_name='__main__')\n"
+        "assert maint_mock.called\n"
+    )
+    event = dict(
+        hook_event_name="UserPromptSubmit",
+        session_id="s-receipt-timeout",
+        cwd=str(tmp_path),
+        prompt="/mindie-agent analyze",
+    )
+    res = subprocess.run(
+        [sys.executable, "-c", driver],
+        input=json.dumps(event),
+        text=True,
+        capture_output=True,
+        env=dict(
+            os.environ,
+            HOME=str(tmp_path),
+            CODEX_HOME=str(tmp_path / "codex"),
+            MINDIE_AGENT_CONFIG=str(config_file),
+            MINDIE_DIAGNOSTICS_ROOT=str(tmp_path / "diag"),
+            MINDIE_DIAGNOSTICS_CONFIG=str(tmp_path / "diag/d.json"),
+        ),
+        timeout=10,
+    )
+    assert res.returncode == 0, res.stderr
+    payload = json.loads(res.stdout)
+    assert set(payload) <= {"systemMessage", "hookSpecificOutput"}
+    assert "MindIE session entry succeeded" in payload["systemMessage"]
+    assert "local entry receipt update failed (TimeoutError)" in payload["systemMessage"]
+    assert "receipt_unconfirmed=true" in payload["hookSpecificOutput"]["additionalContext"]
+    assert Admission(admission_file).knowledge_lease("s-receipt-timeout") is not None

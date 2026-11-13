@@ -370,13 +370,16 @@ if __name__ == "__main__":
                 Path.home() / ".config/mindie-agent/codex.json",
             )).expanduser().absolute()
             stage = getattr(exc, "_mindie_prepare_stage", None) or "bootstrap"
-            record_entry_status(
-                config,
-                stage=stage,
-                status="failed",
-                session_id=_PROMPT_EVENT.get("session_id"),
-                error_type=type(exc).__name__,
-            )
+            try:
+                record_entry_status(
+                    config,
+                    stage=stage,
+                    status="failed",
+                    session_id=_PROMPT_EVENT.get("session_id"),
+                    error_type=type(exc).__name__,
+                )
+            except Exception:
+                pass
             print(json.dumps(prompt_failure_response(stage, type(exc).__name__)))
             raise SystemExit(0)
         if isinstance(exc, SystemExit):

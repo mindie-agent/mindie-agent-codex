@@ -170,21 +170,37 @@ def dispatch(args, config, *, stop_adapter=None):
         from manual_entry import action, authorize, record_entry_status
         result = authorize(read(config), args.prompt_event)
         is_deactivate = action(args.prompt_event) == "deactivate"
-        record_entry_status(
-            config,
-            stage="authorize",
-            status="deactivated" if is_deactivate else "authorized",
-            session_id=args.prompt_event.get("session_id"),
-        )
+        warnings = []
+        try:
+            record_entry_status(
+                config,
+                stage="authorize",
+                status="deactivated" if is_deactivate else "authorized",
+                session_id=args.prompt_event.get("session_id"),
+            )
+        except Exception as exc:
+            # Primary Admission mutation already committed (P4.1 Receipt Honesty):
+            # keep the committed response and surface local receipt accounting warning.
+            warnings.append(f"local entry receipt update failed ({type(exc).__name__})")
         if not is_deactivate:
             try:
                 session_start(config, session_id=args.prompt_event["session_id"])
             except Exception as exc:
                 # The grant is committed. Readiness failure must remain
                 # visible without discarding that known activation result.
-                result["systemMessage"] = (
-                    "MindIE session entry succeeded, but knowledge preparation failed "
-                    f"({type(exc).__name__}); inspect local status before recovery.")
+                warnings.append(f"knowledge preparation failed ({type(exc).__name__})")
+        if warnings:
+            state_word = "deactivation" if is_deactivate else "entry"
+            result["systemMessage"] = (
+                f"MindIE session {state_word} succeeded, but "
+                + " and ".join(warnings)
+                + "; inspect local status before recovery."
+            )
+            hook_out = result.get("hookSpecificOutput")
+            if isinstance(hook_out, dict) and isinstance(hook_out.get("additionalContext"), str):
+                hook_out["additionalContext"] += (
+                    " Receipt warning (receipt_unconfirmed=true): " + "; ".join(warnings) + "."
+                )
         print(json.dumps(result))
         return
     if args.role == 'session-start':
@@ -325,13 +341,16 @@ if __name__ == '__main__':
                     Path.home() / ".config/mindie-agent/codex.json",
                 )).expanduser().absolute()
                 stage = getattr(exc, "_mindie_prepare_stage", None) or "release-entry"
-                record_entry_status(
-                    config_guess,
-                    stage=stage,
-                    status="failed",
-                    session_id=event.get("session_id"),
-                    error_type=type(exc).__name__,
-                )
+                try:
+                    record_entry_status(
+                        config_guess,
+                        stage=stage,
+                        status="failed",
+                        session_id=event.get("session_id"),
+                        error_type=type(exc).__name__,
+                    )
+                except Exception:
+                    pass
                 print(json.dumps(prompt_failure_response(stage, type(exc).__name__)))
             else:
                 print("{}")

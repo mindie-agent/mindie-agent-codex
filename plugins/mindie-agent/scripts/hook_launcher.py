@@ -258,7 +258,10 @@ def _report_prompt_launcher_failure(exc):
         raise SystemExit(0)
     error_type = type(exc).__name__
     print(f"MindIE hook launcher failed: {error_type}", file=sys.stderr)
-    _record_launcher_failure(event.get("session_id"), error_type)
+    try:
+        _record_launcher_failure(event.get("session_id"), error_type)
+    except Exception:
+        pass
     print(json.dumps(dict(
         systemMessage=(
             f"MindIE session authorization failed at hook-launcher ({error_type}); "
