@@ -103,14 +103,21 @@ class Maintenance:
 
     def _run(self):
         failed = False
+        busy = False
         outcome = None
         try:
-            with update_lock(self.config):
-                value = read_json(self.config)[0]
-                argv = [value["python"], "-I",
-                        str(Path(runtime_scripts(value)) / "harness_update.py"),
-                        "--config", str(self.config)]
-                environment = runtime_env(self.config)
+            try:
+                with update_lock(self.config):
+                    value = read_json(self.config)[0]
+                    argv = [value["python"], "-I",
+                            str(Path(runtime_scripts(value)) / "harness_update.py"),
+                            "--config", str(self.config)]
+                    environment = runtime_env(self.config)
+            except BlockingIOError:
+                # Non-blocking lock contention against a foreground operation is
+                # expected concurrency, never a reportable updater fault (#339).
+                busy = True
+                return
             output = run(argv, "", env=environment, cancel=self.cancel,
                          allow_service=True, timeout=2700.0).checked_stdout()
             outcome = json.loads(output)
@@ -157,7 +164,9 @@ class Maintenance:
             # A helper may fail before writing status, or lose the check lock
             # to another process. Both are attempts, not reasons to spawn at
             # every subsequent tool call while the old receipt is still due.
-            if failed or self.next_attempt <= time.time():
+            if busy:
+                self.next_attempt = max(self.next_attempt, time.time() + ACTIVATION_BACKOFF)
+            elif failed or self.next_attempt <= time.time():
                 self.next_attempt = max(self.next_attempt, time.time() + FAILURE_BACKOFF)
 
     def close(self):

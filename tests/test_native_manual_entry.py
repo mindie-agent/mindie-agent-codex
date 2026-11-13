@@ -52,7 +52,18 @@ def test_native_dispatch_prepares_the_committed_manual_session(tmp_path, capsys,
     assert Admission(path).knowledge_lease("manual") is None
 
 
-@pytest.mark.parametrize("prompt", ["Download Kimi", "Explain /mindie-agent", "`/mindie-agent`", "Read the mindie-agent source"])
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Download Kimi",
+        "Explain /mindie-agent",
+        "`/mindie-agent`",
+        "Read the mindie-agent source",
+        "/mindie-agent-other",
+        "[$other-skill](/tmp/SKILL.md) tune KDA",
+        "[@other-plugin](plugin://other@mindie-agent) tune KDA",
+    ],
+)
 def test_ordinary_prompt_returns_no_context_or_state(tmp_path, prompt):
     event = dict(hook_event_name="UserPromptSubmit", session_id="ordinary", cwd=str(tmp_path), prompt=prompt)
     assert manual_entry.authorize({}, event) == {}
@@ -66,10 +77,22 @@ def test_ordinary_prompt_returns_no_context_or_state(tmp_path, prompt):
     assert not (tmp_path / "absent").exists()
 
 
-@pytest.mark.parametrize("prompt", ["/mindie-agent tune KDA", "$mindie-agent tune KDA", "$mindie-agent:mindie-agent tune KDA"])
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "/mindie-agent tune KDA",
+        "\ufeff/mindie-agent tune KDA",
+        "$mindie-agent tune KDA",
+        "$mindie-agent:mindie-agent tune KDA",
+        "[$mindie-agent](/Users/dev/.codex/skills/mindie-agent/SKILL.md) tune KDA",
+        "[$mindie-agent:mindie-agent](C:\\Users\\dev\\.codex\\skills\\mindie-agent\\SKILL.md) tune KDA",
+        "[@mindie-agent](plugin://mindie-agent@mindie-agent) tune KDA",
+    ],
+)
 def test_native_entry_grants_following_turns_but_not_other_sessions(tmp_path, prompt):
     path = tmp_path / "admission.sqlite3"
     event = dict(hook_event_name="UserPromptSubmit", session_id="manual", cwd=str(tmp_path), prompt=prompt)
+    assert manual_entry.action(event) == "tune KDA"
     with patch("service_client.connect") as connect:
         response = manual_entry.authorize(dict(admission_path=str(path)), event)
         connect.assert_not_called()
@@ -171,3 +194,235 @@ def test_native_deactivation_preserves_partial_domain_outcomes(tmp_path):
     assert result["systemMessage"]
     assert Admission(path).knowledge_lease("manual") is None
     assert bad_target.read_text() == "{broken"
+
+
+def test_windows_extended_interpreter_aliases_match_across_launcher_and_contract(tmp_path):
+    import hook_launcher
+    import product_contract
+
+    plain = r"C:\Users\Alice\.codex\plugins\data\mindie-agent\runtimes\abc\Scripts\python.exe"
+    extended = r"\\?\C:\users\alice\.codex\plugins\data\mindie-agent\runtimes\abc\Scripts\python.exe"
+    forward = "C:/Users/Alice/.codex/plugins/data/mindie-agent/runtimes/abc/Scripts/python.exe"
+    unc_plain = r"\\server\share\runtimes\Scripts\python.exe"
+    unc_extended = r"\\?\UNC\SERVER\SHARE\runtimes\Scripts\python.exe"
+
+    for checker in (product_contract.same_interpreter, hook_launcher._same_interpreter):
+        assert checker(plain, extended, windows=True)
+        assert checker(plain, forward, windows=True)
+        assert checker(unc_plain, unc_extended, windows=True)
+        assert not checker(plain, r"C:\Other\python.exe", windows=True)
+        assert not checker(None, plain, windows=True)
+        assert not checker("", plain, windows=True)
+
+    release = tmp_path / "releases/0.1.30"
+    release.mkdir(parents=True)
+    validation = dict(schema="mindie-candidate-check/1", status="validated", native_version="0.1.30")
+    (release / "runtime.json").write_text(
+        json.dumps(dict(python=extended, validation=validation)), encoding="utf-8"
+    )
+    (release / "entry.py").write_text("# fixture\n", encoding="utf-8")
+    adapter = dict(python=plain, product_validation=validation)
+    orig_same = hook_launcher._same_interpreter
+    with patch.object(hook_launcher, "_same_interpreter",
+                      side_effect=lambda a, b: orig_same(a, b, windows=True)):
+        assert hook_launcher._prepared_entry(adapter, tmp_path) == release / "entry.py"
+
+
+def test_stage_specific_inactive_diagnostics_prevent_infinite_resend_loop(tmp_path, monkeypatch):
+    import bridge
+    import knowledge_cli
+
+    diag = tmp_path / "diag"
+    config = tmp_path / "codex.json"
+    admission_file = tmp_path / "codex.admission.sqlite3"
+    release = tmp_path / "releases/0.1.30"
+    release.mkdir(parents=True)
+    validation = dict(schema="mindie-candidate-check/1", status="validated", native_version="0.1.30")
+    (release / "runtime.json").write_text(
+        json.dumps(dict(python=sys.executable, validation=validation)), encoding="utf-8"
+    )
+    # Corrupt profile (`engine_config: null`) fails at `profile-binding` with ProfileUnavailable.
+    config.write_text(
+        json.dumps(dict(
+            python=sys.executable,
+            runtime_scripts=str(SCRIPTS),
+            engine_config=None,
+            admission_path=str(admission_file),
+            product_validation=validation,
+        )),
+        encoding="utf-8",
+    )
+    env = dict(
+        os.environ,
+        HOME=str(tmp_path),
+        CODEX_HOME=str(tmp_path / "codex"),
+        MINDIE_AGENT_CONFIG=str(config),
+        MINDIE_DIAGNOSTICS_ROOT=str(diag),
+        MINDIE_DIAGNOSTICS_CONFIG=str(diag / "diagnostics.json"),
+    )
+    event = dict(
+        hook_event_name="UserPromptSubmit",
+        session_id="thread-top-1",
+        cwd=str(tmp_path),
+        prompt="/mindie-agent check status",
+    )
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPTS / "entry.py"), "--release", str(release), "user-prompt-submit"],
+        input=json.dumps(event),
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+    response = json.loads(completed.stdout)
+    assert "profile-binding" in response["systemMessage"]
+    assert "ProfileUnavailable" in response["systemMessage"]
+    assert "do not repeat /mindie-agent in a loop" in response["systemMessage"]
+    assert "Do NOT ask the user to resend /mindie-agent in a loop" in (
+        response["hookSpecificOutput"]["additionalContext"]
+    )
+
+    monkeypatch.setenv("MINDIE_AGENT_CONFIG", str(config))
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread-top-1")
+    with pytest.raises(bridge.Inactive) as exc_info:
+        bridge.activate("activate")
+    message = str(exc_info.value)
+    assert "profile-binding" in message
+    assert "ProfileUnavailable" in message
+    assert "do not repeat /mindie-agent in a loop" in message
+
+    # Session mismatch: UserPromptSubmit authorized thread-top-1, but shell runs under child-subagent.
+    manual_entry.record_entry_status(
+        config, stage="authorize", status="authorized", session_id="thread-top-1"
+    )
+    monkeypatch.setenv("CODEX_THREAD_ID", "child-subagent")
+    with pytest.raises(bridge.Inactive) as mismatch_exc:
+        bridge.activate("activate")
+    assert "session_mismatch" in str(mismatch_exc.value)
+    with pytest.raises(knowledge_cli.KnowledgeInactive) as cli_exc:
+        knowledge_cli.invoke("describe", {})
+    assert "session_mismatch" in str(cli_exc.value)
+
+
+def test_hook_launcher_failure_keeps_ordinary_prompt_passive_and_surfaces_explicit_gesture(tmp_path):
+    diag = tmp_path / "diag"
+    config = tmp_path / "codex.json"
+    config.write_text("{corrupt-json", encoding="utf-8")
+    env = dict(
+        os.environ,
+        HOME=str(tmp_path),
+        CODEX_HOME=str(tmp_path / "codex"),
+        PLUGIN_DATA=str(tmp_path / "data"),
+        MINDIE_AGENT_CONFIG=str(config),
+        MINDIE_DIAGNOSTICS_ROOT=str(diag),
+        MINDIE_DIAGNOSTICS_CONFIG=str(diag / "diagnostics.json"),
+    )
+    ordinary = dict(
+        hook_event_name="UserPromptSubmit",
+        session_id="thread-1",
+        cwd=str(tmp_path),
+        prompt="Refactor local helper",
+    )
+    res_ordinary = subprocess.run(
+        [sys.executable, str(SCRIPTS / "hook_launcher.py"), "user-prompt-submit"],
+        input=json.dumps(ordinary),
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=10,
+    )
+    assert res_ordinary.returncode == 0
+    assert json.loads(res_ordinary.stdout) == {}
+    assert not config.with_suffix(".entry-status.json").exists()
+
+    explicit = dict(ordinary, prompt="/mindie-agent inspect operator")
+    res_explicit = subprocess.run(
+        [sys.executable, str(SCRIPTS / "hook_launcher.py"), "user-prompt-submit"],
+        input=json.dumps(explicit),
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=10,
+    )
+    assert res_explicit.returncode == 0
+    payload = json.loads(res_explicit.stdout)
+    assert "hook-launcher" in payload["systemMessage"]
+    assert "JSONDecodeError" in payload["systemMessage"]
+    receipt = manual_entry.read_entry_status(config)
+    assert receipt["stage"] == "hook-launcher"
+    assert receipt["status"] == "failed"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows headless PowerShell 5.1 regression")
+def test_windows_headless_powershell_51_user_prompt_submit_utf8_no_console_error(tmp_path, request):
+    import windows_process
+    from bootstrap import publish_entry
+    from tests.process_fixtures import stop_owned_knowledge_service
+
+    ps51 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    if not ps51.is_file():
+        pytest.skip("Windows PowerShell 5.1 is not present")
+
+    release = tmp_path / "data/releases/fixture"
+    release.mkdir(parents=True)
+    validation = dict(schema="mindie-candidate-check/1", status="validated", native_version="fixture")
+    (release / "runtime.json").write_text(
+        json.dumps(dict(python=sys.executable, validation=validation)), encoding="utf-8"
+    )
+    publish_entry(sys.executable, SCRIPTS, release)
+    engine = tmp_path / "engine.json"
+    request.addfinalizer(lambda: stop_owned_knowledge_service(engine) if engine.is_file() else None)
+    admission_file = tmp_path / "admission.sqlite3"
+    engine.write_text(json.dumps(dict(
+        domain="test",
+        root=str(tmp_path / "corpus"),
+        admission_path=str(admission_file),
+        transcript_adapter=str(SCRIPTS / "codex_transcript.py"),
+        product_validation=validation,
+    )), encoding="utf-8")
+    config = tmp_path / "adapter.json"
+    config.write_text(json.dumps(dict(
+        python=sys.executable,
+        runtime_scripts=str(SCRIPTS),
+        engine_config=str(engine),
+        product_validation=validation,
+        admission_path=str(admission_file),
+    )), encoding="utf-8")
+    commands = native_entry.hook_commands("user-prompt-submit")
+    encoded = commands["commandWindows"].split("-EncodedCommand ", 1)[1]
+    env = dict(
+        os.environ,
+        HOME=str(tmp_path),
+        USERPROFILE=str(tmp_path),
+        CODEX_HOME=str(tmp_path / "codex"),
+        MINDIE_AGENT_CONFIG=str(config),
+        PLUGIN_DATA=str(tmp_path / "data"),
+        PLUGIN_ROOT=str(SCRIPTS.parent),
+        MINDIE_DIAGNOSTICS_ROOT=str(tmp_path / "diag"),
+        MINDIE_DIAGNOSTICS_CONFIG=str(tmp_path / "diag/diagnostics.json"),
+    )
+    event = dict(
+        hook_event_name="UserPromptSubmit",
+        session_id="win-ps51-session",
+        cwd=str(tmp_path),
+        prompt="/mindie-agent 中文算子分析",
+    )
+    proc = windows_process.spawn(
+        [str(ps51), "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        env=env,
+    )
+    try:
+        stdout, stderr = proc.communicate(json.dumps(event, ensure_ascii=False), timeout=30)
+    finally:
+        windows_process.close_tree(proc)
+    assert proc.returncode == 0, stderr
+    assert "OutputEncoding" not in stderr
+    response = json.loads(stdout)
+    assert response["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+    assert Admission(admission_file).knowledge_lease("win-ps51-session") is not None

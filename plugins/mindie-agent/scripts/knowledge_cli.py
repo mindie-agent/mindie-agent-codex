@@ -26,8 +26,13 @@ from runtime_call import KnowledgeInactive
 
 def invoke(operation, arguments):
     session = native_session()
-    if operation == "describe" and admission(read_config()).knowledge_lease(session) is None:
-        raise KnowledgeInactive("Knowledge requires manual /mindie-agent activation in this task")
+    if operation == "describe":
+        config = read_config()
+        if admission(config).knowledge_lease(session) is None:
+            from admission_ops import config_path
+            from manual_entry import explain_inactive_session
+            raise KnowledgeInactive(explain_inactive_session(
+                config_path(), session, admission_path=config.get("admission_path")))
     gate = Gate("knowledge")
     if operation == "describe":
         return dict(tools=gate.tools)

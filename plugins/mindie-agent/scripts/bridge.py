@@ -276,8 +276,12 @@ def _runtime_identity():
 def activate(operation, *, domain=None):
     if operation == "activate":
         from admission_ops import admission, native_session, read_config
-        if admission(read_config()).knowledge_lease(native_session()) is None:
-            raise Inactive("Knowledge is not authorized in this session; the user must invoke /mindie-agent first")
+        from manual_entry import explain_inactive_session
+        config = read_config()
+        session = native_session()
+        if admission(config).knowledge_lease(session) is None:
+            raise Inactive(explain_inactive_session(
+                config_path(), session, admission_path=config.get("admission_path")))
     sessions = Sessions()
     if operation == "activate" and domain is not None:
         # Target-domain activation returns its own lease and domain facts. It

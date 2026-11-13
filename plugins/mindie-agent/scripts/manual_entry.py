@@ -12,14 +12,188 @@
 - Explicit entry mutates only the existing Admission lease; no knowledge
   service, corpus, model, transcript or contribution worker is started here.
 """
+import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
+import tempfile
+import time
 
 from session_gate import IDENTITY
 
-GESTURE = re.compile(r"^\s*(?:/mindie-agent|\$mindie-agent(?::mindie-agent)?)(?=\s|$)")
+ENTRY_STATUS_SCHEMA = "mindie-manual-entry/1"
+_STAGE = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
+_ERROR_TYPE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
+# Match explicit start-of-prompt /mindie-agent, $mindie-agent, and Codex
+# Composer's linked skill/plugin pill forms (plus optional leading UTF-8 BOM).
+GESTURE = re.compile(
+    r"^[\s\ufeff]*(?:"
+    r"/mindie-agent"
+    r"|\$mindie-agent(?::mindie-agent)?"
+    r"|\[\$mindie-agent(?::mindie-agent)?\]\([^\r\n)]+\)"
+    r"|\[@mindie-agent\]\(plugin://mindie-agent@[^\r\n)]+\)"
+    r")(?=\s|$)"
+)
+
+
+def entry_status_path(config_file):
+    return Path(config_file).expanduser().absolute().with_suffix(".entry-status.json")
+
+
+def _session_digest(session):
+    if not isinstance(session, str) or not IDENTITY.fullmatch(session):
+        return None
+    return hashlib.sha256(session.encode("utf-8")).hexdigest()[:16]
+
+
+def record_entry_status(config_file, *, stage, status, session_id=None, error_type=None):
+    """Persist a sanitized manual-entry receipt when the config directory exists."""
+    if status not in {"authorized", "deactivated", "failed"}:
+        return
+    target = entry_status_path(config_file)
+    if not target.parent.is_dir():
+        return
+    safe_stage = stage if isinstance(stage, str) and _STAGE.fullmatch(stage) else "entry"
+    safe_error = (
+        error_type
+        if isinstance(error_type, str) and _ERROR_TYPE.fullmatch(error_type)
+        else None
+    )
+    payload = dict(
+        schema=ENTRY_STATUS_SCHEMA,
+        updated_at=time.time(),
+        stage=safe_stage,
+        status=status,
+        session_sha256=_session_digest(session_id),
+        error_type=safe_error,
+    )
+    temporary = None
+    try:
+        descriptor, temporary = tempfile.mkstemp(prefix=target.name + ".", dir=target.parent)
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            json.dump(payload, stream, sort_keys=True)
+            stream.flush()
+        os.replace(temporary, target)
+    except TimeoutError:
+        raise
+    except OSError:
+        # Read-only sandboxes cannot persist receipts; keep the primary hook outcome intact.
+        return
+    finally:
+        if temporary is not None:
+            try:
+                Path(temporary).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def read_entry_status(config_file):
+    target = entry_status_path(config_file)
+    try:
+        if not target.is_file():
+            return None
+        with target.open("rb") as stream:
+            raw = stream.read(4097)
+        if len(raw) > 4096:
+            return None
+        value = json.loads(raw.decode("utf-8"))
+    except TimeoutError:
+        raise
+    except (OSError, ValueError, TypeError):
+        return None
+    if (not isinstance(value, dict)
+            or value.get("schema") != ENTRY_STATUS_SCHEMA
+            or value.get("status") not in {"authorized", "deactivated", "failed"}
+            or type(value.get("updated_at")) not in (int, float)
+            or not math.isfinite(value["updated_at"])):
+        return None
+    return value
+
+
+def prompt_failure_response(stage, error_type):
+    safe_stage = stage if isinstance(stage, str) and _STAGE.fullmatch(stage) else "entry"
+    safe_error = (
+        error_type
+        if isinstance(error_type, str) and _ERROR_TYPE.fullmatch(error_type)
+        else "RuntimeError"
+    )
+    return dict(
+        systemMessage=(
+            f"MindIE session authorization failed at {safe_stage} ({safe_error}); "
+            "inspect local status/permissions and do not repeat /mindie-agent in a loop."
+        ),
+        hookSpecificOutput=dict(
+            hookEventName="UserPromptSubmit",
+            additionalContext=(
+                f"MindIE UserPromptSubmit failed at stage '{safe_stage}' ({safe_error}) "
+                "before session authorization completed. Do NOT ask the user to resend "
+                "/mindie-agent in a loop; inspect local status/permissions if needed and "
+                "continue independent task work with native or deterministic tools."
+            ),
+        ),
+    )
+
+
+def _unwritable_state_hint(config_file, admission_path=None):
+    if os.name == "nt":
+        return False
+    for candidate in (admission_path, config_file):
+        if not candidate:
+            continue
+        current = Path(candidate).expanduser().absolute()
+        if current.exists():
+            return not os.access(current, os.W_OK)
+        for parent in current.parents:
+            if parent.exists():
+                return not os.access(parent, os.W_OK)
+    return False
+
+
+def explain_inactive_session(config_file, session, *, admission_path=None):
+    """Return a stage-specific Inactive message (<260 chars) without leaking paths or IDs."""
+    digest = _session_digest(session)
+    receipt = read_entry_status(config_file) if config_file is not None else None
+    if receipt is not None:
+        status = receipt.get("status")
+        recorded_session = receipt.get("session_sha256")
+        stage = receipt.get("stage")
+        stage = stage if isinstance(stage, str) and _STAGE.fullmatch(stage) else "entry"
+        error_type = receipt.get("error_type")
+        error_type = (
+            error_type
+            if isinstance(error_type, str) and _ERROR_TYPE.fullmatch(error_type)
+            else "RuntimeError"
+        )
+        if status == "failed" and (recorded_session is None or recorded_session == digest):
+            return (
+                f"Knowledge is not authorized in this session: the last /mindie-agent hook "
+                f"failed at {stage} ({error_type}); inspect status/permissions, do not repeat "
+                "/mindie-agent in a loop, and continue with native/deterministic tools"
+            )
+        if status == "deactivated" and recorded_session == digest:
+            return (
+                "Knowledge is not authorized in this session: /mindie-agent was deactivated; "
+                "send /mindie-agent only to re-enable, or continue with native/deterministic tools"
+            )
+        if status == "authorized" and recorded_session and digest and recorded_session != digest:
+            return (
+                "Knowledge is not authorized in this session (session_mismatch: /mindie-agent "
+                "authorized another CODEX_THREAD_ID); do not repeat /mindie-agent in a loop; "
+                "use the top-level session or continue with native/deterministic tools"
+            )
+    if config_file is not None and _unwritable_state_hint(config_file, admission_path=admission_path):
+        return (
+            "Knowledge is not authorized in this session (admission_unwritable: sandbox or "
+            "permissions blocked /mindie-agent state writes); do not repeat /mindie-agent in "
+            "a loop; continue with native/deterministic tools"
+        )
+    return (
+        "Knowledge is not authorized in this session (no /mindie-agent hook receipt; send "
+        "/mindie-agent at prompt start, or if already sent in this turn, UserPromptSubmit did "
+        "not run—do not resend in a loop; continue with native/deterministic tools)"
+    )
 
 
 def requested(event):

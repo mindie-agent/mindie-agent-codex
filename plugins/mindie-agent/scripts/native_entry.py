@@ -54,9 +54,14 @@ STOP_TIMEOUT = (
     STOP_DISPATCH_SECONDS + UV_STARTUP_SECONDS + CLEANUP_GRACE_SECONDS)
 
 PLUGIN_LAUNCHER = "$_hl"
+# Headless Windows PowerShell 5.1 (`CREATE_NO_WINDOW`) has no console handle and
+# throws `IOException: The handle is invalid` on `[Console]::OutputEncoding = ...`
+# unless guarded. `$OutputEncoding` and `PYTHONIOENCODING` still govern pipes.
 PS_PROTOCOL_ENCODING = (
+    "$ProgressPreference = 'SilentlyContinue'; "
+    "$ErrorActionPreference = 'SilentlyContinue'; "
     "$OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
-    "[Console]::OutputEncoding = $OutputEncoding; [Console]::InputEncoding = $OutputEncoding; "
+    "try { [Console]::OutputEncoding = $OutputEncoding; [Console]::InputEncoding = $OutputEncoding } catch {}; "
     "$env:PYTHONIOENCODING = 'utf-8'; "
 )
 # Use "$PLUGIN_ROOT" / "$PLUGIN_DATA" (shell env) rather than ${PLUGIN_ROOT}.
@@ -66,8 +71,6 @@ POSIX_LAUNCHER_RESOLVE = (
     '_hl="$PLUGIN_ROOT/scripts/hook_launcher.py"; '
     'if [ ! -f "$_hl" ]; then _hl="$PLUGIN_DATA/hook_launcher.py"; fi; ')
 PS_LAUNCHER_RESOLVE = (
-    "$ProgressPreference = 'SilentlyContinue'; "
-    "$ErrorActionPreference = 'SilentlyContinue'; "
     "$root = [string]$env:PLUGIN_ROOT; $hl = ''; "
     "if ($root) { $hl = Join-Path $root 'scripts/hook_launcher.py' }; "
     "if (-not $hl -or -not (Test-Path -LiteralPath $hl)) { "
@@ -259,10 +262,28 @@ def hook_commands(role, **names):
     arguments = [*_uv_python(role), PLUGIN_LAUNCHER, *_launcher_flags(**names), role]
     if role == "user-prompt-submit":
         # Preserve the hook's one JSON response: only an explicit entry may
-        # attach knowledge context. Ordinary prompts emit exactly {}.
-        body = (PS_PROTOCOL_ENCODING + PS_LAUNCHER_RESOLVE + "& " + " ".join(ps_arg(arg) for arg in arguments)
-                + "; exit $LASTEXITCODE")
-        return dict(command=POSIX_LAUNCHER_RESOLVE + " ".join(posix_arg(arg) for arg in arguments),
+        # attach knowledge context, and ordinary prompts emit {}. If the outer
+        # uv/launcher command crashes before Python can emit JSON, return a UI
+        # systemMessage so the failure is visible instead of silently dropped.
+        left, right = _failure_json_parts(
+            "MindIE UserPromptSubmit launcher failed; inspect local diagnostics and do not repeat /mindie-agent in a loop.")
+        posix_cmd = " ".join(posix_arg(arg) for arg in arguments)
+        posix = (
+            POSIX_LAUNCHER_RESOLVE + posix_cmd + "; _st=$?; "
+            + "if [ \"$_st\" -ne 0 ]; then printf '%s\\n' "
+            + shlex.quote(left) + '"$_st"' + shlex.quote(right)
+            + "; fi; exit 0"
+        )
+        body = (
+            PS_PROTOCOL_ENCODING + PS_LAUNCHER_RESOLVE
+            + "$failed = $false; $code = 0; try { & "
+            + " ".join(ps_arg(arg) for arg in arguments)
+            + "; $code = $LASTEXITCODE; $failed = ($code -ne 0) } catch { $failed = $true; $code = 1 }; "
+            + "if ($failed) { [Console]::Out.WriteLine('"
+            + left.replace("'", "''") + "' + $code + '" + right.replace("'", "''")
+            + "') }; exit 0"
+        )
+        return dict(command=posix,
                     commandWindows="powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "
                     + base64.b64encode(body.encode("utf-16le")).decode("ascii"),
                     # Cold baseline (900s) + first-use profile setup (225s) +

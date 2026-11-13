@@ -155,8 +155,15 @@ def finish_outcome(config, session, token, succeeded):
     _admission(config).finish(session, token, succeeded)
 
 
+_DISPATCH_STATE = {"stage": "request", "execution": "not_started"}
+_READ_ONLY_KNOWLEDGE = frozenset({"knowledge_query", "knowledge_explain", "knowledge_attach"})
+
+
 def call(payload):
+    _DISPATCH_STATE["stage"] = "request"
+    _DISPATCH_STATE["execution"] = "not_started"
     if payload["surface"] == "catalog":
+        _DISPATCH_STATE["stage"] = "catalog"
         surface = payload["catalog_surface"]
         if surface == "components":
             from component_tools import catalog
@@ -224,7 +231,9 @@ def call(payload):
     default_lease = _admission(config).knowledge_lease(session)
     target_lease = _admission(selected).knowledge_lease(session) if routed else default_lease
     if target_lease is None and default_lease is None:
-        raise KnowledgeInactive("Knowledge requires manual /mindie-agent activation in this task")
+        from manual_entry import explain_inactive_session
+        raise KnowledgeInactive(explain_inactive_session(
+            config_path(), session, admission_path=config.get("admission_path")))
     if target_lease is None and name in {"knowledge_distill", "knowledge_attach"}:
         raise LeaseRequired("the selected domain requires its own manual /mindie-agent activation")
     # C6 capture admission needs the existing target-engine lease token, not a
@@ -254,7 +263,13 @@ def call(payload):
 
         if not sharing.capture_allowed(lease, None):
             raise ValueError("knowledge attach requires enabled community sharing")
+    _DISPATCH_STATE["stage"] = "service-start"
+    _DISPATCH_STATE["execution"] = "not_started"
     connection = connect(selected)
+    _DISPATCH_STATE["stage"] = "operation"
+    _DISPATCH_STATE["execution"] = (
+        "not_started" if name in _READ_ONLY_KNOWLEDGE else "outcome_unconfirmed"
+    )
     if name == "knowledge_attach":
         # Admission is owned by the existing lease; startup needs no
         # second attach protocol or duplicate session registry.
@@ -559,17 +574,16 @@ def remote(payload):
 
 
 if __name__ == "__main__":
-    stage = "request"
-    execution = "not_started"
+    _DISPATCH_STATE["stage"] = "request"
+    _DISPATCH_STATE["execution"] = "not_started"
     try:
-        stage = "request"
         raw = sys.stdin.buffer.read()
         payload = json.loads(raw)
-        stage = "operation"
-        execution = "outcome_unconfirmed"
         sys.stdout.buffer.write((json.dumps(call(payload), ensure_ascii=False) + "\n").encode("utf-8"))
         sys.stdout.buffer.flush()
     except Exception as exc:
+        stage = _DISPATCH_STATE["stage"]
+        execution = _DISPATCH_STATE["execution"]
         try:
             from mindie_knowledge.loop.transport import FeedUnavailableError
         except ImportError:
@@ -577,6 +591,12 @@ if __name__ == "__main__":
             feed_unavailable = False
         else:
             feed_unavailable = isinstance(exc, FeedUnavailableError)
+        try:
+            from mindie_knowledge.loop.service_host import ServiceHostError
+        except ImportError:
+            service_host_error = False
+        else:
+            service_host_error = isinstance(exc, ServiceHostError)
         try:
             from service_client import DomainRouteError
         except ImportError:
@@ -592,6 +612,9 @@ if __name__ == "__main__":
             stage, execution = "authorization", "not_started"
         elif routing_error:
             stage, execution = "routing", "not_started"
+        elif service_host_error:
+            stage = "service-start"
+            execution = "outcome_unconfirmed" if getattr(exc, "uncertain", False) else "not_started"
         message = (
             "Knowledge query unavailable: a configured feed has no verified installed snapshot. "
             "The query did not run. Continue from available code, documentation and native tools; "
@@ -599,6 +622,8 @@ if __name__ == "__main__":
             if feed_unavailable else
             f"Knowledge request rejected before execution: {str(exc)[:300]}. No automatic retry."
             if routing_error else
+            f"MindIE {stage}: ServiceHostError ({exc.stage}:{exc.code}); execution={execution}; no automatic retry."
+            if service_host_error else
             f"MindIE {stage}: {type(exc).__name__}; execution={execution}; no automatic retry."
         )
         shaped = dict(
@@ -620,6 +645,8 @@ if __name__ == "__main__":
                 "lease_required" if lease_required else "domain_routing_rejected"
             )
             shaped["structuredContent"]["message"] = str(exc)[:300]
+        elif service_host_error:
+            shaped["structuredContent"]["service_error"] = dict(stage=exc.stage, code=exc.code)
         diagnostic = reference({"diagnostic": getattr(exc, "mindie_diagnostic", None)})
         # RequestRejected derives ValueError. MaintenanceCancelled may derive
         # RuntimeError; match the class name statically so discovery does not
@@ -633,7 +660,10 @@ if __name__ == "__main__":
             and type(exc).__name__ != "MaintenanceCancelled"
         ):
             diagnostic = failure(
-                "runtime.dispatch", "dispatch", "internal", exception=exc
+                "runtime.dispatch",
+                "service-start" if service_host_error else "dispatch",
+                "internal",
+                exception=exc,
             )
         if diagnostic:
             shaped = attach(shaped, diagnostic)

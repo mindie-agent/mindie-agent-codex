@@ -55,6 +55,7 @@ def preparing(stage):
         if result is not None:
             detail += f" (execution={result.execution}, exit={result.returncode}, cleanup_failed={bool(result.cleanup)})"
         print(detail + "; " + json.dumps(diagnostic, sort_keys=True), file=sys.stderr)
+        exc._mindie_prepare_stage = stage
         exc._mindie_prepare_reported = True
         raise
 
@@ -297,5 +298,34 @@ if __name__ == "__main__":
     try:
         with preparing("bootstrap"):
             main()
-    except Exception:
+    except Exception as exc:
+        if "user-prompt-submit" in sys.argv[2:] and "migrate" not in sys.argv[2:]:
+            try:
+                from manual_entry import (
+                    prompt_failure_response,
+                    read_event,
+                    record_entry_status,
+                    requested,
+                )
+                event = read_event(sys.stdin.buffer)
+            except Exception:
+                event = None
+            if isinstance(event, dict):
+                if not requested(event):
+                    print("{}")
+                    raise SystemExit(0)
+                config = Path(os.environ.get(
+                    "MINDIE_AGENT_CONFIG",
+                    Path.home() / ".config/mindie-agent/codex.json",
+                )).expanduser().absolute()
+                stage = getattr(exc, "_mindie_prepare_stage", None) or "bootstrap"
+                record_entry_status(
+                    config,
+                    stage=stage,
+                    status="failed",
+                    session_id=event.get("session_id"),
+                    error_type=type(exc).__name__,
+                )
+                print(json.dumps(prompt_failure_response(stage, type(exc).__name__)))
+                raise SystemExit(0)
         raise SystemExit(1)
