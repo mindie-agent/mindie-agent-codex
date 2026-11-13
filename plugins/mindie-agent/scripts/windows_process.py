@@ -49,7 +49,9 @@ def exec_or_wait(command, env):
                 cleanup_error.returncode = returncode
                 cleanup_error.add_note("Native entry completed with exit code " + str(returncode))
                 raise
-    raise SystemExit(returncode)
+    forwarded = SystemExit(returncode)
+    forwarded._mindie_forwarded_child = True
+    raise forwarded
 
 
 def spawn(command, *, allow_service=False, **kwargs):
@@ -151,29 +153,33 @@ def _assign_job(process, *, allow_service=False):
     kernel.CloseHandle.argtypes = [wintypes.HANDLE]
     kernel.CloseHandle.restype = wintypes.BOOL
 
-    job = kernel.CreateJobObjectW(None, None)
-    if not job:
-        raise ctypes.WinError(ctypes.get_last_error())
-    limits = ExtendedLimitInformation()
-    limits.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-    if allow_service:
-        # Only explicit service launchers may request CREATE_BREAKAWAY_FROM_JOB.
-        # Ordinary descendants still inherit this Job and are always cleaned.
-        limits.BasicLimitInformation.LimitFlags |= 0x00000800
-    configured = kernel.SetInformationJobObject(
-        job,
-        _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
-        ctypes.byref(limits),
-        ctypes.sizeof(limits),
-    )
-    assigned = configured and kernel.AssignProcessToJobObject(
-        job, int(process._handle)
-    )
-    if not assigned:
+    for breakaway in ((True, False) if allow_service else (False,)):
+        job = kernel.CreateJobObjectW(None, None)
+        if not job:
+            raise ctypes.WinError(ctypes.get_last_error())
+        limits = ExtendedLimitInformation()
+        limits.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if breakaway:
+            # Only explicit service launchers may request CREATE_BREAKAWAY_FROM_JOB.
+            # If an outer host Job Object forbids breakaway (WinError 5/50/87),
+            # fall back to kill-on-close containment rather than aborting hooks.
+            limits.BasicLimitInformation.LimitFlags |= 0x00000800
+        configured = kernel.SetInformationJobObject(
+            job,
+            _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+            ctypes.byref(limits),
+            ctypes.sizeof(limits),
+        )
+        assigned = configured and kernel.AssignProcessToJobObject(
+            job, int(process._handle)
+        )
+        if assigned:
+            process._mindie_windows_job = (kernel, job)
+            return
         error = ctypes.get_last_error()
         kernel.CloseHandle(job)
-        raise ctypes.WinError(error)
-    process._mindie_windows_job = (kernel, job)
+        if not breakaway or error not in (5, 50, 87):
+            raise ctypes.WinError(error)
 
 
 def _resume_windows_process(process):

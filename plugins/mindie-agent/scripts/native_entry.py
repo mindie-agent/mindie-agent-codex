@@ -54,10 +54,16 @@ STOP_TIMEOUT = (
     STOP_DISPATCH_SECONDS + UV_STARTUP_SECONDS + CLEANUP_GRACE_SECONDS)
 
 PLUGIN_LAUNCHER = "$_hl"
+# Headless Windows PowerShell 5.1 (`CREATE_NO_WINDOW`) has no console handle and
+# throws `IOException: The handle is invalid` on `[Console]::OutputEncoding = ...`
+# unless guarded. `$OutputEncoding` and `PYTHONIOENCODING` still govern pipes.
 PS_PROTOCOL_ENCODING = (
+    "$ProgressPreference = 'SilentlyContinue'; "
     "$OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
-    "[Console]::OutputEncoding = $OutputEncoding; [Console]::InputEncoding = $OutputEncoding; "
+    "try { [Console]::InputEncoding = $OutputEncoding } catch {}; "
+    "try { [Console]::OutputEncoding = $OutputEncoding } catch {}; "
     "$env:PYTHONIOENCODING = 'utf-8'; "
+    "$env:PYTHONUTF8 = '1'; "
 )
 # Use "$PLUGIN_ROOT" / "$PLUGIN_DATA" (shell env) rather than ${PLUGIN_ROOT}.
 # Codex substitutes the braced manifest token when listing hooks, so a literal
@@ -67,11 +73,10 @@ POSIX_LAUNCHER_RESOLVE = (
     'if [ ! -f "$_hl" ]; then _hl="$PLUGIN_DATA/hook_launcher.py"; fi; ')
 PS_LAUNCHER_RESOLVE = (
     "$ProgressPreference = 'SilentlyContinue'; "
-    "$ErrorActionPreference = 'SilentlyContinue'; "
     "$root = [string]$env:PLUGIN_ROOT; $hl = ''; "
-    "if ($root) { $hl = Join-Path $root 'scripts/hook_launcher.py' }; "
-    "if (-not $hl -or -not (Test-Path -LiteralPath $hl)) { "
-    "$hl = Join-Path $env:PLUGIN_DATA 'hook_launcher.py' }; ")
+    "if ($root) { try { $hl = Join-Path $root 'scripts/hook_launcher.py' -ErrorAction SilentlyContinue } catch {} }; "
+    "if (-not $hl -or -not (Test-Path -LiteralPath $hl -ErrorAction SilentlyContinue)) { "
+    "try { $hl = Join-Path ([string]$env:PLUGIN_DATA) 'hook_launcher.py' -ErrorAction SilentlyContinue } catch {} }; ")
 # Single-line, double-quoted Python so shlex.quote wraps it in one pair of
 # single quotes. Newlines inside `python3 -c` are rewritten by hooks/list.
 _FAILURE_ENCODER = (
@@ -258,11 +263,72 @@ def neutral_hook_commands(argv, *, failure="MindIE Stop helper failed; capture c
 def hook_commands(role, **names):
     arguments = [*_uv_python(role), PLUGIN_LAUNCHER, *_launcher_flags(**names), role]
     if role == "user-prompt-submit":
-        # Preserve the hook's one JSON response: only an explicit entry may
-        # attach knowledge context. Ordinary prompts emit exactly {}.
-        body = (PS_PROTOCOL_ENCODING + PS_LAUNCHER_RESOLVE + "& " + " ".join(ps_arg(arg) for arg in arguments)
-                + "; exit $LASTEXITCODE")
-        return dict(command=POSIX_LAUNCHER_RESOLVE + " ".join(posix_arg(arg) for arg in arguments),
+        # Preserve the hook's one JSON response: capture stdin before dispatch so
+        # even crashes or nonzero exits after Python consumes stdin still emit a
+        # visible systemMessage on explicit /mindie-agent gestures while keeping
+        # ordinary prompts completely silent ({}, P2.1).
+        left, right = _failure_json_parts(
+            "MindIE UserPromptSubmit launcher failed; inspect local diagnostics and do not repeat /mindie-agent in a loop.")
+        unicode_ws_cps = [cp for cp in range(128, 0x10000) if chr(cp).isspace()]
+        ws_lit = "|".join(chr(cp) for cp in unicode_ws_cps)
+        ws_esc = "|".join(rf"\\u{cp:04x}|\\u{cp:04X}" for cp in unicode_ws_cps)
+        ws_unit = f"([[:space:]]|\x1c|\x1d|\x1e|\x1f|\\\\[fnrt]|\\\\u00(0[9a-dA-D]|1[c-fC-F]|20)|{ws_lit}|{ws_esc})"
+        prefix_unit = f"({ws_unit}|\ufeff|\\\\u[fF][eE][fF][fF])"
+        posix_event = r'(^|[{,][[:space:]]*)"hook_event_name"[[:space:]]*:[[:space:]]*"UserPromptSubmit"'
+        posix_agent = r'(^|[{,][[:space:]]*)"agent_id"[[:space:]]*:[[:space:]]*"[^"]'
+        posix_gesture = (
+            r'(^|[{,][[:space:]]*)"prompt"[[:space:]]*:[[:space:]]*"'
+            + prefix_unit + "*"
+            + r'(/mindie-agent|\$mindie-agent(:mindie-agent)?'
+            + r'|\[\$mindie-agent(:mindie-agent)?\]\(([^"\\)]|\\[^nr])+\)'
+            + r'|\[@mindie-agent\]\(plugin://mindie-agent@([^"\\)]|\\[^nr])+\))'
+            + r'("|' + ws_unit + ')'
+        )
+        posix_cmd = " ".join(posix_arg(arg) for arg in arguments)
+        posix = (
+            POSIX_LAUNCHER_RESOLVE
+            + "_in=$(head -c33554433; printf x); _in=${_in%x}; "
+            + "_out=$(printf '%s' \"$_in\" | " + posix_cmd + "); _st=$?; "
+            + "if [ \"$_st\" -eq 0 ]; then "
+            + "if [ -n \"$_out\" ]; then printf '%s\\n' \"$_out\"; else printf '{}\\n'; fi; "
+            + "elif printf '%s' \"$_in\" | LC_ALL=C grep -Eq " + shlex.quote(posix_event)
+            + " && printf '%s' \"$_in\" | LC_ALL=C grep -Eq " + shlex.quote(posix_gesture)
+            + " && ! printf '%s' \"$_in\" | LC_ALL=C grep -Eq " + shlex.quote(posix_agent)
+            + "; then printf '%s\\n' " + shlex.quote(left) + '"$_st"' + shlex.quote(right)
+            + "; else printf '{}\\n'; fi; exit 0"
+        )
+        ps_gesture = (
+            r'^[\s\u0085\x1c-\x1f\uFEFF]*(?:/mindie-agent|\$mindie-agent(?::mindie-agent)?'
+            r'|\[\$mindie-agent(?::mindie-agent)?\]\([^\r\n)]+\)'
+            r'|\[@mindie-agent\]\(plugin://mindie-agent@[^\r\n)]+\))(?=[\s\u0085\x1c-\x1f]|$)'
+        )
+        body = (
+            PS_PROTOCOL_ENCODING + PS_LAUNCHER_RESOLVE
+            + "$inStream = [Console]::OpenStandardInput(); "
+            + "$ms = [System.IO.MemoryStream]::new(); $buf = [byte[]]::new(65536); "
+            + "while ($ms.Length -lt 33554433) { "
+            + "$take = [Math]::Min($buf.Length, 33554433 - [int]$ms.Length); "
+            + "$n = $inStream.Read($buf, 0, $take); if ($n -le 0) { break }; "
+            + "$ms.Write($buf, 0, $n) }; "
+            + "$inBytes = $ms.ToArray(); $inText = $OutputEncoding.GetString($inBytes); "
+            + "$sendText = if ($inText.EndsWith(\"`r`n\")) { $inText.Substring(0, $inText.Length - 2) } "
+            + "elseif ($inText.EndsWith(\"`n\")) { $inText.Substring(0, $inText.Length - 1) } else { $inText }; "
+            + "$failed = $false; $code = 0; $out = ''; try { "
+            + "$out = ($sendText | & " + " ".join(ps_arg(arg) for arg in arguments) + " | Out-String).Trim(); "
+            + "$code = $LASTEXITCODE; $failed = ($code -ne 0) } catch { $failed = $true; $code = 1 }; "
+            + "$resp = '{}'; "
+            + "if (-not $failed) { if ($out) { $resp = $out } } "
+            + "else { $explicit = $false; try { $ev = $inText | ConvertFrom-Json; "
+            + "if ($null -ne $ev -and $ev.hook_event_name -eq 'UserPromptSubmit' -and (-not $ev.agent_id) "
+            + "-and ($ev.prompt -is [string]) -and ($ev.prompt -cmatch '" + ps_gesture.replace("'", "''") + "')) { "
+            + "$explicit = $true } } catch {}; "
+            + "if ($explicit) { $resp = '"
+            + left.replace("'", "''") + "' + $code + '" + right.replace("'", "''") + "' } }; "
+            + "$outStream = [Console]::OpenStandardOutput(); "
+            + "$outBytes = $OutputEncoding.GetBytes($resp + \"`n\"); "
+            + "$outStream.Write($outBytes, 0, $outBytes.Length); $outStream.Flush(); exit 0"
+        )
+        return dict(command=posix,
                     commandWindows="powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "
                     + base64.b64encode(body.encode("utf-16le")).decode("ascii"),
                     # Cold baseline (900s) + first-use profile setup (225s) +

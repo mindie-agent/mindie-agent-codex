@@ -123,6 +123,8 @@ def typed_catalog_error(exc):
             status=exc.code,
             source=exc,
         )
+    if isinstance(exc, json.JSONDecodeError):
+        return _catalog_error("release_catalog_invalid", source=exc)
     if isinstance(exc, (urllib.error.URLError, ConnectionError, ReleaseResponseTooLarge)):
         return _catalog_error("release_transport_unavailable", source=exc)
     if isinstance(exc, (FileNotFoundError, TimeoutError)):

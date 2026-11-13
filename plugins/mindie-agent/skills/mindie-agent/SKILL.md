@@ -13,7 +13,7 @@ description: Manually enable MindIE knowledge, domain skills, feedback, distilla
 
 Use this skill when the user explicitly invokes `/mindie-agent` or `$mindie-agent` in the current Codex session. The `UserPromptSubmit` hook grants session access on that command.
 
-Before your first knowledge call in the session, resolve the active adapter configuration and run `python -I <runtime_scripts>/bridge.py activate` once in the native shell (which supplies `CODEX_THREAD_ID`). That command activates the session grant and prepares eligible background capture; new chats, forks, and subagents require their own entry.
+Before your first knowledge call in the session, resolve the active adapter configuration and run `python -I <runtime_scripts>/bridge.py activate` once in the native shell (which supplies `CODEX_THREAD_ID`). That command activates the session grant and prepares eligible background capture; new chats, forks, and subagents require their own entry. If `bridge.py activate` returns `Inactive` even though `/mindie-agent` or `$mindie-agent` was already sent in the current turn, report the returned stage-specific reason once, do **not** ask the user to re-send `/mindie-agent` in a loop, and continue the task directly with deterministic MCP or authorized native host tools.
 
 Knowledge tools are invoked via `knowledge_cli.py`:
 - Run `python -I <runtime_scripts>/knowledge_cli.py describe` when you need the tool schemas.

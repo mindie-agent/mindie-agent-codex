@@ -15,7 +15,7 @@ jobs:
     secrets:
       MINDIE_RELEASE_DEPLOY_KEY: ${{ secrets.MINDIE_RELEASE_DEPLOY_KEY }}
     with:
-      release-notes-path: docs/releases/mindie-agent-codex-0.1.29.md
+      release-notes-path: docs/releases/mindie-agent-codex-0.1.30.md
       version-files: |
         plugins/mindie-agent/pyproject.toml
         plugins/mindie-agent/.codex-plugin/plugin.json

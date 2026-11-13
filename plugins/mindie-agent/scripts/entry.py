@@ -51,14 +51,25 @@ class ProfileUnavailable(ValueError):
 
 def _installed_profile(config, receipt, *, adapter=None):
     adapter = read(config) if adapter is None else adapter
+    if not isinstance(adapter, dict) or not isinstance(receipt, dict):
+        raise ProfileUnavailable("installed profile metadata must be JSON objects")
     python = adapter.get("python")
-    scripts = Path(runtime_scripts(adapter))
+    try:
+        scripts = Path(runtime_scripts(adapter))
+    except ValueError as exc:
+        raise ProfileUnavailable("installed profile lacks an absolute runtime_scripts path") from exc
     if not isinstance(python, str) or not os.path.isabs(python):
         raise ProfileUnavailable("installed profile lacks an absolute runtime interpreter")
-    engine = Path(adapter["engine_config"])
+    engine_raw = adapter.get("engine_config")
+    if not isinstance(engine_raw, str) or not os.path.isabs(engine_raw):
+        raise ProfileUnavailable("installed profile lacks an absolute engine_config path")
+    engine = Path(engine_raw)
     value = read(engine)
-    if ("client_contract" in value
-            or value.get("transcript_adapter") != str(scripts / "codex_transcript.py")
+    if (not isinstance(value, dict)
+            or "client_contract" in value
+            or not product_contract.same_interpreter(
+                value.get("transcript_adapter"),
+                str(scripts / "codex_transcript.py"))
             or value.get("product_validation") != adapter.get("product_validation")):
         raise ProfileUnavailable("unsupported installation profile; configuration, data and consent are preserved")
     return config
@@ -66,7 +77,7 @@ def _installed_profile(config, receipt, *, adapter=None):
 
 def profile(release, source=None, *, prepare=True):
     receipt = read(release / "runtime.json")
-    if receipt["python"] != sys.executable:
+    if not isinstance(receipt, dict) or not product_contract.same_interpreter(receipt.get("python"), sys.executable):
         raise ValueError("release interpreter differs from its prepared runtime")
     config = Path(os.environ.get("MINDIE_AGENT_CONFIG", Path.home() / ".config/mindie-agent/codex.json")).expanduser().absolute()
     if os.path.lexists(config):
@@ -91,18 +102,28 @@ def profile(release, source=None, *, prepare=True):
 
 def replacement_entry(release, adapter):
     """Use the canonical launcher's release identity, including first setup."""
-    validation = adapter.get("product_validation", {})
+    if not isinstance(adapter, dict):
+        raise ProfileUnavailable("installed profile metadata must be a JSON object")
+    validation = adapter.get("product_validation")
+    if not isinstance(validation, dict):
+        raise ProfileUnavailable("installed profile points at another runtime with an invalid release identity")
     version = validation.get("native_version")
     if not isinstance(version, str) or not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+!-]{0,79}", version):
         raise ProfileUnavailable("installed profile points at another runtime with an invalid release identity")
     home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
     data = Path(os.environ.get("PLUGIN_DATA", home / "plugins/data/mindie-agent-mindie-agent"))
-    target = Path(adapter.get("component_release") or data / "releases" / version)
-    if (target.resolve() == release.resolve() or not (target / "entry.py").is_file()
+    comp_rel = adapter.get("component_release")
+    if comp_rel is not None and (not isinstance(comp_rel, str) or not os.path.isabs(comp_rel)):
+        raise ProfileUnavailable("installed profile points at another runtime without a prepared entry")
+    target = Path(comp_rel) if comp_rel else data / "releases" / version
+    if (product_contract.same_directory(str(target), str(release))
+            or not (target / "entry.py").is_file()
             or not (target / "runtime.json").is_file()):
         raise ProfileUnavailable("installed profile points at another runtime without a prepared entry")
     receipt = read(target / "runtime.json")
-    if (receipt.get("python") != adapter["python"] or receipt.get("validation") != validation
+    if (not isinstance(receipt, dict)
+            or not product_contract.same_interpreter(receipt.get("python"), adapter.get("python"))
+            or receipt.get("validation") != validation
             or validation.get("schema") != "mindie-candidate-check/1"
             or validation.get("status") != "validated"):
         raise ProfileUnavailable("installed profile differs from its prepared runtime receipt")
@@ -140,20 +161,52 @@ def session_start(config, *, session_id=None):
     print(result.checked_stdout(), file=sys.stderr)
 
 
+_ACTIVE_ARGS = None
+
+
 def dispatch(args, config, *, stop_adapter=None):
     remaining = args.arguments
     if args.role == 'user-prompt-submit':
-        from manual_entry import action, authorize
+        from manual_entry import action, authorize, record_entry_status
         result = authorize(read(config), args.prompt_event)
-        if action(args.prompt_event) != "deactivate":
+        is_deactivate = action(args.prompt_event) == "deactivate"
+        partial_deactivate = is_deactivate and "systemMessage" in result
+        warnings = []
+        if not partial_deactivate:
+            try:
+                record_entry_status(
+                    config,
+                    stage="authorize",
+                    status="deactivated" if is_deactivate else "authorized",
+                    session_id=args.prompt_event.get("session_id"),
+                )
+            except Exception as exc:
+                # Primary Admission mutation already committed (P4.1 Receipt Honesty):
+                # keep the committed response and surface local receipt accounting warning.
+                warnings.append(f"local entry receipt update failed ({type(exc).__name__})")
+        if not is_deactivate:
             try:
                 session_start(config, session_id=args.prompt_event["session_id"])
             except Exception as exc:
                 # The grant is committed. Readiness failure must remain
                 # visible without discarding that known activation result.
+                warnings.append(f"knowledge preparation failed ({type(exc).__name__})")
+        if warnings:
+            existing_msg = result.get("systemMessage")
+            if isinstance(existing_msg, str) and existing_msg:
+                result["systemMessage"] = existing_msg.rstrip(".") + "; " + " and ".join(warnings) + "."
+            else:
+                state_word = "deactivation" if is_deactivate else "entry"
                 result["systemMessage"] = (
-                    "MindIE session entry succeeded, but knowledge preparation failed "
-                    f"({type(exc).__name__}); inspect local status before recovery.")
+                    f"MindIE session {state_word} succeeded, but "
+                    + " and ".join(warnings)
+                    + "; inspect local status before recovery."
+                )
+            hook_out = result.get("hookSpecificOutput")
+            if isinstance(hook_out, dict) and isinstance(hook_out.get("additionalContext"), str):
+                hook_out["additionalContext"] += (
+                    " Receipt warning (receipt_unconfirmed=true): " + "; ".join(warnings) + "."
+                )
         print(json.dumps(result))
         return
     if args.role == 'session-start':
@@ -197,12 +250,14 @@ def dispatch(args, config, *, stop_adapter=None):
 
 
 def main():
+    global _ACTIVE_ARGS
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--release', type=Path, required=True)
     parser.add_argument('--source', type=Path)
     parser.add_argument('role', choices=['session-start', 'user-prompt-submit', 'stop', 'knowledge-mcp', 'remote-mcp', 'tools-mcp', 'sync', 'configure', 'status', 'bridge', 'migrate'])
     parser.add_argument('arguments', nargs=argparse.REMAINDER)
     args = parser.parse_args()
+    _ACTIVE_ARGS = args
     if args.role == 'migrate':
         if not args.arguments:
             raise ValueError("migration role requires the original role")
@@ -225,28 +280,32 @@ def main():
             return
     from bootstrap import preparing
     from session_gate import runtime_env
-    with preparing("profile-binding"):
-        if args.role == "stop":
+    if args.role == "stop":
+        with preparing("profile-binding"):
             # Atomic canonical publication gives this invocation one complete
             # runtime identity; its immutable engine can enqueue after retirement.
             receipt = read(args.release / "runtime.json")
-            if receipt["python"] != sys.executable:
+            if not isinstance(receipt, dict) or not product_contract.same_interpreter(receipt.get("python"), sys.executable):
                 raise ValueError("release interpreter differs from its prepared runtime")
             config = Path(os.environ.get("MINDIE_AGENT_CONFIG", Path.home() / ".config/mindie-agent/codex.json")).expanduser().absolute()
             adapter = read(config)
             _installed_profile(config, receipt, adapter=adapter)
             bind_explicit_config(config)
-            return dispatch(args, config, stop_adapter=adapter)
+        return dispatch(args, config, stop_adapter=adapter)
+    with preparing("profile-binding"):
         config = profile(
             args.release, args.source if args.role == 'session-start' else None,
-            prepare=args.role != 'stop')
-        with update_lock(config, blocking=args.role != 'stop'):
+            prepare=True)
+    mcp = args.role in {'knowledge-mcp', 'remote-mcp', 'tools-mcp'} or (
+        args.role == 'bridge' and args.arguments[:1] == ['mcp'])
+    with update_lock(config, blocking=True):
+        with preparing("profile-binding"):
             # Bind before any helper side effect. MCP keeps this identity in
             # memory and reacquires the same lock for each request.
             adapter = read(config)
             _installed_profile(config, read(args.release / "runtime.json"), adapter=adapter)
-            if (Path(adapter.get("python", "")).absolute() != Path(sys.executable).absolute()
-                    or Path(runtime_scripts(adapter)).resolve() != SCRIPTS.resolve()):
+            if (not product_contract.same_interpreter(adapter.get("python"), sys.executable)
+                    or not product_contract.same_directory(runtime_scripts(adapter), str(SCRIPTS))):
                 # The native facade selected this entry before activation
                 # acquired the lock. No business operation has started yet.
                 command = replacement_entry(args.release, adapter)
@@ -255,10 +314,8 @@ def main():
                 command = None
                 bind_explicit_config(config)
                 os.environ.update(runtime_env(config))
-                mcp = args.role in {'knowledge-mcp', 'remote-mcp', 'tools-mcp'} or (
-                    args.role == 'bridge' and args.arguments[:1] == ['mcp'])
-                if not mcp:
-                    return dispatch(args, config)
+        if command is None and not mcp:
+            return dispatch(args, config)
     if command is not None:
         # Release the old operation lock before entering another interpreter.
         return transfer_entry(command, args, environment)
@@ -267,13 +324,44 @@ def main():
 
 if __name__ == '__main__':
     try:
-        raise SystemExit(main())
-    except Exception as exc:
+        _rc = main()
+    except (Exception, SystemExit) as exc:
+        if isinstance(exc, SystemExit) and (
+            exc.code in (None, 0) or getattr(exc, "_mindie_forwarded_child", False)
+        ):
+            raise
         if isinstance(exc, ProfileUnavailable):
             print(str(exc), file=sys.stderr)
         if not getattr(exc, "_mindie_prepare_reported", False):
             from diagnostic_support import failure
             failure('entry.prepare', 'release-entry', 'configuration',
-                    exception=exc, reportable=False)
+                    exception=exc, reportable=False,
+                    exit_code=exc.code if isinstance(exc, SystemExit) and type(exc.code) is int else None)
             print(f'MindIE release entry failed: {type(exc).__name__}; inspect local diagnostics.', file=sys.stderr)
+        if _ACTIVE_ARGS is not None and _ACTIVE_ARGS.role == 'user-prompt-submit':
+            from manual_entry import prompt_failure_response, record_entry_status, requested
+            event = getattr(_ACTIVE_ARGS, "prompt_event", None)
+            if requested(event):
+                config_guess = Path(os.environ.get(
+                    "MINDIE_AGENT_CONFIG",
+                    Path.home() / ".config/mindie-agent/codex.json",
+                )).expanduser().absolute()
+                stage = getattr(exc, "_mindie_prepare_stage", None) or "release-entry"
+                try:
+                    record_entry_status(
+                        config_guess,
+                        stage=stage,
+                        status="failed",
+                        session_id=event.get("session_id"),
+                        error_type=type(exc).__name__,
+                    )
+                except Exception:
+                    pass
+                print(json.dumps(prompt_failure_response(stage, type(exc).__name__)))
+            else:
+                print("{}")
+            raise SystemExit(0)
+        if isinstance(exc, SystemExit):
+            raise
         raise SystemExit(1)
+    raise SystemExit(_rc)

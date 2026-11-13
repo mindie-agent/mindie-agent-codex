@@ -28,7 +28,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from product_contract import official_feeds, read_json
+from product_contract import official_feeds, read_json, same_directory, same_interpreter
 from session_gate import runtime_binding
 from update_lock import update_lock
 
@@ -87,7 +87,7 @@ def prepare(config, release, *, blocking=True, expected_binding=None, deadline=N
     if deadline is not None and time.monotonic() >= deadline:
         raise TimeoutError("activation preparation deadline expired")
     receipt = read_json(release / "runtime.json")[0]
-    if receipt["python"] != sys.executable:
+    if not isinstance(receipt, dict) or not same_interpreter(receipt.get("python"), sys.executable):
         raise ValueError("candidate preparation must run in its exact installed runtime")
     scripts = Path(__file__).resolve().parent
     legacy = expected_binding is not None and "component_commands" not in expected_binding
@@ -145,17 +145,24 @@ def binding_matches_release(config, release, receipt, *, scripts=None):
     config, release = Path(config).absolute(), Path(release).absolute()
     scripts = Path(__file__).resolve().parent if scripts is None else Path(scripts).absolute()
     adapter = read_json(config)[0]
+    if not isinstance(adapter, dict) or not isinstance(receipt, dict):
+        return False
     validation = receipt.get("validation")
-    if not isinstance(validation, dict) or receipt.get("python") != sys.executable:
+    if not isinstance(validation, dict) or not same_interpreter(receipt.get("python"), sys.executable):
         return False
     digest = hashlib.sha256(os.fsencode(str(config))).hexdigest()
     expected_engine = release / ("profile-" + digest + ".engine.json")
     expected_component = str(release) if "component_updates" in validation else None
-    matches = (adapter.get("python") == sys.executable
-            and adapter.get("runtime_scripts") == str(scripts)
-            and adapter.get("engine_config") == str(expected_engine)
+    comp_matches = (
+        adapter.get("component_release") is None
+        if expected_component is None
+        else same_directory(adapter.get("component_release"), expected_component)
+    )
+    matches = (same_interpreter(adapter.get("python"), sys.executable)
+            and same_directory(adapter.get("runtime_scripts"), str(scripts))
+            and same_interpreter(adapter.get("engine_config"), str(expected_engine))
             and adapter.get("product_validation") == validation
-            and adapter.get("component_release") == expected_component
+            and comp_matches
             and Path(expected_engine).is_file())
     if not matches or "component_updates" not in validation:
         return matches

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import ntpath
+import os
 from pathlib import Path
 import re
 import tomllib
@@ -186,6 +188,38 @@ def requirements(source):
                 or packages[0].get("source", {}).get("git", "").split("#")[-1] != pins[name]):
             raise ValueError("uv.lock differs from the declared exact runtime pins")
     return pins, hashlib.sha256(raw + b"\0" + lock).hexdigest()
+
+
+def _normalize_windows_path(value):
+    text = value.replace("/", "\\")
+    if text[:8].upper() == "\\\\?\\UNC\\":
+        text = "\\\\" + text[8:]
+    elif text.startswith("\\\\?\\"):
+        text = text[4:]
+    return ntpath.normcase(ntpath.abspath(text))
+
+
+def same_interpreter(left, right, *, windows=None):
+    """Compare interpreter or file paths across Windows extended-path aliases."""
+    if not isinstance(left, str) or not isinstance(right, str) or not left or not right:
+        return False
+    if os.name == "nt" if windows is None else windows:
+        return _normalize_windows_path(left) == _normalize_windows_path(right)
+    return os.path.abspath(left) == os.path.abspath(right)
+
+
+def same_directory(left, right, *, windows=None):
+    """Compare resolved directories across symlinks and Windows extended prefixes."""
+    if not isinstance(left, str) or not isinstance(right, str) or not left or not right:
+        return False
+    if os.name == "nt" if windows is None else windows:
+        try:
+            left_resolved = str(Path(_normalize_windows_path(left)).resolve())
+            right_resolved = str(Path(_normalize_windows_path(right)).resolve())
+        except OSError:
+            left_resolved, right_resolved = left, right
+        return _normalize_windows_path(left_resolved) == _normalize_windows_path(right_resolved)
+    return Path(left).resolve() == Path(right).resolve()
 
 
 def package_root(source):
