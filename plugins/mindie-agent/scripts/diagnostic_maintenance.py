@@ -8,6 +8,7 @@ Activates the reporter from saved unified consent, then runs local retention.
 
 [Timeouts & Locks]
 - Executes under `bounded_process.run` with clean `runtime_env(config)`.
+- Offline work gets 15s plus 5s for process startup and SQLite settlement.
 
 [Side-Effect Policy]
 - Prunes expired local diagnostic events and, when reporting is enabled, refreshes the reporter daemon.
@@ -28,8 +29,9 @@ def maintain(config):
         timeout=90.0, allowed_returncodes=(0, 1), env=environment, allow_service=True)
     activation = json.loads(activation_result.checked_stdout())
     command = [sys.executable, '-m', 'mindie_diagnostics.cli', 'reporting', 'maintain',
+               '--budget-seconds', '15',
                '--config', environment["MINDIE_DIAGNOSTICS_CONFIG"]]
-    result = run(command, '', timeout=5.0, allowed_returncodes=(0, 1), env=environment)
+    result = run(command, '', timeout=20.0, allowed_returncodes=(0, 1), env=environment)
     value = json.loads(result.stdout)
     if not isinstance(value, dict) or not isinstance(value.get('status'), str):
         raise ValueError('diagnostics maintenance returned an invalid receipt')

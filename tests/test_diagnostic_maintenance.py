@@ -76,7 +76,9 @@ class DiagnosticMaintenanceTests(unittest.TestCase):
                 self.assertFalse(result['network'])
                 activation, retention = command.call_args_list
                 self.assertEqual(activation.kwargs['timeout'], 90.0)
-                self.assertEqual(retention.kwargs['timeout'], 5.0)
+                self.assertGreaterEqual(retention.kwargs['timeout'], 20.0)
                 self.assertIn('activate', activation.args[0])
                 self.assertEqual(retention.args[0][-2:], ['--config', '/profile/diagnostics.json'])
+                budget = float(retention.args[0][retention.args[0].index('--budget-seconds') + 1])
+                self.assertGreaterEqual(retention.kwargs['timeout'], budget + 5)
                 self.assertNotIn('--update-running', retention.args[0])

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mindie-agent-codex"
-version = "0.1.28"
+version = "0.1.29"
 description = "Codex adapter for MindIE Agent"
 requires-python = ">=3.11"
 dependencies = [
@@ -18,9 +18,9 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "ac4a89e993c89deba5a4a629e1cd89d61e57c843" }
+mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "1d0e413a2852007b46275a123fa1cce7be7b90d0" }
 remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "6e9882e0fa495bf2feeef29ec86492498d364531" }
-mindie-diagnostics = { git = "https://github.com/mindie-agent/diagnostics", rev = "25182e651860fb354a78968fe6b7590f14b14593" }
+mindie-diagnostics = { git = "https://github.com/mindie-agent/diagnostics", rev = "37ed7f04a47eae8097cc286335186c3fcd9584b3" }
 mindie-debugger = { git = "https://github.com/mindie-agent/debugger", rev = "e9406b2b178335190d5cb59dff4d6985894497ba" }
 mindie-profiler = { git = "https://github.com/mindie-agent/profiler", rev = "f7dbca5e643db52807e12649e02291069f3d9d82" }
 mindie-sim = { git = "https://github.com/mindie-agent/sim", rev = "f0f76b0b56830a0315c108efe90bcf131d3701ce" }
@@ -29,7 +29,7 @@ mindie-coordinator = { git = "https://github.com/mindie-agent/coordinator", rev 
 [tool.uv]
 # The reviewed plugin selection also replaces older transitive component pins.
 override-dependencies = [
-  "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@25182e651860fb354a78968fe6b7590f14b14593",
+  "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@37ed7f04a47eae8097cc286335186c3fcd9584b3",
   "mindie-sim @ git+https://github.com/mindie-agent/sim@f0f76b0b56830a0315c108efe90bcf131d3701ce",
   "remote-dev @ git+https://github.com/mindie-agent/remote-dev@6e9882e0fa495bf2feeef29ec86492498d364531",
 ]
