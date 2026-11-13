@@ -2,7 +2,7 @@
 
 Use this flow during installation, first-use setup, or when GitHub authentication fails:
 
-1. **Check existing login**: Install `gh` if missing and run `gh api --hostname github.com user --jq .login` with a bounded timeout. If the expected account is already authenticated (including via `GH_TOKEN`), proceed directly to step 6.
+1. **Check existing login**: Install `gh` if missing and run `gh api --hostname github.com user --jq .login` with a bounded timeout. If the expected account is already authenticated (including via `GH_TOKEN`), proceed directly to step 6. A failed read does not establish invalid credentials: DNS/TCP timeouts, proxy failures and TLS errors must first be diagnosed in the same host process and network context. Opening github.com in a browser does not verify api.github.com access from `gh` or a scheduled worker. Only an actual HTTP authentication response justifies credential repair.
 2. **Choose login method**: Prefer token login on enterprise networks, behind corporate proxies/custom CAs, or when browser login is unavailable; otherwise default to browser login. Respect the user's explicit preference. Keep TLS verification enabled; repair network/proxy/CA issues directly rather than replacing valid tokens.
 3. **Browser login**: Run `gh auth login --hostname github.com --git-protocol https --web` in a user-accessible terminal. Offer the token route if browser authorization is blocked.
 4. **Token creation**: If the user needs a new token, open [GitHub's token page](https://github.com/settings/tokens/new?scopes=repo%2Cread%3Aorg%2Cgist&description=MindIE%20Agent) for a classic PAT with `repo`, `read:org`, and `gist` scopes (or an organization-approved fine-grained PAT covering the target repositories).
