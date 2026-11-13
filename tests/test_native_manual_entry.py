@@ -501,29 +501,33 @@ def test_outer_hook_preserves_canonical_gesture_and_post_read_failures(tmp_path)
     for prompt, extra, should_surface in (
         ("/mindie-agent-other", {}, False),
         ("/mindie-agent:other", {}, False),
+        ("/Mindie-Agent help", {}, False),
         ("$mindie-agent:other", {}, False),
         ("ordinary {\"prompt\": \"/mindie-agent\"}", {}, False),
         ("/mindie-agent help", {"agent_id": "sub-1"}, False),
         ("/mindie-agent", {}, True),
+        ("\ufeff/mindie-agent help", {}, True),
+        ("\u3000/mindie-agent\u00a0help", {}, True),
         ("$mindie-agent:mindie-agent help", {}, True),
         ("[$mindie-agent:mindie-agent](/a/SKILL.md) hi", {}, True),
         ("[@mindie-agent](plugin://mindie-agent@mindie-agent)", {}, True),
     ):
-        payload = dict(hook_event_name="UserPromptSubmit", session_id="s-1", cwd=str(tmp_path), prompt=prompt, **extra)
-        res = subprocess.run(
-            ["/bin/sh", "-c", commands["command"]],
-            input=json.dumps(payload),
-            text=True,
-            capture_output=True,
-            env=missing_env,
-            timeout=10,
-        )
-        assert res.returncode == 0
-        parsed = json.loads(res.stdout)
-        if should_surface:
-            assert "systemMessage" in parsed, (prompt, parsed)
-        else:
-            assert parsed == {}, (prompt, parsed)
+        for ensure_ascii in (False, True):
+            payload = dict(hook_event_name="UserPromptSubmit", session_id="s-1", cwd=str(tmp_path), prompt=prompt, **extra)
+            res = subprocess.run(
+                ["/bin/sh", "-c", commands["command"]],
+                input=json.dumps(payload, ensure_ascii=ensure_ascii),
+                text=True,
+                capture_output=True,
+                env=missing_env,
+                timeout=10,
+            )
+            assert res.returncode == 0
+            parsed = json.loads(res.stdout)
+            if should_surface:
+                assert "systemMessage" in parsed, (ensure_ascii, prompt, parsed)
+            else:
+                assert parsed == {}, (ensure_ascii, prompt, parsed)
 
     # Injecting SystemExit(1) inside setup.install AFTER entry.py consumes stdin must still surface failure.
     release = tmp_path / "releases/0.1.30"
@@ -560,6 +564,52 @@ def test_outer_hook_preserves_canonical_gesture_and_post_read_failures(tmp_path)
     surfaced = json.loads(completed.stdout)
     assert "profile-binding" in surfaced["systemMessage"]
     assert "SystemExit" in surfaced["systemMessage"]
+
+    # A handled helper return code (e.g. dispatch returning 1) must NOT emit a false entry.prepare diagnostic.
+    clean_diag = tmp_path / "clean-diag"
+    valid_engine = tmp_path / "valid-engine.json"
+    valid_config = tmp_path / "valid-codex.json"
+    valid_engine.write_text(
+        json.dumps(dict(
+            transcript_adapter=str(SCRIPTS / "codex_transcript.py"),
+            product_validation=validation,
+        )),
+        encoding="utf-8",
+    )
+    valid_config.write_text(
+        json.dumps(dict(
+            python=sys.executable,
+            runtime_scripts=str(SCRIPTS),
+            engine_config=str(valid_engine),
+            admission_path=str(tmp_path / "adm.sqlite3"),
+            product_validation=validation,
+        )),
+        encoding="utf-8",
+    )
+    handled_driver = (
+        f"import sys; sys.path.insert(0, {str(SCRIPTS)!r})\n"
+        "import bounded_process, runpy\n"
+        "from unittest.mock import patch\n"
+        "res = bounded_process.ProcessResult(stdout='{\"status\":\"degraded\"}\\n', stderr='', returncode=1, execution='completed', cleanup=[])\n"
+        f"sys.argv = [{str(SCRIPTS / 'entry.py')!r}, '--release', {str(release)!r}, 'status']\n"
+        "with patch.object(bounded_process, 'run', return_value=res):\n"
+        f"    runpy.run_path({str(SCRIPTS / 'entry.py')!r}, run_name='__main__')\n"
+    )
+    handled_res = subprocess.run(
+        [sys.executable, "-c", handled_driver],
+        text=True,
+        capture_output=True,
+        env=dict(
+            run_env,
+            MINDIE_AGENT_CONFIG=str(valid_config),
+            MINDIE_DIAGNOSTICS_ROOT=str(clean_diag),
+            MINDIE_DIAGNOSTICS_CONFIG=str(clean_diag / "d.json"),
+        ),
+        timeout=10,
+    )
+    assert handled_res.returncode == 1
+    assert "MindIE release entry failed" not in handled_res.stderr
+    assert not list(clean_diag.rglob("*.jsonl"))
 
 
 def test_knowledge_cli_describe_preserves_inactive_stage_and_not_started(tmp_path, monkeypatch, capsys):

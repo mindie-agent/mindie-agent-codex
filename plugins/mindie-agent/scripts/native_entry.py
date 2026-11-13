@@ -267,14 +267,19 @@ def hook_commands(role, **names):
         # ordinary prompts completely silent ({}, P2.1).
         left, right = _failure_json_parts(
             "MindIE UserPromptSubmit launcher failed; inspect local diagnostics and do not repeat /mindie-agent in a loop.")
+        unicode_ws = [chr(cp) for cp in range(128, 0x10000) if chr(cp).isspace() or cp == 0xFEFF]
+        ws_lit = "|".join(unicode_ws)
+        ws_esc = "|".join(rf"\\u{cp:04x}|\\u{cp:04X}" for cp in range(128, 0x10000) if chr(cp).isspace() or cp == 0xFEFF)
+        ws_unit = f"([[:space:]]|\x1c|\x1d|\x1e|\x1f|\\\\[bfnrt]|\\\\u00(0[9a-dA-D]|1[c-fC-F]|20)|{ws_lit}|{ws_esc})"
         posix_event = r'(^|[{,][[:space:]]*)"hook_event_name"[[:space:]]*:[[:space:]]*"UserPromptSubmit"'
         posix_agent = r'(^|[{,][[:space:]]*)"agent_id"[[:space:]]*:[[:space:]]*"[^"]'
         posix_gesture = (
-            r'(^|[{,][[:space:]]*)"prompt"[[:space:]]*:[[:space:]]*"([[:space:]]|\\[nrt]|\\ufeff|\\uFEFF)*'
-            r'(/mindie-agent|\$mindie-agent(:mindie-agent)?'
-            r'|\[\$mindie-agent(:mindie-agent)?\]\(([^"\\)]|\\[^nr])+\)'
-            r'|\[@mindie-agent\]\(plugin://mindie-agent@([^"\\)]|\\[^nr])+\))'
-            r'("|[[:space:]]|\\[nrt])'
+            r'(^|[{,][[:space:]]*)"prompt"[[:space:]]*:[[:space:]]*"'
+            + ws_unit + "*"
+            + r'(/mindie-agent|\$mindie-agent(:mindie-agent)?'
+            + r'|\[\$mindie-agent(:mindie-agent)?\]\(([^"\\)]|\\[^nr])+\)'
+            + r'|\[@mindie-agent\]\(plugin://mindie-agent@([^"\\)]|\\[^nr])+\))'
+            + r'("|' + ws_unit + ')'
         )
         posix_cmd = " ".join(posix_arg(arg) for arg in arguments)
         posix = (
@@ -290,9 +295,9 @@ def hook_commands(role, **names):
             + "; else printf '{}\\n'; fi; exit 0"
         )
         ps_gesture = (
-            r'^[\s\uFEFF]*(?:/mindie-agent|\$mindie-agent(?::mindie-agent)?'
+            r'^[\s\u0085\x1c-\x1f\uFEFF]*(?:/mindie-agent|\$mindie-agent(?::mindie-agent)?'
             r'|\[\$mindie-agent(?::mindie-agent)?\]\([^\r\n)]+\)'
-            r'|\[@mindie-agent\]\(plugin://mindie-agent@[^\r\n)]+\))(?=\s|$)'
+            r'|\[@mindie-agent\]\(plugin://mindie-agent@[^\r\n)]+\))(?=[\s\u0085\x1c-\x1f]|$)'
         )
         body = (
             PS_PROTOCOL_ENCODING + PS_LAUNCHER_RESOLVE
@@ -303,7 +308,7 @@ def hook_commands(role, **names):
             + "if (-not $failed) { if ($out) { [Console]::Out.WriteLine($out) } else { [Console]::Out.WriteLine('{}') } } "
             + "else { $explicit = $false; try { $ev = $inText | ConvertFrom-Json; "
             + "if ($null -ne $ev -and $ev.hook_event_name -eq 'UserPromptSubmit' -and (-not $ev.agent_id) "
-            + "-and ($ev.prompt -is [string]) -and ($ev.prompt -match '" + ps_gesture.replace("'", "''") + "')) { "
+            + "-and ($ev.prompt -is [string]) -and ($ev.prompt -cmatch '" + ps_gesture.replace("'", "''") + "')) { "
             + "$explicit = $true } } catch {}; "
             + "if ($explicit) { [Console]::Out.WriteLine('"
             + left.replace("'", "''") + "' + $code + '" + right.replace("'", "''") + "') } "

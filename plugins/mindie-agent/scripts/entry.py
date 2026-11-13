@@ -302,7 +302,7 @@ def main():
 
 if __name__ == '__main__':
     try:
-        raise SystemExit(main())
+        _rc = main()
     except (Exception, SystemExit) as exc:
         if isinstance(exc, SystemExit) and exc.code in (None, 0):
             raise
@@ -337,3 +337,4 @@ if __name__ == '__main__':
         if isinstance(exc, SystemExit):
             raise
         raise SystemExit(1)
+    raise SystemExit(_rc)
