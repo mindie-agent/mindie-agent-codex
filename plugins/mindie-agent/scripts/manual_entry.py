@@ -94,6 +94,8 @@ def record_entry_status(config_file, *, stage, status, session_id=None, error_ty
         return
     target = entry_status_path(config_file)
     if not target.parent.is_dir():
+        if status in {"authorized", "deactivated"}:
+            raise FileNotFoundError("manual entry receipt directory does not exist")
         return
     safe_stage = stage if isinstance(stage, str) and _STAGE.fullmatch(stage) else "entry"
     safe_error = (
@@ -130,8 +132,7 @@ def record_entry_status(config_file, *, stage, status, session_id=None, error_ty
     except TimeoutError:
         raise
     except OSError:
-        # Read-only sandboxes cannot persist receipts; keep the primary hook outcome intact.
-        return
+        raise
     finally:
         if temporary is not None:
             try:

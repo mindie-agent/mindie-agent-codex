@@ -428,7 +428,13 @@ def test_windows_headless_powershell_51_user_prompt_submit_utf8_no_console_error
     )
     publish_entry(sys.executable, SCRIPTS, release)
     engine = tmp_path / "engine.json"
-    request.addfinalizer(lambda: stop_owned_knowledge_service(engine) if engine.is_file() else None)
+    def _cleanup():
+        if engine.is_file():
+            try:
+                stop_owned_knowledge_service(engine)
+            except Exception:
+                return
+    request.addfinalizer(_cleanup)
     admission_file = tmp_path / "admission.sqlite3"
     engine.write_text(json.dumps(dict(
         domain="test",
@@ -748,3 +754,59 @@ def test_entry_preserves_committed_authorization_when_receipt_write_times_out(tm
     assert "local entry receipt update failed (TimeoutError)" in payload["systemMessage"]
     assert "receipt_unconfirmed=true" in payload["hookSpecificOutput"]["additionalContext"]
     assert Admission(admission_file).knowledge_lease("s-receipt-timeout") is not None
+
+    # Ordinary OSError (e.g. PermissionError) during receipt persistence must also surface receipt_unconfirmed=true.
+    os_driver = driver.replace("TimeoutError('receipt timeout')", "PermissionError('read-only dir')")
+    os_res = subprocess.run(
+        [sys.executable, "-c", os_driver],
+        input=json.dumps(dict(event, session_id="s-receipt-perm")),
+        text=True,
+        capture_output=True,
+        env=dict(
+            os.environ,
+            HOME=str(tmp_path),
+            CODEX_HOME=str(tmp_path / "codex"),
+            MINDIE_AGENT_CONFIG=str(config_file),
+            MINDIE_DIAGNOSTICS_ROOT=str(tmp_path / "diag"),
+            MINDIE_DIAGNOSTICS_CONFIG=str(tmp_path / "diag/d.json"),
+        ),
+        timeout=10,
+    )
+    assert os_res.returncode == 0, os_res.stderr
+    os_payload = json.loads(os_res.stdout)
+    assert "local entry receipt update failed (PermissionError)" in os_payload["systemMessage"]
+    assert "receipt_unconfirmed=true" in os_payload["hookSpecificOutput"]["additionalContext"]
+    assert Admission(admission_file).knowledge_lease("s-receipt-perm") is not None
+
+    # Partial multi-domain deactivation must NOT record status='deactivated' or claim deactivation succeeded.
+    partial_driver = (
+        f"import runpy, sys; sys.path.insert(0, {str(SCRIPTS)!r})\n"
+        "from unittest.mock import patch\n"
+        "import manual_entry\n"
+        "from mindie_knowledge.loop import domain_routes\n"
+        "partial = {'status': 'partial', 'domains': {'ascendc': 'failed'}}\n"
+        f"sys.argv = [{str(SCRIPTS / 'entry.py')!r}, '--release', {str(release)!r}, 'user-prompt-submit']\n"
+        "with patch.object(domain_routes, 'deactivate_registered_domains', return_value=partial), "
+        "patch.object(manual_entry, 'record_entry_status') as rec_mock:\n"
+        f"    runpy.run_path({str(SCRIPTS / 'entry.py')!r}, run_name='__main__')\n"
+        "assert not rec_mock.called\n"
+    )
+    partial_res = subprocess.run(
+        [sys.executable, "-c", partial_driver],
+        input=json.dumps(dict(event, session_id="s-partial-deact", prompt="/mindie-agent deactivate")),
+        text=True,
+        capture_output=True,
+        env=dict(
+            os.environ,
+            HOME=str(tmp_path),
+            CODEX_HOME=str(tmp_path / "codex"),
+            MINDIE_AGENT_CONFIG=str(config_file),
+            MINDIE_DIAGNOSTICS_ROOT=str(tmp_path / "diag"),
+            MINDIE_DIAGNOSTICS_CONFIG=str(tmp_path / "diag/d.json"),
+        ),
+        timeout=10,
+    )
+    assert partial_res.returncode == 0, partial_res.stderr
+    partial_payload = json.loads(partial_res.stdout)
+    assert "deactivation is incomplete" in partial_payload["systemMessage"]
+    assert "deactivation succeeded" not in partial_payload["systemMessage"]

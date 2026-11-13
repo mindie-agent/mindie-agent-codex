@@ -59,7 +59,6 @@ PLUGIN_LAUNCHER = "$_hl"
 # unless guarded. `$OutputEncoding` and `PYTHONIOENCODING` still govern pipes.
 PS_PROTOCOL_ENCODING = (
     "$ProgressPreference = 'SilentlyContinue'; "
-    "$ErrorActionPreference = 'SilentlyContinue'; "
     "$OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
     "try { [Console]::InputEncoding = $OutputEncoding } catch {}; "
     "try { [Console]::OutputEncoding = $OutputEncoding } catch {}; "
@@ -73,10 +72,11 @@ POSIX_LAUNCHER_RESOLVE = (
     '_hl="$PLUGIN_ROOT/scripts/hook_launcher.py"; '
     'if [ ! -f "$_hl" ]; then _hl="$PLUGIN_DATA/hook_launcher.py"; fi; ')
 PS_LAUNCHER_RESOLVE = (
+    "$ProgressPreference = 'SilentlyContinue'; "
     "$root = [string]$env:PLUGIN_ROOT; $hl = ''; "
-    "if ($root) { $hl = Join-Path $root 'scripts/hook_launcher.py' }; "
-    "if (-not $hl -or -not (Test-Path -LiteralPath $hl)) { "
-    "$hl = Join-Path $env:PLUGIN_DATA 'hook_launcher.py' }; ")
+    "if ($root) { try { $hl = Join-Path $root 'scripts/hook_launcher.py' -ErrorAction SilentlyContinue } catch {} }; "
+    "if (-not $hl -or -not (Test-Path -LiteralPath $hl -ErrorAction SilentlyContinue)) { "
+    "try { $hl = Join-Path ([string]$env:PLUGIN_DATA) 'hook_launcher.py' -ErrorAction SilentlyContinue } catch {} }; ")
 # Single-line, double-quoted Python so shlex.quote wraps it in one pair of
 # single quotes. Newlines inside `python3 -c` are rewritten by hooks/list.
 _FAILURE_ENCODER = (

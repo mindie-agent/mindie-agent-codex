@@ -170,18 +170,20 @@ def dispatch(args, config, *, stop_adapter=None):
         from manual_entry import action, authorize, record_entry_status
         result = authorize(read(config), args.prompt_event)
         is_deactivate = action(args.prompt_event) == "deactivate"
+        partial_deactivate = is_deactivate and "systemMessage" in result
         warnings = []
-        try:
-            record_entry_status(
-                config,
-                stage="authorize",
-                status="deactivated" if is_deactivate else "authorized",
-                session_id=args.prompt_event.get("session_id"),
-            )
-        except Exception as exc:
-            # Primary Admission mutation already committed (P4.1 Receipt Honesty):
-            # keep the committed response and surface local receipt accounting warning.
-            warnings.append(f"local entry receipt update failed ({type(exc).__name__})")
+        if not partial_deactivate:
+            try:
+                record_entry_status(
+                    config,
+                    stage="authorize",
+                    status="deactivated" if is_deactivate else "authorized",
+                    session_id=args.prompt_event.get("session_id"),
+                )
+            except Exception as exc:
+                # Primary Admission mutation already committed (P4.1 Receipt Honesty):
+                # keep the committed response and surface local receipt accounting warning.
+                warnings.append(f"local entry receipt update failed ({type(exc).__name__})")
         if not is_deactivate:
             try:
                 session_start(config, session_id=args.prompt_event["session_id"])
@@ -190,12 +192,16 @@ def dispatch(args, config, *, stop_adapter=None):
                 # visible without discarding that known activation result.
                 warnings.append(f"knowledge preparation failed ({type(exc).__name__})")
         if warnings:
-            state_word = "deactivation" if is_deactivate else "entry"
-            result["systemMessage"] = (
-                f"MindIE session {state_word} succeeded, but "
-                + " and ".join(warnings)
-                + "; inspect local status before recovery."
-            )
+            existing_msg = result.get("systemMessage")
+            if isinstance(existing_msg, str) and existing_msg:
+                result["systemMessage"] = existing_msg.rstrip(".") + "; " + " and ".join(warnings) + "."
+            else:
+                state_word = "deactivation" if is_deactivate else "entry"
+                result["systemMessage"] = (
+                    f"MindIE session {state_word} succeeded, but "
+                    + " and ".join(warnings)
+                    + "; inspect local status before recovery."
+                )
             hook_out = result.get("hookSpecificOutput")
             if isinstance(hook_out, dict) and isinstance(hook_out.get("additionalContext"), str):
                 hook_out["additionalContext"] += (
