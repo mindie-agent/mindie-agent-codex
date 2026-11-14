@@ -58,12 +58,30 @@ PLUGIN_LAUNCHER = "$_hl"
 # throws `IOException: The handle is invalid` on `[Console]::OutputEncoding = ...`
 # unless guarded. `$OutputEncoding` and `PYTHONIOENCODING` still govern pipes.
 PS_PROTOCOL_ENCODING = (
-    "$ProgressPreference = 'SilentlyContinue'; "
-    "$OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
-    "try { [Console]::InputEncoding = $OutputEncoding } catch {}; "
-    "try { [Console]::OutputEncoding = $OutputEncoding } catch {}; "
-    "$env:PYTHONIOENCODING = 'utf-8'; "
-    "$env:PYTHONUTF8 = '1'; "
+    "$ProgressPreference='SilentlyContinue';"
+    "$u=[Text.UTF8Encoding]::new($false);$OutputEncoding=$u;"
+    "try{[Console]::InputEncoding=$u}catch{};"
+    "try{[Console]::OutputEncoding=$u}catch{};"
+    "$env:PYTHONIOENCODING='utf-8';$env:PYTHONUTF8='1';"
+)
+# Spawn CUI helpers via Diagnostics.Process with CreateNoWindow=$true and raw
+# pipe streams so headless Windows PowerShell 5.1 (CREATE_NO_WINDOW, CP936)
+# never flashes consoles, wraps stderr in ErrorRecord, exceeds cmd.exe's 8191
+# char limit, or corrupts UTF-8 JSON when [Console]::OutputEncoding has no handle.
+PS_PROC_HELPERS = (
+    "function _q([string]$a){if(-not $a.Length){return '\"\"'};"
+    "if($a -notmatch '[\\s\"]'){return $a};"
+    "return '\"'+([regex]::Replace($a,'(\\\\*)(\")','$1$1\\\"') -replace '(\\\\+)$','$1$1')+'\"'};"
+    "function _w([string]$s,[bool]$e){$b=$u.GetBytes($s+\"`n\");"
+    "$o=if($e){[Console]::OpenStandardError()}else{[Console]::OpenStandardOutput()};"
+    "$o.Write($b,0,$b.Length);$o.Flush()};"
+    "function _psi([object[]]$v){$x=[string]$v[0];if(-not $x){throw 1};"
+    "if($x.IndexOfAny([char[]]'\\/:') -lt 0){"
+    "$g=@(Get-Command $x -All -CommandType Application -EA 0|?{$_.Source -notmatch '\\\\WindowsApps\\\\'});"
+    "if($g.Count){$x=$g[0].Source}else{throw 1}};"
+    "$i=[Diagnostics.ProcessStartInfo]::new();$i.FileName=$x;"
+    "$i.Arguments=($(for($k=1;$k -lt $v.Count;$k++){_q([string]$v[$k])}) -join ' ');"
+    "$i.UseShellExecute=$false;$i.CreateNoWindow=$true;return $i};"
 )
 # Use "$PLUGIN_ROOT" / "$PLUGIN_DATA" (shell env) rather than ${PLUGIN_ROOT}.
 # Codex substitutes the braced manifest token when listing hooks, so a literal
@@ -72,11 +90,11 @@ POSIX_LAUNCHER_RESOLVE = (
     '_hl="$PLUGIN_ROOT/scripts/hook_launcher.py"; '
     'if [ ! -f "$_hl" ]; then _hl="$PLUGIN_DATA/hook_launcher.py"; fi; ')
 PS_LAUNCHER_RESOLVE = (
-    "$ProgressPreference = 'SilentlyContinue'; "
-    "$root = [string]$env:PLUGIN_ROOT; $hl = ''; "
-    "if ($root) { try { $hl = Join-Path $root 'scripts/hook_launcher.py' -ErrorAction SilentlyContinue } catch {} }; "
-    "if (-not $hl -or -not (Test-Path -LiteralPath $hl -ErrorAction SilentlyContinue)) { "
-    "try { $hl = Join-Path ([string]$env:PLUGIN_DATA) 'hook_launcher.py' -ErrorAction SilentlyContinue } catch {} }; ")
+    "$r=[string]$env:PLUGIN_ROOT;$d=[string]$env:PLUGIN_DATA;$hl='';"
+    "if($r){try{$hl=Join-Path $r 'scripts/hook_launcher.py' -EA 0}catch{}};"
+    "if((-not $hl -or -not(Test-Path -LiteralPath $hl -EA 0)) -and $d){"
+    "try{$hl=Join-Path $d 'hook_launcher.py' -EA 0}catch{}};"
+    "if(-not $hl){$hl='/hook_launcher.py'};")
 # Single-line, double-quoted Python so shlex.quote wraps it in one pair of
 # single quotes. Newlines inside `python3 -c` are rewritten by hooks/list.
 _FAILURE_ENCODER = (
@@ -139,7 +157,7 @@ def mcp_locator_code(*, name="mindie-agent", marketplace="mindie-agent", seed_ve
         "def load(p):\n"
         " with p.open('rb') as f:b=f.read(65537)\n"
         " if len(b)>65536:raise ValueError('MindIE metadata exceeds its byte bound')\n"
-        " v=json.loads(b)\n"
+        " v=json.loads(b.decode('utf-8-sig'))\n"
         " if not isinstance(v,dict):raise ValueError('MindIE metadata must be an object')\n"
         " return v\n"
         "home=Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex')))\n"
@@ -187,10 +205,11 @@ def _posix_failure_json(failure):
 def _ps_failure_json(failure):
     prefix = failure.replace("'", "''")
     return (
-        "$detail = ((Get-Content -LiteralPath $errFile -Raw -ErrorAction SilentlyContinue) + '').Trim(); "
-        "$msg = '" + prefix + " (exit ' + $code + ')'; "
-        "if ($detail) { $msg = $msg + [char]10 + $detail }; "
-        "[Console]::Out.WriteLine((@{systemMessage=$msg} | ConvertTo-Json -Compress))"
+        "$d=$u.GetString($eb);"
+        "if($d.Length -gt 800){$n8=if([char]::IsHighSurrogate($d[799])){799}else{800};$d=$d.Substring(0,$n8)};"
+        "$d=$d.Trim();$m='" + prefix + " (exit '+$code+')';"
+        "if($d){$m=$m+[char]10+$d};"
+        "_w (@{systemMessage=$m}|ConvertTo-Json -Compress) $false"
     )
 
 
@@ -228,33 +247,45 @@ def neutral_hook_commands(argv, *, failure="MindIE Stop helper failed; capture c
             + "else rm -f \"$_err\"; printf '{}\\n'; fi"
         )
 
-    warning_ps = ("[Console]::Error.WriteLine(" + ps_arg(failure) + "); " if keep_stderr else "")
+    warning_ps = ("_w " + ps_arg(failure) + " $true;" if keep_stderr else "")
     exit_ps = "exit $code" if pass_exit else "exit 0"
-    invoke = " ".join(ps_arg(arg) for arg in argv)
+    invoke_csv = ",".join(ps_arg(arg) for arg in argv)
     if keep_stderr:
         body = (
             resolve_ps
-            + "$ProgressPreference = 'SilentlyContinue'; $failed = $false; $code = 0; try { & "
-            + invoke + " 1>$null; $code = $LASTEXITCODE; $failed = ($code -ne 0) } catch { $failed = $true; $code = 1 }; "
-            + "if ($failed) { " + warning_ps
-            + "[Console]::Out.WriteLine('"
-            + left.replace("'", "''") + "' + $code + '"
-            + right.replace("'", "''") + "')"
-            + " } else { [Console]::Out.WriteLine('{}') }; " + exit_ps
+            + "$failed=$false;$code=0;$p=$null;try{"
+            + "$psi=_psi @(" + invoke_csv + ");$psi.RedirectStandardOutput=$true;"
+            + "$p=[Diagnostics.Process]::Start($psi);"
+            + "$ot=$p.StandardOutput.BaseStream.CopyToAsync([IO.Stream]::Null);"
+            + "$p.WaitForExit();[void]$ot.Wait();"
+            + "$code=$p.ExitCode;$failed=($code -ne 0)"
+            + "}catch{$failed=$true;$code=1}finally{if($p){$p.Dispose()}};"
+            + "if($failed){" + warning_ps
+            + "_w ('" + left.replace("'", "''") + "'+$code+'"
+            + right.replace("'", "''") + "') $false"
+            + "}else{_w '{}' $false};" + exit_ps
         )
     else:
         body = (
             resolve_ps
-            + "$ProgressPreference = 'SilentlyContinue'; $failed = $false; $code = 0; "
-            "$errFile = [System.IO.Path]::GetTempFileName(); try { & "
-            + invoke + " 1>$null 2>$errFile; $code = $LASTEXITCODE; $failed = ($code -ne 0) } catch { $failed = $true; $code = 1 }; "
-            + "$hasErr = ((Get-Item -LiteralPath $errFile -ErrorAction SilentlyContinue).Length -gt 0); "
-            + "if ($failed -or $hasErr) { Get-Content -LiteralPath $errFile -ErrorAction SilentlyContinue | "
-            + "ForEach-Object { [Console]::Error.WriteLine($_) }; " + warning_ps + _ps_failure_json(failure)
-            + " } else { [Console]::Out.WriteLine('{}') }; "
-            + "Remove-Item -LiteralPath $errFile -ErrorAction SilentlyContinue; " + exit_ps
+            + "$failed=$false;$code=0;$eb=[byte[]]@();$p=$null;$ems=[IO.MemoryStream]::new();try{"
+            + "$psi=_psi @(" + invoke_csv + ");"
+            + "$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true;"
+            + "$p=[Diagnostics.Process]::Start($psi);"
+            + "$ot=$p.StandardOutput.BaseStream.CopyToAsync([IO.Stream]::Null);"
+            + "$et=$p.StandardError.BaseStream.CopyToAsync($ems);"
+            + "$p.WaitForExit();[void][Threading.Tasks.Task]::WaitAll(@($ot,$et));"
+            + "$code=$p.ExitCode;$failed=($code -ne 0);$eb=$ems.ToArray()"
+            + "}catch{$failed=$true;$code=1;$eb=$ems.ToArray()}"
+            + "finally{if($p){$p.Dispose()};$ems.Dispose()};"
+            + "$hasErr=($eb.Length -gt 0);"
+            + "if($failed -or $hasErr){"
+            + "if($hasErr){$es=[Console]::OpenStandardError();$es.Write($eb,0,$eb.Length);"
+            + "if($eb[$eb.Length-1] -ne 10){$es.WriteByte(10)};$es.Flush()};"
+            + warning_ps + _ps_failure_json(failure)
+            + "}else{_w '{}' $false};" + exit_ps
         )
-    body = PS_PROTOCOL_ENCODING + body
+    body = PS_PROTOCOL_ENCODING + PS_PROC_HELPERS + body
     windows = "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " + base64.b64encode(
         body.encode("utf-16le")).decode("ascii")
     return {"command": posix, "commandWindows": windows, "statusMessage": "MindIE Agent"}
@@ -303,30 +334,27 @@ def hook_commands(role, **names):
             r'|\[@mindie-agent\]\(plugin://mindie-agent@[^\r\n)]+\))(?=[\s\u0085\x1c-\x1f]|$)'
         )
         body = (
-            PS_PROTOCOL_ENCODING + PS_LAUNCHER_RESOLVE
-            + "$inStream = [Console]::OpenStandardInput(); "
-            + "$ms = [System.IO.MemoryStream]::new(); $buf = [byte[]]::new(65536); "
-            + "while ($ms.Length -lt 33554433) { "
-            + "$take = [Math]::Min($buf.Length, 33554433 - [int]$ms.Length); "
-            + "$n = $inStream.Read($buf, 0, $take); if ($n -le 0) { break }; "
-            + "$ms.Write($buf, 0, $n) }; "
-            + "$inBytes = $ms.ToArray(); $inText = $OutputEncoding.GetString($inBytes); "
-            + "$sendText = if ($inText.EndsWith(\"`r`n\")) { $inText.Substring(0, $inText.Length - 2) } "
-            + "elseif ($inText.EndsWith(\"`n\")) { $inText.Substring(0, $inText.Length - 1) } else { $inText }; "
-            + "$failed = $false; $code = 0; $out = ''; try { "
-            + "$out = ($sendText | & " + " ".join(ps_arg(arg) for arg in arguments) + " | Out-String).Trim(); "
-            + "$code = $LASTEXITCODE; $failed = ($code -ne 0) } catch { $failed = $true; $code = 1 }; "
-            + "$resp = '{}'; "
-            + "if (-not $failed) { if ($out) { $resp = $out } } "
-            + "else { $explicit = $false; try { $ev = $inText | ConvertFrom-Json; "
-            + "if ($null -ne $ev -and $ev.hook_event_name -eq 'UserPromptSubmit' -and (-not $ev.agent_id) "
-            + "-and ($ev.prompt -is [string]) -and ($ev.prompt -cmatch '" + ps_gesture.replace("'", "''") + "')) { "
-            + "$explicit = $true } } catch {}; "
-            + "if ($explicit) { $resp = '"
-            + left.replace("'", "''") + "' + $code + '" + right.replace("'", "''") + "' } }; "
-            + "$outStream = [Console]::OpenStandardOutput(); "
-            + "$outBytes = $OutputEncoding.GetBytes($resp + \"`n\"); "
-            + "$outStream.Write($outBytes, 0, $outBytes.Length); $outStream.Flush(); exit 0"
+            PS_PROTOCOL_ENCODING + PS_PROC_HELPERS + PS_LAUNCHER_RESOLVE
+            + "$is=[Console]::OpenStandardInput();$ms=[IO.MemoryStream]::new();$bf=[byte[]]::new(65536);"
+            + "while($ms.Length -lt 33554433){$tk=[Math]::Min($bf.Length,33554433-[int]$ms.Length);"
+            + "$n=$is.Read($bf,0,$tk);if($n -le 0){break};$ms.Write($bf,0,$n)};"
+            + "$it=$u.GetString($ms.ToArray()).TrimStart([char]0xFEFF);$ms.Dispose();"
+            + "$sb=$u.GetBytes(($it -replace '\\r?\\n\\z',''));$fa=$false;$cd=0;$out='';$p=$null;"
+            + "$om=[IO.MemoryStream]::new();try{"
+            + "$si=_psi @(" + ",".join(ps_arg(arg) for arg in arguments) + ");"
+            + "$si.RedirectStandardInput=$true;$si.RedirectStandardOutput=$true;"
+            + "$p=[Diagnostics.Process]::Start($si);$ot=$p.StandardOutput.BaseStream.CopyToAsync($om);"
+            + "try{$p.StandardInput.BaseStream.Write($sb,0,$sb.Length);$p.StandardInput.Close()}"
+            + "catch{try{$p.StandardInput.Close()}catch{}};"
+            + "$p.WaitForExit();[void]$ot.Wait();"
+            + "$cd=$p.ExitCode;$fa=($cd -ne 0);$out=$u.GetString($om.ToArray()).Trim()"
+            + "}catch{$fa=$true;$cd=1}finally{if($p){$p.Dispose()};$om.Dispose()};"
+            + "$rp='{}';if(-not $fa){if($out){$rp=$out}}else{$ex=$false;try{$ev=$it|ConvertFrom-Json;"
+            + "if($null -ne $ev -and $ev.hook_event_name -eq 'UserPromptSubmit' -and (-not $ev.agent_id) "
+            + "-and ($ev.prompt -is [string]) -and ($ev.prompt -cmatch '" + ps_gesture.replace("'", "''") + "')){"
+            + "$ex=$true}}catch{};if($ex){$rp='"
+            + left.replace("'", "''") + "'+$cd+'" + right.replace("'", "''") + "'}};"
+            + "_w $rp $false;exit 0"
         )
         return dict(command=posix,
                     commandWindows="powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "

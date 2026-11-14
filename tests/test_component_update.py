@@ -380,3 +380,112 @@ def test_unclassified_helper_crash_stays_internal_runtimeerror(tmp_path):
             component_update.check(config, SCRIPTS.parent, tmp_path / "data")
     assert caught.value is crash
     activate.assert_not_called()
+
+
+def test_ssl_and_incomplete_http_transport_errors_stay_non_reportable_while_local_bugs_report(tmp_path, monkeypatch):
+    import http.client
+    import socket
+    import ssl
+    import harness_update
+    from mindie_diagnostics.ingestion import ingest
+    from mindie_diagnostics.integration import configure_reporting
+    from mindie_diagnostics.outbox import Outbox
+
+    cert_err = ssl.SSLCertVerificationError(1, "self-signed certificate in chain")
+    typed_cert = component_update.typed_catalog_error(cert_err)
+    assert isinstance(typed_cert, component_update.CatalogError)
+    assert typed_cert.code == "release_certificate_error"
+    assert typed_cert.category == "certificate"
+
+    for transient in (
+        ssl.SSLError("TLS EOF mid-stream"),
+        http.client.IncompleteRead(b"part", 64),
+        http.client.RemoteDisconnected("Remote end closed connection without response"),
+        socket.gaierror(8, "nodename nor servname provided"),
+    ):
+        rebuilt = component_update.typed_catalog_error(transient)
+        assert isinstance(rebuilt, component_update.CatalogError)
+        assert rebuilt.code == "release_transport_unavailable"
+        assert rebuilt.category == "temporary_network"
+
+    for local_bug in (
+        http.client.InvalidURL("nonnumeric port"),
+        http.client.ImproperConnectionState("cannot send request"),
+        http.client.NotConnected(),
+    ):
+        assert component_update.typed_catalog_error(local_bug) is local_bug
+    timeout_err = TimeoutError("probe timed out")
+    assert component_update.typed_catalog_error(timeout_err) is timeout_err
+
+    logs = tmp_path / "diag-logs"
+    policy = tmp_path / "diagnostics.json"
+    monkeypatch.setenv("MINDIE_DIAGNOSTICS_ROOT", str(logs))
+    monkeypatch.setenv("MINDIE_DIAGNOSTICS_CONFIG", str(policy))
+    configure_reporting(True, config=policy, roots=[str(logs)])
+    config = tmp_path / "codex.json"
+    env = {"CODEX_HOME": str(tmp_path / "native"), "MINDIE_CODEX_BIN": str(tmp_path / "codex-bin")}
+    config.write_text(json.dumps({"native_context": env}), encoding="utf-8")
+    before = {"version": "0.0.1", "enabled": True}
+    with patch.object(harness_update, "runtime_env", return_value=env), \
+            patch.object(harness_update, "harness_version", return_value="0.153.4"), \
+            patch.object(harness_update, "installed", return_value=before), \
+            patch("mindie_knowledge.releases_io.fetch_releases", side_effect=ssl.SSLError("TLS drop")):
+        res = harness_update.check(config)
+    assert res["status"] == "failed"
+    assert ingest(logs, Outbox(tmp_path / "queue.db"), config=policy)["enqueued"] == 0
+
+
+def test_wsl_host_binary_resolution_rejects_windows_drvfs_and_pe_shims(tmp_path, monkeypatch):
+    import struct
+    import native_context
+
+    if os.name != "posix":
+        pytest.skip("POSIX/WSL PATH shadowing check")
+
+    win_dir = tmp_path / "mnt_c_npm"
+    lin_dir = tmp_path / "linux_bin"
+    win_dir.mkdir()
+    lin_dir.mkdir()
+    # Extensionless PE binary + .exe shim in fake PATH ahead of Linux binary.
+    pe_shim = win_dir / "codex"
+    header = bytearray(128)
+    header[:2] = b"MZ"
+    struct.pack_into("<I", header, 0x3C, 64)
+    header[64:68] = b"PE\x00\x00"
+    pe_shim.write_bytes(bytes(header))
+    pe_shim.chmod(0o755)
+    exe_shim = win_dir / "uv.exe"
+    exe_shim.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    exe_shim.chmod(0o755)
+    lin_codex = lin_dir / "codex"
+    lin_codex.write_text("#!/bin/sh\necho linux\n", encoding="utf-8")
+    lin_codex.chmod(0o755)
+
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu-24.04")
+    monkeypatch.setenv("PATH", f"/mnt/c/Users/demo/AppData/Roaming/npm:{win_dir}:{lin_dir}")
+    assert native_context.is_windows_host_binary("/mnt/c/Users/demo/AppData/Roaming/npm/codex") is True
+    assert native_context.is_windows_host_binary(pe_shim) is True
+    assert native_context.is_windows_host_binary(exe_shim) is True
+    assert native_context.is_windows_host_binary(lin_codex) is False
+    assert native_context.which_host_binary("codex") == str(lin_codex)
+    monkeypatch.delenv("MINDIE_CODEX_BIN", raising=False)
+    monkeypatch.setenv("CODEX_APP_RUNTIME_CLI_PATH", "/mnt/c/Program Files/Codex/codex.exe")
+    captured = native_context.capture(home=tmp_path / "codex-home")
+    assert captured["MINDIE_CODEX_BIN"] == str(lin_codex)
+
+    # Genuine Linux ELF and Linux shebang scripts stored on WSL DrvFS remain usable,
+    # while Windows npm/cmd shims invoking `.exe`/`cygpath` are rejected.
+    drvfs_venv = tmp_path / "drvfs_venv"
+    drvfs_venv.mkdir()
+    linux_console = drvfs_venv / "mindie-profiler"
+    linux_console.write_text("#!/mnt/c/proj/.venv/bin/python\nimport sys\n", encoding="utf-8")
+    linux_console.chmod(0o755)
+    npm_shim = drvfs_venv / "codex-npm"
+    npm_shim.write_text('#!/bin/sh\nbasedir=$(cygpath -w "$0")\nexec "$basedir/node.exe"\n', encoding="utf-8")
+    npm_shim.chmod(0o755)
+    elf_bin = drvfs_venv / "elf-tool"
+    elf_bin.write_bytes(b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 56)
+    elf_bin.chmod(0o755)
+    assert native_context._is_wsl_linux_executable(linux_console) is True
+    assert native_context._is_wsl_linux_executable(elf_bin) is True
+    assert native_context._is_wsl_linux_executable(npm_shim) is False

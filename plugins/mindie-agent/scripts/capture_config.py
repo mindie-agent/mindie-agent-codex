@@ -66,7 +66,9 @@ if __name__ == "__main__":
             from mindie_knowledge.loop.store import Store
             from mindie_knowledge.loop.service_context import validate
             from mindie_knowledge.git_layout import validate_config_feed_layout
-            config = json.load(sys.stdin)
+            _buf = getattr(sys.stdin, "buffer", None)
+            _raw = _buf.read().decode("utf-8-sig") if _buf is not None else sys.stdin.read().lstrip("\ufeff")
+            config = json.loads(_raw)
             validate(config)
             validate_config_feed_layout(config)
             store = Store(config['root'], config['domain'])

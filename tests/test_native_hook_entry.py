@@ -131,6 +131,8 @@ class NativeHookEntryTests(unittest.TestCase):
         stop_windows = base64.b64decode(stop["commandWindows"].split()[-1]).decode("utf-16le")
         self.assertIn("$hasErr", stop_windows)
         self.assertIn("$failed -or $hasErr", stop_windows)
+        for hook_def in (start, prompt, stop):
+            self.assertLess(len(hook_def["commandWindows"]), 8000)
         self.assertGreaterEqual(
             native_entry.STOP_TIMEOUT,
             native_entry.STOP_DISPATCH_SECONDS + native_entry.UV_STARTUP_SECONDS
@@ -204,6 +206,112 @@ class NativeHookEntryTests(unittest.TestCase):
         self.config.mkdir()
         with self.assertRaises((ValueError, OSError)):
             self.launch("session-start")
+
+    def test_windows_psi_enumerates_all_candidates_past_windowsapps_and_fails_closed(self):
+        import shutil
+        import subprocess
+
+        self.assertIn("-All -CommandType Application", native_entry.PS_PROC_HELPERS)
+        self.assertIn("else{throw 1}", native_entry.PS_PROC_HELPERS)
+        ps_exe = shutil.which("powershell.exe") if os.name == "nt" else None
+        if not ps_exe:
+            return
+        win_apps = self.root / "Microsoft" / "WindowsApps"
+        real_bin = self.root / "real_bin"
+        win_apps.mkdir(parents=True)
+        real_bin.mkdir(parents=True)
+        (win_apps / "mindie_test_uv.cmd").write_text("@exit /b 9009\r\n", encoding="ascii")
+        real_cmd = real_bin / "mindie_test_uv.cmd"
+        real_cmd.write_text("@exit /b 0\r\n", encoding="ascii")
+
+        probe = (
+            native_entry.PS_PROTOCOL_ENCODING
+            + native_entry.PS_PROC_HELPERS
+            + "$i=_psi @('mindie_test_uv','--version');_w $i.FileName $false"
+        )
+        encoded = base64.b64encode(probe.encode("utf-16le")).decode("ascii")
+        res = subprocess.run(
+            [ps_exe, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+            env={**os.environ, "PATH": f"{win_apps}{os.pathsep}{real_bin}"},
+            capture_output=True, text=True, encoding="utf-8", timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(Path(res.stdout.strip()).resolve(), real_cmd.resolve())
+
+        only_stub = subprocess.run(
+            [ps_exe, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+            env={**os.environ, "PATH": str(win_apps)},
+            capture_output=True, text=True, encoding="utf-8", timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        self.assertNotEqual(only_stub.returncode, 0)
+
+    def test_wsl_drvfs_accepts_uv_console_scripts_and_posix_basedir_launchers(self):
+        if os.name != "posix":
+            return
+        import native_context
+
+        uv_console = self.root / "mindie-profiler"
+        uv_console.write_text(
+            "#!/mnt/c/proj/.venv/bin/python3\n"
+            "# -*- coding: utf-8 -*-\n"
+            "import sys\n"
+            'if sys.argv[0].endswith(".exe"):\n'
+            "    sys.argv[0] = sys.argv[0][:-4]\n",
+            encoding="utf-8",
+        )
+        uv_console.chmod(0o755)
+        posix_wrapper = self.root / "codex-wrapper"
+        posix_wrapper.write_text(
+            '#!/bin/sh\nbasedir=$(dirname "$0")\nexec "$basedir/linux-codex" "$@"\n',
+            encoding="utf-8",
+        )
+        posix_wrapper.chmod(0o755)
+        win_npm_shim = self.root / "codex-npm"
+        win_npm_shim.write_text(
+            '#!/bin/sh\nbasedir=$(dirname "$0")\nexec "$basedir/node.exe" "$@"\n',
+            encoding="utf-8",
+        )
+        win_npm_shim.chmod(0o755)
+
+        self.assertTrue(native_context._is_wsl_linux_executable(uv_console))
+        self.assertTrue(native_context._is_wsl_linux_executable(posix_wrapper))
+        self.assertFalse(native_context._is_wsl_linux_executable(win_npm_shim))
+
+        real_open = native_context.os.open
+        redirect = {
+            "/mnt/c/proj/.venv/bin/mindie-profiler": uv_console,
+            "/mnt/c/proj/bin/codex-wrapper": posix_wrapper,
+            "/mnt/c/Users/dev/AppData/Roaming/npm/codex": win_npm_shim,
+        }
+
+        def fake_open(p, flags, *a):
+            return real_open(redirect.get(os.fspath(p), p), flags, *a)
+
+        with unittest.mock.patch.dict(os.environ, {"WSL_DISTRO_NAME": "Ubuntu-24.04"}), \
+             unittest.mock.patch.object(native_context.os, "open", side_effect=fake_open):
+            self.assertEqual(
+                native_context.which_host_binary(
+                    "mindie-profiler",
+                    which_fn=lambda name, path=None: "/mnt/c/proj/.venv/bin/mindie-profiler",
+                ),
+                "/mnt/c/proj/.venv/bin/mindie-profiler",
+            )
+            self.assertEqual(
+                native_context.which_host_binary(
+                    "codex-wrapper",
+                    which_fn=lambda name, path=None: "/mnt/c/proj/bin/codex-wrapper",
+                ),
+                "/mnt/c/proj/bin/codex-wrapper",
+            )
+            self.assertIsNone(
+                native_context.which_host_binary(
+                    "codex",
+                    path="/mnt/c/Users/dev/AppData/Roaming/npm",
+                    which_fn=lambda name, path=None: "/mnt/c/Users/dev/AppData/Roaming/npm/codex" if path else None,
+                )
+            )
 
 
 if __name__ == "__main__":

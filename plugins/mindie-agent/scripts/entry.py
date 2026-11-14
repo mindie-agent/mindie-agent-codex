@@ -239,7 +239,7 @@ def dispatch(args, config, *, stop_adapter=None):
         data = ""
         if args.role == "stop":
             from bridge import _read_hook_stdin
-            data = _read_hook_stdin().decode("utf-8")
+            data = _read_hook_stdin().decode("utf-8-sig")
             data = json.dumps(dict(adapter=adapter, hook_input=data), ensure_ascii=False)
             arguments = ["stop", "--snapshot"]
         result = run([adapter["python"], "-I", str(script), *arguments],

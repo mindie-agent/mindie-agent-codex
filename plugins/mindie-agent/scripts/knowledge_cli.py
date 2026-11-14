@@ -56,8 +56,8 @@ def main(argv=None):
             if len(raw) > 1024 * 1024:
                 raise InvalidToolArguments("knowledge arguments exceed 1 MiB")
             try:
-                arguments = json.loads(raw)
-            except ValueError as exc:
+                arguments = json.loads(raw.decode("utf-8-sig"))
+            except (UnicodeDecodeError, ValueError) as exc:
                 raise InvalidToolArguments("knowledge arguments must be valid JSON") from exc
         result = invoke(argv[0], arguments)
     except KnowledgeInactive as exc:
