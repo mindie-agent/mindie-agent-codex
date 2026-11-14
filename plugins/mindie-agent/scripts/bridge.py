@@ -186,7 +186,8 @@ def hook_event(raw):
     transcript_path alone is enough. The transcript itself is never opened
     here. The optional final-answer copy has no role in transcript capture.
     """
-    event = json.loads(raw)
+    text = raw.decode("utf-8-sig") if isinstance(raw, (bytes, bytearray)) else str(raw).lstrip("\ufeff")
+    event = json.loads(text)
     if not isinstance(event, dict) or event.get("hook_event_name") != "Stop":
         raise ValueError("unexpected hook event")
     for key in ("session_id", "turn_id"):
@@ -506,7 +507,9 @@ def main():
         try:
             # The raw event and 64 KiB adapter are already bounded. Re-encoding
             # adds escaping/spacing plus the fixed envelope keys.
-            envelope = json.loads(_read_hook_stdin(max_bytes=2 * (MAX_HOOK_BYTES + 65536) + 64))
+            envelope = json.loads(
+                _read_hook_stdin(max_bytes=2 * (MAX_HOOK_BYTES + 65536) + 64).decode("utf-8-sig")
+            )
             if (not isinstance(envelope, dict) or set(envelope) != {"adapter", "hook_input"}
                     or not isinstance(envelope["hook_input"], str)):
                 raise ValueError("invalid internal Stop envelope")

@@ -249,7 +249,8 @@ def read_event(stream):
     raw = stream.read(32 * 1024 * 1024 + 1)
     if len(raw) > 32 * 1024 * 1024:
         raise ValueError("native prompt hook exceeds its byte budget")
-    return json.loads(raw)
+    text = raw.decode("utf-8-sig") if isinstance(raw, (bytes, bytearray)) else str(raw).lstrip("\ufeff")
+    return json.loads(text)
 
 
 def action(event):

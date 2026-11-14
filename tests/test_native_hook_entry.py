@@ -131,6 +131,8 @@ class NativeHookEntryTests(unittest.TestCase):
         stop_windows = base64.b64decode(stop["commandWindows"].split()[-1]).decode("utf-16le")
         self.assertIn("$hasErr", stop_windows)
         self.assertIn("$failed -or $hasErr", stop_windows)
+        for hook_def in (start, prompt, stop):
+            self.assertLess(len(hook_def["commandWindows"]), 8000)
         self.assertGreaterEqual(
             native_entry.STOP_TIMEOUT,
             native_entry.STOP_DISPATCH_SECONDS + native_entry.UV_STARTUP_SECONDS

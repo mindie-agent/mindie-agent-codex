@@ -61,13 +61,13 @@ NORMALIZE_SCRIPT = """
 import json, sys
 from mindie_knowledge.loop.settings import normalize, transition
 try:
-    request = json.loads(sys.stdin.read())
+    request = json.loads(sys.stdin.buffer.read().decode('utf-8-sig'))
     value = (normalize(request['settings']) if request['previous'] is None
              else transition(request['previous'], request['settings']))
 except ValueError as exc:
-    print(json.dumps({"rejected": str(exc)[:240]}, ensure_ascii=False))
+    sys.stdout.buffer.write((json.dumps({"rejected": str(exc)[:240]}, ensure_ascii=False) + '\\n').encode('utf-8'))
 else:
-    print(json.dumps({"ok": value}, ensure_ascii=False))
+    sys.stdout.buffer.write((json.dumps({"ok": value}, ensure_ascii=False) + '\\n').encode('utf-8'))
 """
 
 
@@ -488,13 +488,15 @@ def status(config_file=None, saved=None, *, adapter=None):
 
 def resolve_github_identity(repository, *, account=None, fork=None):
     """Best-effort GitHub login and fork resolution via `gh` when not explicitly passed."""
-    if fork or not shutil.which("gh"):
+    from native_context import which_host_binary
+    gh_bin = None if fork else which_host_binary("gh", which_fn=shutil.which)
+    if fork or not gh_bin:
         return account, fork
     repo_name = repository.split("/", 1)[1]
     try:
         if not account:
             res = run(
-                ["gh", "api", "--hostname", "github.com", "user", "--jq", ".login"],
+                [gh_bin, "api", "--hostname", "github.com", "user", "--jq", ".login"],
                 "",
                 timeout=5.0,
             )
@@ -504,7 +506,7 @@ def resolve_github_identity(repository, *, account=None, fork=None):
         if account and not fork:
             res = run(
                 [
-                    "gh",
+                    gh_bin,
                     "api",
                     "--hostname",
                     "github.com",

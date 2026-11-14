@@ -172,7 +172,8 @@ def _baseline_runtime(source, data):
         # extended namespace so importlib can read long dependency resources.
         python, release = native_path(python), native_path(release)
         receipt = release / "runtime.json"
-        uv = shutil.which("uv")
+        from native_context import which_host_binary
+        uv = which_host_binary("uv", which_fn=shutil.which)
         if uv is None:
             raise FileNotFoundError("uv is required to prepare MindIE's locked runtime")
         env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
@@ -329,8 +330,8 @@ def _guard_passive_prompt():
     raw = sys.stdin.buffer.read(32 * 1024 * 1024 + 1)
     if len(raw) <= 32 * 1024 * 1024:
         try:
-            event = json.loads(raw)
-        except (ValueError, TypeError):
+            event = json.loads(raw.decode("utf-8-sig"))
+        except (UnicodeDecodeError, ValueError, TypeError):
             event = None
         if isinstance(event, dict):
             from manual_entry import requested

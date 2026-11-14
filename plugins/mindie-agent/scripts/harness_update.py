@@ -671,7 +671,13 @@ def check(config, *, first_install=False, force=False):
                 _atomic(status_path, status)
                 return status
             except Exception as exc:
+                from component_update import classify_transport_exception
                 from diagnostic_support import failure
+                if getattr(exc, "category", None) is None and (kind := classify_transport_exception(exc)) is not None:
+                    try:
+                        exc.category = kind[0]
+                    except (AttributeError, TypeError):
+                        pass
                 status["diagnostic"] = failure("release.update", stage, "update", exception=exc,
                     exit_code=getattr(getattr(exc, "process_result", None), "returncode", None))
                 status.update(status="failed", stage=stage, error_type=type(exc).__name__,

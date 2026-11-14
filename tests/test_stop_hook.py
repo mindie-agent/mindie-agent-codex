@@ -86,18 +86,21 @@ class StopHookTests(unittest.TestCase):
     host_shell = None
 
     def run_shell(self, commands, *, env=None, timeout=10):
-        """Dispatch the host-native wrapper: POSIX sh, cmd.exe EncodedCommand, or pwsh."""
+        """Dispatch the host-native wrapper: POSIX sh, cmd.exe EncodedCommand, pwsh, or PS 5.1."""
         env = {**os.environ, **(env or {})}
         if os.name == "nt":
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             command = commands["commandWindows"]
             if self.host_shell:
                 encoded = command.split("-EncodedCommand ", 1)[1]
                 argv = [self.host_shell, "-NoLogo", "-NoProfile", "-NonInteractive",
                         "-EncodedCommand", encoded]
                 return subprocess.run(argv, capture_output=True, text=True,
-                                      encoding="utf-8", timeout=timeout, env=env)
+                                      encoding="utf-8", timeout=timeout, env=env,
+                                      creationflags=flags)
             return subprocess.run(command, shell=True, capture_output=True, text=True,
-                                  encoding="utf-8", timeout=timeout, env=env)
+                                  encoding="utf-8", timeout=timeout, env=env,
+                                  creationflags=flags)
         return subprocess.run(commands["command"], shell=True, capture_output=True,
                               text=True, encoding="utf-8", timeout=timeout, env=env)
 
@@ -304,12 +307,41 @@ class StopHookTests(unittest.TestCase):
         self.assertIn("prep-detail", result.stderr)
         self.assertIn("(exit 7)", json.loads(result.stdout)["systemMessage"])
 
+    def test_stop_caps_oversized_unicode_stderr_without_errorrecord_wrapping(self):
+        commands = stop_hook_commands([
+            sys.executable, "-c",
+            "import sys; sys.stderr.buffer.write(('中文故障:' + 'x' * 1200 + '\\n').encode('utf-8')); raise SystemExit(9)",
+        ])
+        result = self.run_shell(commands, env={"PYTHONUTF8": "0"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("中文故障:", result.stderr)
+        message = json.loads(result.stdout)["systemMessage"]
+        self.assertIn("(exit 9)", message)
+        self.assertIn("中文故障:", message)
+        self.assertNotIn("CategoryInfo", message)
+        self.assertNotIn("FullyQualifiedErrorId", message)
+        detail = message.split("\n", 1)[1]
+        self.assertLessEqual(len(detail), 800)
+
+
+def _windows_ps51() -> str | None:
+    if os.name != "nt":
+        return None
+    sysroot = Path(os.environ.get("SystemRoot") or r"C:\Windows")
+    cand = sysroot / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    return str(cand) if cand.is_file() else shutil.which("powershell.exe")
+
 
 @unittest.skipUnless(os.name == 'nt', 'native PowerShell hook dispatch')
 class PowerShellStopHookTests(StopHookTests):
     # The native Windows host uses PowerShell, while shell=True uses CMD.
     # Exercise both dispatchers with the real stdin and missing-child cases.
     host_shell = shutil.which('pwsh') or shutil.which('powershell')
+
+
+@unittest.skipUnless(bool(_windows_ps51()), 'Windows PowerShell 5.1 headless hook dispatch')
+class WindowsPowerShell51StopHookTests(StopHookTests):
+    host_shell = _windows_ps51()
 
 
 if __name__ == "__main__":

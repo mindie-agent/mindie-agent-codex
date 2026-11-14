@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import http.client
 import json
 from pathlib import Path
 import re
+import socket
+import ssl
 import sys
 import urllib.error
 
@@ -75,19 +78,76 @@ def _copy_process(source, target):
     return target
 
 
-def _catalog_error(code, *, category="temporary_network", status=None, source=None):
+def _finite_delay(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")) or number < 0:
+        return None
+    return number
+
+
+def _is_cert_verification_error(exc) -> bool:
+    if isinstance(exc, ssl.SSLCertVerificationError):
+        return True
+    return isinstance(exc, ssl.SSLError) and getattr(exc, "reason", None) == "CERTIFICATE_VERIFY_FAILED"
+
+
+def classify_transport_exception(exc):
+    """Classify typed stdlib HTTP/TLS/socket transport errors without free-text parsing."""
+    if exc is None or isinstance(exc, TimeoutError):
+        return None
+    if isinstance(exc, urllib.error.HTTPError):
+        headers = getattr(exc, "headers", None)
+        raw_retry = headers.get("Retry-After") if headers is not None and hasattr(headers, "get") else None
+        retry_after = _finite_delay(raw_retry) if raw_retry is not None else None
+        return ("rate_limited" if exc.code == 429 else "temporary_network", retry_after)
+    if _is_cert_verification_error(exc):
+        return ("certificate", None)
+    if isinstance(exc, urllib.error.URLError):
+        reason = getattr(exc, "reason", None)
+        if _is_cert_verification_error(reason) or _is_cert_verification_error(getattr(exc, "__cause__", None)):
+            return ("certificate", None)
+        return ("temporary_network", None)
+    if isinstance(exc, ssl.SSLError):
+        if _is_cert_verification_error(getattr(exc, "__cause__", None)):
+            return ("certificate", None)
+        return ("temporary_network", None)
+    if isinstance(
+        exc,
+        (
+            http.client.InvalidURL,
+            http.client.ImproperConnectionState,
+            http.client.NotConnected,
+            http.client.UnimplementedFileMode,
+        ),
+    ):
+        return None
+    if isinstance(exc, (ConnectionError, http.client.HTTPException, socket.gaierror, socket.herror)):
+        return ("temporary_network", None)
+    return None
+
+
+def _catalog_error(code, *, category="temporary_network", status=None, retry_after=None, source=None):
     error = CatalogError(code)
     error.code = code
     error.category = category
     if type(status) is int and 100 <= status <= 599:
         error.status = status
+    if retry_after is not None:
+        error.retry_after = retry_after
     return _copy_process(source, error) if source is not None else error
 
 
 def typed_catalog_error(exc):
     """Rebuild typed catalog facts lost at the child or HTTP boundary."""
-    from mindie_knowledge.release_http import ReleaseResponseTooLarge
-    from mindie_knowledge.releases_io import ReleaseFetchError
+    try:
+        from mindie_knowledge.release_http import ReleaseResponseTooLarge
+        from mindie_knowledge.releases_io import ReleaseFetchError
+    except ImportError:
+        ReleaseResponseTooLarge = ()
+        ReleaseFetchError = ()
 
     payload = _error_payload(getattr(exc, "mindie_output", None))
     if payload is None:
@@ -103,9 +163,14 @@ def typed_catalog_error(exc):
             error = TimeoutError("component catalog probe timed out")
         else:
             status = payload.get("status")
+            category = (
+                "certificate" if code == "release_certificate_error"
+                else "rate_limited" if status == 429
+                else "temporary_network"
+            )
             error = _catalog_error(
                 code or "release catalog unavailable",
-                category="rate_limited" if status == 429 else "temporary_network",
+                category=category,
                 status=status if type(status) is int else None,
             )
         return _copy_process(exc, error)
@@ -117,16 +182,26 @@ def typed_catalog_error(exc):
             source=exc,
         )
     if isinstance(exc, urllib.error.HTTPError):
+        kind = classify_transport_exception(exc)
         return _catalog_error(
             "release_http_error",
-            category="rate_limited" if exc.code == 429 else "temporary_network",
+            category=kind[0] if kind else ("rate_limited" if exc.code == 429 else "temporary_network"),
             status=exc.code,
+            retry_after=kind[1] if kind else None,
             source=exc,
         )
     if isinstance(exc, json.JSONDecodeError):
         return _catalog_error("release_catalog_invalid", source=exc)
-    if isinstance(exc, (urllib.error.URLError, ConnectionError, ReleaseResponseTooLarge)):
+    if isinstance(exc, ReleaseResponseTooLarge):
         return _catalog_error("release_transport_unavailable", source=exc)
+    if (kind := classify_transport_exception(exc)) is not None:
+        category, retry_after = kind
+        return _catalog_error(
+            "release_certificate_error" if category == "certificate" else "release_transport_unavailable",
+            category=category,
+            retry_after=retry_after,
+            source=exc,
+        )
     if isinstance(exc, (FileNotFoundError, TimeoutError)):
         return exc
     return exc

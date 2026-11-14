@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mindie-agent-codex"
-version = "0.1.31"
+version = "0.1.32"
 description = "Codex adapter for MindIE Agent"
 requires-python = ">=3.11"
 dependencies = [

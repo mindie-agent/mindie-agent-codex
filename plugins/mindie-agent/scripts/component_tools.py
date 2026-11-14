@@ -140,7 +140,11 @@ def command(adapter, component):
     runtime_bins = [str(Path(adapter["python"]).parent)]
     if Path(adapter["python"]) == Path(sys.executable):
         runtime_bins.append(sysconfig.get_path("scripts"))
-    executable = shutil.which(name, path=os.pathsep.join(runtime_bins)) or shutil.which(name)
+    from native_context import which_host_binary
+    executable = (
+        which_host_binary(name, path=os.pathsep.join(runtime_bins), which_fn=shutil.which)
+        or which_host_binary(name, which_fn=shutil.which)
+    )
     if executable is None:
         raise FileNotFoundError(
             "mindie-" + component + " is not installed on PATH; install the component "

@@ -70,7 +70,7 @@ def read(path):
         raw = handle.read(65537)
     if len(raw) > 65536:
         raise ValueError("MindIE metadata exceeds its byte bound")
-    value = json.loads(raw)
+    value = json.loads(raw.decode("utf-8-sig"))
     if not isinstance(value, dict):
         raise ValueError("MindIE metadata must be an object")
     return value
@@ -242,8 +242,8 @@ def _report_prompt_launcher_failure(exc):
         raw = sys.stdin.buffer.read(32 * 1024 * 1024 + 1)
         if len(raw) > 32 * 1024 * 1024:
             return
-        event = json.loads(raw)
-    except (OSError, ValueError, TypeError):
+        event = json.loads(raw.decode("utf-8-sig"))
+    except (OSError, UnicodeDecodeError, ValueError, TypeError):
         return
     explicit = (
         isinstance(event, dict)
