@@ -30,7 +30,7 @@ from capture_spool import Capture
 from session_gate import config_path, runtime_env
 
 
-PATH_FIELDS = ("root", "config", "operation_id", "output")
+PATH_FIELDS = ("root", "config", "operation_id", "incident_id", "output")
 MAX_STRING = 4096
 MAX_ARGV = 256
 MAX_ARGV_ITEM = 65536
@@ -114,8 +114,10 @@ def catalog():
         ("diagnostics_status", "Inspect local MindIE diagnostic/reporting status without starting a worker or contacting GitHub.",
          dict(config=_path("Optional existing diagnostics policy path.")), []),
         ("diagnostics_bundle", "Export a bounded, sanitized local diagnostic support bundle. Does not upload it.",
-         dict(root=_path("Local diagnostics log root."),
-              operation_id=_path("Operation identifier."), output=_path("Local output file.")), ["root"]),
+         dict(root=_path("Optional local diagnostics log root; defaults to the active MindIE diagnostics root."),
+              operation_id=_path("Operation identifier."),
+              incident_id=_path("Incident identifier alias for operation_id."),
+              output=_path("Local output file.")), []),
     ):
         result.append(dict(name=name, description=description,
                            inputSchema=dict(type="object", additionalProperties=False,
@@ -191,6 +193,20 @@ def validate(name, arguments):
     _integer(arguments, "timeout_ms", *TIMEOUT_MS[:2], TIMEOUT_MS[2])
 
 
+def _default_diagnostics_root() -> str:
+    explicit = os.environ.get("MINDIE_DIAGNOSTICS_ROOT")
+    if explicit:
+        return str(Path(explicit).expanduser())
+    if os.name == "nt" and not os.environ.get("XDG_STATE_HOME"):
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            return str(Path(local) / "mindie" / "diagnostics")
+    xdg = os.environ.get("XDG_STATE_HOME")
+    if xdg:
+        return str(Path(xdg) / "mindie" / "diagnostics")
+    return str(Path.home() / ".local" / "state" / "mindie" / "diagnostics")
+
+
 def _build(name, arguments):
     if name in DESCRIPTIONS:
         return name, list(arguments["argv"])
@@ -199,10 +215,13 @@ def _build(name, arguments):
         if arguments.get("config") is not None:
             argv.append("--config=" + arguments["config"])
         return "diagnostics", argv
-    argv = ["bundle", "--root=" + arguments["root"]]
-    for key in ("operation_id", "output"):
-        if arguments.get(key) is not None:
-            argv.append("--" + key.replace("_", "-") + "=" + arguments[key])
+    root_val = arguments["root"] if arguments.get("root") is not None else _default_diagnostics_root()
+    argv = ["bundle", "--root=" + root_val]
+    op_id = arguments.get("operation_id") if arguments.get("operation_id") is not None else arguments.get("incident_id")
+    if op_id is not None:
+        argv.append("--operation-id=" + op_id)
+    if arguments.get("output") is not None:
+        argv.append("--output=" + arguments["output"])
     return "diagnostics", argv
 
 
@@ -227,6 +246,9 @@ def execute(name, arguments, session, *, cancel=None, timeout=None):
         bound = min(bound, timeout)
     environment = runtime_env(config_path(), adapter=adapter)
     environment["CODEX_THREAD_ID"] = session
+    invocation_token = os.urandom(16).hex() if name in DESCRIPTIONS else None
+    if invocation_token is not None:
+        environment["MINDIE_DIAGNOSTICS_INVOCATION_TOKEN"] = invocation_token
     try:
         executable = command(adapter, component)
     except FileNotFoundError as exc:
@@ -254,5 +276,14 @@ def execute(name, arguments, session, *, cancel=None, timeout=None):
             value["result"] = json.loads(output.stdout)
         except json.JSONDecodeError:
             pass
+    if name in DESCRIPTIONS and output.returncode not in (0, 2):
+        import diagnostic_support
+        diag = diagnostic_support.record_component_crash(
+            name, argv, output.returncode, output.stderr,
+            parsed_result=value.get("result"), executable=executable[0],
+            invocation_token=invocation_token,
+        )
+        if diag is not None:
+            value["diagnostic"] = diag
     return dict(content=[dict(type="text", text=json.dumps(value, ensure_ascii=False))],
                 structuredContent=value, isError=output.returncode != 0)
