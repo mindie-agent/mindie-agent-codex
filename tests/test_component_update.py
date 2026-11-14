@@ -472,3 +472,20 @@ def test_wsl_host_binary_resolution_rejects_windows_drvfs_and_pe_shims(tmp_path,
     monkeypatch.setenv("CODEX_APP_RUNTIME_CLI_PATH", "/mnt/c/Program Files/Codex/codex.exe")
     captured = native_context.capture(home=tmp_path / "codex-home")
     assert captured["MINDIE_CODEX_BIN"] == str(lin_codex)
+
+    # Genuine Linux ELF and Linux shebang scripts stored on WSL DrvFS remain usable,
+    # while Windows npm/cmd shims invoking `.exe`/`cygpath` are rejected.
+    drvfs_venv = tmp_path / "drvfs_venv"
+    drvfs_venv.mkdir()
+    linux_console = drvfs_venv / "mindie-profiler"
+    linux_console.write_text("#!/mnt/c/proj/.venv/bin/python\nimport sys\n", encoding="utf-8")
+    linux_console.chmod(0o755)
+    npm_shim = drvfs_venv / "codex-npm"
+    npm_shim.write_text('#!/bin/sh\nbasedir=$(cygpath -w "$0")\nexec "$basedir/node.exe"\n', encoding="utf-8")
+    npm_shim.chmod(0o755)
+    elf_bin = drvfs_venv / "elf-tool"
+    elf_bin.write_bytes(b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 56)
+    elf_bin.chmod(0o755)
+    assert native_context._is_wsl_linux_executable(linux_console) is True
+    assert native_context._is_wsl_linux_executable(elf_bin) is True
+    assert native_context._is_wsl_linux_executable(npm_shim) is False

@@ -207,6 +207,46 @@ class NativeHookEntryTests(unittest.TestCase):
         with self.assertRaises((ValueError, OSError)):
             self.launch("session-start")
 
+    def test_windows_psi_enumerates_all_candidates_past_windowsapps_and_fails_closed(self):
+        import shutil
+        import subprocess
+
+        self.assertIn("-All -CommandType Application", native_entry.PS_PROC_HELPERS)
+        self.assertIn("else{throw 1}", native_entry.PS_PROC_HELPERS)
+        ps_exe = shutil.which("powershell.exe") if os.name == "nt" else None
+        if not ps_exe:
+            return
+        win_apps = self.root / "Microsoft" / "WindowsApps"
+        real_bin = self.root / "real_bin"
+        win_apps.mkdir(parents=True)
+        real_bin.mkdir(parents=True)
+        (win_apps / "mindie_test_uv.cmd").write_text("@exit /b 9009\r\n", encoding="ascii")
+        real_cmd = real_bin / "mindie_test_uv.cmd"
+        real_cmd.write_text("@exit /b 0\r\n", encoding="ascii")
+
+        probe = (
+            native_entry.PS_PROTOCOL_ENCODING
+            + native_entry.PS_PROC_HELPERS
+            + "$i=_psi @('mindie_test_uv','--version');_w $i.FileName $false"
+        )
+        encoded = base64.b64encode(probe.encode("utf-16le")).decode("ascii")
+        res = subprocess.run(
+            [ps_exe, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+            env={**os.environ, "PATH": f"{win_apps}{os.pathsep}{real_bin}"},
+            capture_output=True, text=True, encoding="utf-8", timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(Path(res.stdout.strip()).resolve(), real_cmd.resolve())
+
+        only_stub = subprocess.run(
+            [ps_exe, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+            env={**os.environ, "PATH": str(win_apps)},
+            capture_output=True, text=True, encoding="utf-8", timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        self.assertNotEqual(only_stub.returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
