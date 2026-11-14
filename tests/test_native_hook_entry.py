@@ -247,6 +247,72 @@ class NativeHookEntryTests(unittest.TestCase):
         )
         self.assertNotEqual(only_stub.returncode, 0)
 
+    def test_wsl_drvfs_accepts_uv_console_scripts_and_posix_basedir_launchers(self):
+        if os.name != "posix":
+            return
+        import native_context
+
+        uv_console = self.root / "mindie-profiler"
+        uv_console.write_text(
+            "#!/mnt/c/proj/.venv/bin/python3\n"
+            "# -*- coding: utf-8 -*-\n"
+            "import sys\n"
+            'if sys.argv[0].endswith(".exe"):\n'
+            "    sys.argv[0] = sys.argv[0][:-4]\n",
+            encoding="utf-8",
+        )
+        uv_console.chmod(0o755)
+        posix_wrapper = self.root / "codex-wrapper"
+        posix_wrapper.write_text(
+            '#!/bin/sh\nbasedir=$(dirname "$0")\nexec "$basedir/linux-codex" "$@"\n',
+            encoding="utf-8",
+        )
+        posix_wrapper.chmod(0o755)
+        win_npm_shim = self.root / "codex-npm"
+        win_npm_shim.write_text(
+            '#!/bin/sh\nbasedir=$(dirname "$0")\nexec "$basedir/node.exe" "$@"\n',
+            encoding="utf-8",
+        )
+        win_npm_shim.chmod(0o755)
+
+        self.assertTrue(native_context._is_wsl_linux_executable(uv_console))
+        self.assertTrue(native_context._is_wsl_linux_executable(posix_wrapper))
+        self.assertFalse(native_context._is_wsl_linux_executable(win_npm_shim))
+
+        real_open = native_context.os.open
+        redirect = {
+            "/mnt/c/proj/.venv/bin/mindie-profiler": uv_console,
+            "/mnt/c/proj/bin/codex-wrapper": posix_wrapper,
+            "/mnt/c/Users/dev/AppData/Roaming/npm/codex": win_npm_shim,
+        }
+
+        def fake_open(p, flags, *a):
+            return real_open(redirect.get(os.fspath(p), p), flags, *a)
+
+        with unittest.mock.patch.dict(os.environ, {"WSL_DISTRO_NAME": "Ubuntu-24.04"}), \
+             unittest.mock.patch.object(native_context.os, "open", side_effect=fake_open):
+            self.assertEqual(
+                native_context.which_host_binary(
+                    "mindie-profiler",
+                    which_fn=lambda name, path=None: "/mnt/c/proj/.venv/bin/mindie-profiler",
+                ),
+                "/mnt/c/proj/.venv/bin/mindie-profiler",
+            )
+            self.assertEqual(
+                native_context.which_host_binary(
+                    "codex-wrapper",
+                    which_fn=lambda name, path=None: "/mnt/c/proj/bin/codex-wrapper",
+                ),
+                "/mnt/c/proj/bin/codex-wrapper",
+            )
+            self.assertIsNone(
+                native_context.which_host_binary(
+                    "codex",
+                    path="/mnt/c/Users/dev/AppData/Roaming/npm",
+                    which_fn=lambda name, path=None: "/mnt/c/Users/dev/AppData/Roaming/npm/codex" if path else None,
+                )
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
