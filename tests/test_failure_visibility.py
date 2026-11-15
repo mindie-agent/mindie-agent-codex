@@ -10,6 +10,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/mindie-agent/scripts'
 sys.path.insert(0, str(SCRIPTS))
 from bounded_process import ProcessResult
 import bridge
+import mcp_gate
 from session_gate import Sessions, Inactive
 
 
@@ -124,3 +125,104 @@ class FailureVisibilityTests(unittest.TestCase):
                 self.assertIs(caught.exception, primary)
                 self.assertIn('accounting also failed: OSError', primary.__notes__[0])
                 self.assertEqual(rpc.call_count, 2)
+
+    def test_cli_input_and_schema_reasons_are_closed_and_allowlisted(self):
+        for reason in sorted(mcp_gate.CLI_INPUT_REASONS):
+            with self.subTest(reason=reason):
+                exc = mcp_gate.InvalidToolArguments(
+                    'PRIVATE-EXCEPTION-TEXT', stage='cli_input', reason=reason)
+                exc.request_not_started = True
+                result = mcp_gate.call_failure(exc)
+                structured = result['structuredContent']
+                self.assertEqual(structured['code'], 'invalid_arguments')
+                self.assertEqual(structured['stage'], 'cli_input')
+                self.assertEqual(structured['reason'], reason)
+                self.assertEqual(structured['execution'], 'not_started')
+                self.assertFalse(structured['automatic_retry'])
+                self.assertNotIn('PRIVATE-EXCEPTION-TEXT', json.dumps(result))
+
+        for stage, reason in (('input_read', 'input_empty'),
+                              ('cli_input', 'private_reason'),
+                              ('private_stage', 'input_empty')):
+            with self.subTest(stage=stage, reason=reason):
+                result = mcp_gate.call_failure(mcp_gate.InvalidToolArguments(
+                    'PRIVATE-EXCEPTION-TEXT', stage=stage, reason=reason))
+                self.assertEqual(result['structuredContent']['code'], 'invalid_arguments')
+                self.assertNotIn('stage', result['structuredContent'])
+                self.assertNotIn('reason', result['structuredContent'])
+                self.assertNotIn('PRIVATE-EXCEPTION-TEXT', json.dumps(result))
+
+    def test_input_json_position_is_optional_and_typed(self):
+        exc = mcp_gate.InvalidToolArguments(
+            'private', stage='cli_input', reason='input_json', line=2, column=7)
+        structured = mcp_gate.call_failure(exc)['structuredContent']
+        self.assertEqual((structured['line'], structured['column']), (2, 7))
+        for line, column in ((True, 3), (1.5, 3), ('2', 3), (None, None)):
+            with self.subTest(line=line, column=column):
+                exc = mcp_gate.InvalidToolArguments(
+                    'private', stage='cli_input', reason='input_json',
+                    line=line, column=column)
+                structured = mcp_gate.call_failure(exc)['structuredContent']
+                self.assertNotIn('line', structured)
+                if type(column) is int:
+                    self.assertEqual(structured['column'], column)
+                else:
+                    self.assertNotIn('column', structured)
+
+    def test_input_unavailable_is_not_started_and_never_echoes_the_path(self):
+        result = mcp_gate.call_failure(mcp_gate.InputUnavailableError(
+            'cannot read /private/path SECRET-INPUT-NAME'))
+        structured = result['structuredContent']
+        self.assertEqual(structured['code'], 'input_unavailable')
+        self.assertEqual(structured['stage'], 'input_read')
+        self.assertEqual(structured['execution'], 'not_started')
+        self.assertFalse(structured['automatic_retry'])
+        serialized = json.dumps(result)
+        self.assertNotIn('/private/path', serialized)
+        self.assertNotIn('SECRET-INPUT-NAME', serialized)
+
+    def test_schema_rejections_are_distinct_and_never_echo_caller_keys(self):
+        gate = mcp_gate.Gate('knowledge')
+
+        def failure(request):
+            try:
+                gate._tool_args(request)
+            except mcp_gate.InvalidToolArguments as exc:
+                return mcp_gate.call_failure(exc)
+            self.fail('request was accepted')
+
+        result = failure(dict(params=dict(name='knowledge_missing', arguments={})))
+        self.assertEqual(result['structuredContent']['reason'], 'unknown_operation')
+        self.assertEqual(result['structuredContent']['stage'], 'tool_schema')
+
+        result = failure(dict(params=dict(name='knowledge_feedback', arguments={})))
+        self.assertEqual(result['structuredContent']['reason'], 'schema_missing_field')
+        self.assertEqual(result['structuredContent']['field'], 'ref')
+
+        unknown = 'SECRET-UNKNOWN-KEY-NAME'
+        result = failure(dict(params=dict(
+            name='knowledge_feedback', arguments={'ref': 'x', unknown: 1})))
+        self.assertEqual(result['structuredContent']['reason'], 'schema_unknown_field')
+        self.assertNotIn(unknown, json.dumps(result))
+
+        result = failure(dict(params=dict(name='knowledge_feedback', arguments=[])))
+        self.assertEqual(result['structuredContent']['reason'], 'input_not_object')
+
+        inputs = dict(kind='hardware_spec', outcome='verified', source_locator='fixture://x',
+                      content='fixture', evidence_refs=[], **{unknown: 1})
+        result = failure(dict(params=dict(
+            name='knowledge_distill',
+            arguments=dict(inputs=[inputs], task_state='verified_milestone'))))
+        self.assertEqual(result['structuredContent']['reason'], 'schema_unknown_input_field')
+        self.assertNotIn(unknown, json.dumps(result))
+
+        for reason in ('unknown_operation', 'schema_missing_field', 'schema_unknown_field',
+                       'schema_unknown_input_field'):
+            with self.subTest(reason=reason):
+                exc = mcp_gate.InvalidToolArguments(
+                    'Invalid MindIE tool arguments (unknown keys; missing keys)',
+                    stage='tool_schema', reason=reason)
+                result = mcp_gate.call_failure(exc)
+                self.assertEqual(result['structuredContent']['reason'], reason)
+                self.assertEqual(result['structuredContent']['stage'], 'tool_schema')
+                self.assertNotIn('unknown keys; missing keys', result['content'][0]['text'])

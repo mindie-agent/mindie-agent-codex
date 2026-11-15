@@ -1,8 +1,11 @@
 """Idle switching preserves exact service facts, without a model or native install."""
 import io
 import json
+from contextlib import redirect_stdout
 from importlib.metadata import PackageNotFoundError, version
+import os
 from pathlib import Path
+import struct
 import sys
 import sysconfig
 import subprocess
@@ -15,6 +18,29 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
 import release_activation
 from session_gate import runtime_binding
+
+
+def write_launcher(path, *, subsystem=2):
+    """Minimal, never-executed PE32+ header with one subsystem."""
+    header = bytearray(64 + 24 + 70)
+    header[:2] = b"MZ"
+    struct.pack_into("<I", header, 60, 64)
+    header[64:68] = b"PE\0\0"
+    struct.pack_into("<H", header, 84, 70)
+    struct.pack_into("<H", header, 88, 0x20B)
+    struct.pack_into("<H", header, 156, subsystem)
+    path.write_bytes(header)
+    return path
+
+
+class WindowsOs:
+    """Delegate to the host os module while reporting a Windows host."""
+
+    name = "nt"
+
+    def __getattr__(self, item):
+        return getattr(os, item)
+
 
 OFFICIAL_OPERATORS = dict(
     domain="operators", repository="mindie-agent/knowledge-operators",
@@ -202,6 +228,60 @@ class OfficialFeedUpdateTests(unittest.TestCase):
         self.assertEqual(settings_path.read_bytes(), settings_before)
         self.assertEqual(consent.read_bytes(), before)
 
+    def test_windows_prepare_rejects_a_cui_launcher_before_writing_profile_state(self):
+        from mindie_knowledge.loop.service_host import ServiceHostError
+        config, _consent = self.profile(feeds=[])
+        candidate = self.base / "candidate-runtime"
+        candidate.mkdir()
+        python = candidate / "python.exe"
+        python.write_bytes(b"")
+        write_launcher(python.with_name("pythonw.exe"), subsystem=3)
+        before = config.read_bytes()
+        with patch.object(release_activation, "os", WindowsOs()), \
+                patch.object(release_activation.sys, "executable", str(python)):
+            with self.assertRaises(ServiceHostError) as caught:
+                self.prepare(config, name="cui-candidate")
+        self.assertEqual(caught.exception.code, "windowless_interpreter_invalid")
+        self.assertEqual(config.read_bytes(), before)
+        self.assertFalse(list((self.base / "cui-candidate").glob("profile-*.engine.json")))
+
+    def test_cli_envelope_preserves_windows_service_launcher_stage_and_code(self):
+        import activation_diagnostics
+        from bounded_process import ProcessResult
+        from mindie_knowledge.loop.service_host import ServiceHostError
+
+        for name, subsystem, expected_code in (
+            ("missing", None, "windowless_interpreter_missing"),
+            ("cui", 3, "windowless_interpreter_invalid"),
+        ):
+            with self.subTest(name=name):
+                config, _consent = self.profile(feeds=[])
+                candidate = self.base / ("launcher-" + name)
+                candidate.mkdir()
+                python = candidate / "python.exe"
+                python.write_bytes(b"")
+                if subsystem is not None:
+                    write_launcher(python.with_name("pythonw.exe"), subsystem=subsystem)
+                with patch.object(release_activation, "os", WindowsOs()), \
+                        patch.object(release_activation.sys, "executable", str(python)):
+                    with self.assertRaises(ServiceHostError) as caught:
+                        self.prepare(config, name="envelope-" + name)
+                stdout = io.StringIO()
+                with patch("diagnostic_support.failure",
+                           return_value={"recorded": True, "logging_failed": False}) as record, \
+                        redirect_stdout(stdout):
+                    activation_diagnostics.emit_error(caught.exception)
+                envelope = json.loads(stdout.getvalue())
+                assert envelope["kind"] == "exception"
+                assert envelope["error"]["stage"] == "windows_service_interpreter"
+                assert envelope["error"]["code"] == expected_code
+                assert record.call_args.args[1] == "runtime_activation.windows_service_interpreter"
+                outer = RuntimeError("PRIVATE parent wrapper")
+                outer.process_result = ProcessResult("completed", stdout.getvalue(), 1)
+                recovered = activation_diagnostics.child_error(outer)
+                assert recovered.activation_stage == "windows_service_interpreter"
+                assert recovered.activation_code == expected_code
+
     def test_component_candidate_prepares_new_commands_without_changing_the_live_profile(self):
         config, consent = self.profile(feeds=[dict(OFFICIAL_VLLM)])
         old = json.loads(config.read_text())
@@ -237,7 +317,13 @@ class ActivationTests(unittest.TestCase):
         self.old = dict(python="/old/python", runtime_scripts="/old/scripts",
                         engine_config=str(self.root / "old.json"),
                         product_validation={"old": True}, consent="preserved", component_commands={})
-        self.new = dict(self.old, python="/new/python", runtime_scripts="/new/scripts",
+        candidate_dir = self.root / "candidate-runtime"
+        candidate_dir.mkdir()
+        self.candidate_python = candidate_dir / ("python.exe" if os.name == "nt" else "python")
+        self.candidate_python.write_bytes(b"")
+        write_launcher(self.candidate_python.with_name("pythonw.exe"), subsystem=2)
+        self.new = dict(self.old, python=str(self.candidate_python),
+                        runtime_scripts=str(candidate_dir / "scripts"),
                         engine_config=str(self.root / "new.json"),
                         product_validation={"new": True})
         self.config.write_text(json.dumps(self.old))
@@ -281,7 +367,8 @@ class ActivationTests(unittest.TestCase):
 
     def test_component_commands_switch_only_after_idle_and_detect_concurrent_edits(self):
         self.old["component_commands"] = {"sim": ["/old/python", "-m", "mindie_sim"]}
-        self.new["component_commands"] = {"sim": ["/new/python", "-m", "mindie_sim"]}
+        self.new["component_commands"] = {
+            "sim": [str(self.candidate_python), "-m", "mindie_sim"]}
         self.config.write_text(json.dumps(self.old))
         self.prepared["expected_binding"] = runtime_binding(self.old)
         self.retire_service.return_value = {"idle": False}
@@ -445,6 +532,51 @@ class ActivationTests(unittest.TestCase):
         self.retire_service.assert_not_called()
         self.prepare_service.assert_not_called()
         self.assertEqual(self.config.read_bytes(), before)
+
+    def test_windows_service_activation_refuses_an_invalid_launcher_before_retirement(self):
+        from mindie_knowledge.loop.service_host import ServiceHostError
+        for name, subsystem, expected_code in (
+            ("cui", 3, "windowless_interpreter_invalid"),
+            ("missing", None, "windowless_interpreter_missing"),
+        ):
+            with self.subTest(name=name):
+                candidate = self.root / name
+                candidate.mkdir()
+                python = candidate / "python.exe"
+                python.write_bytes(b"")
+                if subsystem is not None:
+                    write_launcher(python.with_name("pythonw.exe"), subsystem=subsystem)
+                self.prepared["adapter"]["python"] = str(python)
+                with patch.object(release_activation, "os", WindowsOs()), \
+                        patch("mindie_knowledge.loop.handoff._probe", return_value="absent"), \
+                        patch("diagnostic_support.failure",
+                              return_value={"recorded": True,
+                                            "logging_failed": False}) as record:
+                    result = release_activation.activate(
+                        self.config, self.prepared, control_seconds=.5)
+                self.assertEqual(result["status"], "incomplete")
+                self.assertEqual(result["stage"], "windows_service_interpreter")
+                self.assertEqual(result["code"], expected_code)
+                self.assertEqual(result["error_type"], ServiceHostError.__name__)
+                self.assertEqual(record.call_args.args[1],
+                                 "runtime_activation.windows_service_interpreter")
+                self.inspect_retirement.assert_not_called()
+                self.retire_service.assert_not_called()
+                self.prepare_service.assert_not_called()
+                self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_windows_service_activation_accepts_a_gui_launcher(self):
+        candidate = self.root / "gui"
+        candidate.mkdir()
+        python = candidate / "python.exe"
+        python.write_bytes(b"")
+        write_launcher(python.with_name("pythonw.exe"), subsystem=2)
+        self.prepared["adapter"]["python"] = str(python)
+        with patch.object(release_activation, "os", WindowsOs()):
+            result = self.run_activation(["absent", "ready"])
+        self.assertEqual(result["status"], "active")
+        self.retire_service.assert_called_once()
+        self.assertEqual(json.loads(self.config.read_text()), self.new)
 
     def test_control_expiry_does_not_kill_candidate_or_publish(self):
         with patch("mindie_knowledge.loop.handoff._probe", return_value="starting"):

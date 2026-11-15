@@ -15,6 +15,7 @@ import argparse
 from contextlib import contextmanager
 import http.client
 import json
+import os
 from pathlib import Path
 import re
 import socket
@@ -287,9 +288,18 @@ def prepare(source, python, data, *, current_python=None, force=False, current_s
     release = native_path(artifact["generation"]) / "release"
     release.mkdir(exist_ok=True)
     receipt = release / "runtime.json"
-    if not receipt.exists():
+    if receipt.exists():
+        if os.name == "nt":
+            # A cached generation receipt still has to prove this machine's
+            # generated pythonw.exe before its entry can be published.
+            existing = read_json(receipt)[0]
+            probe(python, scripts, lambda argv, **kw: run(argv, "", **kw).checked_stdout(),
+                  verified_receipt=existing["validation"], components=artifact["components"],
+                  require_windows_service=True)
+    else:
         validation = probe(python, scripts, lambda argv, **kw: run(argv, "", **kw).checked_stdout(),
-                           components=artifact["components"])
+                           components=artifact["components"],
+                           require_windows_service=(os.name == "nt"))
         _atomic(receipt, dict(key=Path(artifact["generation"]).name, python=str(python),
                               source=str(retained), validation=validation))
     publish_entry(python, scripts, release)

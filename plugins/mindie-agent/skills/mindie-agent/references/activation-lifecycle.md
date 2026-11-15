@@ -7,6 +7,18 @@
 - A single-turn host `Stop` event only hands off the completed turn's public transcript slice to the background organizer; it does not mark a multi-turn or long-horizon engineering task as completed.
 - Remote execution (`remote-dev`) and deterministic component tools operate independently of the knowledge lease.
 
+## Knowledge CLI Input & Failure Stages
+
+- Invoke `knowledge_cli.py` as `describe`, `<operation>` with UTF-8 JSON on binary stdin, or `<operation> --input-file <path>`. A selected file is the only source; an unreadable file never falls back to stdin. Input is bounded to 1 MiB and accepts UTF-8 with an optional BOM. UTF-16/GBK, empty, oversized, malformed and non-object JSON are rejected before dispatch.
+- On Windows PowerShell 5.1, write the payload as UTF-8 (its BOM is accepted) and pass the file instead of relying on the console pipe:
+  ```powershell
+  $payload | Set-Content -LiteralPath $inputFile -Encoding UTF8 -ErrorAction Stop
+  & $runtimePython -I $cli knowledge_query --input-file $inputFile
+  if ($LASTEXITCODE -ne 0) { throw "knowledge_cli.py failed with exit code $LASTEXITCODE" }
+  ```
+- Closed failure stages: `cli_input` (`argv_invalid`, `input_empty`, `input_too_large`, `input_encoding`, `input_json` with optional `line`/`column`, `input_not_object`), `input_read` (`code="input_unavailable"`), and `tool_schema` (`unknown_operation`, `schema_missing_field`, `schema_unknown_field`, `schema_unknown_input_field`). Parsed calls retain the existing admission and routing semantics.
+- Windows service preparation may fail at `windows_service_interpreter` with `windowless_interpreter_missing` or `windowless_interpreter_invalid`. An invalid candidate never retires the current service owner or publishes its binding; API-only preparation remains usable without scheduled-service capability.
+
 ## Explicit Configuration, Status & Multi-Domain Routing (`entry.py bridge`)
 
 Use the installed `PLUGIN_DATA/releases/0.1.1/entry.py bridge` in the active profile (`CODEX_THREAD_ID` is provided by the native shell):

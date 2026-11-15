@@ -1,7 +1,10 @@
 """Candidate subprocess ownership and fail-closed product receipt boundaries."""
+from contextlib import nullcontext
 from pathlib import Path
 import json
+import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -13,6 +16,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
+import bootstrap
 import bounded_process
 import setup as setup_script
 import candidate_validate
@@ -20,6 +24,19 @@ import product_contract
 from bounded_process import run
 
 RECEIPT = "import json,sys; value=json.loads(sys.argv[sys.argv.index('--identity')+1]); value['status']='validated'; print(json.dumps(value),flush=True)\n"
+
+
+def write_launcher(path, *, subsystem=2, magic=0x20B):
+    """Minimal, never-executed PE32/PE32+ header with one subsystem."""
+    header = bytearray(64 + 24 + 70)
+    header[:2] = b"MZ"
+    struct.pack_into("<I", header, 60, 64)
+    header[64:68] = b"PE\0\0"
+    struct.pack_into("<H", header, 84, 70)
+    struct.pack_into("<H", header, 88, magic)
+    struct.pack_into("<H", header, 156, subsystem)
+    Path(path).write_bytes(header)
+    return Path(path)
 
 
 class RuntimeProbeTests(unittest.TestCase):
@@ -236,6 +253,167 @@ class RuntimeProbeTests(unittest.TestCase):
               patch.object(candidate_validate, 'publication_contract', side_effect=ValueError('content contract hash differs'))):
             with self.assertRaisesRegex(ValueError, 'publication_contract: read_failed'):
                 candidate_validate.validate(self.source, expected)
+
+    def _service_validate(self, tmp_path, subsystem, *, previous=None):
+        expected = product_contract.identity(self.source, 'a' * 40)
+        executable = tmp_path / 'Scripts' / 'python.exe'
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b'')
+        if subsystem is not None:
+            write_launcher(executable.with_name('pythonw.exe'), subsystem=subsystem)
+        with patch.object(candidate_validate, 'os', SimpleNamespace(name='nt')), \
+                patch.object(candidate_validate.sys, 'executable', str(executable)), \
+                patch.object(candidate_validate, 'adapter_check'), \
+                patch.object(candidate_validate, 'installed_revisions'), \
+                patch.object(candidate_validate, 'runtime_check'), \
+                patch.object(candidate_validate, 'publication_contract') as publication:
+            result = candidate_validate.validate(
+                self.source, expected, previous, require_windows_service=True)
+        return expected, result, publication
+
+    def test_required_service_capability_accepts_only_a_gui_launcher(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            expected, result, publication = self._service_validate(tmp_path, 2)
+            self.assertEqual(result, dict(expected, status='validated'))
+            publication.assert_called_once()
+
+            previous = dict(expected, status='validated')
+            expected, result, publication = self._service_validate(
+                tmp_path / 'cached', 2, previous=previous)
+            self.assertEqual(result, previous)
+            publication.assert_not_called()
+
+    def test_required_service_capability_rejects_cui_or_missing_launcher(self):
+        for name, subsystem, code in (
+            ('cui', 3, 'windowless_interpreter_invalid'),
+            ('missing', None, 'windowless_interpreter_missing'),
+        ):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                tmp_path = Path(directory)
+                with self.assertRaises(candidate_validate.CheckFailure) as caught:
+                    self._service_validate(tmp_path, subsystem)
+                self.assertEqual(caught.exception.failure, dict(
+                    stage='windows_service_interpreter', code=code))
+
+                # A generic verified receipt is never service-capability proof.
+                expected = product_contract.identity(self.source, 'a' * 40)
+                with self.assertRaises(candidate_validate.CheckFailure) as caught:
+                    self._service_validate(
+                        tmp_path / 'cached', subsystem,
+                        previous=dict(expected, status='validated'))
+                self.assertEqual(caught.exception.failure, dict(
+                    stage='windows_service_interpreter', code=code))
+
+    def test_api_only_validation_remains_usable_without_a_gui_launcher(self):
+        for subsystem in (3, None):
+            with self.subTest(subsystem=subsystem), tempfile.TemporaryDirectory() as directory:
+                tmp_path = Path(directory)
+                expected = product_contract.identity(self.source, 'a' * 40)
+                executable = tmp_path / 'Scripts' / 'python.exe'
+                executable.parent.mkdir(parents=True)
+                executable.write_bytes(b'')
+                if subsystem is not None:
+                    write_launcher(executable.with_name('pythonw.exe'), subsystem=subsystem)
+                with patch.object(candidate_validate, 'os', SimpleNamespace(name='nt')), \
+                        patch.object(candidate_validate.sys, 'executable', str(executable)), \
+                        patch.object(candidate_validate, 'adapter_check'), \
+                        patch.object(candidate_validate, 'installed_revisions'), \
+                        patch.object(candidate_validate, 'runtime_check'), \
+                        patch.object(candidate_validate, 'publication_contract'):
+                    result = candidate_validate.validate(self.source, expected)
+                self.assertEqual(result, dict(expected, status='validated'))
+
+    def test_failure_receipt_accepts_the_windows_service_stage(self):
+        expected = product_contract.identity(self.source, 'a' * 40)
+        for code in ('windowless_interpreter_missing', 'windowless_interpreter_invalid'):
+            with self.subTest(code=code):
+                failure = dict(stage='windows_service_interpreter', code=code)
+                output = json.dumps(dict(expected, status='failed', failure=failure))
+                error = product_contract.failure_receipt(output, expected, 1)
+                self.assertIsInstance(error, product_contract.CandidateValidationError)
+                self.assertEqual((error.stage, error.code), ('windows_service_interpreter', code))
+        for failure in (
+            dict(stage='windows_service_interpreter', code='api_incompatible'),
+            dict(stage='runtime_api', code='windowless_interpreter_invalid'),
+        ):
+            with self.subTest(failure=failure):
+                output = json.dumps(dict(expected, status='failed', failure=failure))
+                error = product_contract.failure_receipt(output, expected, 1)
+                self.assertEqual((error.stage, error.code), ('process', 'nonzero_exit'))
+
+    def test_probe_forwards_the_service_requirement_to_the_candidate(self):
+        seen = []
+
+        def command(argv, **kwargs):
+            seen.append(argv)
+            return run(argv, '', **kwargs).checked_stdout()
+
+        product_contract.probe(sys.executable, self.scripts, command,
+                               revision='a' * 40, require_windows_service=True)
+        self.assertIn('--require-windows-service', seen[-1])
+        product_contract.probe(sys.executable, self.scripts, command,
+                               revision='a' * 40, require_windows_service=False)
+        self.assertNotIn('--require-windows-service', seen[-1])
+
+    def test_candidate_cli_accepts_the_service_requirement_flag(self):
+        import io
+        expected = product_contract.identity(self.source, 'a' * 40)
+        stdout = SimpleNamespace(buffer=io.BytesIO())
+        argv = ['candidate_validate.py', '--source', str(self.source),
+                '--identity', json.dumps(expected), '--require-windows-service']
+        with patch.object(candidate_validate, 'validate',
+                          return_value=dict(expected, status='validated')) as validate, \
+                patch.object(candidate_validate.sys, 'argv', argv), \
+                patch.object(candidate_validate.sys, 'stdout', stdout):
+            self.assertEqual(candidate_validate.main(), 0)
+        validate.assert_called_once_with(self.source, expected, None,
+                                         require_windows_service=True)
+
+    def test_cached_baseline_runtime_rechecks_the_windows_service_launcher(self):
+        data = Path(self.temp.name) / 'data'
+        source = Path(self.temp.name) / 'bootstrap-source'
+        source.mkdir()
+        version, key = '0.1.32', 'a' * 64
+        runtime = data / 'runtimes' / key[:24]
+        python = runtime / 'Scripts/python.exe'
+        release = data / 'releases' / version
+        release.mkdir(parents=True)
+        receipt = release / 'runtime.json'
+        validation = dict(schema='mindie-candidate-check/1', status='validated')
+        receipt.write_text(json.dumps(dict(key=key, python=str(python), validation=validation)))
+        scripts = Path(self.temp.name) / 'installed' / 'scripts'
+
+        class WindowsOs:
+            name = 'nt'
+
+            def __getattr__(self, item):
+                return getattr(os, item)
+
+        with patch.object(bootstrap, 'os', WindowsOs()), \
+                patch.object(bootstrap, 'native_version', return_value=version), \
+                patch.object(bootstrap, 'runtime_key', return_value=key), \
+                patch.object(bootstrap, 'exclusive_lock', side_effect=lambda *a, **kw: nullcontext()), \
+                patch.object(bootstrap, 'preparing', side_effect=lambda stage: nullcontext()), \
+                patch.object(bootstrap, 'readback', return_value=scripts), \
+                patch.object(bootstrap, 'publish_entry') as publish, \
+                patch.object(bootstrap, 'probe', return_value=validation) as probe, \
+                patch.object(bootstrap, 'validate_receipt') as validate_receipt:
+            result = bootstrap._baseline_runtime(source, data)
+            self.assertEqual(result, (python, scripts, release))
+            validate_receipt.assert_not_called()
+            publish.assert_called_once()
+            args, kwargs = probe.call_args
+            self.assertEqual(args[:2], (python, scripts))
+            self.assertEqual(kwargs, dict(verified_receipt=validation,
+                                          require_windows_service=True))
+
+            probe.side_effect = product_contract.CandidateValidationError(dict(
+                stage='windows_service_interpreter', code='windowless_interpreter_missing'))
+            publish.reset_mock()
+            with self.assertRaises(product_contract.CandidateValidationError):
+                bootstrap._baseline_runtime(source, data)
+            publish.assert_not_called()
 
 
 if __name__ == '__main__':

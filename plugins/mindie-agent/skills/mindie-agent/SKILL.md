@@ -17,7 +17,7 @@ Before your first knowledge call in the session, resolve the active adapter conf
 
 Knowledge tools are invoked via `knowledge_cli.py`:
 - Run `python -I <runtime_scripts>/knowledge_cli.py describe` when you need the tool schemas.
-- Run `python -I <runtime_scripts>/knowledge_cli.py <tool_name>` with JSON arguments on stdin (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`).
+- Run `python -I <runtime_scripts>/knowledge_cli.py <tool_name>` with JSON arguments on stdin, or pass `--input-file <path>` for a UTF-8 JSON file (recommended on Windows PowerShell) (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`).
 
 Deterministic tools (`remote-dev`, `coordinator`, `debugger`, `profiler`, `sim`, `diagnostics_status`, `diagnostics_bundle`) are always available in every session without activating this skill.
 

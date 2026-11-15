@@ -52,6 +52,27 @@ def _atomic(path, value):
         Path(temporary).unlink(missing_ok=True)
 
 
+def _require_windows_service_launcher(python_executable):
+    """Reject a missing/CUI launcher before retiring or publishing a service owner."""
+    if os.name != "nt":
+        return
+    from mindie_knowledge.loop.service_host import ServiceHostError
+    from mindie_knowledge.windows_interpreter import require_windowless
+    try:
+        require_windowless(Path(python_executable).with_name("pythonw.exe"))
+    except TimeoutError:
+        raise
+    except ServiceHostError as exc:
+        # A CLI failure crosses `prepare()` before the activation handler runs.
+        # Attach allowlisted metadata so the error envelope keeps the stage and
+        # code even at this earlier boundary.
+        exc.activation_stage = "windows_service_interpreter"
+        exc.activation_code = (exc.code if exc.code in {
+            "windowless_interpreter_missing", "windowless_interpreter_invalid",
+        } else "windowless_interpreter_invalid")
+        raise
+
+
 def _validate_legacy_runtime_floor(adapter):
     """An old parent snapshots after building; recheck its actual runtime floor."""
     from mindie_knowledge.component_runtime import read_inventory, read_versions
@@ -89,6 +110,7 @@ def prepare(config, release, *, blocking=True, expected_binding=None, deadline=N
     receipt = read_json(release / "runtime.json")[0]
     if not isinstance(receipt, dict) or not same_interpreter(receipt.get("python"), sys.executable):
         raise ValueError("candidate preparation must run in its exact installed runtime")
+    _require_windows_service_launcher(sys.executable)
     scripts = Path(__file__).resolve().parent
     legacy = expected_binding is not None and "component_commands" not in expected_binding
     with update_lock(config, blocking=blocking):
@@ -178,6 +200,7 @@ def activate(config, prepared, *, control_seconds=CONTROL_SECONDS):
     from mindie_knowledge.loop.cli import config_at
     from mindie_knowledge.loop.handoff import _probe
     from mindie_knowledge.loop.lifecycle import inspect_retirement, retire_service
+    from mindie_knowledge.loop.service_host import ServiceHostError
 
     if (type(control_seconds) not in (int, float) or not math.isfinite(control_seconds)
             or control_seconds <= 0):
@@ -204,6 +227,18 @@ def activate(config, prepared, *, control_seconds=CONTROL_SECONDS):
             stage = "binding_read"
             current = read_json(config)[0]
             target = prepared["adapter"]
+            # A service-required candidate must be a real GUI launcher before
+            # this handoff may retire an owner or publish the replacement.
+            stage = "windows_service_interpreter"
+            try:
+                _require_windows_service_launcher(target["python"])
+            except TimeoutError:
+                raise
+            except ServiceHostError as exc:
+                from activation_diagnostics import evidence
+                return incomplete(code=exc.activation_code, error_type=type(exc).__name__,
+                                  diagnostic_evidence=evidence(exc))
+            stage = "binding_read"
             if runtime_binding(current) == runtime_binding(target):
                 state = probe(Path(target["engine_config"]), config_at(target["engine_config"]))
                 return (dict(status="active", unavailable_seconds=0)

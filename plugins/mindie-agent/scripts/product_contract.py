@@ -42,6 +42,7 @@ FAILURE_CODES = {
     "adapter": {"adapter_incompatible", "release_state_undeclared", "release_version_mismatch"},
     "runtime_pins": {"package_missing", "receipt_missing", "receipt_invalid", "revision_mismatch", "metadata_unavailable"},
     "runtime_api": {"api_incompatible"},
+    "windows_service_interpreter": {"windowless_interpreter_missing", "windowless_interpreter_invalid"},
     "publication_fetch": {"init_failed", "fetch_failed", "revision_read_failed", "revision_mismatch"},
     "publication_contract": {"contract_mismatch", "read_failed", "validator_mismatch"},
     "receipt": {"receipt_mismatch"},
@@ -336,7 +337,8 @@ def validate_receipt(output, expected):
     return value
 
 
-def probe(python, scripts, command, *, revision=None, verified_receipt=None, components=None):
+def probe(python, scripts, command, *, revision=None, verified_receipt=None, components=None,
+          require_windows_service=False):
     scripts = Path(scripts).resolve()
     source = source_root(scripts)
     expected = identity(source, revision, components=components)
@@ -347,6 +349,10 @@ def probe(python, scripts, command, *, revision=None, verified_receipt=None, com
         # Candidate source and installed runtime are checked again locally.
         validate_receipt(json.dumps(verified_receipt), expected)
         argv.extend(["--verified-receipt", json.dumps(verified_receipt, sort_keys=True)])
+    if require_windows_service:
+        # This explicit mode is separate from API compatibility; only service
+        # preparation asks the candidate to validate its generated launcher.
+        argv.append("--require-windows-service")
     output = command(argv, timeout=180.0, max_output=65536,
                      on_failure=lambda output, code: failure_receipt(output, expected, code))
     receipt = validate_receipt(output, expected)

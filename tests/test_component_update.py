@@ -2,6 +2,7 @@
 import io
 import json
 from pathlib import Path
+import struct
 import sys
 import os
 import subprocess
@@ -16,9 +17,35 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/mindie-agent/scripts"
 sys.path.insert(0, str(SCRIPTS))
 import bootstrap
 import component_update
-from product_contract import identity
+from product_contract import CandidateValidationError, identity
 import native_entry
 import candidate_validate
+
+
+def write_launcher(path, *, subsystem=2):
+    """Minimal, never-executed PE32+ header with one subsystem."""
+    header = bytearray(64 + 24 + 70)
+    header[:2] = b"MZ"
+    struct.pack_into("<I", header, 60, 64)
+    header[64:68] = b"PE\0\0"
+    struct.pack_into("<H", header, 84, 70)
+    struct.pack_into("<H", header, 88, 0x20B)
+    struct.pack_into("<H", header, 156, subsystem)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(header)
+    return path
+
+
+def windows_service_probe(python, scripts, command, **kwargs):
+    """Apply the real launcher contract wherever the production probe would."""
+    from mindie_knowledge.loop.service_host import ServiceHostError
+    from mindie_knowledge.windows_interpreter import require_windowless
+    try:
+        require_windowless(Path(python).with_name("pythonw.exe"))
+    except ServiceHostError as exc:
+        raise CandidateValidationError(dict(
+            stage="windows_service_interpreter", code=exc.code)) from None
+    return dict(status="validated")
 
 
 def test_component_cli_starts_isolated_from_a_unicode_path(tmp_path, monkeypatch):
@@ -59,6 +86,74 @@ def test_an_unchanged_independent_runtime_is_not_rebuilt(tmp_path):
     discover.assert_called_once_with(sys.executable, baseline["runtime"], force=False,
                                     required_components={})
     build.assert_not_called()
+
+
+def test_component_candidate_probe_requires_windows_service_capability(tmp_path):
+    from types import SimpleNamespace
+    baseline = identity(SCRIPTS.parent)
+    selected = {
+        name: dict(revision=revision, version=version(name), repository="owner/" + name)
+        for name, revision in baseline["runtime"].items()
+    }
+    candidate_python = tmp_path / "candidate" / "Scripts" / "python.exe"
+    candidate_source = tmp_path / "candidate" / "source"
+    (tmp_path / "generation").mkdir()
+    with patch.object(component_update, "_discover_catalog",
+                      return_value=dict(changed=True, runtime=selected)), \
+            patch("mindie_knowledge.component_runtime.build", return_value=dict(
+                python=str(candidate_python), source=str(candidate_source),
+                generation=str(tmp_path / "generation"), components={})), \
+            patch.object(bootstrap, "readback", return_value=tmp_path / "scripts"), \
+            patch.object(bootstrap, "publish_entry"), \
+            patch.object(component_update, "probe",
+                         return_value=dict(status="validated")) as probe, \
+            patch.object(component_update, "os", SimpleNamespace(name="nt")):
+        result = component_update.prepare(SCRIPTS.parent, sys.executable, tmp_path)
+    assert result["python"] == str(bootstrap.native_path(candidate_python))
+    assert probe.call_args.kwargs["require_windows_service"] is True
+
+
+@pytest.mark.parametrize("subsystem, expected_code", (
+    (None, "windowless_interpreter_missing"),
+    (3, "windowless_interpreter_invalid"),
+))
+def test_cached_component_runtime_revalidates_windows_launcher(
+        tmp_path, subsystem, expected_code):
+    from types import SimpleNamespace
+    baseline = identity(SCRIPTS.parent)
+    selected = {
+        name: dict(revision=revision, version=version(name), repository="owner/" + name)
+        for name, revision in baseline["runtime"].items()
+    }
+    generation = tmp_path / "generation"
+    (generation / "release").mkdir(parents=True)
+    candidate_python = tmp_path / "candidate" / "Scripts" / "python.exe"
+    candidate_python.parent.mkdir(parents=True)
+    candidate_python.write_bytes(b"")
+    if subsystem is not None:
+        write_launcher(candidate_python.with_name("pythonw.exe"), subsystem=subsystem)
+    validation = {"source_sha256": "fixture"}
+    receipt = generation / "release" / "runtime.json"
+    receipt.write_text(json.dumps(dict(python=str(candidate_python),
+                                       validation=validation)), encoding="utf-8")
+    with patch.object(component_update, "_discover_catalog",
+                      return_value=dict(changed=True, runtime=selected)), \
+            patch("mindie_knowledge.component_runtime.build", return_value=dict(
+                python=str(candidate_python), source=str(tmp_path / "candidate" / "source"),
+                generation=str(generation), components={})), \
+            patch.object(bootstrap, "readback", return_value=tmp_path / "scripts"), \
+            patch.object(bootstrap, "publish_entry") as publish, \
+            patch.object(component_update, "probe",
+                         side_effect=windows_service_probe) as probe, \
+            patch.object(component_update, "os", SimpleNamespace(name="nt")):
+        with pytest.raises(CandidateValidationError) as caught:
+            component_update.prepare(SCRIPTS.parent, sys.executable, tmp_path)
+    assert caught.value.stage == "windows_service_interpreter"
+    assert caught.value.code == expected_code
+    assert probe.call_args.kwargs["verified_receipt"] == validation
+    assert probe.call_args.kwargs["components"] == {}
+    assert probe.call_args.kwargs["require_windows_service"] is True
+    publish.assert_not_called()
 
 
 def test_candidate_build_failure_does_not_change_the_active_native_binding(tmp_path):
@@ -210,16 +305,101 @@ def test_component_activation_carries_the_binding_used_for_release_selection(tmp
 def test_native_bootstrap_keeps_the_effective_component_release_on_reload(tmp_path, monkeypatch):
     release = tmp_path / "effective-release"
     release.mkdir()
-    validation = identity(SCRIPTS.parent)
+    validation = dict(identity(SCRIPTS.parent), status="validated")
     (release / "runtime.json").write_text(json.dumps(dict(python=sys.executable, validation=validation)))
     config = tmp_path / "config.json"
     config.write_text(json.dumps(dict(component_release=str(release), python=sys.executable)))
     monkeypatch.setenv("MINDIE_AGENT_CONFIG", str(config))
     with patch.object(bootstrap, "readback", return_value=SCRIPTS), \
-            patch.object(bootstrap, "_baseline_runtime") as baseline:
+            patch.object(bootstrap, "_baseline_runtime") as baseline, \
+            patch.object(bootstrap, "_probe_component_runtime") as probe:
         python, scripts, selected = bootstrap.ensure_runtime(SCRIPTS.parent, tmp_path / "data")
     assert (python, scripts, selected) == (Path(sys.executable), SCRIPTS, release)
     baseline.assert_not_called()
+    if os.name == "nt":
+        probe.assert_called_once_with(Path(sys.executable), SCRIPTS, validation)
+    else:
+        probe.assert_not_called()
+
+
+def test_stdlib_bootstrap_revalidates_a_cached_component_runtime_without_importing_it(tmp_path):
+    """The bare host Python delegates component identity to the candidate runtime."""
+    source = tmp_path / "component-source"
+    (source / ".codex-plugin").mkdir(parents=True)
+    (source / "scripts").mkdir()
+    for name in ("product-contract.json", "pyproject.toml", "uv.lock"):
+        shutil.copy2(SCRIPTS.parent / name, source / name)
+    shutil.copy2(SCRIPTS.parent / ".codex-plugin/plugin.json",
+                 source / ".codex-plugin/plugin.json")
+    scripts = source / "scripts"
+    (scripts / "candidate_validate.py").write_text(
+        "import json\n"
+        "import os\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "arguments = sys.argv[1:]\n"
+        "identity = json.loads(arguments[arguments.index('--identity') + 1])\n"
+        "Path(os.environ['MINDIE_COMPONENT_PROBE_MARKER']).write_text(\n"
+        "    json.dumps(arguments), encoding='utf-8')\n"
+        "print(json.dumps(dict(identity, status='validated'), sort_keys=True))\n",
+        encoding="utf-8",
+    )
+    baseline = identity(source)
+    validation = dict(
+        baseline, status="validated",
+        runtime={name: "b" * 40 for name in baseline["runtime"]},
+        component_updates={
+            "schema": "mindie-component-runtime/1",
+            "adapter_source_sha256": baseline["source_sha256"],
+            "runtime": {name: {"revision": "b" * 40} for name in baseline["runtime"]},
+            "lock_sha256": "c" * 64,
+        },
+    )
+    release = tmp_path / "component-release"
+    release.mkdir()
+    (release / "runtime.json").write_text(
+        json.dumps(dict(python=sys.executable, validation=validation)), encoding="utf-8")
+    config = tmp_path / "codex.json"
+    config.write_text(json.dumps(dict(component_release=str(release))), encoding="utf-8")
+    marker = tmp_path / "candidate-probe.json"
+    code = """
+import os
+import sys
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, sys.argv[1])
+import bootstrap
+
+class WindowsOs:
+    name = "nt"
+
+    def __getattr__(self, item):
+        return getattr(os, item)
+
+config, scripts, source, data, release = (Path(value) for value in sys.argv[2:7])
+with patch.object(bootstrap, "readback", return_value=scripts):
+    with patch.object(bootstrap, "os", WindowsOs()):
+        selected = bootstrap.ensure_runtime(source, data)
+assert selected == (Path(sys.executable), scripts, release), selected
+assert "mindie_knowledge" not in sys.modules
+print("stdlib bootstrap kept")
+"""
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-c", code, str(SCRIPTS), str(config),
+         str(scripts), str(source), str(tmp_path / "data"), str(release)],
+        env=dict(os.environ, MINDIE_AGENT_CONFIG=str(config),
+                 MINDIE_COMPONENT_PROBE_MARKER=str(marker)),
+        cwd=tmp_path, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    arguments = json.loads(marker.read_text(encoding="utf-8"))
+    assert arguments[:2] == ["--source", str(source)]
+    assert arguments[arguments.index("--identity") + 1] == json.dumps(
+        {key: value for key, value in validation.items() if key != "status"}, sort_keys=True)
+    assert arguments[arguments.index("--verified-receipt") + 1] == json.dumps(
+        validation, sort_keys=True)
+    assert "--require-windows-service" in arguments
 
 
 def test_stdlib_bootstrap_leaves_custom_only_bindings_to_the_installed_helper(tmp_path):

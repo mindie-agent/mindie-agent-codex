@@ -197,6 +197,28 @@ def runtime_check(scripts):
         raise ValueError(output.getvalue().strip() or "candidate runtime probe returned no result")
 
 
+def windows_service_check(executable=None):
+    """Validate the generated GUI launcher only when service capability is required.
+
+    The shared PE reader owns the header contract; this adapter translates its
+    known failures into the closed candidate-validation stage.
+    """
+    if os.name != "nt":
+        return
+    from mindie_knowledge.loop.service_host import ServiceHostError
+    from mindie_knowledge.windows_interpreter import require_windowless
+
+    launcher = Path(sys.executable if executable is None else executable).with_name("pythonw.exe")
+    try:
+        require_windowless(launcher)
+    except TimeoutError:
+        raise
+    except ServiceHostError as exc:
+        code = (exc.code if exc.code in {"windowless_interpreter_missing", "windowless_interpreter_invalid"}
+                else "windowless_interpreter_invalid")
+        raise CheckFailure("windows_service_interpreter", code) from exc
+
+
 def publication_git(args, code, env, *, timeout: float | None = 60.0):
     """Project only execution facts from one owned Git process."""
     from bounded_process import run
@@ -263,7 +285,7 @@ def publication_contract(publication):
             raise CheckFailure("publication_contract", code) from exc
 
 
-def validate(source, expected, verified_receipt=None):
+def validate(source, expected, verified_receipt=None, *, require_windows_service=False):
     actual = checked("source", "source_invalid", lambda: identity(source, expected.get("candidate_revision"), components=expected.get("component_updates")))
     if actual != expected:
         raise CheckFailure("source", "source_changed")
@@ -275,6 +297,10 @@ def validate(source, expected, verified_receipt=None):
         checked("runtime_pins", "revision_mismatch", lambda: verify(actual["component_updates"]["runtime"]))
     checked("adapter", "adapter_incompatible", lambda: adapter_check(Path(source)))
     checked("runtime_api", "api_incompatible", lambda: runtime_check(Path(__file__).resolve().parent))
+    # Service capability is required even when a generic immutable receipt is
+    # reused: that receipt never proves this machine's generated launcher.
+    if require_windows_service:
+        windows_service_check()
     if verified_receipt is None:
         # The runtime parser checks material formats and review semantics.
         # The verified Git revision still binds the trusted publication read;
@@ -297,12 +323,14 @@ def main():
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--identity", required=True)
     parser.add_argument("--verified-receipt")
+    parser.add_argument("--require-windows-service", action="store_true")
     args = parser.parse_args()
     expected = {}
     try:
         expected = json.loads(args.identity)
         previous = json.loads(args.verified_receipt) if args.verified_receipt else None
-        result = validate(args.source, expected, previous)
+        result = validate(args.source, expected, previous,
+                          require_windows_service=args.require_windows_service)
     except Exception as exc:
         # Only fixed protocol-owned fields leave this process. Provider output,
         # filesystem paths and arbitrary exception text are never echoed.

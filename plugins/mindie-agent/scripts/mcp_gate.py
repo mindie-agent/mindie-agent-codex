@@ -78,11 +78,34 @@ def failure(message):
 
 
 class InvalidToolArguments(ValueError):
-    """Rejected by the declared tool schema before any runtime dispatch."""
+    """Rejected by the declared schema or CLI grammar before any runtime dispatch."""
 
-    def __init__(self, message, field=None):
+    def __init__(self, message, field=None, *, stage=None, reason=None, line=None, column=None):
         super().__init__(message)
         self.field = field if isinstance(field, str) and field.isidentifier() else None
+        self.stage = stage
+        self.reason = reason
+        self.line = line if type(line) is int else None
+        self.column = column if type(column) is int else None
+
+
+class InputUnavailableError(OSError):
+    """The explicit --input-file source could not be read; stdin is not a fallback."""
+
+
+CLI_INPUT_STAGES = frozenset({"cli_input", "tool_schema"})
+CLI_INPUT_REASONS = frozenset({
+    "argv_invalid",
+    "input_empty",
+    "input_too_large",
+    "input_encoding",
+    "input_json",
+    "input_not_object",
+    "unknown_operation",
+    "schema_missing_field",
+    "schema_unknown_field",
+    "schema_unknown_input_field",
+})
 
 
 class SwitchingRuntime(RuntimeError):
@@ -142,6 +165,7 @@ def knowledge_timeout(name, timeout):
 
 FAILURE_HINTS = {
     "invalid_arguments": "Correct the arguments once using the tool schema; do not repeat unchanged arguments.",
+    "input_unavailable": "Nothing was executed and stdin was not used as a fallback. Confirm --input-file names a readable UTF-8 JSON file; do not repeat unchanged input.",
     "timeout": "The deadline expired and the outcome may be unknown; inspect side effects and any capture receipt before another attempt.",
     "cancelled": "The call was cancelled and the outcome may be unknown; inspect side effects and any capture receipt before another attempt.",
     "output_limit": "Output exceeded the hard cap; inspect any available partial capture receipt. Use an output-file option when supported for large results.",
@@ -153,6 +177,7 @@ FAILURE_HINTS = {
 }
 FAILURE_MESSAGES = {
     "invalid_arguments": "Request rejected before execution (invalid_arguments)",
+    "input_unavailable": "MindIE knowledge input file could not be read (input_unavailable)",
     "timeout": "MindIE request deadline exceeded (timeout)",
     "cancelled": "MindIE request was cancelled (cancelled)",
     "output_limit": "MindIE response exceeded the output limit (output_limit)",
@@ -162,12 +187,26 @@ FAILURE_MESSAGES = {
     "runtime_unavailable": "MindIE runtime failed (runtime_unavailable)",
     "internal_error": "MindIE call failed (internal_error)",
 }
+INVALID_ARGUMENT_HINTS = {
+    "argv_invalid": "Use `describe`, or `<operation>` with JSON on stdin, or `<operation> --input-file <path>`; no other arguments are accepted.",
+    "input_empty": "Provide a non-empty UTF-8 JSON object; the selected input was empty.",
+    "input_too_large": "Keep the JSON input at or below 1 MiB.",
+    "input_encoding": "Provide UTF-8 JSON (an optional UTF-8 BOM is accepted); UTF-16 and legacy encodings are rejected.",
+    "input_json": "Provide syntactically valid JSON.",
+    "input_not_object": "Provide a JSON object of tool arguments.",
+    "unknown_operation": "Use one of the advertised knowledge tool names.",
+    "schema_missing_field": "Add the schema-required field named by `field`.",
+    "schema_unknown_field": "Remove fields that the tool schema does not declare.",
+    "schema_unknown_input_field": "Remove fields that the `inputs` item schema does not declare.",
+}
 
 
 def failure_code(exc):
     """Closed classification; neither the exception text nor output is echoed."""
     if isinstance(exc, InvalidToolArguments):
         return "invalid_arguments"
+    if isinstance(exc, InputUnavailableError):
+        return "input_unavailable"
     name = type(exc).__name__
     text = str(exc) if isinstance(exc, (RuntimeError, ValueError)) else ""
     if isinstance(exc, TimeoutError):
@@ -195,19 +234,36 @@ def call_failure(exc):
     code = failure_code(exc)
     process = getattr(exc, "process_result", None)
     process = process if isinstance(process, ProcessResult) else None
-    if code in ("invalid_arguments", "component_not_installed"):
+    if code in ("invalid_arguments", "component_not_installed", "input_unavailable"):
         execution = "not_started"
     else:
         execution = ("not_started" if getattr(exc, "request_not_started", False)
                      else process.execution if process is not None else "unknown")
     structured = dict(code=code, execution=execution, automatic_retry=False)
-    if getattr(exc, "request_not_started", False):
-        structured.update(stage=getattr(exc, "request_stage", "admission"),
-                          error_type=type(exc).__name__)
+    if code == "input_unavailable":
+        structured["stage"] = "input_read"
+    else:
+        stage = getattr(exc, "stage", None)
+        reason = getattr(exc, "reason", None)
+        if (isinstance(exc, InvalidToolArguments)
+                and stage in CLI_INPUT_STAGES and reason in CLI_INPUT_REASONS):
+            structured.update(stage=stage, reason=reason)
+            if reason == "input_json":
+                if type(getattr(exc, "line", None)) is int:
+                    structured["line"] = exc.line
+                if type(getattr(exc, "column", None)) is int:
+                    structured["column"] = exc.column
+        elif getattr(exc, "request_not_started", False):
+            structured.update(stage=getattr(exc, "request_stage", "admission"),
+                              error_type=type(exc).__name__)
     field = getattr(exc, "field", None)
     if code == "invalid_arguments" and isinstance(field, str) and field.isidentifier():
         structured["field"] = field
     message = FAILURE_MESSAGES[code] + ". " + FAILURE_HINTS[code] + " No automatic retry."
+    reason = structured.get("reason")
+    if code == "invalid_arguments" and reason in INVALID_ARGUMENT_HINTS:
+        message = (FAILURE_MESSAGES[code] + ". " + INVALID_ARGUMENT_HINTS[reason]
+                   + " No automatic retry.")
     if (getattr(exc, "request_not_started", False)
             and code in {"internal_error", "runtime_unavailable", "timeout"}):
         message = (
@@ -467,18 +523,28 @@ class Gate:
         params = request.get("params", {})
         name, args = params.get("name"), params.get("arguments")
         tool = next((tool for tool in self.tools if tool["name"] == name), None)
-        if not tool or not isinstance(args, dict):
-            raise InvalidToolArguments("Unknown MindIE tool or invalid arguments")
+        if tool is None:
+            raise InvalidToolArguments("Unknown MindIE tool or invalid arguments",
+                                       stage="tool_schema", reason="unknown_operation")
+        if not isinstance(args, dict):
+            raise InvalidToolArguments("Invalid MindIE tool arguments (object required)",
+                                       stage="tool_schema", reason="input_not_object")
         args = dict(args)
         schema = tool["inputSchema"]
         unknown = set(args) - set(schema["properties"])
         missing = set(schema["required"]) - set(args)
         if unknown or missing:
+            # Never echo caller-supplied key names; only a missing field from
+            # the trusted schema may be named.
             detail = "; ".join(part for part in [
-                "unknown keys: " + ", ".join(sorted(unknown)) if unknown else "",
-                "missing keys: " + ", ".join(sorted(missing)) if missing else "",
+                "unknown keys" if unknown else "",
+                "missing keys" if missing else "",
             ] if part)
-            raise InvalidToolArguments("Invalid MindIE tool arguments (" + detail + ")")
+            field = next(iter(missing)) if not unknown and len(missing) == 1 else None
+            raise InvalidToolArguments(
+                "Invalid MindIE tool arguments (" + detail + ")",
+                field=field, stage="tool_schema",
+                reason="schema_unknown_field" if unknown else "schema_missing_field")
         if name == "knowledge_distill":
             items = args.get("inputs")
             item_schema = schema["properties"]["inputs"]["items"]
@@ -488,8 +554,8 @@ class Gate:
                         undeclared = set(item) - set(item_schema["properties"])
                         if undeclared:
                             raise InvalidToolArguments(
-                                "Invalid MindIE tool arguments (unknown input keys: "
-                                + ", ".join(sorted(undeclared)) + ")")
+                                "Invalid MindIE tool arguments (unknown input keys)",
+                                stage="tool_schema", reason="schema_unknown_input_field")
         return name, args
 
     def _request_identity(self, request):

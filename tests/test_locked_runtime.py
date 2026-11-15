@@ -4,6 +4,7 @@ import io
 import os
 from pathlib import Path
 import queue
+import struct
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,41 @@ import native_entry
 import product_contract
 import summary_provider
 from mindie_knowledge.filesystem import path_is_within
+
+
+def write_launcher(path, *, subsystem=2):
+    """Minimal, never-executed PE32+ header with one subsystem."""
+    header = bytearray(64 + 24 + 70)
+    header[:2] = b"MZ"
+    struct.pack_into("<I", header, 60, 64)
+    header[64:68] = b"PE\0\0"
+    struct.pack_into("<H", header, 84, 70)
+    struct.pack_into("<H", header, 88, 0x20B)
+    struct.pack_into("<H", header, 156, subsystem)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(header)
+    return path
+
+
+def windows_service_probe(python, scripts, validation):
+    """Apply the production launcher contract without spawning the candidate."""
+    from mindie_knowledge.loop.service_host import ServiceHostError
+    from mindie_knowledge.windows_interpreter import require_windowless
+    try:
+        require_windowless(Path(python).with_name("pythonw.exe"))
+    except ServiceHostError as exc:
+        raise product_contract.CandidateValidationError(dict(
+            stage="windows_service_interpreter", code=exc.code)) from None
+    return dict(validation, status="validated")
+
+
+class WindowsOs:
+    """Delegate to the host os module while reporting a Windows host."""
+
+    name = "nt"
+
+    def __getattr__(self, item):
+        return getattr(os, item)
 
 
 class RuntimeTests(unittest.TestCase):
@@ -181,12 +217,106 @@ class RuntimeTests(unittest.TestCase):
             fixed_entry = bootstrap.publish_entry(python, SCRIPTS, release)
             original = receipt.read_bytes(), fixed_entry.read_bytes()
             with patch.object(bootstrap, "readback", return_value=SCRIPTS) as readback, \
-                    patch.object(bootstrap, "run") as install:
+                    patch.object(bootstrap, "run") as install, \
+                    patch.object(bootstrap, "probe", return_value=validation) as probe:
                 self.assertEqual(bootstrap.ensure_runtime(source, data),
                                  (python, SCRIPTS, release))
                 readback.assert_called_once_with(python, source)
                 install.assert_not_called()
+                if os.name == "nt":
+                    self.assertTrue(probe.call_args.kwargs["require_windows_service"])
+                else:
+                    probe.assert_not_called()
             self.assertEqual((receipt.read_bytes(), fixed_entry.read_bytes()), original)
+
+    def test_cached_component_release_revalidates_windows_launcher(self):
+        for subsystem, expected_code in (
+            (None, "windowless_interpreter_missing"),
+            (3, "windowless_interpreter_invalid"),
+        ):
+            with self.subTest(subsystem=subsystem), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = SCRIPTS.parent
+                active = root / "active"
+                active.mkdir()
+                python = root / "candidate" / "Scripts" / "python.exe"
+                python.parent.mkdir(parents=True)
+                python.write_bytes(b"")
+                if subsystem is not None:
+                    write_launcher(python.with_name("pythonw.exe"), subsystem=subsystem)
+                validation = dict(product_contract.identity(source), status="validated")
+                (active / "runtime.json").write_text(json.dumps(
+                    dict(python=str(python), validation=validation)))
+                config = root / "config.json"
+                config.write_text(json.dumps(dict(component_release=str(active))))
+                with patch("session_gate.config_path", return_value=config), \
+                        patch.object(bootstrap, "os", WindowsOs()), \
+                        patch.object(bootstrap, "readback", return_value=SCRIPTS) as readback, \
+                        patch.object(bootstrap, "_probe_component_runtime",
+                                     side_effect=windows_service_probe) as probe, \
+                        patch.object(bootstrap, "publish_entry") as publish:
+                    with self.assertRaises(
+                            product_contract.CandidateValidationError) as caught:
+                        bootstrap.ensure_runtime(source, root / "data")
+                self.assertEqual(caught.exception.stage, "windows_service_interpreter")
+                self.assertEqual(caught.exception.code, expected_code)
+                readback.assert_called_once_with(python, source)
+                self.assertEqual(probe.call_args.args, (python, SCRIPTS, validation))
+                publish.assert_not_called()
+
+    def test_cached_windows_validation_enforces_the_900s_budget(self):
+        from types import SimpleNamespace
+
+        class Clock:
+            now = 1000.0
+
+            def monotonic(self):
+                return self.now
+
+        clock = Clock()
+        lock_timeouts = []
+
+        class Lock:
+            def __enter__(self):
+                clock.now += 645
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def acquire(path, *, timeout=None):
+            lock_timeouts.append(timeout)
+            return Lock()
+
+        def readback(python, source):
+            clock.now += 245
+            return SCRIPTS
+
+        def probe(python, scripts, command, **kwargs):
+            return command([str(python), "-I", "-c", "pass"], timeout=180.0)
+
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory)
+            source = SCRIPTS.parent
+            release = data / "releases" / product_contract.native_version(source)
+            release.mkdir(parents=True)
+            key = bootstrap.runtime_key(source)
+            python = data / "runtimes" / key[:24] / "Scripts" / "python.exe"
+            (release / "runtime.json").write_text(json.dumps(
+                dict(key=key, python=str(python), validation={})))
+            with patch.object(bootstrap, "os", WindowsOs()), \
+                    patch.object(bootstrap, "time",
+                                 SimpleNamespace(monotonic=clock.monotonic)), \
+                    patch.object(bootstrap, "exclusive_lock", side_effect=acquire), \
+                    patch.object(bootstrap, "readback", side_effect=readback), \
+                    patch.object(bootstrap, "probe", side_effect=probe), \
+                    patch.object(bootstrap, "run") as install, \
+                    patch.object(bootstrap, "publish_entry") as publish:
+                with self.assertRaisesRegex(TimeoutError, "budget exhausted"):
+                    bootstrap._baseline_runtime(source, data)
+        self.assertEqual(lock_timeouts, [645])
+        install.assert_not_called()
+        publish.assert_not_called()
 
     def test_source_files_exclude_build_caches_but_include_lock_and_resources(self):
         names={p.relative_to(SCRIPTS.parent).as_posix() for p in product_contract.package_files(SCRIPTS.parent)}

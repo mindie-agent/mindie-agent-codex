@@ -28,7 +28,10 @@ import sysconfig
 import tempfile
 import time
 
-from product_contract import package_files, source_identity, probe, identity, validate_receipt, native_version, read_json
+from product_contract import (
+    failure_receipt, identity, native_version, package_files, probe, read_json,
+    source_identity, source_root, validate_receipt,
+)
 from bootstrap_lock import exclusive_lock
 from bounded_process import run
 from windows_process import exec_or_wait
@@ -105,6 +108,36 @@ print(json.dumps({'root':str(root),'prefix':sys.prefix,'version':d.version}))
     return installed / "scripts"
 
 
+def _probe_component_runtime(python, scripts, validation):
+    """Revalidate a cached component runtime without importing it in this host.
+
+    The stdlib bootstrap process must never import `mindie_knowledge`: only the
+    installed candidate runtime can resolve its component identity. Reuse the
+    stdlib-only contract helpers here and delegate that check to the candidate.
+    """
+    if not isinstance(validation, dict) or validation.get("status") != "validated":
+        raise ValueError("candidate validation receipt does not match the requested source")
+    source = source_root(scripts)
+    baseline = identity(source, validation.get("candidate_revision"))
+    if any(validation.get(key) != value
+           for key, value in baseline.items() if key != "runtime"):
+        raise ValueError("candidate validation receipt does not match the requested source")
+    if "component_updates" not in validation and validation != dict(baseline, status="validated"):
+        raise ValueError("candidate validation receipt does not match the requested source")
+    expected = {key: value for key, value in validation.items() if key != "status"}
+    argv = [str(python), "-I", "-B", str(Path(scripts) / "candidate_validate.py"),
+            "--source", str(source),
+            "--identity", json.dumps(expected, sort_keys=True),
+            "--verified-receipt", json.dumps(validation, sort_keys=True),
+            "--require-windows-service"]
+    output = run(argv, "", timeout=180.0, max_output=65536,
+                 on_failure=lambda out, code: failure_receipt(out, expected, code)).checked_stdout()
+    receipt = validate_receipt(output, expected)
+    if identity(source, validation.get("candidate_revision")) != baseline:
+        raise ValueError("candidate source changed during validation")
+    return receipt
+
+
 def ensure_runtime(source, data):
     """Keep an independently updated runtime when native reloads this plugin."""
     from session_gate import config_path
@@ -115,7 +148,10 @@ def ensure_runtime(source, data):
         receipt = read_json(Path(active) / "runtime.json")[0]
         if receipt["validation"]["source_sha256"] == source_identity(source):
             python = Path(receipt["python"])
-            return python, readback(python, source), Path(active)
+            scripts = readback(python, source)
+            if os.name == "nt":
+                _probe_component_runtime(python, scripts, receipt["validation"])
+            return python, scripts, Path(active)
     python, scripts, release = _baseline_runtime(source, data)
     if active or current.get("component_commands"):
         # A newer plugin may carry older component pins. Build its adapter with
@@ -150,7 +186,8 @@ def _baseline_runtime(source, data):
     executable = "Scripts/python.exe" if os.name == "nt" else "bin/python"
     python = runtime / executable
     receipt = release / "runtime.json"
-    with exclusive_lock(release / "prepare.lock", timeout=budget(825, 75)):
+    with exclusive_lock(release / "prepare.lock",
+                        timeout=budget(645, 255) if os.name == "nt" else budget(825, 75)):
         if receipt.exists():
             existing = json.loads(receipt.read_text(encoding="utf-8"))
             bound_python = Path(existing["python"])
@@ -164,8 +201,20 @@ def _baseline_runtime(source, data):
             if str(python).startswith("\\\\?\\"):
                 release = native_path(release)
             with preparing("completed-runtime"):
+                budget(60, 195 if os.name == "nt" else 15)
                 scripts = readback(python, source)
-                validate_receipt(json.dumps(existing["validation"]), identity(scripts.parent))
+                if os.name == "nt":
+                    # A cached generic receipt does not prove this machine's
+                    # generated pythonw.exe; recheck the launcher locally.
+                    probe(python, scripts,
+                          lambda argv, **kw: run(
+                              argv, "",
+                              **dict(kw, timeout=budget(kw.get("timeout", 180.0), 15))
+                          ).checked_stdout(),
+                          verified_receipt=existing["validation"],
+                          require_windows_service=True)
+                else:
+                    validate_receipt(json.dumps(existing["validation"]), identity(scripts.parent))
                 publish_entry(python, scripts, release)
             return python, scripts, release
         # The interpreter spelling also determines sys.prefix. Retain the
@@ -225,9 +274,15 @@ def _baseline_runtime(source, data):
                      "--python", sys.executable], "", timeout=budget(540, 255), env=env).checked_stdout()
             Path(log).unlink()
         with preparing("installed-readback"):
+            budget(60, 195)
             scripts = readback(python, source)
         with preparing("candidate-validation"):
-            validation = probe(python, scripts, lambda argv, **kw: run(argv, "", **kw).checked_stdout())
+            validation = probe(python, scripts,
+                               lambda argv, **kw: run(
+                                   argv, "",
+                                   **dict(kw, timeout=budget(kw.get("timeout", 180.0), 15))
+                               ).checked_stdout(),
+                               require_windows_service=(os.name == "nt"))
         with preparing("release-publication"):
             temporary = release / "runtime.json.tmp"
             temporary.write_text(json.dumps({"key": key, "python": str(python),

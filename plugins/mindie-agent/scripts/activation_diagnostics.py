@@ -25,8 +25,12 @@ from pathlib import Path
 
 SCHEMA = "mindie.activation.failure/1"
 COMPONENT = "mindie-agent-codex"
-_STAGES = frozenset({"installation_lock", "binding_read", "new_owner_ready",
-                     "old_owner_retirement", "new_owner_readiness", "domain_retirement", "binding_publish"})
+_STAGES = frozenset({"installation_lock", "binding_read", "windows_service_interpreter",
+                     "new_owner_ready", "old_owner_retirement", "new_owner_readiness",
+                     "domain_retirement", "binding_publish"})
+_STAGE_CODES = {"windows_service_interpreter": frozenset({
+    "windowless_interpreter_missing", "windowless_interpreter_invalid",
+})}
 _CLASSES = {cls.__name__: cls for cls in (
     OSError, FileNotFoundError, PermissionError, TimeoutError, ConnectionError,
     ImportError, ModuleNotFoundError)}
@@ -53,6 +57,12 @@ def emit_error(exception):
     typed = typed_catalog_error(exception)
     catalog = isinstance(typed, CatalogError)
     error = {"type": type(typed).__name__}
+    stage = getattr(exception, "activation_stage", None)
+    if isinstance(stage, str) and stage in _STAGES:
+        error["stage"] = stage
+        code = getattr(exception, "activation_code", None)
+        if isinstance(code, str) and code in _STAGE_CODES.get(stage, ()):
+            error["code"] = code
     if catalog:
         # Existing typed catalog projection already admits only static codes.
         from component_update import _CODE
@@ -67,7 +77,9 @@ def emit_error(exception):
     # Classification may rebuild the exception; record the original traceback
     # before the parent reuses this incident and discards its wrapper evidence.
     typed.mindie_failure_evidence = original_evidence
-    diagnostic = failure("release.update", "runtime_activation", "update", exception=typed, exit_code=1)
+    diagnostic_stage = ("runtime_activation." + stage
+                        if isinstance(stage, str) and stage in _STAGES else "runtime_activation")
+    diagnostic = failure("release.update", diagnostic_stage, "update", exception=typed, exit_code=1)
     print(json.dumps(dict(schema=SCHEMA, kind="catalog" if catalog else "exception",
                           error=error, build=build_metadata(), evidence=original_evidence,
                           diagnostic=diagnostic), sort_keys=True))
@@ -97,6 +109,12 @@ def child_error(exception):
     elif kind == "exception":
         recovered = _typed(error.get("type"), value.get("evidence"))
         typed = _copy_process(exception, recovered) if recovered is not None else exception
+        stage = error.get("stage")
+        if isinstance(stage, str) and stage in _STAGES:
+            typed.activation_stage = stage
+            code = error.get("code")
+            if isinstance(code, str) and code in _STAGE_CODES.get(stage, ()):
+                typed.activation_code = code
     else:
         return exception
     # record_failure revalidates the transport projection before persistence.
