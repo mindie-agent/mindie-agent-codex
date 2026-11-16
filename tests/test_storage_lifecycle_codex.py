@@ -426,6 +426,86 @@ def test_capture_reclaims_stale_active_and_abandons_its_own(tmp_path):
     assert not list(tmp_path.glob("*.active"))
 
 
+def _release_with_runtime(host, version, key):
+    """One published release and the exact runtime its immutable receipt names."""
+    runtime = host.plugin / "runtimes" / key
+    python = runtime / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    release = host.plugin / "releases" / version
+    release.mkdir(parents=True)
+    receipt = release / "runtime.json"
+    receipt.write_text(json.dumps(dict(key=key, python=str(python))), encoding="utf-8")
+    age = 50_000 - int(version.rsplit(".", 1)[-1])
+    for path in (release, runtime, python.parent, python.parent.parent):
+        _age(path, age)
+    return release, python
+
+
+def test_staged_newer_release_keeps_bound_release_and_one_rollback(tmp_path, monkeypatch):
+    host = Host(tmp_path)
+    host.env(monkeypatch)
+    releases = {
+        version: _release_with_runtime(host, f"0.1.{version}", f"key-{version}")
+        for version in range(30, 35)
+    }
+    # A newer 0.1.34 is staged, while codex.json still executes 0.1.33's
+    # runtime. component_release is absent/None, so only the python binding
+    # identifies the active release.
+    (host.config / "codex.json").write_text(json.dumps(dict(
+        component_release=None, python=str(releases[33][1]))), encoding="utf-8")
+
+    result = host.reclaim()
+
+    retained = {entry.name for entry in (host.plugin / "releases").iterdir()
+                if entry.is_dir()}
+    assert {"0.1.34", "0.1.33", "0.1.32"} <= retained, retained
+    assert "0.1.31" not in retained and "0.1.30" not in retained, retained
+    assert releases[33][0].is_dir() and releases[32][0].is_dir()
+    assert (host.plugin / "runtimes" / "key-33").is_dir()
+    assert (host.plugin / "runtimes" / "key-32").is_dir()
+    assert result["status"] == "completed", result
+
+
+def test_explicit_keep_paths_survive_a_sweep_that_would_drop_them(tmp_path, monkeypatch):
+    host = Host(tmp_path)
+    host.env(monkeypatch)
+    releases = {
+        version: _release_with_runtime(host, f"0.1.{version}", f"key-{version}")
+        for version in range(30, 35)
+    }
+    old_release, old_python = releases[30]
+    old_runtime = host.plugin / "runtimes" / "key-30"
+
+    result = host.reclaim(keep_paths=[old_release, old_python])
+
+    assert old_release.is_dir() and old_runtime.is_dir()
+    assert old_python.is_file()
+    assert result["status"] == "completed", result
+
+
+def test_native_metadata_version_protects_candidate_and_rollback(tmp_path, monkeypatch):
+    host = Host(tmp_path)
+    host.env(monkeypatch)
+    releases = {
+        version: _release_with_runtime(host, f"0.1.{version}", f"key-{version}")
+        for version in range(30, 36)
+    }
+    # 0.1.35 is a staged newer directory; only the in-flight 0.1.34 metadata
+    # identifies 0.1.33 as the rollback that must not be reclaimed.
+    native = host.plugin / "codex.updates" / "native.json"
+    native.parent.mkdir(parents=True)
+    native.write_text(json.dumps(dict(
+        stage="installed", metadata=dict(version="0.1.34"))), encoding="utf-8")
+
+    result = host.reclaim()
+
+    assert releases[34][0].is_dir() and releases[33][0].is_dir()
+    assert (host.plugin / "runtimes" / "key-34").is_dir()
+    assert (host.plugin / "runtimes" / "key-33").is_dir()
+    assert result["status"] == "completed", result
+
+
 def test_serving_runtime_lease_holds_the_owning_generation(tmp_path, monkeypatch):
     import mindie_knowledge.storage as storage
     from storage_gc import serving_runtime_lease

@@ -34,6 +34,9 @@ HOST = "codex"
 REPOSITORY = "mindie-agent/mindie-agent"
 _STORAGE = "MindIE diagnostic storage unavailable; original outcome unchanged."
 CONTEXT_ENV = ("MINDIE_DIAGNOSTICS_CONFIG", "MINDIE_DIAGNOSTICS_ROOT")
+_UPDATE_NON_REPORTABLE_CATEGORIES = frozenset({
+    "temporary_network", "rate_limited", "deadline", "resolver", "authentication",
+    "certificate", "permission", "hook_trust", "busy", "deferred", "prerequisite", "cancelled"})
 
 
 def environment_context(adapter, config_file=None):
@@ -185,6 +188,53 @@ def _chain_inner_diagnostic(exc):
     return None
 
 
+def _update_exception_policy(exception):
+    """Typed update facts, independent of the installed fallback's age."""
+    seen, pending, categories = set(), [exception], set()
+    while pending and len(seen) < 32:
+        current = pending.pop(0)
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        code = getattr(current, "code", None)
+        if type(current).__name__ == "ReleaseValidationError" \
+                or code in {"revision_mismatch", "contract_mismatch"}:
+            return True, categories
+        if code in {"release_transport_unavailable", "release_http_error"}:
+            return False, categories
+        category = getattr(current, "category", None)
+        if category in _UPDATE_NON_REPORTABLE_CATEGORIES:
+            return False, categories | {category}
+        if isinstance(current, OSError):
+            return False, categories
+        cause = getattr(current, "__cause__", None)
+        context = (None if getattr(current, "__suppress_context__", False)
+                   else getattr(current, "__context__", None))
+        pending.extend(item for item in (cause, context) if item is not None)
+    return True, categories
+
+
+_UPDATE_CONNECTIVITY_CATEGORIES = frozenset({
+    "temporary_network", "rate_limited", "deadline", "resolver", "authentication", "certificate", "permission", "hook_trust", "cancelled"})
+
+
+def _update_category_override(exception):
+    """Return ``(category, reportable)`` for an older fallback that says internal."""
+    reportable, categories = _update_exception_policy(exception)
+    if reportable:
+        return None, True
+    try:
+        from mindie_diagnostics.fallback import update_failure_policy
+        upstream = update_failure_policy(exception)
+    except Exception:  # noqa: BLE001 - diagnostics never masks the primary fault
+        upstream = ("internal", True, None)
+    if upstream[0] != "internal":
+        return None, False
+    category = ("connectivity" if categories & _UPDATE_CONNECTIVITY_CATEGORIES
+                else "prerequisite")
+    return category, False
+
+
 def failure(operation, stage, category, *, exception=None, revision=None,
             elapsed_ms=None, exit_code=None, reportable=True, incident_id=None,
             reason_code=None, substage=None):
@@ -193,6 +243,10 @@ def failure(operation, stage, category, *, exception=None, revision=None,
         return {"incident_id": trusted, "logging_failed": False}
     if (inner := _chain_inner_diagnostic(exception)) is not None:
         return inner
+    if category == "update":
+        override, effective = _update_category_override(exception)
+        category = override or category
+        reportable = reportable and effective
     child_build = getattr(exception, "mindie_failure_build", None)
     build = (_project_build(child_build) if isinstance(child_build, dict) else {}) or build_metadata()
     eff_reason = reason_code if reason_code is not None else getattr(exception, "reason_code", None)

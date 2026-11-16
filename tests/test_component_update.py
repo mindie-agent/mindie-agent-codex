@@ -113,6 +113,47 @@ def test_component_candidate_probe_requires_windows_service_capability(tmp_path)
     assert probe.call_args.kwargs["require_windows_service"] is True
 
 
+def test_component_build_reuses_the_active_release_publication_baseline(tmp_path):
+    baseline = identity(SCRIPTS.parent)
+    release = tmp_path / "active-release"
+    release.mkdir()
+    validation = dict(baseline, status="validated",
+                      runtime={name: "a" * 40 for name in baseline["runtime"]})
+    (release / "runtime.json").write_text(json.dumps(dict(
+        python=sys.executable, validation=validation)), encoding="utf-8")
+    stale = tmp_path / "stale-release"
+    stale.mkdir()
+    (stale / "runtime.json").write_text(json.dumps(dict(
+        python=sys.executable,
+        validation=dict(validation, source_sha256="0" * 64))), encoding="utf-8")
+    selected = {
+        name: dict(revision=revision, version=version(name), repository="owner/" + name)
+        for name, revision in baseline["runtime"].items()
+    }
+    (tmp_path / "generation").mkdir()
+    for adapter, expected in (
+        (dict(component_release=str(release)), validation),
+        (dict(component_release=None), None),
+        (dict(component_release=str(stale)), None),
+    ):
+        (tmp_path / "generation/release/runtime.json").unlink(missing_ok=True)
+        with patch.object(component_update, "_discover_catalog",
+                          return_value=dict(changed=True, runtime=selected)), \
+                patch("mindie_knowledge.component_runtime.build", return_value=dict(
+                    python=str(tmp_path / "candidate" / "python"),
+                    source=str(tmp_path / "candidate" / "source"),
+                    generation=str(tmp_path / "generation"), components={})), \
+                patch.object(bootstrap, "readback", return_value=tmp_path / "scripts"), \
+                patch.object(bootstrap, "publish_entry"), \
+                patch.object(component_update, "probe",
+                             return_value=dict(status="validated")) as probe:
+            result = component_update.prepare(
+                SCRIPTS.parent, sys.executable, tmp_path, adapter=adapter)
+        assert result["python"] == str(bootstrap.native_path(
+            tmp_path / "candidate" / "python"))
+        assert probe.call_args.kwargs["verified_receipt"] == expected
+
+
 @pytest.mark.parametrize("subsystem, expected_code", (
     (None, "windowless_interpreter_missing"),
     (3, "windowless_interpreter_invalid"),

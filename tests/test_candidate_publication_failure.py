@@ -159,6 +159,156 @@ class PublicationFailureTests(unittest.TestCase):
                     returncode=0 if completed else None, cleanup_failed=False,
                 ))
 
+    def test_transport_text_is_reduced_to_one_closed_category(self):
+        cases = (
+            ("fatal: unable to access remote: Could not resolve host: github.com",
+             "resolver"),
+            ("fatal: unable to access remote: SSL certificate problem: "
+             "unable to get local issuer certificate", "certificate"),
+            ("fatal: unable to access remote: Recv failure: Connection reset by peer",
+             "temporary_network"),
+        )
+        for text, expected in cases:
+            with self.subTest(category=expected), patch.object(
+                self.runner, "run",
+                return_value=self.runner.ProcessResult(
+                    "completed", stdout=PRIVATE, returncode=128, stderr=text),
+            ):
+                with self.assertRaises(candidate.CheckFailure) as caught:
+                    candidate.publication_git(["private-" + PRIVATE], "fetch_failed", {})
+                error = self.projected(caught.exception.failure)
+                self.assertEqual(error.category, expected)
+                self.assertEqual(error.reason_code, "fetch_failed")
+                self.assertEqual(error.substage, "publication_fetch")
+                self.assertNotIn(text, str(error))
+                self.assertEqual(error.process, dict(
+                    execution="completed", reason="nonzero_exit", returncode=128,
+                    cleanup_failed=False,
+                ))
+
+    def test_timeout_and_spawn_failure_use_closed_fallback_categories(self):
+        timeout = TimeoutError(PRIVATE)
+        timeout.process_result = self.runner.ProcessResult("unknown", stdout=PRIVATE)
+        for error, expected in (
+            (timeout, "temporary_network"),
+            (TimeoutError(PRIVATE), "temporary_network"),
+            (FileNotFoundError(PRIVATE), "prerequisite"),
+        ):
+            with self.subTest(category=expected), patch.object(
+                self.runner, "run", side_effect=error,
+            ):
+                with self.assertRaises(candidate.CheckFailure) as caught:
+                    candidate.publication_git(["private-" + PRIVATE], "fetch_failed", {})
+                self.assertEqual(caught.exception.failure["category"], expected)
+                self.assertNotIn(PRIVATE, str(caught.exception))
+
+    def test_unclassified_output_keeps_the_three_key_process_failure(self):
+        with patch.object(self.runner, "run", return_value=self.runner.ProcessResult(
+                "completed", stdout=PRIVATE, returncode=17, stderr=PRIVATE)):
+            with self.assertRaises(candidate.CheckFailure) as caught:
+                candidate.publication_git(["private-" + PRIVATE], "fetch_failed", {})
+        self.assertEqual(set(caught.exception.failure),
+                         {"stage", "code", "process"})
+        self.projected(caught.exception.failure)
+
+    def test_receipt_rejects_an_unclassified_category_label(self):
+        failure = dict(stage="publication_fetch", code="fetch_failed", process=dict(
+            execution="completed", reason="nonzero_exit", returncode=128,
+            cleanup_failed=False,
+        ), category=PRIVATE)
+        error = contract.failure_receipt(
+            json.dumps(dict(EXPECTED, status="failed", failure=failure)), EXPECTED, 1,
+        )
+        self.assertEqual((error.stage, error.code), ("process", "nonzero_exit"))
+        self.assertIsNone(error.category)
+        accepted = dict(failure, category="resolver")
+        error = contract.failure_receipt(
+            json.dumps(dict(EXPECTED, status="failed", failure=accepted)), EXPECTED, 1,
+        )
+        self.assertEqual((error.stage, error.code), ("publication_fetch", "fetch_failed"))
+        self.assertEqual(error.category, "resolver")
+        self.assertEqual(error.reason_code, "fetch_failed")
+        self.assertEqual(error.substage, "publication_fetch")
+
+    @staticmethod
+    def _identity():
+        return dict(
+            schema=contract.RECEIPT_SCHEMA, candidate_revision="a" * 40,
+            source_sha256="b" * 64, product_sha256="c" * 64,
+            requirements_sha256="d" * 64,
+            runtime={"mindie-knowledge": "e" * 40},
+            publication=dict(repository="mindie-agent/knowledge", ref="main",
+                             domain="vllm-ascend", verified_commit="f" * 40),
+            component_updates=dict(
+                schema="mindie-component-runtime/1", adapter_source_sha256="b" * 64,
+                runtime={"mindie-knowledge": {"revision": "1" * 40}},
+                lock_sha256="2" * 64),
+        )
+
+    def test_pure_component_update_reuses_verified_publication_without_network(self):
+        actual = self._identity()
+        verified = dict(actual, status="validated", runtime={"mindie-knowledge": "3" * 40},
+                        component_updates=dict(actual["component_updates"],
+                                               lock_sha256="4" * 64))
+        calls = []
+        for options in (dict(verified_publication=verified),
+                        dict(verified_receipt=verified)):
+            with self.subTest(options=sorted(options)), \
+                    patch.object(candidate, "identity", return_value=actual), \
+                    patch.object(candidate, "installed_revisions",
+                                 side_effect=lambda pins: calls.append("pins")), \
+                    patch("mindie_knowledge.runtime_inventory.verify_lock",
+                          side_effect=lambda value: calls.append("lock")), \
+                    patch("mindie_knowledge.runtime_inventory.verify",
+                          side_effect=lambda value: calls.append("verify")), \
+                    patch.object(candidate, "adapter_check",
+                                 side_effect=lambda plugin: calls.append("adapter")), \
+                    patch.object(candidate, "runtime_check",
+                                 side_effect=lambda scripts: calls.append("runtime")), \
+                    patch.object(candidate, "publication_contract",
+                                 side_effect=AssertionError("network read repeated")):
+                result = candidate.validate("source", actual, **options)
+            self.assertEqual(result, dict(actual, status="validated"))
+        self.assertEqual(calls, ["pins", "lock", "verify", "adapter", "runtime"] * 2)
+
+    def test_verified_publication_mismatch_is_a_receipt_failure(self):
+        actual = self._identity()
+        mismatch = dict(actual, status="validated",
+                        publication=dict(actual["publication"], verified_commit="9" * 40))
+        with patch.object(candidate, "identity", return_value=actual), \
+                patch.object(candidate, "installed_revisions"), \
+                patch("mindie_knowledge.runtime_inventory.verify_lock"), \
+                patch("mindie_knowledge.runtime_inventory.verify"), \
+                patch.object(candidate, "adapter_check"), \
+                patch.object(candidate, "runtime_check"), \
+                patch.object(candidate, "publication_contract") as network:
+            with self.assertRaises(candidate.CheckFailure) as caught:
+                candidate.validate("source", actual, verified_publication=mismatch)
+        self.assertEqual(caught.exception.failure, dict(
+            stage="receipt", code="receipt_mismatch"))
+        network.assert_not_called()
+
+    def test_probe_forwards_a_pure_component_baseline_as_verified_publication(self):
+        actual = self._identity()
+        verified = dict(actual, status="validated", runtime={"mindie-knowledge": "3" * 40})
+        seen = []
+
+        def command(argv, **kwargs):
+            seen.append((list(argv), dict(kwargs)))
+            return json.dumps(dict(actual, status="validated"))
+
+        with patch.object(contract, "source_root", return_value=ROOT), \
+                patch.object(contract, "identity", return_value=actual):
+            self.assertEqual(
+                contract.probe(sys.executable, SCRIPTS, command,
+                               verified_receipt=verified,
+                               components=actual["component_updates"]),
+                dict(actual, status="validated"))
+        argv = seen[0][0]
+        self.assertIn("--verified-publication", argv)
+        self.assertNotIn("--verified-receipt", argv)
+        self.assertEqual(seen[0][1]["timeout"], 180.0)
+
     def test_real_local_git_init_failure_keeps_exit_status_without_paths(self):
         git = shutil.which("git")
         if git is None:

@@ -59,6 +59,10 @@ FAILURE_COMPONENTS = {
     "mindie-coordinator",
 }
 PUBLICATION_PROCESS_CODES = {"init_failed", "fetch_failed", "revision_read_failed"}
+FAILURE_CATEGORIES = {
+    "temporary_network", "rate_limited", "certificate", "authentication",
+    "resolver", "permission", "prerequisite",
+}
 
 
 def _valid_process_failure(value):
@@ -100,6 +104,9 @@ class CandidateValidationError(RuntimeError):
         self.code = failure["code"]
         self.component = failure.get("component")
         self.process = failure.get("process")
+        self.category = failure.get("category")
+        self.reason_code = failure.get("code")
+        self.substage = failure.get("stage")
         suffix = " (" + self.component + ")" if self.component else ""
         if self.process is not None:
             suffix += (
@@ -117,11 +124,15 @@ def failure_receipt(output, expected, returncode):
     try:
         value = json.loads(output, object_pairs_hook=_object)
         failure = value["failure"]
+        keys = set(failure) if isinstance(failure, dict) else set()
+        category = failure.get("category") if isinstance(failure, dict) else None
         if (not isinstance(failure, dict)
-                or set(failure) not in (
+                or keys - {"category"} not in (
                     {"stage", "code"}, {"stage", "code", "component"},
                     {"stage", "code", "process"},
                 )
+                or ("category" in keys and (
+                    type(category) is not str or category not in FAILURE_CATEGORIES))
                 or failure.get("stage") not in FAILURE_CODES
                 or failure.get("code") not in FAILURE_CODES[failure["stage"]]
                 or ("component" in failure and failure["component"] not in FAILURE_COMPONENTS)
@@ -337,8 +348,18 @@ def validate_receipt(output, expected):
     return value
 
 
-def probe(python, scripts, command, *, revision=None, verified_receipt=None, components=None,
-          require_windows_service=False):
+def publication_baseline(receipt, expected):
+    """A validated receipt proving the same official publication identity."""
+    return (
+        isinstance(receipt, dict)
+        and receipt.get("status") == "validated"
+        and all(receipt.get(field) == expected.get(field)
+                for field in ("schema", "source_sha256", "product_sha256", "publication"))
+    )
+
+
+def probe(python, scripts, command, *, revision=None, verified_receipt=None,
+          verified_publication=None, components=None, require_windows_service=False):
     scripts = Path(scripts).resolve()
     source = source_root(scripts)
     expected = identity(source, revision, components=components)
@@ -347,8 +368,22 @@ def probe(python, scripts, command, *, revision=None, verified_receipt=None, com
     if verified_receipt is not None:
         # Only the already validated immutable publication baseline is reused.
         # Candidate source and installed runtime are checked again locally.
-        validate_receipt(json.dumps(verified_receipt), expected)
-        argv.extend(["--verified-receipt", json.dumps(verified_receipt, sort_keys=True)])
+        try:
+            validate_receipt(json.dumps(verified_receipt), expected)
+        except (TypeError, ValueError):
+            if not publication_baseline(verified_receipt, expected):
+                raise
+            # A pure component update keeps the same source, product and
+            # publication; only runtime pins/component_updates differ.
+            argv.extend(["--verified-publication",
+                         json.dumps(verified_receipt, sort_keys=True)])
+        else:
+            argv.extend(["--verified-receipt", json.dumps(verified_receipt, sort_keys=True)])
+    elif verified_publication is not None:
+        if not publication_baseline(verified_publication, expected):
+            raise ValueError("verified publication does not match the requested source")
+        argv.extend(["--verified-publication",
+                     json.dumps(verified_publication, sort_keys=True)])
     if require_windows_service:
         # This explicit mode is separate from API compatibility; only service
         # preparation asks the candidate to validate its generated launcher.

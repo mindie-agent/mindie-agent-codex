@@ -51,6 +51,88 @@ class UpdateTests(unittest.TestCase):
                          ["connectivity", "internal", "internal"])
         self.assertEqual(ingest(logs, Outbox(self.root / "queue.db"), config=policy)["enqueued"], 2)
 
+    def _configured_events(self):
+        from mindie_diagnostics.integration import configure_reporting
+
+        policy = Path(os.environ["MINDIE_DIAGNOSTICS_CONFIG"])
+        logs = Path(os.environ["MINDIE_DIAGNOSTICS_ROOT"])
+        configure_reporting(True, config=policy, roots=[str(logs)])
+        return logs
+
+    @staticmethod
+    def _events(logs):
+        return [json.loads(line) for path in logs.glob("events/*/*.jsonl")
+                for line in path.read_text().splitlines()]
+
+    def test_publication_transport_categories_are_not_reportable(self):
+        from product_contract import CandidateValidationError
+
+        logs = self._configured_events()
+        process = dict(execution="completed", reason="nonzero_exit",
+                       returncode=128, cleanup_failed=False)
+        for category, expected in (
+            ("resolver", "connectivity"),
+            ("certificate", "credentials"),
+            ("temporary_network", "connectivity"),
+            ("busy", "prerequisite"),
+            ("deferred", "prerequisite"),
+            ("prerequisite", "prerequisite"),
+        ):
+            with self.subTest(category=category):
+                (self.state / "status.json").write_text(json.dumps(dict(
+                    status="failed", checked_at=0, last_successful_check=100)))
+                self.installed.side_effect = CandidateValidationError(dict(
+                    stage="publication_fetch", code="fetch_failed",
+                    process=process, category=category))
+                result = update.check(self.config)
+                self.assertEqual(result["status"], "failed")
+                event = self._events(logs)[-1]
+                self.assertEqual(event["attributes"]["category"], expected)
+                self.assertIs(event["reportable"], False)
+        self.installed.side_effect = None
+        self.installed.return_value = self.before
+
+    def test_http_boundary_json_failure_is_not_reportable_but_source_mismatch_is(self):
+        from mindie_knowledge.releases_io import ReleaseFetchError, _remote_json
+
+        logs = self._configured_events()
+        with self.assertRaises(ReleaseFetchError) as caught:
+            _remote_json(b'{"private-response":')
+        json_error = caught.exception
+        self.assertEqual(getattr(json_error, "category", None), "temporary_network")
+        for error, category, reportable in (
+            (json_error, "connectivity", False),
+            (ReleaseFetchError("release_source_blob_mismatch"), "internal", True),
+        ):
+            with self.subTest(category=category, reportable=reportable):
+                (self.state / "status.json").write_text(json.dumps(dict(
+                    status="failed", checked_at=0, last_successful_check=100)))
+                with patch("mindie_knowledge.releases_io.fetch_releases", side_effect=error):
+                    result = update.check(self.config)
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["stage"], "release_selection")
+                event = self._events(logs)[-1]
+                self.assertEqual(event["attributes"]["category"], category)
+                self.assertIs(event["reportable"], reportable)
+
+    def test_release_validation_mismatch_stays_internal_and_reportable(self):
+        from mindie_knowledge.releases import ReleaseValidationError
+
+        logs = self._configured_events()
+        for code in ("revision_mismatch", "contract_mismatch"):
+            with self.subTest(code=code):
+                (self.state / "status.json").write_text(json.dumps(dict(
+                    status="failed", checked_at=0, last_successful_check=100)))
+                error = ReleaseValidationError(code)
+                with patch("mindie_knowledge.releases_io.fetch_releases",
+                           side_effect=error):
+                    result = update.check(self.config)
+                self.assertEqual(result["status"], "failed")
+                event = self._events(logs)[-1]
+                self.assertEqual(event["attributes"]["category"], "internal")
+                self.assertIs(event["reportable"], True)
+                self.assertEqual(event["attributes"]["reason_code"], code)
+
     def test_owned_update_fault_is_recorded_and_ingested_with_failed_receipt(self):
         from mindie_diagnostics.integration import configure_reporting
         from mindie_diagnostics.ingestion import ingest

@@ -4,7 +4,9 @@
 Validates candidate source integrity, installed runtime package commit pins (`direct_url.json`), adapter layout, `runtime_probe` execution, and the official publication contract commit.
 
 [Invariants]
-- Only protocol-owned fields (`stage`, `code`, `component`, `process`) leave this process on failure; provider output and filesystem paths are never echoed.
+- Only protocol-owned fields (`stage`, `code`, `component`, `process`, and one
+  closed transport `category`) leave this process on failure; provider output
+  and filesystem paths are never echoed.
 - Re-reads source identity after validation to reject concurrent local edits.
 
 [Timeouts & Locks]
@@ -34,6 +36,16 @@ from product_contract import identity, native_version, read_json, validate_recei
 from runtime_probe import build_probe_script
 
 CATALOG_MAX_BYTES = 1024 * 1024
+FAILURE_CATEGORIES = frozenset({
+    "temporary_network", "rate_limited", "certificate", "authentication",
+    "resolver", "permission", "prerequisite",
+})
+_DNS_PHRASES = (
+    "could not resolve host", "temporary failure in name resolution",
+    "name or service not known", "nodename nor servname",
+    "temporary failure resolving", "dns error", "getaddrinfo",
+    "no address associated with hostname", "unknown host",
+)
 
 
 def read_catalog(path):
@@ -53,13 +65,34 @@ def read_catalog(path):
 
 
 class CheckFailure(ValueError):
-    def __init__(self, stage, code, component=None, *, process=None):
+    def __init__(self, stage, code, component=None, *, process=None, category=None):
         self.failure = dict(stage=stage, code=code)
         if component is not None:
             self.failure["component"] = component
         if process is not None:
             self.failure["process"] = process
+        if category in FAILURE_CATEGORIES:
+            # Only a closed, non-secret category label is ever projected.
+            self.failure["category"] = category
         super().__init__(stage + ": " + code)
+
+
+def _transport_category(reason, exc, *streams):
+    """Classify bounded Git text into one closed category; never retain it."""
+    if reason == "spawn_failed" and isinstance(exc, FileNotFoundError):
+        return "prerequisite"
+    text = "\n".join(value for value in streams if isinstance(value, str) and value)
+    lower = text.lower()
+    if any(phrase in lower for phrase in _DNS_PHRASES):
+        return "resolver"
+    if text.strip():
+        from bounded_process import classify_transport_text
+        kind = classify_transport_text(text)
+        if kind is not None and kind[0] in FAILURE_CATEGORIES:
+            return kind[0]
+    if reason == "timeout":
+        return "temporary_network"
+    return None
 
 
 def checked(stage, code, operation):
@@ -231,23 +264,29 @@ def publication_git(args, code, env, *, timeout: float | None = 60.0):
         returncode = result.returncode if result is not None else None
         cleanup_failed = bool(result.cleanup) if result is not None else False
         reason = "process_failed"
-        if execution == "not_started":
+        if execution == "not_started" or (
+                result is None and isinstance(exc, FileNotFoundError)):
             reason = "spawn_failed"
         elif execution == "completed" and returncode != 0:
             reason = "nonzero_exit"
-        elif execution == "unknown" and isinstance(exc, TimeoutError):
+        elif isinstance(exc, TimeoutError) and (result is None or execution == "unknown"):
             reason = "timeout"
+        category = _transport_category(
+            reason, exc,
+            getattr(result, "stdout", ""), getattr(result, "stderr", ""))
         raise CheckFailure("publication_fetch", code, process=dict(
             execution=execution, reason=reason, returncode=returncode,
             cleanup_failed=cleanup_failed,
-        )) from exc
+        ), category=category) from exc
     if result.execution != "completed" or result.returncode != 0 or result.cleanup:
         reason = ("process_failed" if result.execution != "completed"
                   else "nonzero_exit" if result.returncode != 0 else "cleanup_failed")
+        category = _transport_category(
+            reason, None, getattr(result, "stdout", ""), getattr(result, "stderr", ""))
         raise CheckFailure("publication_fetch", code, process=dict(
             execution=result.execution, reason=reason, returncode=result.returncode,
             cleanup_failed=bool(result.cleanup),
-        ))
+        ), category=category)
     return result.stdout
 
 
@@ -285,7 +324,18 @@ def publication_contract(publication):
             raise CheckFailure("publication_contract", code) from exc
 
 
-def validate(source, expected, verified_receipt=None, *, require_windows_service=False):
+def publication_baseline(receipt, actual):
+    """Whether a validated receipt still proves the same official publication."""
+    return (
+        isinstance(receipt, dict)
+        and receipt.get("status") == "validated"
+        and all(receipt.get(field) == actual.get(field)
+                for field in ("schema", "source_sha256", "product_sha256", "publication"))
+    )
+
+
+def validate(source, expected, verified_receipt=None, *, verified_publication=None,
+             require_windows_service=False):
     actual = checked("source", "source_invalid", lambda: identity(source, expected.get("candidate_revision"), components=expected.get("component_updates")))
     if actual != expected:
         raise CheckFailure("source", "source_changed")
@@ -301,17 +351,25 @@ def validate(source, expected, verified_receipt=None, *, require_windows_service
     # reused: that receipt never proves this machine's generated launcher.
     if require_windows_service:
         windows_service_check()
-    if verified_receipt is None:
+    if verified_receipt is not None:
+        try:
+            validate_receipt(json.dumps(verified_receipt), actual)
+        except (TypeError, ValueError):
+            # A pure component update keeps the same source, product and
+            # publication contract; only runtime pins/component_updates move.
+            # That already-verified publication baseline still binds the
+            # official commit, so only the redundant network read is skipped.
+            if not publication_baseline(verified_receipt, actual):
+                raise CheckFailure("receipt", "receipt_mismatch") from None
+    elif verified_publication is not None:
+        if not publication_baseline(verified_publication, actual):
+            raise CheckFailure("receipt", "receipt_mismatch")
+    else:
         # The runtime parser checks material formats and review semantics.
         # The verified Git revision still binds the trusted publication read;
         # current-format selection no longer depends on a fixed content digest.
         checked("publication_contract", "read_failed",
                 lambda: publication_contract(actual["publication"]))
-    else:
-        # This baseline is immutable and already verified for these exact
-        # source/product/runtime identities. Rechecking before installation
-        # never repeats the network read; local checks above always rerun.
-        checked("receipt", "receipt_mismatch", lambda: validate_receipt(json.dumps(verified_receipt), actual))
     # Re-read the source after validation to reject concurrent local edits.
     if checked("source", "source_invalid", lambda: identity(source, actual["candidate_revision"], components=actual.get("component_updates"))) != actual:
         raise CheckFailure("source", "source_changed")
@@ -323,14 +381,20 @@ def main():
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--identity", required=True)
     parser.add_argument("--verified-receipt")
+    parser.add_argument("--verified-publication")
     parser.add_argument("--require-windows-service", action="store_true")
     args = parser.parse_args()
     expected = {}
     try:
         expected = json.loads(args.identity)
         previous = json.loads(args.verified_receipt) if args.verified_receipt else None
+        publication = (json.loads(args.verified_publication)
+                       if args.verified_publication else None)
+        options = (dict(verified_publication=publication) if publication is not None
+                   else {})
         result = validate(args.source, expected, previous,
-                          require_windows_service=args.require_windows_service)
+                          require_windows_service=args.require_windows_service,
+                          **options)
     except Exception as exc:
         # Only fixed protocol-owned fields leave this process. Provider output,
         # filesystem paths and arbitrary exception text are never echoed.

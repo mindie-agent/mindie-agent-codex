@@ -4,6 +4,8 @@ receipt binds the effective lock and installed commits. Plugin updates inherit
 the current component floor; bootstrap cannot switch it back to baseline pins.
 Expected catalog HTTP/transport misses and JSON rejected at the HTTP boundary
 keep shared diagnostic codes; local parsing and unclassified crashes stay internal.
+A pure component move reuses the active release's verified publication identity;
+installed pins, adapter and runtime checks always rerun locally.
 [Timeouts & Locks] External metadata shares 15s across interpreters. The builder
 owns 420s and its generation lock; validation takes 180s; idle handoff takes 30s.
 After an active switch a 2s bounded storage reclamation runs without the build lock.
@@ -260,6 +262,25 @@ def _without_retired_inventory(runtime_module, retired_state: dict):
         runtime_module.read_inventory = original
 
 
+def _verified_publication(adapter, expected):
+    """Reuse the active release's validated publication for pure component moves."""
+    release = adapter.get("component_release") if isinstance(adapter, dict) else None
+    if not isinstance(release, str) or not release.strip():
+        return None
+    try:
+        value = read_json(Path(release) / "runtime.json")[0]
+    except TimeoutError:
+        raise
+    except (OSError, TypeError, ValueError):
+        return None
+    validation = value.get("validation") if isinstance(value, dict) else None
+    if not isinstance(validation, dict) or validation.get("status") != "validated":
+        return None
+    fields = ("schema", "source_sha256", "product_sha256", "publication")
+    return validation if all(validation.get(field) == expected.get(field)
+                             for field in fields) else None
+
+
 def prepare(source, python, data, *, current_python=None, force=False, current_source=None,
             adapter=None):
     import mindie_knowledge.component_runtime as component_runtime
@@ -271,6 +292,7 @@ def prepare(source, python, data, *, current_python=None, force=False, current_s
     # artifact paths below, where Python imports and profile I/O need them.
     source, data = Path(source), Path(data)
     baseline = identity(source)
+    publication = _verified_publication(adapter, baseline)
     required = {
         name: version for name, version in (required_components(adapter) if adapter else {}).items()
         if name not in RETIRED_COMPONENTS
@@ -313,6 +335,7 @@ def prepare(source, python, data, *, current_python=None, force=False, current_s
                   require_windows_service=True)
     else:
         validation = probe(python, scripts, lambda argv, **kw: run(argv, "", **kw).checked_stdout(),
+                           verified_receipt=publication,
                            components=artifact["components"],
                            require_windows_service=(os.name == "nt"))
         _atomic(receipt, dict(key=Path(artifact["generation"]).name, python=str(python),
