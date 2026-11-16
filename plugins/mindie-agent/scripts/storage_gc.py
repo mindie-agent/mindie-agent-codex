@@ -191,8 +191,17 @@ def _version_key(name):
                  for part in re.split(r"[.+-]", name))
 
 
+def _strip_win_prefix(text):
+    if text[:8].upper() == "\\\\?\\UNC\\":
+        return "\\\\" + text[8:]
+    if text.startswith("\\\\?\\") or text.startswith("//?/"):
+        return text[4:]
+    return text
+
+
 def _normalized(value):
-    return Path(os.path.normpath(os.path.abspath(os.path.expanduser(os.fspath(value)))))
+    raw = _strip_win_prefix(os.fspath(value).strip())
+    return Path(os.path.normpath(os.path.abspath(os.path.expanduser(raw))))
 
 
 def _release_dir(value, releases_root):
@@ -337,7 +346,7 @@ def _collect_protected_state(plugin_data, config_home, codex_home, keep_paths,
             try:
                 normalized_python = _normalized(python)
                 adapter_pythons.add(os.path.normcase(str(normalized_python)))
-                adapter_pythons.add(os.path.normcase(os.path.realpath(normalized_python)))
+                adapter_pythons.add(os.path.normcase(str(_normalized(os.path.realpath(normalized_python)))))
             except TimeoutError:
                 raise
             except (OSError, ValueError):
@@ -349,7 +358,7 @@ def _collect_protected_state(plugin_data, config_home, codex_home, keep_paths,
             except (OSError, RuntimeError, ValueError):
                 owner = None
             if owner is not None:
-                adapter_owners.add(os.path.normcase(str(owner)))
+                adapter_owners.add(os.path.normcase(str(_normalized(owner))))
         add_owned(adapter.get("runtime_scripts"))
         for text in _strings(adapter.get("domain_configs")):
             release_dir = _release_dir(text, releases_root)
@@ -390,7 +399,7 @@ def _collect_protected_state(plugin_data, config_home, codex_home, keep_paths,
                 normalized_python = _normalized(receipt_python)
                 matches = (
                     os.path.normcase(str(normalized_python)) in adapter_pythons
-                    or os.path.normcase(os.path.realpath(normalized_python)) in adapter_pythons)
+                    or os.path.normcase(str(_normalized(os.path.realpath(normalized_python)))) in adapter_pythons)
             except TimeoutError:
                 raise
             except (OSError, ValueError):
@@ -402,7 +411,7 @@ def _collect_protected_state(plugin_data, config_home, codex_home, keep_paths,
                     raise
                 except (OSError, RuntimeError, ValueError):
                     owner = None
-                matches = owner is not None and os.path.normcase(str(owner)) in adapter_owners
+                matches = owner is not None and os.path.normcase(str(_normalized(owner))) in adapter_owners
             if matches:
                 active_versions.add(name)
                 add(path)
@@ -472,7 +481,10 @@ def _collect_protected_state(plugin_data, config_home, codex_home, keep_paths,
         add_owned(receipt.get("python"))
         key = receipt.get("key")
         if isinstance(key, str) and key.strip():
-            add(runtimes_root / key)
+            clean_key = key.strip()
+            add(runtimes_root / clean_key)
+            if len(clean_key) > 24:
+                add(runtimes_root / clean_key[:24])
     return set(protected.values())
 
 
@@ -482,10 +494,11 @@ _collect_protected_State = _collect_protected_state
 
 def _inside(path, root):
     try:
-        common = os.path.commonpath((str(path), str(root)))
-    except ValueError:
+        lhs, rhs = str(_normalized(path)), str(_normalized(root))
+        common = os.path.commonpath((lhs, rhs))
+    except (OSError, TypeError, ValueError):
         return False
-    return os.path.normcase(common) == os.path.normcase(str(root))
+    return os.path.normcase(common) == os.path.normcase(rhs)
 
 
 def _hold_protected_leases(stack, protected, plugin_data, data_home=None):
@@ -497,17 +510,19 @@ def _hold_protected_leases(stack, protected, plugin_data, data_home=None):
     if data_home is not None:
         roots.extend(Path(data_home) / name
                      for name in ("releases", "runtimes", "component-runtimes"))
+    failures = []
     for directory in sorted({Path(item) for item in protected},
                             key=lambda item: str(item)):
         try:
-            if not directory.is_dir() or not any(_inside(directory, root) for root in roots):
+            normalized_dir = _normalized(directory)
+            if not normalized_dir.is_dir() or not any(_inside(normalized_dir, root) for root in roots):
                 continue
-            stack.enter_context(acquire_runtime_lease(directory))
+            stack.enter_context(acquire_runtime_lease(normalized_dir))
         except TimeoutError:
             raise
-        except (OSError, RuntimeError, ValueError):
-            # A read-only or otherwise unleasable directory must never crash GC.
-            pass
+        except (OSError, RuntimeError, ValueError) as exc:
+            failures.append(exc)
+    return failures
 
 
 def _legacy_phase(config_home, data_home, codex_home, budget, force, result):
@@ -571,6 +586,7 @@ def reclaim_storage(*, data=None, config_home=None, data_home=None, codex_home=N
                   config_home=str(config_home), data_home=str(data_home),
                   codex_home=str(codex_home), elapsed_seconds=0.0)
     try:
+        protected_ok = True
         try:
             protected = _collect_protected_state(
                 plugin_data, config_home, codex_home, keep,
@@ -578,25 +594,31 @@ def reclaim_storage(*, data=None, config_home=None, data_home=None, codex_home=N
         except TimeoutError:
             raise
         except Exception as exc:  # noqa: BLE001 - cleanup is never a primary failure
-            protected = set()
+            protected, protected_ok = set(), False
+            result["partial"] = True
             _warning(result, "protected", exc)
         expanded = keep + [str(item) for item in sorted(protected, key=str)]
         with ExitStack() as leases:
-            _hold_protected_leases(leases, protected, plugin_data, data_home)
-            try:
-                remaining = max(MIN_PHASE_BUDGET_SECONDS, deadline - time.monotonic())
-                legacy_budget = min(remaining, max(MIN_PHASE_BUDGET_SECONDS, budget * 0.6))
-                _legacy_phase(config_home, data_home, codex_home, legacy_budget, force, result)
-            except TimeoutError:
-                raise
-            except ImportError as exc:
-                result["status"] = "unavailable"
-                _warning(result, "legacy", exc)
-            except OSError as exc:
-                _warning(result, "legacy", exc)
-            except Exception as exc:  # noqa: BLE001 - cleanup is never a primary failure
-                _warning(result, "legacy", exc)
-            _merge(result, result.get("legacy"))
+            lease_failures = _hold_protected_leases(leases, protected, plugin_data, data_home)
+            if lease_failures:
+                protected_ok = False
+                result["partial"] = True
+                _warning(result, "lease", lease_failures[0])
+            if protected_ok:
+                try:
+                    remaining = max(MIN_PHASE_BUDGET_SECONDS, deadline - time.monotonic())
+                    legacy_budget = min(remaining, max(MIN_PHASE_BUDGET_SECONDS, budget * 0.6))
+                    _legacy_phase(config_home, data_home, codex_home, legacy_budget, force, result)
+                except TimeoutError:
+                    raise
+                except ImportError as exc:
+                    result["status"] = "unavailable"
+                    _warning(result, "legacy", exc)
+                except OSError as exc:
+                    _warning(result, "legacy", exc)
+                except Exception as exc:  # noqa: BLE001 - cleanup is never a primary failure
+                    _warning(result, "legacy", exc)
+                _merge(result, result.get("legacy"))
             try:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:

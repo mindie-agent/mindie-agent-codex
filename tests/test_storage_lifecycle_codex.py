@@ -521,3 +521,41 @@ def test_serving_runtime_lease_holds_the_owning_generation(tmp_path, monkeypatch
         else:
             assert (generation / ".inuse.lock").is_file()
     assert not list(generation.glob(".inuse.*.lease"))
+
+
+def test_windows_extended_paths_and_short_runtime_keys_survive_reclaim(tmp_path, monkeypatch):
+    host = Host(tmp_path)
+    host.env(monkeypatch)
+    created = {}
+    for ver in range(28, 35):
+        full_key = f"{ver:02d}" + ("abcdef0123456789" * 4)[:62]
+        short_dir = host.plugin / "runtimes" / full_key[:24]
+        py = short_dir / "Scripts" / "python.exe"
+        py.parent.mkdir(parents=True, exist_ok=True)
+        py.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+        rel = host.plugin / "releases" / f"0.1.{ver}"
+        rel.mkdir(parents=True, exist_ok=True)
+        (rel / "runtime.json").write_text(json.dumps({
+            "key": full_key,
+            "python": "\\\\?\\" + str(py),
+        }), encoding="utf-8")
+        age = 50_000 - ver
+        for path in (rel, short_dir, py.parent):
+            _age(path, age)
+        created[ver] = (rel, short_dir, py)
+
+    (host.config / "codex.json").write_text(json.dumps({
+        "component_release": None,
+        "python": "\\\\?\\" + str(created[33][2]),
+    }), encoding="utf-8")
+    keep_dir, keep_rt, keep_py = created[28]
+
+    result = host.reclaim(keep_paths=["\\\\?\\" + str(keep_dir), "\\\\?\\" + str(keep_py)])
+
+    assert created[34][0].is_dir() and created[34][1].is_dir()
+    assert created[33][0].is_dir() and created[33][1].is_dir()
+    assert created[32][0].is_dir() and created[32][1].is_dir()
+    assert keep_dir.is_dir() and keep_rt.is_dir()
+    assert not created[29][0].exists() and not created[29][1].exists()
+    assert result["status"] == "completed", result
+

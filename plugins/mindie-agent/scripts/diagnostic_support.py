@@ -217,7 +217,6 @@ def _update_exception_policy(exception):
 _UPDATE_CONNECTIVITY_CATEGORIES = frozenset({
     "temporary_network", "rate_limited", "deadline", "resolver", "authentication", "certificate", "permission", "hook_trust", "cancelled"})
 
-
 def _update_category_override(exception):
     """Return ``(category, reportable)`` for an older fallback that says internal."""
     reportable, categories = _update_exception_policy(exception)
@@ -226,6 +225,7 @@ def _update_category_override(exception):
     try:
         from mindie_diagnostics.fallback import update_failure_policy
         upstream = update_failure_policy(exception)
+    except TimeoutError: raise
     except Exception:  # noqa: BLE001 - diagnostics never masks the primary fault
         upstream = ("internal", True, None)
     if upstream[0] != "internal":
