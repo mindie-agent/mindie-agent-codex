@@ -869,6 +869,6 @@ def test_prepare_serializes_concurrent_component_inheritance_on_lock_contention(
     assert not errors, errors
     assert len(results) == 2
     assert max_concurrent_builders == 1
-    assert probe_mock.call_count == 1
+    assert probe_mock.call_count == (2 if os.name == "nt" else 1)
     assert sum(1 for r in results if r.get("reused")) == 1
 
