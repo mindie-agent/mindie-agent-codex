@@ -31,7 +31,7 @@ import urllib.error
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bounded_process import run
-from product_contract import identity, package_files, probe, read_json
+from product_contract import identity, package_files, probe, read_json, validate_receipt
 
 from mindie_knowledge.component_bindings import (
     managed_commands,
@@ -340,6 +340,8 @@ def _inherit_local_floor(source, current_python, baseline, required, adapter, ca
         for name, row in pool.items():
             if name not in targets or Version(row["version"]) > Version(targets[name]["version"]):
                 targets[name] = row
+            elif Version(row["version"]) == Version(targets[name]["version"]) and row["revision"] != targets[name]["revision"]:
+                raise catalog_exc
     validate_targets(targets)
     for name, req_version in (required or {}).items():
         if name not in targets or (
@@ -347,48 +349,6 @@ def _inherit_local_floor(source, current_python, baseline, required, adapter, ca
         ):
             raise catalog_exc
     return dict(installed=installed, runtime=targets, changed=targets != installed)
-
-
-def _try_reuse_completed_generation(data, baseline, targets, *, native_path, readback, publish_entry):
-    """Fast-path an already-built and validated component generation without re-running GC/build."""
-    from mindie_knowledge.component_runtime import generation_dir, generation_key
-
-    full_key = generation_key(baseline, targets)
-    gen_dir = generation_dir(Path(data) / "component-runtimes", full_key)
-    manifest_path = gen_dir / "components.json"
-    release = native_path(gen_dir) / "release"
-    receipt = release / "runtime.json"
-    if not manifest_path.is_file() or not receipt.is_file():
-        return None
-    try:
-        components = read_json(manifest_path)[0]
-        existing = read_json(receipt)[0]
-    except TimeoutError:
-        raise
-    except (OSError, TypeError, ValueError):
-        return None
-    if (
-        not isinstance(components, dict)
-        or components.get("generation_key") not in (None, full_key)
-        or components.get("adapter_source_sha256") != baseline["source_sha256"]
-        or components.get("runtime") != targets
-        or not isinstance(existing, dict)
-        or not isinstance(existing.get("validation"), dict)
-        or existing["validation"].get("status") != "validated"
-    ):
-        return None
-    exe = "Scripts/python.exe" if os.name == "nt" else "bin/python"
-    python = native_path(gen_dir / "runtime/.venv" / exe)
-    retained = native_path(gen_dir / "source")
-    if not Path(python).is_file() or not Path(retained).is_dir():
-        return None
-    scripts = readback(python, retained)
-    if os.name == "nt":
-        probe(python, scripts, lambda argv, **kw: run(argv, "", **kw).checked_stdout(),
-              verified_receipt=existing["validation"], components=components,
-              require_windows_service=True)
-    publish_entry(python, scripts, release)
-    return dict(python=str(python), scripts=str(scripts), release=str(release), reused=True)
 
 
 def prepare(source, python, data, *, current_python=None, force=False, current_source=None,
@@ -433,11 +393,6 @@ def prepare(source, python, data, *, current_python=None, force=False, current_s
     pins = {name: row["revision"] for name, row in selection["runtime"].items()}
     if (current_python is not None or not selection["changed"]) and pins == baseline["runtime"] and not needs_binding:
         return None
-    reused = _try_reuse_completed_generation(
-        data, baseline, selection["runtime"],
-        native_path=native_path, readback=readback, publish_entry=publish_entry)
-    if reused is not None:
-        return reused
     artifact = build(source, data / "component-runtimes", baseline, selection["runtime"],
                      python=python, adapter_distribution="mindie-agent-codex",
                      files=[str(path.relative_to(source)) for path in package_files(source)])
@@ -446,14 +401,21 @@ def prepare(source, python, data, *, current_python=None, force=False, current_s
     release = native_path(artifact["generation"]) / "release"
     release.mkdir(exist_ok=True)
     receipt = release / "runtime.json"
-    if receipt.exists():
+    reused = receipt.exists()
+    if reused:
+        existing = read_json(receipt)[0]
         if os.name == "nt":
             # A cached generation receipt still has to prove this machine's
             # generated pythonw.exe before its entry can be published.
-            existing = read_json(receipt)[0]
             probe(python, scripts, lambda argv, **kw: run(argv, "", **kw).checked_stdout(),
                   verified_receipt=existing["validation"], components=artifact["components"],
                   require_windows_service=True)
+        else:
+            validate_receipt(
+                json.dumps(existing["validation"]),
+                identity(retained, existing["validation"].get("candidate_revision"),
+                         components=artifact["components"]),
+            )
     else:
         validation = probe(python, scripts, lambda argv, **kw: run(argv, "", **kw).checked_stdout(),
                            verified_receipt=publication,
@@ -462,7 +424,10 @@ def prepare(source, python, data, *, current_python=None, force=False, current_s
         _atomic(receipt, dict(key=Path(artifact["generation"]).name, python=str(python),
                               source=str(retained), validation=validation))
     publish_entry(python, scripts, release)
-    return dict(python=str(python), scripts=str(scripts), release=str(release))
+    result = dict(python=str(python), scripts=str(scripts), release=str(release))
+    if reused:
+        result["reused"] = True
+    return result
 
 
 def check(config, source, data, *, force=False):
