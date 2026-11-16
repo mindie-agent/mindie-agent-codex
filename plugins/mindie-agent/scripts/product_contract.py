@@ -338,6 +338,8 @@ def identity(source, revision=None, *, components=None):
     if components is None:
         return baseline
     from mindie_knowledge.component_releases import runtime_identity
+    if isinstance(components, dict) and "generation_key" in components:
+        components = {k: v for k, v in components.items() if k != "generation_key"}
     return runtime_identity(baseline, components)
 
 

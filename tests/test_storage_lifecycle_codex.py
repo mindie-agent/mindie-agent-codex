@@ -112,8 +112,10 @@ def test_historical_backlog_is_reclaimed_to_bounded_counts(tmp_path, monkeypatch
 
     result = host.reclaim()
 
-    remaining_components = sorted((host.plugin / "component-runtimes").iterdir())
-    remaining_runtimes = sorted((host.plugin / "runtimes").iterdir())
+    remaining_components = sorted(
+        entry for entry in (host.plugin / "component-runtimes").iterdir() if entry.is_dir())
+    remaining_runtimes = sorted(
+        entry for entry in (host.plugin / "runtimes").iterdir() if entry.is_dir())
     remaining_releases = sorted(
         entry.name for entry in releases_root.iterdir()
         if entry.is_dir() and entry.name.startswith("0.0."))
