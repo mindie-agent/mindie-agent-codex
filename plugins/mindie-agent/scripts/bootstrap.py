@@ -167,7 +167,8 @@ def ensure_runtime(source, data):
             effective = json.loads(result)
         if effective:
             python = Path(effective["python"])
-            _postbuild_cleanup(python, data, keep=[floor])
+            if not effective.get("reused"):
+                _postbuild_cleanup(python, data, keep=[floor])
             return python, Path(effective["scripts"]), Path(effective["release"])
     python, scripts, release = _baseline_runtime(
         source, data, cleanup_python=floor)

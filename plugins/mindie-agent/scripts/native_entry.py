@@ -397,8 +397,12 @@ def write_manifests(root):
                       # does not change business tool-call deadlines.
                       startup_timeout_sec=MCP_STARTUP_SECONDS,
                       env_vars=["CODEX_HOME", "MINDIE_AGENT_CONFIG",
+                                "MINDIE_CONFIG_HOME", "MINDIE_DATA_HOME",
+                                "MINDIE_REMOTE_STATE_DIR",
                                 "MINDIE_CODEX_BIN", "MINDIE_DIAGNOSTICS_CONFIG",
-                                "MINDIE_DIAGNOSTICS_ROOT", *TRANSPORT_ENV])
+                                "MINDIE_DIAGNOSTICS_ROOT",
+                                "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME",
+                                "UV_CACHE_DIR", *TRANSPORT_ENV])
         if name == "mindie-remote-dev":
             # Codex 0.153.4 plugin `.mcp.json` accepts a literal `env` object
             # (the same RawMcpServerConfig used by `codex mcp add --env`). This

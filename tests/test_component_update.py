@@ -741,3 +741,48 @@ def test_wsl_host_binary_resolution_rejects_windows_drvfs_and_pe_shims(tmp_path,
     assert native_context._is_wsl_linux_executable(linux_console) is True
     assert native_context._is_wsl_linux_executable(elf_bin) is True
     assert native_context._is_wsl_linux_executable(npm_shim) is False
+
+
+def test_inheritance_falls_back_to_local_floor_on_catalog_403_and_fast_reuses_generation(tmp_path):
+    from mindie_knowledge.component_runtime import generation_dir, generation_key
+
+    source = SCRIPTS.parent
+    baseline = identity(source)
+    floor_meta = component_update._lock_baseline_floor(source, baseline["runtime"])
+    assert floor_meta is not None
+    sim_newer = dict(repository="mindie-agent/sim", version="0.9.16", revision="3" * 40)
+    installed_inv = dict(floor_meta, **{"mindie-sim": sim_newer})
+
+    gen_key = generation_key(baseline, installed_inv)
+    gen_dir = generation_dir(tmp_path / "component-runtimes", gen_key)
+    exe_rel = "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    py_path = gen_dir / "runtime/.venv" / exe_rel
+    py_path.parent.mkdir(parents=True, exist_ok=True)
+    py_path.write_text("", encoding="utf-8")
+    (gen_dir / "source").mkdir(parents=True, exist_ok=True)
+    (gen_dir / "release").mkdir(parents=True, exist_ok=True)
+    (gen_dir / "components.json").write_text(json.dumps({
+        "generation_key": gen_key,
+        "adapter_source_sha256": baseline["source_sha256"],
+        "runtime": installed_inv,
+    }), encoding="utf-8")
+    (gen_dir / "release/runtime.json").write_text(json.dumps({
+        "key": gen_dir.name,
+        "python": str(bootstrap.native_path(py_path)),
+        "validation": {"status": "validated", "source_sha256": baseline["source_sha256"]},
+    }), encoding="utf-8")
+
+    err_403 = component_update._catalog_error("release_http_error", category="temporary_network", status=403)
+    adapter = {"component_commands": {"sim": ["/ext/python", "-I", "-X", "utf8", "-m", "mindie_sim"]}}
+    with patch.object(component_update, "_discover_catalog", side_effect=err_403), \
+            patch.object(component_update, "required_components", return_value={"mindie-sim": "0.9.16"}), \
+            patch("mindie_knowledge.component_runtime.read_inventory", return_value=installed_inv), \
+            patch("mindie_knowledge.component_runtime.build") as build_mock, \
+            patch.object(bootstrap, "readback", return_value=tmp_path / "scripts"), \
+            patch.object(bootstrap, "publish_entry"), \
+            patch.object(component_update, "probe", return_value={"status": "validated"}):
+        res = component_update.prepare(source, "/floor/python", tmp_path, current_python="/floor/python", adapter=adapter)
+        assert res is not None and res.get("reused") is True
+        build_mock.assert_not_called()
+        with pytest.raises(component_update.CatalogError):
+            component_update.prepare(source, "/floor/python", tmp_path, current_python=None, adapter=adapter)

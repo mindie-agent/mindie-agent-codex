@@ -24,6 +24,7 @@ import re
 import socket
 import ssl
 import sys
+import tomllib
 import urllib.error
 
 # Isolated Python omits the script directory; helpers belong to this candidate.
@@ -281,6 +282,115 @@ def _verified_publication(adapter, expected):
                              for field in fields) else None
 
 
+def _lock_baseline_floor(source, baseline_pins):
+    """Read official VCS floor metadata for `baseline_pins` from local `uv.lock`."""
+    from mindie_knowledge.runtime_inventory import COMPONENTS, validate_targets
+
+    lock_path = Path(source) / "uv.lock"
+    if not lock_path.is_file():
+        return None
+    parsed = tomllib.loads(lock_path.read_text(encoding="utf-8"))
+    floor = {}
+    for pkg in parsed.get("package", ()):
+        name = pkg.get("name")
+        if name not in baseline_pins or name not in COMPONENTS:
+            continue
+        git_url = (pkg.get("source") or {}).get("git", "")
+        commit = git_url.rsplit("#", 1)[-1] if "#" in git_url else ""
+        repo = COMPONENTS[name]
+        if ("github.com/" + repo) not in git_url or commit != baseline_pins[name]:
+            return None
+        floor[name] = dict(repository=repo, version=str(pkg.get("version", "")), revision=commit)
+    if set(floor) != set(baseline_pins):
+        return None
+    validate_targets(floor)
+    return floor
+
+
+def _inherit_local_floor(source, current_python, baseline, required, adapter, catalog_exc,
+                         component_runtime):
+    """Fallback to verified local inventories when GitHub release API is unavailable."""
+    from semantic_version import Version
+    from mindie_knowledge.runtime_inventory import validate_targets
+
+    lock_floor = _lock_baseline_floor(source, baseline["runtime"])
+    if lock_floor is None:
+        raise catalog_exc
+    installed = {
+        k: v for k, v in component_runtime.read_inventory(current_python).items()
+        if k not in RETIRED_COMPONENTS
+    }
+    targets = dict(lock_floor)
+    candidates = [installed]
+    seen_pythons = {str(current_python)}
+    for _name, bound_python, _module in managed_commands(adapter or {}).values():
+        py_str = str(bound_python)
+        if py_str in seen_pythons:
+            continue
+        seen_pythons.add(py_str)
+        try:
+            ext_inv = component_runtime.read_inventory(bound_python)
+        except TimeoutError:
+            raise
+        except Exception:  # noqa: BLE001 - non-VCS external wheels cannot supply SHA receipts
+            continue
+        candidates.append({k: v for k, v in ext_inv.items() if k not in RETIRED_COMPONENTS})
+
+    for pool in candidates:
+        for name, row in pool.items():
+            if name not in targets or Version(row["version"]) > Version(targets[name]["version"]):
+                targets[name] = row
+    validate_targets(targets)
+    for name, req_version in (required or {}).items():
+        if name not in targets or (
+            req_version is not None and Version(targets[name]["version"]) < Version(req_version)
+        ):
+            raise catalog_exc
+    return dict(installed=installed, runtime=targets, changed=targets != installed)
+
+
+def _try_reuse_completed_generation(data, baseline, targets, *, native_path, readback, publish_entry):
+    """Fast-path an already-built and validated component generation without re-running GC/build."""
+    from mindie_knowledge.component_runtime import generation_dir, generation_key
+
+    full_key = generation_key(baseline, targets)
+    gen_dir = generation_dir(Path(data) / "component-runtimes", full_key)
+    manifest_path = gen_dir / "components.json"
+    release = native_path(gen_dir) / "release"
+    receipt = release / "runtime.json"
+    if not manifest_path.is_file() or not receipt.is_file():
+        return None
+    try:
+        components = read_json(manifest_path)[0]
+        existing = read_json(receipt)[0]
+    except TimeoutError:
+        raise
+    except (OSError, TypeError, ValueError):
+        return None
+    if (
+        not isinstance(components, dict)
+        or components.get("generation_key") not in (None, full_key)
+        or components.get("adapter_source_sha256") != baseline["source_sha256"]
+        or components.get("runtime") != targets
+        or not isinstance(existing, dict)
+        or not isinstance(existing.get("validation"), dict)
+        or existing["validation"].get("status") != "validated"
+    ):
+        return None
+    exe = "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    python = native_path(gen_dir / "runtime/.venv" / exe)
+    retained = native_path(gen_dir / "source")
+    if not Path(python).is_file() or not Path(retained).is_dir():
+        return None
+    scripts = readback(python, retained)
+    if os.name == "nt":
+        probe(python, scripts, lambda argv, **kw: run(argv, "", **kw).checked_stdout(),
+              verified_receipt=existing["validation"], components=components,
+              require_windows_service=True)
+    publish_entry(python, scripts, release)
+    return dict(python=str(python), scripts=str(scripts), release=str(release), reused=True)
+
+
 def prepare(source, python, data, *, current_python=None, force=False, current_source=None,
             adapter=None):
     import mindie_knowledge.component_runtime as component_runtime
@@ -299,8 +409,14 @@ def prepare(source, python, data, *, current_python=None, force=False, current_s
     }
     retired_state = {"removed": False}
     with _without_retired_inventory(component_runtime, retired_state):
-        selection = _discover_catalog(current_python or python, baseline["runtime"], force=force,
-                                      required_components=required)
+        try:
+            selection = _discover_catalog(current_python or python, baseline["runtime"], force=force,
+                                          required_components=required)
+        except CatalogError as exc:
+            if current_python is None or force:
+                raise
+            selection = _inherit_local_floor(
+                source, current_python, baseline, required, adapter, exc, component_runtime)
     if isinstance(selection.get("runtime"), dict):
         for name in RETIRED_COMPONENTS:
             if name in selection["runtime"]:
@@ -317,6 +433,11 @@ def prepare(source, python, data, *, current_python=None, force=False, current_s
     pins = {name: row["revision"] for name, row in selection["runtime"].items()}
     if (current_python is not None or not selection["changed"]) and pins == baseline["runtime"] and not needs_binding:
         return None
+    reused = _try_reuse_completed_generation(
+        data, baseline, selection["runtime"],
+        native_path=native_path, readback=readback, publish_entry=publish_entry)
+    if reused is not None:
+        return reused
     artifact = build(source, data / "component-runtimes", baseline, selection["runtime"],
                      python=python, adapter_distribution="mindie-agent-codex",
                      files=[str(path.relative_to(source)) for path in package_files(source)])
