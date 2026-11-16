@@ -138,29 +138,42 @@ def configure_bootstrap_uv_cache(data, runtime, env):
         runtime, env, preferred=Path(data) / UV_CACHE_DIRECTORY)
 
 
+def _strip_win_prefix(text):
+    if text[:8].upper() == "\\\\?\\UNC\\":
+        return "\\\\" + text[8:]
+    if text.startswith("\\\\?\\") or text.startswith("//?/"):
+        return text[4:]
+    return text
+
+
+def _normalized(value):
+    raw = _strip_win_prefix(os.fspath(value).strip())
+    return Path(os.path.normpath(os.path.abspath(os.path.expanduser(raw))))
+
+
 def _plugin_data(data):
     if data is not None:
-        return Path(data).expanduser().absolute()
+        return _normalized(data)
     configured = os.environ.get("PLUGIN_DATA")
     if configured:
-        return Path(configured).expanduser().absolute()
-    home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
-    return (home / "plugins/data/mindie-agent-mindie-agent").absolute()
+        return _normalized(configured)
+    home = _normalized(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    return _normalized(home / "plugins/data/mindie-agent-mindie-agent")
 
 
 def _config_home(value):
-    return Path(value or os.environ.get(
-        "MINDIE_CONFIG_HOME", Path.home() / ".config/mindie-agent")).expanduser().absolute()
+    return _normalized(value or os.environ.get(
+        "MINDIE_CONFIG_HOME", Path.home() / ".config/mindie-agent"))
 
 
 def _data_home(value):
-    return Path(value or os.environ.get(
-        "MINDIE_DATA_HOME", Path.home() / ".local/share/mindie-agent")).expanduser().absolute()
+    return _normalized(value or os.environ.get(
+        "MINDIE_DATA_HOME", Path.home() / ".local/share/mindie-agent"))
 
 
 def _infer_codex_home(plugin_data):
     """Recover `<codex_home>` from the default `<codex>/plugins/data/<name>` shape."""
-    plugin_data = Path(plugin_data)
+    plugin_data = _normalized(plugin_data)
     if plugin_data.parent.name == "data" and plugin_data.parent.parent.name == "plugins":
         return plugin_data.parent.parent.parent
     return None
@@ -168,14 +181,14 @@ def _infer_codex_home(plugin_data):
 
 def _codex_home(value, plugin_data=None):
     if value is not None:
-        return Path(value).expanduser().absolute()
+        return _normalized(value)
     configured = os.environ.get("CODEX_HOME")
     if configured:
-        return Path(configured).expanduser().absolute()
+        return _normalized(configured)
     inferred = _infer_codex_home(_plugin_data(plugin_data))
     if inferred is not None:
         return inferred
-    return (Path.home() / ".codex").absolute()
+    return _normalized(Path.home() / ".codex")
 
 
 def _warning(value, label, error):
@@ -189,19 +202,6 @@ def _version_key(name):
     name = name[1:] if name[:1] in "vV" else name
     return tuple((0, int(part)) if part.isdigit() else (1, part)
                  for part in re.split(r"[.+-]", name))
-
-
-def _strip_win_prefix(text):
-    if text[:8].upper() == "\\\\?\\UNC\\":
-        return "\\\\" + text[8:]
-    if text.startswith("\\\\?\\") or text.startswith("//?/"):
-        return text[4:]
-    return text
-
-
-def _normalized(value):
-    raw = _strip_win_prefix(os.fspath(value).strip())
-    return Path(os.path.normpath(os.path.abspath(os.path.expanduser(raw))))
 
 
 def _release_dir(value, releases_root):
@@ -281,7 +281,9 @@ def _collect_protected_state(plugin_data, config_home, codex_home, keep_paths,
     """
     from mindie_knowledge.storage import owning_dir
 
-    plugin_data = Path(plugin_data)
+    plugin_data = _normalized(plugin_data)
+    config_home = _normalized(config_home)
+    codex_home = _normalized(codex_home)
     releases_root = plugin_data / "releases"
     runtimes_root = plugin_data / "runtimes"
     protected = {}

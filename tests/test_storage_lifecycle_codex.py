@@ -550,7 +550,14 @@ def test_windows_extended_paths_and_short_runtime_keys_survive_reclaim(tmp_path,
     }), encoding="utf-8")
     keep_dir, keep_rt, keep_py = created[28]
 
-    result = host.reclaim(keep_paths=["\\\\?\\" + str(keep_dir), "\\\\?\\" + str(keep_py)])
+    result = storage_gc.reclaim_storage(
+        data="\\\\?\\" + str(host.plugin),
+        config_home="\\\\?\\" + str(host.config),
+        data_home="\\\\?\\" + str(host.data),
+        codex_home="\\\\?\\" + str(host.codex),
+        force=True,
+        keep_paths=["\\\\?\\" + str(keep_dir), "\\\\?\\" + str(keep_py)],
+    )
 
     assert created[34][0].is_dir() and created[34][1].is_dir()
     assert created[33][0].is_dir() and created[33][1].is_dir()
@@ -558,4 +565,3 @@ def test_windows_extended_paths_and_short_runtime_keys_survive_reclaim(tmp_path,
     assert keep_dir.is_dir() and keep_rt.is_dir()
     assert not created[29][0].exists() and not created[29][1].exists()
     assert result["status"] == "completed", result
-
