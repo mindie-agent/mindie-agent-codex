@@ -11,9 +11,12 @@ Bootstraps the plugin's isolated `uv` virtual environment under `PLUGIN_DATA/run
 
 [Timeouts & Locks]
 - Acquires `exclusive_lock(release / "prepare.lock")` across bounded `uv sync` (`540.0s`), `readback` (`60.0s`), `probe`, and `runtime.json` publication.
+- Pre/post-build storage reclamation is dispatched to a healthy managed interpreter within a 12s/20s outer bound; it never holds the prepare lock.
+- A cross-volume default uv cache is redirected to a same-volume `<data>/.uv-cache` before sync.
 
 [Side-Effect Policy]
 - Writes under `PLUGIN_DATA` and an owned temporary build workspace; atomic `os.replace()` publishes `runtime.json`.
+- A successful sync removes its own `prepare-*.log`; failures retain only the newest bounded constructor logs.
 """
 from __future__ import annotations
 
@@ -34,7 +37,141 @@ from product_contract import (
 )
 from bootstrap_lock import exclusive_lock
 from bounded_process import run
+import storage_gc
 from windows_process import exec_or_wait
+
+LAST_CLEANUP = None
+PREPARE_LOG_RETENTION = 3
+PREPARE_LOG_SECONDS = 24 * 3600
+
+
+def _record_cleanup(value):
+    """Keep the latest bounded cleanup receipt for local diagnostics/tests."""
+    global LAST_CLEANUP
+    LAST_CLEANUP = value
+    return value
+
+
+def _healthy_python(value):
+    if not isinstance(value, (str, os.PathLike)):
+        return None
+    try:
+        path = Path(value)
+        return path if path.is_file() and os.access(path, os.X_OK) else None
+    except TimeoutError:
+        raise
+    except (OSError, ValueError):
+        return None
+
+
+def _prebuild_cleanup(python, data):
+    """Reclaim disposable history before a large uv sync on a full volume."""
+    if python is None:
+        return None
+    return _record_cleanup(storage_gc.dispatch_cleanup(
+        python, data=data, keep_paths=[python], budget_seconds=1.5, timeout=12.0))
+
+
+def _postbuild_cleanup(python, data, keep=()):
+    """A verified runtime is never hidden by a later cleanup warning."""
+    keep_paths = [python, *(item for item in keep if item)]
+    try:
+        value = storage_gc.dispatch_cleanup(
+            python, data=data, keep_paths=keep_paths,
+            budget_seconds=2.0, timeout=20.0)
+    except TimeoutError:
+        value = {"status": "deferred", "reason": "budget_exhausted"}
+    return _record_cleanup(value)
+
+
+def _unlink_prepare_log(path):
+    try:
+        Path(path).unlink(missing_ok=True)
+    except TimeoutError:
+        return "TimeoutError"
+    except OSError as exc:
+        return type(exc).__name__
+    return None
+
+
+def _prune_prepare_logs(data, release, keep=None):
+    """Retain only the newest constructor logs; cleanup never masks a build."""
+    candidates = []
+    try:
+        candidates.extend(Path(release).glob("prepare-*.log"))
+        releases = Path(data) / "releases"
+        for directory in list(releases.iterdir())[:64]:
+            if directory.is_dir():
+                candidates.extend(directory.glob("prepare-*.log"))
+    except TimeoutError:
+        raise
+    except OSError:
+        return
+    rows = []
+    seen = set()
+    for path in candidates:
+        name = str(path)
+        if name in seen:
+            continue
+        try:
+            modified = path.stat().st_mtime
+        except FileNotFoundError:
+            continue
+        except TimeoutError:
+            raise
+        except OSError:
+            continue
+        seen.add(name)
+        rows.append((modified, name, path))
+    rows.sort(key=lambda item: item[0], reverse=True)
+    current = str(keep) if keep is not None else None
+    retained = {current} if current is not None else set()
+    now = time.time()
+    recent = 0
+    for mtime, name, _path in rows:
+        if name == current:
+            continue
+        if recent >= PREPARE_LOG_RETENTION or now - mtime >= PREPARE_LOG_SECONDS:
+            break
+        retained.add(name)
+        recent += 1
+    for _mtime, name, path in rows:
+        if name not in retained:
+            _unlink_prepare_log(path)
+
+
+def ensure_runtime(source, data):
+    """Keep an independently updated runtime when native reloads this plugin."""
+    from session_gate import config_path
+    config = config_path()
+    current = json.loads(config.read_text(encoding="utf-8")) if config.is_file() else {}
+    active = current.get("component_release")
+    if active:
+        receipt = read_json(Path(active) / "runtime.json")[0]
+        if receipt["validation"]["source_sha256"] == source_identity(source):
+            python = Path(receipt["python"])
+            scripts = readback(python, source)
+            if os.name == "nt":
+                _probe_component_runtime(python, scripts, receipt["validation"])
+            return python, scripts, Path(active)
+    floor = _healthy_python(current.get("python"))
+    scripts_source = Path(source) / "scripts"
+    if floor is not None and (active or current.get("component_commands")):
+        # Probe/merge the installed component floor before building a second
+        # full runtime. A merged generation keeps its own verified lock.
+        with preparing("component-inheritance"):
+            result = run([str(floor), "-I", "-B", str(scripts_source / "component_update.py"),
+                          str(source), str(floor), str(data), str(floor),
+                          "--config", str(config)],
+                         "", timeout=830).checked_stdout()
+            effective = json.loads(result)
+        if effective:
+            python = Path(effective["python"])
+            _postbuild_cleanup(python, data, keep=[floor])
+            return python, Path(effective["scripts"]), Path(effective["release"])
+    python, scripts, release = _baseline_runtime(
+        source, data, cleanup_python=floor)
+    return python, scripts, release
 
 
 @contextmanager
@@ -138,36 +275,7 @@ def _probe_component_runtime(python, scripts, validation):
     return receipt
 
 
-def ensure_runtime(source, data):
-    """Keep an independently updated runtime when native reloads this plugin."""
-    from session_gate import config_path
-    config = config_path()
-    current = json.loads(config.read_text(encoding="utf-8")) if config.is_file() else {}
-    active = current.get("component_release")
-    if active:
-        receipt = read_json(Path(active) / "runtime.json")[0]
-        if receipt["validation"]["source_sha256"] == source_identity(source):
-            python = Path(receipt["python"])
-            scripts = readback(python, source)
-            if os.name == "nt":
-                _probe_component_runtime(python, scripts, receipt["validation"])
-            return python, scripts, Path(active)
-    python, scripts, release = _baseline_runtime(source, data)
-    if active or current.get("component_commands"):
-        # A newer plugin may carry older component pins. Build its adapter with
-        # the installed floor before publishing any binding for the new plugin.
-        with preparing("component-inheritance"):
-            result = run([str(python), "-I", "-B", str(scripts / "component_update.py"),
-                          str(source), str(python), str(data), current["python"],
-                          "--config", str(config)],
-                         "", timeout=830).checked_stdout()
-            effective = json.loads(result)
-        if effective:
-            return Path(effective["python"]), Path(effective["scripts"]), Path(effective["release"])
-    return python, scripts, release
-
-
-def _baseline_runtime(source, data):
+def _baseline_runtime(source, data, cleanup_python=None):
     deadline = time.monotonic() + 900
     def budget(maximum, reserve):
         remaining = deadline - time.monotonic() - reserve
@@ -186,6 +294,8 @@ def _baseline_runtime(source, data):
     executable = "Scripts/python.exe" if os.name == "nt" else "bin/python"
     python = runtime / executable
     receipt = release / "runtime.json"
+    if not receipt.exists():
+        _prebuild_cleanup(cleanup_python, data)
     with exclusive_lock(release / "prepare.lock",
                         timeout=budget(645, 255) if os.name == "nt" else budget(825, 75)):
         if receipt.exists():
@@ -228,6 +338,7 @@ def _baseline_runtime(source, data):
         env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
         env.update(UV_PROJECT_ENVIRONMENT=str(runtime), UV_NO_PROGRESS="1",
                    GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never")
+        storage_gc.configure_bootstrap_uv_cache(data, runtime, env)
         if "UV_SYSTEM_CERTS" not in env and "UV_NATIVE_TLS" not in env:
             env["UV_SYSTEM_CERTS"] = "true"
             env["UV_NATIVE_TLS"] = "true"
@@ -269,26 +380,47 @@ def _baseline_runtime(source, data):
                     target = project / path.relative_to(source)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(path, target)
-                run([sys.executable, "-I", "-B", "-c", redirect, log, uv, "sync",
-                     "--project", str(project), "--locked", "--no-editable", "--no-dev",
-                     "--python", sys.executable], "", timeout=budget(540, 255), env=env).checked_stdout()
-            Path(log).unlink()
-        with preparing("installed-readback"):
-            budget(60, 195)
-            scripts = readback(python, source)
-        with preparing("candidate-validation"):
-            validation = probe(python, scripts,
-                               lambda argv, **kw: run(
-                                   argv, "",
-                                   **dict(kw, timeout=budget(kw.get("timeout", 180.0), 15))
-                               ).checked_stdout(),
-                               require_windows_service=(os.name == "nt"))
-        with preparing("release-publication"):
-            temporary = release / "runtime.json.tmp"
-            temporary.write_text(json.dumps({"key": key, "python": str(python),
-                                             "validation": validation}))
-            os.replace(temporary, receipt)
-            publish_entry(python, scripts, release)
+                synced = False
+                try:
+                    run([sys.executable, "-I", "-B", "-c", redirect, log, uv, "sync",
+                         "--project", str(project), "--locked", "--no-editable", "--no-dev",
+                         "--python", sys.executable], "", timeout=budget(540, 255), env=env).checked_stdout()
+                    synced = True
+                finally:
+                    if not synced:
+                        try:
+                            _prune_prepare_logs(data, release, keep=Path(log))
+                        except TimeoutError:
+                            pass
+        completed = False
+        try:
+            with preparing("installed-readback"):
+                budget(60, 195)
+                scripts = readback(python, source)
+            with preparing("candidate-validation"):
+                validation = probe(python, scripts,
+                                   lambda argv, **kw: run(
+                                       argv, "",
+                                       **dict(kw, timeout=budget(kw.get("timeout", 180.0), 15))
+                                   ).checked_stdout(),
+                                   require_windows_service=(os.name == "nt"))
+            with preparing("release-publication"):
+                temporary = release / "runtime.json.tmp"
+                temporary.write_text(json.dumps({"key": key, "python": str(python),
+                                                 "validation": validation}))
+                os.replace(temporary, receipt)
+                publish_entry(python, scripts, release)
+            completed = True
+        finally:
+            if completed:
+                _unlink_prepare_log(log)
+            else:
+                try:
+                    _prune_prepare_logs(data, release, keep=Path(log))
+                except TimeoutError:
+                    pass
+        _postbuild_cleanup(python, data,
+                           keep=[cleanup_python] if cleanup_python else [])
         return python, scripts, release
 
 

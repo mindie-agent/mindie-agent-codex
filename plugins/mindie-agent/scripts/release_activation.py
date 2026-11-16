@@ -10,6 +10,7 @@ Activates a newly validated plugin release (`activate`) by preparing the target 
 
 [Timeouts & Locks]
 - Uses non-blocking `update_lock(config, exclusive=True, blocking=False)` for atomic handoff and `timeout=30.0s` for `idle-stop`. Legacy runtime metadata shares 15s. Preparation accepts a caller startup deadline; the attempt snapshot is bounded to 64 KiB stdin.
+- After an active handoff, a 2s bounded storage reclamation runs outside `update_lock`; its warning never changes the published binding.
 
 [Side-Effect Policy]
 - Publishes the prepared engine and atomically replaces the adapter binding via
@@ -138,6 +139,21 @@ def prepare(config, release, *, blocking=True, expected_binding=None, deadline=N
         from mindie_knowledge.component_bindings import rebind_commands
         adapter["component_commands"] = rebind_commands(
             old, sys.executable, receipt["validation"].get("component_updates", {}).get("runtime", {}))
+    elif "component_updates" not in receipt["validation"]:
+        # A baseline runtime has no managed component targets. Keeping an old
+        # floor's managed binding would force the next bootstrap to rebuild a
+        # redundant component runtime after this plugin upgrade. User custom
+        # wrappers are never managed and stay byte-for-byte unchanged.
+        from mindie_knowledge.component_bindings import managed_commands
+        managed = managed_commands(old)
+        if managed:
+            remaining = {key: value for key, value in
+                         old.get("component_commands", {}).items()
+                         if key not in managed}
+            if remaining:
+                adapter["component_commands"] = remaining
+            else:
+                adapter.pop("component_commands", None)
     adapter["component_release"] = (str(release) if "component_updates" in receipt["validation"] else None)
     engine["service_launch_context"] = service_launch_context(config, adapter)
     from capture_config import prepare_domains
@@ -330,6 +346,7 @@ def main(argv=None, stdin=None):
     expected = _attempt_expected(stdin) if attempt else None
     blocking = not attempt
     receipt = read_json(release / "runtime.json")[0]
+    prepared = None
     try:
         prepared = prepare(config, release, blocking=blocking, expected_binding=expected)
     except InstallationChanged:
@@ -341,6 +358,23 @@ def main(argv=None, stdin=None):
     if result.get("status") == "active":
         from native_hooks import configure_catalog_refresh
         result["tool_catalog_refresh"] = configure_catalog_refresh()
+        from storage_gc import cleanup_fact
+        keep_paths = [sys.executable]
+        if isinstance(prepared, dict):
+            previous = (prepared.get("expected_binding") or {}).get("python")
+            if isinstance(previous, str):
+                keep_paths.append(previous)
+        try:
+            from mindie_knowledge.storage import owning_dir
+            keep_paths = [str(owning_dir(value) or value) for value in keep_paths]
+        except ImportError:
+            pass
+        except TimeoutError:
+            raise
+        except (OSError, RuntimeError, ValueError):
+            pass
+        result["storage_cleanup"] = cleanup_fact(
+            keep_paths=keep_paths, budget_seconds=2.0)
     return result
 
 

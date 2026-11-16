@@ -12,6 +12,9 @@ Fixed release entrypoint (`releases/<version>/entry.py`) that validates `runtime
 [Timeouts & Locks]
 - Acquires `update_lock(config)` (`blocking=True` except on `stop`) around profile validation and initialization.
 - Every long-lived MCP role, including `tools-mcp`, releases that shared lock before serve dispatch; `Gate.call` acquires it again only for an actual tool call.
+- Every long-lived MCP role holds `acquire_runtime_lease` on its owning managed
+  generation for the entire serve loop; non-blocking lease failure falls back
+  to live-process protection instead of refusing the session.
 - Session maintenance has a 300-second execution budget for reporter, feed,
   and knowledge readiness, followed by bounded owned-process cleanup.
 - Release dispatch to helper scripts is bounded at 120.0s.
@@ -229,9 +232,12 @@ def dispatch(args, config, *, stop_adapter=None):
             args.role == "bridge" and remaining[:1] == ["mcp"]):
         # This stable facade owns the native protocol. Each tools/call
         # dispatches the complete selected helper under the operation lock.
+        # A resident server holds its managed generation against any GC sweep.
+        from storage_gc import serving_runtime_lease
         script = SCRIPTS / target
         sys.argv = [str(script), *arguments]
-        runpy.run_path(str(script), run_name='__main__')
+        with serving_runtime_lease():
+            runpy.run_path(str(script), run_name='__main__')
     else:
         from bounded_process import run
         adapter = stop_adapter if stop_adapter is not None else read(config)

@@ -12,11 +12,14 @@ refresh, and diagnostic maintenance.
   with `bootstrap.preparing` stage markers.
 
 [Timeouts & Locks]
-- Executed within the caller's bounded subprocess budget.
+- Executed within the caller's bounded subprocess budget. One 2s bounded
+  storage reclamation runs after diagnostic maintenance and never changes the
+  maintenance status.
 
 [Side-Effect Policy]
-- Starts/connects to the knowledge service, refreshes feed state, and runs
-  diagnostic maintenance under the profile directory.
+- Starts/connects to the knowledge service, refreshes feed state, runs
+  diagnostic maintenance, and silently reclaims disposable storage history
+  under the profile directory.
 """
 import json
 import os
@@ -36,9 +39,13 @@ def maintain(config):
     from diagnostic_maintenance import maintain as diagnostics_maintain
     with preparing("diagnostic-maintenance"):
         diagnostics = diagnostics_maintain(config)
+    from storage_gc import cleanup_fact
+    storage_cleanup = cleanup_fact(
+        keep_paths=[sys.executable, adapter.get("python")], budget_seconds=2.0)
     from mindie_knowledge.loop.activation import Admission
     if Admission(adapter["admission_path"]).knowledge_lease(os.environ.get("CODEX_THREAD_ID")) is None:
-        print(json.dumps(dict(status="inactive", diagnostics=diagnostics)))
+        print(json.dumps(dict(status="inactive", diagnostics=diagnostics,
+                              storage_cleanup=storage_cleanup)))
         return
     from service_client import connect
     with preparing("service-start"):
@@ -48,7 +55,8 @@ def maintain(config):
         feed = sync(adapter["engine_config"])
     ready = (feed.get("status") == "ok"
              and diagnostics.get("status") in {"ok", "complete", "unchanged"})
-    value = dict(status="ready" if ready else "incomplete", feed=feed, diagnostics=diagnostics)
+    value = dict(status="ready" if ready else "incomplete", feed=feed,
+                 diagnostics=diagnostics, storage_cleanup=storage_cleanup)
     print(json.dumps(value))
     if not ready:
         raise RuntimeError("MindIE session preparation is incomplete; inspect local status")

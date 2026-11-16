@@ -17,6 +17,7 @@ SCRIPTS=Path(__file__).resolve().parents[1]/'plugins/mindie-agent/scripts'
 sys.path.insert(0,str(SCRIPTS))
 import bootstrap
 import entry
+import native_context
 import native_entry
 import product_contract
 import summary_provider

@@ -11,7 +11,7 @@ Validates compatibility with the installed `codex --version` (`harness_version`)
 - Preserves typed activation-helper failures and their exit facts; unstructured crashes remain internal.
 
 [Timeouts & Locks]
-- Enforces `timeout=15.0s` for `codex --version`, `timeout=300.0s` for `codex plugin install`, and `timeout=330.0s` for activation (outer 330s >= inner 300s session maintenance + 30s grace).
+- Enforces `timeout=15.0s` for `codex --version`, `timeout=300.0s` for `codex plugin install`, and `timeout=330.0s` for activation (outer 330s >= inner 300s session maintenance + 30s grace). A first-install switch then runs one 2s-budget storage reclamation in the new runtime.
 
 [Side-Effect Policy]
 - Updates the local marketplace catalog, native Codex plugin cache/config, and MindIE release binding only after candidate validation succeeds.
@@ -379,6 +379,11 @@ def _prepare_and_activate(config, pending, env, root, *, first_install=False):
             except (OSError, ValueError) as record_error:
                 exc.receipt_error_type = type(record_error).__name__
             raise
+        if isinstance(value, dict) and value.get("status") == "active":
+            from storage_gc import dispatch_cleanup
+            pending["storage_cleanup"] = dispatch_cleanup(
+                runtime["python"], data=data, keep_paths=[runtime["python"]],
+                budget_seconds=2.0, timeout=20.0)
         _store_activation(root, pending, value, result, None)
         return value
 

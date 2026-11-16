@@ -282,6 +282,28 @@ class OfficialFeedUpdateTests(unittest.TestCase):
                 assert recovered.activation_stage == "windows_service_interpreter"
                 assert recovered.activation_code == expected_code
 
+    def test_baseline_switch_drops_only_managed_component_commands(self):
+        config, _consent = self.profile(feeds=[])
+        old = json.loads(config.read_text())
+        old["component_commands"] = {
+            "sim": [sys.executable, "-I", "-X", "utf8", "-m", "mindie_sim"],
+            "profiler": ["/custom/profiler", "--format", "site"],
+        }
+        config.write_text(json.dumps(old))
+        before = config.read_bytes()
+        prepared = self.prepare(config)
+        assert "sim" not in prepared["adapter"]["component_commands"]
+        assert prepared["adapter"]["component_commands"]["profiler"] == [
+            "/custom/profiler", "--format", "site"]
+        assert config.read_bytes() == before
+
+        old["component_commands"] = {
+            "sim": [sys.executable, "-I", "-X", "utf8", "-m", "mindie_sim"],
+        }
+        config.write_text(json.dumps(old))
+        prepared = self.prepare(config, name="release-managed-only")
+        assert "component_commands" not in prepared["adapter"]
+
     def test_component_candidate_prepares_new_commands_without_changing_the_live_profile(self):
         config, consent = self.profile(feeds=[dict(OFFICIAL_VLLM)])
         old = json.loads(config.read_text())

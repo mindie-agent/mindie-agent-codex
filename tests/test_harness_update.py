@@ -86,20 +86,23 @@ class UpdateTests(unittest.TestCase):
     def test_component_inheritance_crash_keeps_one_incident_through_outer_boundary(self):
         import bootstrap
         import diagnostic_support
-        active, helper = self.root / 'active', self.root / 'helper'
+        active, source = self.root / 'active', self.root / 'source'
         active.mkdir()
-        helper.mkdir()
+        (source / 'scripts').mkdir(parents=True)
         (active / 'runtime.json').write_text(json.dumps({'validation': {'source_sha256': 'old'}}))
-        # Unmodified entry point with a missing committed dependency: the real
-        # isolated child fails before it can emit a structured response.
-        (helper / 'component_update.py').write_bytes((SCRIPTS / 'component_update.py').read_bytes())
+        # The new source owns the component helper it runs. Unmodified entry
+        # point with a missing committed dependency: the real isolated child
+        # fails before it can emit a structured response.
+        (source / 'scripts/component_update.py').write_bytes(
+            (SCRIPTS / 'component_update.py').read_bytes())
         self.config.write_text(json.dumps({'component_release': str(active), 'python': sys.executable}))
         with patch('session_gate.config_path', return_value=self.config), \
                 patch.object(bootstrap, 'source_identity', return_value='new'), \
-                patch.object(bootstrap, '_baseline_runtime', return_value=(Path(sys.executable), helper, active)):
+                patch.object(bootstrap, '_baseline_runtime',
+                             return_value=(Path(sys.executable), source / 'scripts', active)):
             with self.assertRaises(RuntimeError) as caught:
                 with bootstrap.preparing('outer'):
-                    bootstrap.ensure_runtime(SCRIPTS.parent, self.root)
+                    bootstrap.ensure_runtime(source, self.root)
         ref = caught.exception.mindie_diagnostic
         self.assertTrue(ref['recorded'])
         outer = diagnostic_support.failure('release.update', 'activation', 'update', exception=caught.exception)

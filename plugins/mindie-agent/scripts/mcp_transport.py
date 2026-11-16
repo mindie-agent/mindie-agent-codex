@@ -3,7 +3,8 @@
 [Role] Serve bounded requests without tying the connection to one runtime generation.
 [Invariants] Keep native identities, cancellation and active requests intact on update.
 [Timeouts & Locks] Four workers and serialized stdout; 1s selected-catalog watcher.
-[Side-Effect Policy] Delegates calls to Gate; catalog refresh never activates knowledge.
+[Side-Effect Policy] Delegates calls to Gate; catalog refresh never activates knowledge;
+on normal stdin EOF it releases RemoteReceipts owner sidecars.
 """
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -141,4 +142,7 @@ def serve(surface, gate_api):
             for event, _ in pending.values():
                 event.set()
         executor.shutdown(wait=True)
+        closer = getattr(gate, "close", None)
+        if callable(closer):
+            closer()
 

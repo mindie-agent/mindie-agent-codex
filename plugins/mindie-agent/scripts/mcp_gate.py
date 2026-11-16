@@ -10,6 +10,7 @@ Implements the JSON-RPC MCP server gate (`Gate`, `serve`) for public `remote`/`c
 - Knowledge schemas are private to the manual Skill entry, never MCP discovery.
 - Deterministic component tools need native identity but no knowledge lease.
 - When a remote operation has already succeeded (`outcome == "succeeded"`), a local receipt-accounting failure NEVER overwrites the business result with `isError=True` (`receipt_unconfirmed=True` is attached instead).
+- An idle `<owner>.owner.lock` sidecar is removed only after a non-blocking exclusive probe; held or unreadable sidecars are always kept.
 
 [Timeouts & Locks]
 - Uses shared `update_lock` around bounded runtime subprocess dispatch (per-tool remote budget derived from the native inner wait plus 60s grace, knowledge `45.0s`, distill helper budget). Tools whose accepted arguments include `timeout_ms` and that have no native wait get an inner `timeout_ms` inside that budget. SQLite WAL mode with `busy_timeout=5000` for `RemoteReceipts`, and per-request cancellation events triggered by `notifications/cancelled` or `mindie_interrupt`.
@@ -42,6 +43,7 @@ from session_gate import (
 from update_lock import update_lock, file_lock
 from receipt_layout import prepare_layout
 import receipt_layout
+from receipt_owners import owned_lock, owner_is_alive, owner_path, sweep_idle_owner_locks
 from mcp_identity import native_identity, native_turn_identity, interrupt_turn
 
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
@@ -380,19 +382,24 @@ class RemoteReceipts:
     def _ensure_owner(self):
         if not self._owner_ready:
             self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            self._ownership.enter_context(file_lock(self.path.parent / (self.owner + ".owner.lock")))
+            self._ownership.enter_context(
+                owned_lock(owner_path(self.path.parent, self.owner)))
             self._owner_ready = True
 
     def _owner_alive(self, owner):
-        if not isinstance(owner, str) or len(owner) != 32 or any(c not in "0123456789abcdef" for c in owner):
-            raise ValueError("remote receipt owner identity is invalid")
         if owner == self.owner:
             return self._owner_ready
+        return owner_is_alive(owner_path(self.path.parent, owner))
+
+    def close(self):
+        self._ownership.close()
+
+    def _sweep_owner_locks(self):
         try:
-            with file_lock(self.path.parent / (owner + ".owner.lock"), exclusive=True):
-                return False
-        except BlockingIOError:
-            return True
+            sweep_idle_owner_locks(self.path.parent, keep={self.owner})
+        except TimeoutError:
+            # A sidecar scan is maintenance; it never blocks receipt admission.
+            pass
 
     def _db(self):
         db = None
@@ -412,6 +419,7 @@ class RemoteReceipts:
 
     def _open_db(self):
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._sweep_owner_locks()
         with file_lock(self.path.with_suffix(".initialize.lock"), exclusive=True, blocking=True):
             existed = self.path.exists()
             db = sqlite3.connect(self.path, timeout=5.0)
@@ -486,6 +494,11 @@ class Gate:
         self.connection_id = uuid.uuid4().hex
         self._remote_receipts = {}
         self.config = config_path()
+
+    def close(self):
+        receipts, self._remote_receipts = self._remote_receipts, {}
+        for value in receipts.values():
+            value.close()
 
     @property
     def tools(self):

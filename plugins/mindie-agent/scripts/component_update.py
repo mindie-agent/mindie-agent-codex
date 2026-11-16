@@ -6,6 +6,7 @@ Expected catalog HTTP/transport misses and JSON rejected at the HTTP boundary
 keep shared diagnostic codes; local parsing and unclassified crashes stay internal.
 [Timeouts & Locks] External metadata shares 15s across interpreters. The builder
 owns 420s and its generation lock; validation takes 180s; idle handoff takes 30s.
+After an active switch a 2s bounded storage reclamation runs without the build lock.
 [Side-Effect Policy] Builds a private generation, validates without a model, and
 publishes through release_activation. No consent or knowledge lease is created.
 """
@@ -339,6 +340,11 @@ def check(config, source, data, *, force=False):
     except Exception as exc:
         raise typed_catalog_error(exc) from None
     result = json.loads(output)
+    if result.get("status") == "active" and "storage_cleanup" not in result:
+        from storage_gc import cleanup_fact
+        result["storage_cleanup"] = cleanup_fact(
+            data=data, keep_paths=[runtime["python"], adapter.get("python")],
+            budget_seconds=2.0)
     return dict(result, runtime=runtime)
 
 

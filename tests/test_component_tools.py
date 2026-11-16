@@ -130,9 +130,11 @@ def test_sim_v090_compose_and_frontier_cli(sim_gate, tmp_path):
     ]})
     assert not eff["isError"], eff
     assert eff["structuredContent"]["result"]["schema"] == "mindie-sim.efficiency/1"
+    # sim >= 0.9.15's SLA report exceeds the 64 KiB default preview; the
+    # documented caller control keeps the structured result available.
     sla = call(sim_gate, "sim", {"argv": [
         "sla", str(composed_path), "--sla-ms", "30", "--context", "4096",
-    ]})
+    ], "max_output_tokens": 131072})
     assert not sla["isError"], sla
     assert sla["structuredContent"]["result"]["sla_ms"] == 30.0
     pd = call(sim_gate, "sim", {"argv": [

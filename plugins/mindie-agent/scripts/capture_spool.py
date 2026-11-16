@@ -5,17 +5,17 @@ Streams child stdout/stderr to private local files and keeps only a bounded prev
 
 [Invariants]
 - Combined spooled bytes never exceed `hard_cap`; the chunk crossing it is stored truncated and `OutputHardCap` is raised so the owner kills the tree.
-- A capture writes `<token>-<stream>.active` and renames it to `.spool` on close; only completed `.spool` files are ever pruned, so an active capture is never removed.
+- A capture writes `<token>-<stream>.active` and renames it to `.spool` on close; an active capture owned by this process is never removed. Only stale `*.active` files older than the orphan threshold are swept.
 - A path appears in a receipt only after its file was written and finalized; write/rename failures are reported in `spool_error` and never as a missing artifact claim.
 - After `freeze()`/`close()` no more bytes are accepted; late reader-thread chunks are ignored, so bytes, hash and preview stay consistent.
 - Filesystem timeouts propagate to the process owner. After execution completes,
   finalization failures are separate cleanup warnings, never a changed exit code.
 
 [Timeouts & Locks]
-- One in-process lock serializes `add` against `freeze`. Retention runs when a capture completes (and at start): completed files older than 24h, beyond 64 files or beyond 128 MiB are removed oldest first, never the capture that just completed.
+- One in-process lock serializes `add` against `freeze`. Retention runs when a capture completes (and at start): completed files older than 24h, beyond 64 files or beyond 128 MiB are removed oldest first, never the capture that just completed. Orphan `*.active` sweeps scan at most 256 entries and remove only files older than 24h that this process does not hold open.
 
 [Side-Effect Policy]
-- Creates a 0700 directory and 0600 files only under the supplied spool directory; removes only completed `*.spool` files there. `.active` files orphaned by a crashed process are left in place (never touched).
+- Creates a 0700 directory and 0600 files only under the supplied spool directory; removes only completed `*.spool` files and stale unowned `*.active` orphans there. `_abandon()` also removes its own created-but-unusable temporary file.
 """
 import codecs
 import hashlib
@@ -29,8 +29,28 @@ HARD_CAP = 16 * 1024 * 1024
 RETENTION_SECONDS = 24 * 3600
 RETENTION_FILES = 64
 RETENTION_BYTES = 128 * 1024 * 1024
+ACTIVE_ORPHAN_SECONDS = 24 * 3600
+ACTIVE_SCAN_LIMIT = 256
 ACTIVE_SUFFIX = ".active"
 DONE_SUFFIX = ".spool"
+_ACTIVE_LOCK = threading.Lock()
+_OPEN_ACTIVE = set()
+
+
+def _remember_active(path):
+    with _ACTIVE_LOCK:
+        _OPEN_ACTIVE.add(str(path))
+
+
+def _forget_active(path):
+    with _ACTIVE_LOCK:
+        _OPEN_ACTIVE.discard(str(path))
+
+
+def _active_in_use(path):
+    with _ACTIVE_LOCK:
+        return str(path) in _OPEN_ACTIVE
+
 
 
 class OutputHardCap(ValueError):
@@ -82,6 +102,50 @@ def prune(directory, *, now=None, keep=()):
     return errors
 
 
+def prune_active(directory, *, now=None, keep=()):
+    """Remove stale crashed-capture files, never one this process holds open."""
+    errors = []
+    now = time.time() if now is None else now
+    keep = {str(item) for item in keep}
+    found = []
+    scanned = 0
+    try:
+        with os.scandir(directory) as iterator:
+            for item in iterator:
+                if scanned >= ACTIVE_SCAN_LIMIT:
+                    break
+                scanned += 1
+                if item.name.endswith(ACTIVE_SUFFIX):
+                    found.append(Path(directory) / item.name)
+    except TimeoutError:
+        raise
+    except OSError as exc:
+        return [type(exc).__name__]
+    for path in found:
+        if str(path) in keep or _active_in_use(path):
+            continue
+        try:
+            info = path.stat()
+        except FileNotFoundError:
+            continue
+        except TimeoutError:
+            raise
+        except OSError as exc:
+            errors.append(type(exc).__name__)
+            continue
+        if now - info.st_mtime < ACTIVE_ORPHAN_SECONDS:
+            continue
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except TimeoutError:
+            raise
+        except OSError as exc:
+            errors.append(type(exc).__name__)
+    return errors
+
+
 class _Stream:
     def __init__(self, name, directory, token, preview_limit):
         self.name = name
@@ -100,6 +164,7 @@ class _Stream:
             descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             self.handle = os.fdopen(descriptor, "wb")
             self.path = str(path)
+            _remember_active(path)
         except TimeoutError:
             raise
         except OSError as exc:
@@ -126,10 +191,18 @@ class _Stream:
 
     def _abandon(self):
         handle, self.handle = self.handle, None
-        self.path = None
+        path, self.path = self.path, None
         if handle is not None:
             try:
                 handle.close()
+            except TimeoutError:
+                raise
+            except OSError:
+                pass
+        if path is not None:
+            _forget_active(path)
+            try:
+                Path(path).unlink(missing_ok=True)
             except TimeoutError:
                 raise
             except OSError:
@@ -141,18 +214,22 @@ class _Stream:
             return
         self.closed = True
         handle, self.handle = self.handle, None
+        path, self.path = self.path, None
         if handle is None:
             return
         try:
             handle.close()
-            final = self.path[:-len(ACTIVE_SUFFIX)] + DONE_SUFFIX
-            os.replace(self.path, final)
+            final = path[:-len(ACTIVE_SUFFIX)] + DONE_SUFFIX
+            os.replace(path, final)
+            _forget_active(path)
             self.path = final
         except TimeoutError:
+            _forget_active(path)
             self.error = "TimeoutError"
             self.path = None
             raise
         except OSError as exc:
+            _forget_active(path)
             self.error = type(exc).__name__
             self.path = None
 
@@ -184,6 +261,7 @@ class Capture:
             Path(directory).mkdir(parents=True, exist_ok=True, mode=0o700)
             os.chmod(directory, 0o700)
             self.retention_errors = prune(directory)
+            self.retention_errors += prune_active(directory)
         except TimeoutError:
             raise
         except OSError as exc:
@@ -225,6 +303,7 @@ class Capture:
             keep = [stream.path for stream in self.streams.values() if stream.path]
             try:
                 self.retention_errors += prune(self.directory, keep=keep)
+                self.retention_errors += prune_active(self.directory, keep=keep)
             except TimeoutError:
                 raise
             except Exception as exc:
