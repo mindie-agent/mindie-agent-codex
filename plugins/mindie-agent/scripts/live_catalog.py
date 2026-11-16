@@ -103,9 +103,19 @@ def _tools(surface, config, bundled):
 def component_call(request, session, config, *, cancel=None, timeout=None):
     value = _selected(config, required=True)
     params = request.get("params") or {}
+    meta = params.get("_meta")
+    native_call = {"threadId": session}
+    if isinstance(meta, dict) and isinstance(meta.get("x-codex-turn-metadata"), dict):
+        turn = meta["x-codex-turn-metadata"]
+        forwarded = {
+            key: turn[key] for key in ("thread_id", "session_id", "thread_source") if key in turn
+        }
+        forwarded.setdefault("thread_id", session)
+        native_call["x-codex-turn-metadata"] = forwarded
     if value is None or _local(value):
         from component_tools import execute
-        return execute(params.get("name"), params.get("arguments"), session, cancel=cancel, timeout=timeout)
+        return execute(params.get("name"), params.get("arguments"), session, cancel=cancel,
+                       timeout=timeout, native_call=native_call)
     from mcp_gate import runtime_result
     arguments = params.get("arguments") or {}
     inner = arguments.get("timeout_ms", 120000)
@@ -115,7 +125,7 @@ def component_call(request, session, config, *, cancel=None, timeout=None):
         [value["python"], str(Path(runtime_scripts(value)) / "runtime_call.py")],
         json.dumps({"surface": "components", "name": params.get("name"), "arguments": arguments,
                     "mindie_session_id": session, "native_session_verified": True,
-                    "timeout": timeout}),
+                    "timeout": timeout, "native_call": native_call}),
         timeout=(inner / 1000 + 30 if timeout is None else timeout + 30),
         max_output=32 * 1024 * 1024, env=runtime_env(config, adapter=value), cancel=cancel,
     )

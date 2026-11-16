@@ -99,7 +99,14 @@ def serve(surface, gate_api):
                         respond(identifier, result)
                         continue
                     try:
-                        identity = gate_api.native_turn_identity(message)
+                        if surface == "knowledge":
+                            identity = gate_api.native_turn_identity(message)
+                        else:
+                            default_session = "mcp-" + getattr(gate, "connection_id", "default")
+                            thread_id, turn_id = gate_api.optional_turn_identity(
+                                message, default_session=default_session
+                            )
+                            identity = (thread_id, turn_id) if turn_id is not None else None
                     except ValueError as exc:
                         respond(identifier, gate_api.call_failure(exc))
                         continue

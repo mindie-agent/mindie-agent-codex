@@ -411,3 +411,20 @@ class GeneralRemoteTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'response exceeds'):
                 runtime_call.call(payload)
         self.assertEqual(finished, [False])
+
+    def test_remote_surface_accepts_zero_and_partial_metadata_without_turn_id(self):
+        frames = [
+            {'id': 1, 'params': {'name': 'remote_bash', 'arguments': {'command': 'true', 'host': 'example.invalid'}}},
+            {'id': 2, 'params': {'name': 'remote_bash', 'arguments': {'command': 'true', 'host': 'example.invalid'}, '_meta': {}}},
+            {'id': 3, 'params': {'name': 'remote_bash', 'arguments': {'command': 'true', 'host': 'example.invalid'}, '_meta': {'threadId': 'work-chat'}}},
+        ]
+        with patch.object(mcp_gate, 'run', return_value=ProcessResult("completed", '{"content":[], "isError":false}', 0)) as dispatch:
+            gate = mcp_gate.Gate('remote')
+            for frame in frames:
+                res = gate.call(frame)
+                self.assertFalse(res['isError'], res)
+            # Duplicate RPC id on the same connection is still rejected without turn_id.
+            dup = gate.call(frames[0])
+            self.assertTrue(dup['isError'])
+            self.assertIn('Duplicate MCP request', json.dumps(dup))
+            self.assertEqual(dispatch.call_count, 3)

@@ -265,3 +265,41 @@ def test_command_resolves_component_cli_from_adapter_runtime_bin(tmp_path, monke
     monkeypatch.setenv("PATH", "")
     resolved = component_tools.command({"python": str(fake_python)}, "sim")
     assert Path(resolved[0]).resolve() == fake_sim.resolve()
+
+
+@pytest.mark.parametrize("meta", [
+    None,
+    {},
+    {"threadId": "work-mode-thread"},
+    {
+        "threadId": "automation-thread",
+        "x-codex-turn-metadata": {
+            "thread_id": "automation-thread",
+            "session_id": "automation-thread",
+            "thread_source": "automation",
+        },
+    },
+    {
+        "threadId": "work-chat-partial",
+        "x-codex-turn-metadata": {"session_id": "tree-id"},
+    },
+])
+def test_components_surface_works_without_turn_metadata(component_gate, meta, monkeypatch):
+    import live_catalog
+
+    gate, _ = component_gate
+    captured = {}
+    orig_execute = __import__("component_tools").execute
+
+    def spy_execute(name, arguments, session, **kwargs):
+        captured["native_call"] = kwargs.get("native_call")
+        return orig_execute(name, arguments, session, **kwargs)
+
+    monkeypatch.setattr(__import__("component_tools"), "execute", spy_execute)
+    params = {"name": "diagnostics_status", "arguments": {}}
+    if meta is not None:
+        params["_meta"] = meta
+    result = gate.call({"id": 1, "params": params})
+    assert not result["isError"], result
+    if isinstance(meta, dict) and "x-codex-turn-metadata" in meta:
+        assert captured["native_call"]["x-codex-turn-metadata"]["thread_id"] == meta["threadId"]

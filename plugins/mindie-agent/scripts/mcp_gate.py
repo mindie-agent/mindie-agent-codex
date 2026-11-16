@@ -44,7 +44,7 @@ from update_lock import update_lock, file_lock
 from receipt_layout import prepare_layout
 import receipt_layout
 from receipt_owners import owned_lock, owner_is_alive, owner_path, sweep_idle_owner_locks
-from mcp_identity import native_identity, native_turn_identity, interrupt_turn
+from mcp_identity import interrupt_turn, native_identity, native_turn_identity, optional_native_identity, optional_turn_identity
 
 # Knowledge stdout only. A legal maximum page measured 817407 bytes.
 KNOWLEDGE_MAX_OUTPUT = 1024 * 1024
@@ -518,13 +518,17 @@ class Gate:
                 if self.surface == "remote":
                     dispatched = True
                     return self._remote_call(request, cancel, timeout, cli_identity)
-                # Discovery creates no capture state. Task identity comes from
-                # the native metadata or the trusted CLI, never tool arguments.
-                session = native_identity(request) if cli_identity is None else cli_identity[0]
                 if self.surface == "components":
                     from live_catalog import component_call
+                    session = (
+                        optional_native_identity(request, default_session="mcp-" + self.connection_id)
+                        if cli_identity is None
+                        else cli_identity[0]
+                    )
                     dispatched = True
                     return component_call(request, session, self.config, cancel=cancel, timeout=timeout)
+                # Private knowledge surface still requires verified native metadata or CLI identity.
+                session = native_identity(request) if cli_identity is None else cli_identity[0]
                 dispatched = True
                 return self._call(request, session, cancel, timeout=timeout)
         except Exception as exc:
@@ -586,12 +590,15 @@ class Gate:
         result = None
         try:
             if cli_identity is None:
-                session = native_identity(request)
+                session, turn = optional_turn_identity(
+                    request, default_session="mcp-" + self.connection_id
+                )
             else:
                 # Trusted local plumbing for domain CLIs: env-derived identity
                 # supplied out of band. Remote never checks a knowledge
                 # activation bearer; the token element is ignored by design.
                 session = cli_identity[0]
+                turn = None
                 if not isinstance(session, str) or not IDENTITY.fullmatch(session):
                     raise ValueError("Valid native task identity required")
             name, args = self._tool_args(request)
@@ -600,17 +607,12 @@ class Gate:
                 receipts = RemoteReceipts(session)
                 self._remote_receipts[session] = receipts
             if cli_identity is None:
-                turn = request["params"]["_meta"]["x-codex-turn-metadata"].get("turn_id")
-                if not isinstance(turn, str) or not IDENTITY.fullmatch(turn):
-                    raise ValueError("Native turn identity required for remote request receipt")
                 # connection_id is this Gate, and one Gate serves one stdio
                 # process. Duplicate detection is connection-local: a numeric
                 # RPC id reused after reconnect is not the same invocation.
                 # An uncertain remote command is not automatically replayed.
-                identity = (
-                    turn + ":" + self.connection_id + ":"
-                    + self._request_identity(request)
-                )
+                prefix = turn + ":" + self.connection_id if turn is not None else "conn:" + self.connection_id
+                identity = prefix + ":" + self._request_identity(request)
             else:
                 # Domain CLI has no host turn id. Its existing nonce is this
                 # connection; do not add a second one.

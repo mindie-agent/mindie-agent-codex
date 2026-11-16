@@ -61,7 +61,7 @@ Codex Host MCP Client (stdio JSON-RPC) ──► hook_launcher.py
    - `bridge.py` (`stop`) and `admission_ops.py` (`stop_capture`) check `Admission.knowledge_lease(session)` (`entry_enabled=1`) before reading `sharing` settings or inspecting transcripts. Native transcript ownership and saved contribution scope remain authoritative; unactivated sessions are never auto-associated.
    - If capture fails on an active session, `bridge.py` records a diagnostic reference and returns `status="degraded"` (keeping the session lease active).
 4. **MCP Tool Gating & Receipt Accounting (`mcp_gate.py`)**:
-   - Deterministic `remote-dev` tools and factual `bridge.py status` checks remain available in ordinary sessions without `/mindie-agent`.
+   - Deterministic `remote-dev` and `components` (`coordinator`, `profiler`, `sim`, `debugger`, `diagnostics_*`) tools work in every session and entry mode (CLI, Desktop, ChatGPT Work mode, Automations, Subagents, and plain zero-`_meta` MCP clients) without `/mindie-agent` or mandatory `x-codex-turn-metadata`. Host `_meta` is an optional correlation/interruption hint, never an admission gate.
    - Private `knowledge_*` calls (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`) check `Admission.knowledge_lease(session_id)` in `runtime_call.py` and fail with `KnowledgeInactive` (`code="knowledge_inactive"`) unless the current session was manually enabled via `/mindie-agent` or `$mindie-agent`.
    - **Receipt Honesty Invariant**: Once a remote tool execution succeeds (`done=True`), if local SQLite receipt persistence (`finish()`) raises an `OSError`/`sqlite3.Error`, `mcp_gate.py` attaches `receipt_warning` + `diagnostic_ref` to `structuredContent` and **never** flips `isError=True` on the succeeded remote result.
 
@@ -74,25 +74,26 @@ Codex Host MCP Client (stdio JSON-RPC) ──► hook_launcher.py
   - `STOP_DRAIN (15.0s) >= STOP_GRACE (12.0s) + 3.0s` in `entry.py` / `bridge.py`.
   - Cold-start runtime preparation (`BOOTSTRAP_TOTAL = 540.0s` inside the 900s baseline) runs only when explicitly triggered and uses stage markers (`bootstrap.preparing`).
   - Host hook outer timeouts cover inner budgets plus `uv` startup and cleanup: SessionStart 1545s (900 baseline + 225 first-use profile setup + 300 maintenance + 60 uv + 60 cleanup), UserPromptSubmit 1665s (900 + 225 setup + 420 forward + 60 uv + 60 cleanup), Stop 240s.
-- **Four `v0.0.2` Iron Rules**:
+- **Five Anti-Over-Defensive Iron Rules**:
   1. **Lightweight SQLite Connections**: `agent_diagnostics.py` and `mcp_gate.py` (`RemoteReceipts`) open SQLite with `PRAGMA journal_mode=WAL`, `PRAGMA synchronous=NORMAL`, `PRAGMA busy_timeout=5000`, and `CREATE TABLE IF NOT EXISTS`. Never run `.owner` / `.authority.json` sidecar `lstat` ceremonies or `PRAGMA table_info` / `sqlite_master` schema reflection on every operation.
   2. **Honest External Receipts**: Reserve `unknown` receipts for uncertain remote execution; never turn a succeeded remote call into `isError=True` over a local receipt write error, and never brick local state into permanent `fault`.
   3. **Simple Regular-File I/O**: Use `Path.is_file()` and `Path.open("rb")` for local configuration and transcript reads; do not use `O_NOFOLLOW`/`O_NONBLOCK`/`fstat` inode-recheck paranoia or parent-directory symlink walks (`_present`).
   4. **No Inline String-Blob Runtime Clones**: Keep runtime modules as clean standalone `.py` scripts tested directly via behavior, not byte-for-byte file copy assertions.
+  5. **Zero Pre-Call Session-Binding Gates on Deterministic Tools (`P2.7`)**: `remote` and `components` MCP surfaces execute over standard `tools/call` with zero `x-codex-turn-metadata` (`optional_turn_identity` / `optional_native_identity`); reserve strict `native_identity` and `Admission.knowledge_lease` exclusively for `knowledge` and `Stop` capture.
 
 ---
 
 ## 4. Verification & Live NPU Acceptance Commands
 
-Use the shared test virtual environment (`/Volumes/data/code/mindie-release-20261014/codex-interrupt-final-env-20261016/bin/python`) to run the test suite:
+Run the test suite using the repository's isolated virtual environment (`uv` / `.venv`, cross-platform on Windows, macOS, and Linux):
 
 ```bash
 # 1. Full unit, contract, and E2E MCP knowledge suite (Tier 0 + Tier 1)
-/Volumes/data/code/mindie-release-20261014/codex-interrupt-final-env-20261016/bin/python -m pytest tests -q --ignore=tests/test_live_npu_acceptance.py
+uv run --project plugins/mindie-agent --locked --no-editable --group test python -m pytest tests -q --ignore=tests/test_live_npu_acceptance.py
 
 # 2. End-to-end MCP + Knowledge lifecycle verification
-/Volumes/data/code/mindie-release-20261014/codex-interrupt-final-env-20261016/bin/python -m pytest tests/test_mcp_knowledge_e2e.py -q
+uv run --project plugins/mindie-agent --locked --no-editable --group test python -m pytest tests/test_mcp_knowledge_e2e.py -q
 
 # 3. Live Ascend NPU acceptance on standing A2 (173.125.1.2) & A3 (192.168.13.165) clusters (Tier 2)
-/Volumes/data/code/mindie-release-20261014/codex-interrupt-final-env-20261016/bin/python -m pytest tests/test_live_npu_acceptance.py -q
+uv run --project plugins/mindie-agent --locked --no-editable --group test python -m pytest tests/test_live_npu_acceptance.py -q
 ```

@@ -181,7 +181,7 @@ def call(payload):
             raise ValueError("MindIE runtime identity mismatch")
         try:
             return execute(payload["name"], payload["arguments"], payload["mindie_session_id"],
-                           timeout=payload.get("timeout"))
+                           timeout=payload.get("timeout"), native_call=payload.get("native_call"))
         except Exception as exc:
             return call_failure(exc)
     config = json.loads(config_path().read_text(encoding='utf-8'))

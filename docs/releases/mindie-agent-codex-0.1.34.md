@@ -15,3 +15,5 @@
 - **`RemoteReceipts` owner 锁与采集 `.active` 回收（`mcp_gate.py`、`receipt_owners.py`、`capture_spool.py`、`mcp_transport.py`）**：释放 `_ownership` 时在非阻塞独占确认无竞争后清理自身 `<owner>.owner.lock`，初始化时按有界扫描回收已死 owner 的历史锁文件；`Capture` 创建与清扫目录时回收 `>24h` 且未被本进程打开的陈旧孤儿 `*.active`，`_abandon()` 也会清理自己已创建但无用的临时文件。
 
 - **跨平台约束**：Windows 不使用 `os.kill(pid, 0)`，目录重命名前不持有目标目录内的打开句柄，路径等价比较统一使用 `mindie_knowledge.filesystem.path_identity`；全部文本文件保持 Unix `LF`。
+
+- **确定性工具零前置轮次身份门禁（`P2.7`）**：`components` 与 `remote` 表面在缺少 `_meta` 轮次身份时自动回退至连接级确定性会话（保留 `knowledge` 严格原生轮次与手动入口门禁 `P2.1`），并在转发部分 `x-codex-turn-metadata` 给 `coordinator` 时自动补齐 `thread_id`。

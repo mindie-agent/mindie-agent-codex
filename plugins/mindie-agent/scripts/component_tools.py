@@ -64,12 +64,13 @@ DESCRIPTIONS = {
     ),
     "coordinator": (
         "Manage Ascend host inventory, probe CPU/RAM/NPU capacity, bind containers, "
-        "and acquire/inspect/release NPU and service-port leases through "
-        "mindie-coordinator. Pass CLI argv, e.g. ['hosts', '--action', 'list'] "
-        "or ['probe', '--json', '{\"action\":\"hosts\"}']. Use ['--help'] to inspect options."
-        " Host inventory, probes, containers and bare-metal leases need no managed "
-        "task binding or knowledge activation. Omit context_file for these independent "
-        "operations; inspect resources before acquiring a lease."
+        "acquire/inspect/release NPU and service-port leases, and run or observe "
+        "managed multi-host tasks through mindie-coordinator. Pass CLI argv, e.g. "
+        "['hosts', '--action', 'list'], ['probe', '--json', '{\"action\":\"hosts\"}'], "
+        "or ['task', 'session' | 'run' | 'execution' | 'finish', ...]. Use ['--help'] "
+        "to inspect options. Neither environment operations nor managed task commands "
+        "require prior session hooks, knowledge activation, or caller-supplied context_file; "
+        "executions are addressed directly by execution_id."
     ),
     "debugger": (
         "Ascend NPU fault triage (`triage`, `decode-code`), ACLGraph/NPUGraph capture/replay & buffer-address "
@@ -240,7 +241,7 @@ def _value(component, output):
     return value
 
 
-def execute(name, arguments, session, *, cancel=None, timeout=None):
+def execute(name, arguments, session, *, cancel=None, timeout=None, native_call=None):
     validate(name, arguments)
     adapter = json.loads(config_path().read_text(encoding="utf-8"))
     component, argv = _build(name, arguments)
@@ -250,6 +251,14 @@ def execute(name, arguments, session, *, cancel=None, timeout=None):
         bound = min(bound, timeout)
     environment = runtime_env(config_path(), adapter=adapter)
     environment["CODEX_THREAD_ID"] = session
+    # Never leak launch-time task references from a resident MCP process.
+    environment.pop("MINDIE_COORDINATOR_NATIVE_CALL", None)
+    if component == "coordinator":
+        for key in ("MINDIE_CONTEXT_FILE", "MINDIE_PARENT_CONTEXT", "MINDIE_ATTACH_CONTEXT",
+                    "CODEX_SESSION_ID"):
+            environment.pop(key, None)
+        if native_call is not None:
+            environment["MINDIE_COORDINATOR_NATIVE_CALL"] = json.dumps(native_call)
     invocation_token = os.urandom(16).hex() if name in DESCRIPTIONS else None
     if invocation_token is not None:
         environment["MINDIE_DIAGNOSTICS_INVOCATION_TOKEN"] = invocation_token

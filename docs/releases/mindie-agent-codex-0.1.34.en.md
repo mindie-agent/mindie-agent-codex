@@ -15,3 +15,5 @@
 - **`RemoteReceipts` owner-lock and capture `.active` reclamation (`mcp_gate.py`, `receipt_owners.py`, `capture_spool.py`, `mcp_transport.py`)**: Releasing `_ownership` removes its own `<owner>.owner.lock` after a non-blocking exclusive probe proves no contention, and initialization performs a bounded sweep of historical dead-owner lock files. A `Capture` reclaims stale orphan `*.active` files older than 24h that are not open in this process, and `_abandon()` removes its own created-but-unused temporary file.
 
 - **Cross-platform guarantees**: Windows never calls `os.kill(pid, 0)`, no open handle inside a target directory survives an NTFS rename, path equivalence uses `mindie_knowledge.filesystem.path_identity`, and every text file keeps Unix `LF`.
+
+- **Zero pre-call turn-identity gates on deterministic surfaces (`P2.7`)**: `components` and `remote` execute without mandatory `_meta` turn metadata via connection-scoped fallback (keeping `knowledge` strictly gated on `native_turn_identity` / `P2.1`), and `live_catalog.py` normalizes partial `x-codex-turn-metadata` with `thread_id` when forwarding to `coordinator`.
