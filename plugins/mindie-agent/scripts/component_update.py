@@ -6,9 +6,11 @@ Expected catalog HTTP/transport misses and JSON rejected at the HTTP boundary
 keep shared diagnostic codes; local parsing and unclassified crashes stay internal.
 A pure component move reuses the active release's verified publication identity;
 installed pins, adapter and runtime checks always rerun locally.
-[Timeouts & Locks] External metadata shares 15s across interpreters. The builder
-owns 420s and its generation lock; validation takes 180s; idle handoff takes 30s.
-After an active switch a 2s bounded storage reclamation runs without the build lock.
+[Timeouts & Locks] External metadata shares 15s across interpreters. Concurrent
+preparation serializes on data/component-inheritance.lock (760s <= 830s outer
+caller budget) and retries non-blocking builder contention within that bound.
+The builder owns 420s and its generation lock; validation takes 180s; idle
+handoff takes 30s. After an active switch a 2s bounded storage reclamation runs.
 [Side-Effect Policy] Builds a private generation, validates without a model, and
 publishes through release_activation. No consent or knowledge lease is created.
 """
@@ -24,12 +26,14 @@ import re
 import socket
 import ssl
 import sys
+import time
 import tomllib
 import urllib.error
 
 # Isolated Python omits the script directory; helpers belong to this candidate.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from bootstrap_lock import exclusive_lock
 from bounded_process import run
 from product_contract import identity, package_files, probe, read_json, validate_receipt
 
@@ -393,37 +397,55 @@ def prepare(source, python, data, *, current_python=None, force=False, current_s
     pins = {name: row["revision"] for name, row in selection["runtime"].items()}
     if (current_python is not None or not selection["changed"]) and pins == baseline["runtime"] and not needs_binding:
         return None
-    artifact = build(source, data / "component-runtimes", baseline, selection["runtime"],
-                     python=python, adapter_distribution="mindie-agent-codex",
-                     files=[str(path.relative_to(source)) for path in package_files(source)])
-    python, retained = native_path(artifact["python"]), native_path(artifact["source"])
-    scripts = readback(python, retained)
-    release = native_path(artifact["generation"]) / "release"
-    release.mkdir(exist_ok=True)
-    receipt = release / "runtime.json"
-    reused = receipt.exists()
-    if reused:
-        existing = read_json(receipt)[0]
-        if os.name == "nt":
-            # A cached generation receipt still has to prove this machine's
-            # generated pythonw.exe before its entry can be published.
-            probe(python, scripts, lambda argv, **kw: run(argv, "", **kw).checked_stdout(),
-                  verified_receipt=existing["validation"], components=artifact["components"],
-                  require_windows_service=True)
+    data.mkdir(parents=True, exist_ok=True)
+    lock_deadline = time.monotonic() + 760.0
+    with exclusive_lock(data / "component-inheritance.lock", timeout=760):
+        while True:
+            try:
+                artifact = build(
+                    source,
+                    data / "component-runtimes",
+                    baseline,
+                    selection["runtime"],
+                    python=python,
+                    adapter_distribution="mindie-agent-codex",
+                    timeout=min(420.0, max(1.0, lock_deadline - time.monotonic() - 255.0)),
+                    files=[str(path.relative_to(source)) for path in package_files(source)],
+                )
+                break
+            except BlockingIOError:
+                remaining = lock_deadline - time.monotonic() - 255.0
+                if remaining <= 0:
+                    raise TimeoutError("component runtime build lock is busy") from None
+                time.sleep(min(0.1, remaining))
+        python, retained = native_path(artifact["python"]), native_path(artifact["source"])
+        scripts = readback(python, retained)
+        release = native_path(artifact["generation"]) / "release"
+        release.mkdir(exist_ok=True)
+        receipt = release / "runtime.json"
+        reused = receipt.exists()
+        if reused:
+            existing = read_json(receipt)[0]
+            if os.name == "nt":
+                # A cached generation receipt still has to prove this machine's
+                # generated pythonw.exe before its entry can be published.
+                probe(python, scripts, lambda argv, **kw: run(argv, "", **kw).checked_stdout(),
+                      verified_receipt=existing["validation"], components=artifact["components"],
+                      require_windows_service=True)
+            else:
+                validate_receipt(
+                    json.dumps(existing["validation"]),
+                    identity(retained, existing["validation"].get("candidate_revision"),
+                             components=artifact["components"]),
+                )
         else:
-            validate_receipt(
-                json.dumps(existing["validation"]),
-                identity(retained, existing["validation"].get("candidate_revision"),
-                         components=artifact["components"]),
-            )
-    else:
-        validation = probe(python, scripts, lambda argv, **kw: run(argv, "", **kw).checked_stdout(),
-                           verified_receipt=publication,
-                           components=artifact["components"],
-                           require_windows_service=(os.name == "nt"))
-        _atomic(receipt, dict(key=Path(artifact["generation"]).name, python=str(python),
-                              source=str(retained), validation=validation))
-    publish_entry(python, scripts, release)
+            validation = probe(python, scripts, lambda argv, **kw: run(argv, "", **kw).checked_stdout(),
+                               verified_receipt=publication,
+                               components=artifact["components"],
+                               require_windows_service=(os.name == "nt"))
+            _atomic(receipt, dict(key=Path(artifact["generation"]).name, python=str(python),
+                                  source=str(retained), validation=validation))
+        publish_entry(python, scripts, release)
     result = dict(python=str(python), scripts=str(scripts), release=str(release))
     if reused:
         result["reused"] = True

@@ -788,3 +788,87 @@ def test_inheritance_falls_back_to_local_floor_on_catalog_403_and_fast_reuses_ge
         build_mock.assert_called_once()
         with pytest.raises(component_update.CatalogError):
             component_update.prepare(source, "/floor/python", tmp_path, current_python=None, adapter=adapter)
+
+
+def test_prepare_serializes_concurrent_component_inheritance_on_lock_contention(tmp_path):
+    import threading
+
+    source = SCRIPTS.parent
+    baseline = identity(source)
+    floor_meta = component_update._lock_baseline_floor(source, baseline["runtime"])
+    assert floor_meta is not None
+    sim_newer = dict(repository="mindie-agent/sim", version="0.9.16", revision="4" * 40)
+    installed_inv = dict(floor_meta, **{"mindie-sim": sim_newer})
+
+    gen_dir = tmp_path / "component-runtimes/gen1"
+    py_path = gen_dir / "runtime/.venv/bin/python"
+    retained = gen_dir / "source"
+    shutil.copytree(source, retained, ignore=shutil.ignore_patterns("__pycache__", ".venv"))
+    components = {
+        "schema": "mindie-component-runtime/1",
+        "adapter_source_sha256": baseline["source_sha256"],
+        "lock_sha256": "b" * 64,
+        "runtime": installed_inv,
+    }
+    expected_id = identity(retained, components=components)
+    active_builders = 0
+    max_concurrent_builders = 0
+    guard = threading.Lock()
+    entered = threading.Event()
+
+    def fake_build(*_args, **_kwargs):
+        nonlocal active_builders, max_concurrent_builders
+        with guard:
+            active_builders += 1
+            max_concurrent_builders = max(max_concurrent_builders, active_builders)
+            if active_builders > 1:
+                active_builders -= 1
+                raise BlockingIOError("file lock is held")
+        entered.set()
+        try:
+            import time as _time
+            _time.sleep(0.08)
+            return {
+                "python": str(py_path),
+                "source": str(retained),
+                "generation": str(gen_dir),
+                "components": components,
+            }
+        finally:
+            with guard:
+                active_builders -= 1
+
+    adapter = {"component_commands": {"sim": ["/ext/python", "-I", "-X", "utf8", "-m", "mindie_sim"]}}
+    results, errors = [], []
+    with patch.object(component_update, "_discover_catalog",
+                      return_value={"installed": floor_meta, "runtime": installed_inv, "changed": True}), \
+            patch.object(component_update, "required_components", return_value={}), \
+            patch("mindie_knowledge.component_runtime.build", side_effect=fake_build), \
+            patch.object(bootstrap, "readback", return_value=tmp_path / "scripts"), \
+            patch.object(bootstrap, "publish_entry"), \
+            patch.object(component_update, "probe", return_value=dict(expected_id, status="validated")) as probe_mock:
+        def worker():
+            try:
+                results.append(
+                    component_update.prepare(
+                        source, "/floor/python", tmp_path / "data",
+                        current_python="/floor/python", adapter=adapter,
+                    )
+                )
+            except BaseException as exc:  # pragma: no cover
+                errors.append(exc)
+
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        t1.start()
+        assert entered.wait(timeout=2.0)
+        t2.start()
+        t1.join(timeout=5.0)
+        t2.join(timeout=5.0)
+
+    assert not errors, errors
+    assert len(results) == 2
+    assert max_concurrent_builders == 1
+    assert probe_mock.call_count == 1
+    assert sum(1 for r in results if r.get("reused")) == 1
+
