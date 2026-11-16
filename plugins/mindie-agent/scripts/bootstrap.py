@@ -157,19 +157,33 @@ def ensure_runtime(source, data):
     floor = _healthy_python(current.get("python"))
     scripts_source = Path(source) / "scripts"
     if floor is not None and (active or current.get("component_commands")):
-        # Probe/merge the installed component floor before building a second
-        # full runtime. A merged generation keeps its own verified lock.
-        with preparing("component-inheritance"):
-            result = run([str(floor), "-I", "-B", str(scripts_source / "component_update.py"),
-                          str(source), str(floor), str(data), str(floor),
-                          "--config", str(config)],
-                         "", timeout=830).checked_stdout()
-            effective = json.loads(result)
-        if effective:
-            python = Path(effective["python"])
-            if not effective.get("reused"):
-                _postbuild_cleanup(python, data, keep=[floor])
-            return python, Path(effective["scripts"]), Path(effective["release"])
+        # Codex starts remote-mcp and tools-mcp concurrently on thread/start,
+        # while component_runtime.build uses a non-blocking generation lock.
+        # Serialize inheritance per profile (865s >= 830s + 20s + 15s grace).
+        inherit_lock = config.with_name(config.name + ".inherit.lock")
+        with exclusive_lock(inherit_lock, timeout=865):
+            current = json.loads(config.read_text(encoding="utf-8")) if config.is_file() else {}
+            active = current.get("component_release")
+            if active:
+                receipt = read_json(Path(active) / "runtime.json")[0]
+                if receipt["validation"]["source_sha256"] == source_identity(source):
+                    python = Path(receipt["python"])
+                    scripts = readback(python, source)
+                    if os.name == "nt":
+                        _probe_component_runtime(python, scripts, receipt["validation"])
+                    return python, scripts, Path(active)
+            floor = _healthy_python(current.get("python")) or floor
+            with preparing("component-inheritance"):
+                result = run([str(floor), "-I", "-B", str(scripts_source / "component_update.py"),
+                              str(source), str(floor), str(data), str(floor),
+                              "--config", str(config)],
+                             "", timeout=830).checked_stdout()
+                effective = json.loads(result)
+            if effective:
+                python = Path(effective["python"])
+                if not effective.get("reused"):
+                    _postbuild_cleanup(python, data, keep=[floor])
+                return python, Path(effective["scripts"]), Path(effective["release"])
     python, scripts, release = _baseline_runtime(
         source, data, cleanup_python=floor)
     return python, scripts, release
@@ -443,15 +457,18 @@ def publish_entry(python, scripts, release):
             raise ValueError("immutable release entry differs")
         _publish_hook_launcher(scripts, release)
         return target
-    temporary = release / "entry.py.tmp"
-    temporary.write_text(text, encoding="utf-8")
+    fd, raw_tmp = tempfile.mkstemp(prefix="entry.py.", suffix=".tmp", dir=release)
+    temporary = Path(raw_tmp)
     try:
-        os.link(temporary, target)
-    except FileExistsError:
-        if target.read_text(encoding="utf-8") != text:
-            raise ValueError("immutable release entry differs")
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(text)
+        try:
+            os.link(temporary, target)
+        except FileExistsError:
+            if target.read_text(encoding="utf-8") != text:
+                raise ValueError("immutable release entry differs")
     finally:
-        temporary.unlink()
+        temporary.unlink(missing_ok=True)
     _publish_hook_launcher(scripts, release)
     return target
 
@@ -467,15 +484,18 @@ def _publish_hook_launcher(scripts, release):
         if target.read_text(encoding="utf-8") != text:
             raise ValueError("immutable release launcher differs")
     else:
-        temporary = Path(release) / "hook_launcher.py.tmp"
-        temporary.write_text(text, encoding="utf-8", newline="\n")
+        fd, raw_tmp = tempfile.mkstemp(prefix="hook_launcher.py.", suffix=".tmp", dir=release)
+        temporary = Path(raw_tmp)
         try:
-            os.link(temporary, target)
-        except FileExistsError:
-            if target.read_text(encoding="utf-8") != text:
-                raise ValueError("immutable release launcher differs")
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+                stream.write(text)
+            try:
+                os.link(temporary, target)
+            except FileExistsError:
+                if target.read_text(encoding="utf-8") != text:
+                    raise ValueError("immutable release launcher differs")
         finally:
-            temporary.unlink()
+            temporary.unlink(missing_ok=True)
     if Path(release).parent.name != "releases":
         return
     durable = Path(release).parent.parent / "hook_launcher.py"

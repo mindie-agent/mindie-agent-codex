@@ -57,7 +57,7 @@ class Host:
     def reclaim(self, **options):
         return storage_gc.reclaim_storage(
             data=self.plugin, config_home=self.config, data_home=self.data,
-            codex_home=self.codex, budget_seconds=options.pop("budget_seconds", 10.0),
+            codex_home=self.codex, budget_seconds=options.pop("budget_seconds", 25.0),
             force=options.pop("force", True), **options)
 
 

@@ -788,3 +788,47 @@ def test_inheritance_falls_back_to_local_floor_on_catalog_403_and_fast_reuses_ge
         build_mock.assert_called_once()
         with pytest.raises(component_update.CatalogError):
             component_update.prepare(source, "/floor/python", tmp_path, current_python=None, adapter=adapter)
+
+
+def test_concurrent_ensure_runtime_serializes_component_inheritance(tmp_path, monkeypatch):
+    import concurrent.futures
+    import threading
+    import time
+    from bounded_process import ProcessResult
+
+    old_release = tmp_path / "old-release"
+    old_release.mkdir()
+    (old_release / "runtime.json").write_text(
+        json.dumps({"python": sys.executable, "validation": {"source_sha256": "0" * 64, "status": "validated"}}),
+        encoding="utf-8",
+    )
+    config = tmp_path / "codex.json"
+    config.write_text(json.dumps({"component_release": str(old_release), "python": sys.executable}), encoding="utf-8")
+    monkeypatch.setenv("MINDIE_AGENT_CONFIG", str(config))
+
+    in_flight = 0
+    guard = threading.Lock()
+    new_release = tmp_path / "merged-release"
+    new_release.mkdir()
+
+    def fake_run(argv, stdin, **kwargs):
+        nonlocal in_flight
+        with guard:
+            if in_flight > 0:
+                raise BlockingIOError("non-blocking component generation prepare.lock collision")
+            in_flight += 1
+        try:
+            time.sleep(0.12)
+            payload = {"python": sys.executable, "scripts": str(SCRIPTS), "release": str(new_release), "reused": True}
+            return ProcessResult("completed", json.dumps(payload), 0)
+        finally:
+            with guard:
+                in_flight -= 1
+
+    with patch.object(bootstrap, "run", side_effect=fake_run):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            f1 = pool.submit(bootstrap.ensure_runtime, SCRIPTS.parent, tmp_path / "data")
+            f2 = pool.submit(bootstrap.ensure_runtime, SCRIPTS.parent, tmp_path / "data")
+            r1, r2 = f1.result(timeout=10), f2.result(timeout=10)
+    assert r1 == (Path(sys.executable), SCRIPTS, new_release)
+    assert r2 == (Path(sys.executable), SCRIPTS, new_release)
