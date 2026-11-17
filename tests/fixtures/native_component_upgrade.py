@@ -33,7 +33,7 @@ with update_lock(config, exclusive=True):
 
 # Keep this native regression deterministic while exercising the real builder,
 # isolated API probe and activation against the installed formal baseline.
-inventory = read_inventory(adapter["python"], timeout=15)
+inventory = read_inventory(adapter["python"], timeout=15, include_substrate=True)
 from bootstrap import native_path
 from mindie_knowledge.filesystem import path_is_within
 
