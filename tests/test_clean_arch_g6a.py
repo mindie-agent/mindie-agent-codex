@@ -65,6 +65,38 @@ def test_hooks_json_exact_sha256_and_byte_length_frozen():
     assert hashlib.sha256(raw).hexdigest() == FROZEN_HOOKS_SHA256
 
 
+def test_manual_skill_trigger_and_pure_runtime_skill_boundary():
+    skill_dir = PLUGIN / "skills" / "mindie-agent"
+    openai_yaml = (skill_dir / "agents" / "openai.yaml").read_text(encoding="utf-8")
+    assert "allow_implicit_invocation: false" in openai_yaml
+
+    skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    assert skill_md.startswith("---\n")
+    frontmatter = skill_md.split("\n---\n", 1)[0]
+    assert "disable-model-invocation: true" in frontmatter
+
+    for moved in ("user-notice.md", "workspace-setup.md", "github-authentication.md"):
+        assert (ROOT / "docs" / "install" / moved).is_file()
+        assert not (skill_dir / "references" / moved).exists()
+
+    forbidden_snippets = (
+        "First-Use Onboarding",
+        "user-notice.md",
+        "workspace-setup.md",
+        "github-authentication.md",
+        "needs_onboarding_prompt",
+        "vllm-ascend-workspace",
+        "gh auth login",
+        "setup.py sharing",
+        "/user/starred/mindie-agent/mindie-agent",
+        "request_user_input",
+    )
+    for md_path in sorted(skill_dir.rglob("*.md")):
+        body = md_path.read_text(encoding="utf-8")
+        for snippet in forbidden_snippets:
+            assert snippet not in body, f"{md_path.relative_to(ROOT)} still contains {snippet!r}"
+
+
 def test_bundled_harness_seed_and_host_adapter_contract(isolated_env, tmp_path):
     import host_adapter
 

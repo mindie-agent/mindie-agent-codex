@@ -15,3 +15,10 @@
 | [故障诊断与取消边界](failure-diagnostics.zh.md) | [Failure Diagnostics](failure-diagnostics.md) | 纯只读状态诊断、本地进程树取消回收与远端持久作业分离 |
 | [框架稳定性与持久化配置](framework-stability.zh.md) | [Framework Stability](framework-stability.md) | 日常无感使用保障、Windows 原子配置读写与组件测试复现说明 |
 | [测试边界与契约校验](testing-contracts.zh.md) | [Test Boundaries & Contracts](testing-contracts.md) | `tests/preflight.py` 预检、发布兼容性校验与多维契约测试矩阵 |
+
+## 安装与授权须知 (`docs/install/`)
+
+- [用户须知 (`docs/install/user-notice.md`)](install/user-notice.md) — 社区经验共享脱敏范围、公开 Git 历史说明与统一贡献开关
+- [GitHub 登录引导 (`docs/install/github-authentication.md`)](install/github-authentication.md) — 安装阶段 `gh` 认证与企业网络进程级 `GIT_CONFIG_COUNT` 配置
+- [开发工作区配置指南 (`docs/install/workspace-setup.md`)](install/workspace-setup.md) — 首次安装交互式工作区初始化与共享偏好持久化
+- [最新发布说明：`v0.1.36`](releases/mindie-agent-codex-0.1.36.md) | [English](releases/mindie-agent-codex-0.1.36.en.md)

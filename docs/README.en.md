@@ -15,3 +15,10 @@ This directory contains the Harness interface verification records, public trans
 | [Failure Diagnostics](failure-diagnostics.md) | [故障诊断与取消边界](failure-diagnostics.zh.md) | Read-only status checks, local process-group cancellation cleanup, and durable remote job separation |
 | [Framework Stability](framework-stability.md) | [框架稳定性与持久化配置](framework-stability.zh.md) | Persistent user preferences across updates, Windows atomic config I/O, and verification boundaries |
 | [Test Boundaries & Contracts](testing-contracts.md) | [测试边界与契约校验](testing-contracts.zh.md) | `tests/preflight.py` checks, publication compatibility validation, and contract test matrix |
+
+## Installation & Consent Guides (`docs/install/`)
+
+- [Contribution Notice (`docs/install/user-notice.md`)](install/user-notice.md) — Visible-message filtering, redaction limits, public Git history, and unified consent switch
+- [GitHub Sign-In (`docs/install/github-authentication.md`)](install/github-authentication.md) — Setup-time `gh` authentication and process-scoped `GIT_CONFIG_COUNT` enterprise transport
+- [Workspace Setup (`docs/install/workspace-setup.md`)](install/workspace-setup.md) — Initial workspace onboarding and persistent sharing configuration
+- [Latest Release Notes: `v0.1.36`](releases/mindie-agent-codex-0.1.36.en.md) | [中文](releases/mindie-agent-codex-0.1.36.md)

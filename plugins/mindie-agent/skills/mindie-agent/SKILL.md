@@ -1,13 +1,14 @@
 ---
 name: mindie-agent
 description: Manually enable MindIE knowledge, domain skills, feedback, distillation and background capture for the current session through /mindie-agent or $mindie-agent. Configured deterministic tools remain available without this entry.
+disable-model-invocation: true
 ---
 
 # MindIE Agent (Codex Unified Entry)
 
 ## 1. Core Operating Stance
 
-- **Keep the user's task moving**: Knowledge, onboarding, diagnostics, and local ledgers are optional helpers. If any helper is unavailable, report that specific failure once and continue with deterministic MCP tools or authorized host-native tools. Reconcile any `unknown` remote write before repeating it.
+- **Keep the user's task moving**: Knowledge, diagnostics, and local ledgers are optional helpers. If any helper is unavailable, report that specific failure once and continue with deterministic MCP tools or authorized host-native tools. Reconcile any `unknown` remote write before repeating it.
 - **Zero-gate deterministic tools**: `remote-dev`, `coordinator` (`hosts`, `probe`, `container`, `lease`, and `task session|run|execution|finish` addressed directly by `execution_id`), `profiler`, `sim`, `debugger`, and local `diagnostics` work in every session (CLI, Desktop, Work mode, Automations, and Subagents) without `/mindie-agent`, `x-codex-turn-metadata`, or `context_file`. Acquire a `coordinator` lease (or verify an existing host reservation) before running workloads on physical NPUs; if device ownership cannot be confirmed, pause only that device step.
 - **Explicit `/mindie-agent` knowledge gate**: Invoke this skill only when the user explicitly enters `/mindie-agent` or `$mindie-agent` in the current session (`UserPromptSubmit` grants the session lease; new chats, forks, and subagents require their own entry). Before your first knowledge call in the session, run `python -I <runtime_scripts>/bridge.py activate` once in the native shell (which supplies `CODEX_THREAD_ID`). If `activate` reports `Inactive`, surface the stage reason once without asking the user to repeat `/mindie-agent`, and continue the task directly.
 
@@ -24,19 +25,8 @@ Knowledge tools run through `knowledge_cli.py` (`python -I <runtime_scripts>/kno
   - `coordinator` (`execution_id`) and `remote-dev` (`job_id`) persist authoritative run state—check existing handles before resubmitting after an interruption or compaction. Pass explicit `--time-window`, `--step-window`, or `--full-range` and `--clock-domain` to `mindie_profiler`.
   - For multi-round kernel/serving optimization, you may optionally track hypotheses with `<runtime_scripts>/rsi_loop.py` (`experiment-ledger.jsonl`). When repeated `L3` repairs plateau on a structural bottleneck, query `L4` structural mutators (or let `assess_stagnation` switch to exploration) and optionally spawn a clean subagent seeded with `exploration_context.subagent_fact_pack.prompt_brief`, verifying multi-factor changes via leave-one-out ablations on the target operator's native interface.
 
-## 3. Non-Intrusive First-Use Onboarding
+## 3. Progressive References (Load Only When Needed)
 
-- Check `python <runtime_scripts>/setup.py sharing --status` only during explicit setup or after addressing an urgent user request—never interrupt active troubleshooting with setup prompts, and reuse saved choices (`contribute`, `disabled`, `read-only`, `later`) silently.
-- When `needs_onboarding_prompt: true`, briefly reference [用户须知](references/user-notice.md) and ask via `request_user_input` in the user's language:
-  1. **Workspace**: Keep the current directory when already inside a repository checkout, or optionally initialize/select `vllm-ascend-workspace` when starting from an empty folder;
-  2. **Community Sharing & Sanitized Fault Reporting**: Enable (`setup.py sharing --enable --project-root "$WORKSPACE_ROOT"`) vs. Keep Local-Only (`setup.py sharing --disable`);
-  3. **Optional GitHub Star**: Ask lightly whether to star `mindie-agent/mindie-agent` (only run `gh api -X PUT /user/starred/mindie-agent/mindie-agent` on an explicit yes).
-- Keep local consent state, background reporter health, and external GitHub Issue/PR creation distinct when reporting status.
-
-## 4. Progressive References (Load Only When Needed)
-
-- GitHub sign-in & enterprise proxy/token setup: [GitHub Sign-In](references/github-authentication.md)
-- Workspace initialization details: [Workspace Setup](references/workspace-setup.md)
 - Detailed schemas, profiler flags & optional experiment ledger: [Domain Tooling](references/domain-skills.md)
 - Diagnostic isolation & scale-up verification (`W1–W7`): [Diagnostic Reasoning](references/diagnostic-reasoning.md)
 - Session/capture lifecycle & historical import: [Capture & Operation Lifecycle](references/activation-lifecycle.md)

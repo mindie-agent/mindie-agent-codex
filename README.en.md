@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.35-0F766E.svg" alt="Release v0.1.35"></a>
+  <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.36-0F766E.svg" alt="Release v0.1.36"></a>
   <a href="plugins/mindie-agent/harness-compatibility.json"><img src="https://img.shields.io/badge/Codex_CLI-0.153.4_%7C_%3E%3D0.162.0--alpha.2-10A37F.svg" alt="Codex CLI 0.153.4 | >=0.162.0-alpha.2"></a>
   <a href="plugins/mindie-agent/pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
@@ -27,7 +27,7 @@
 
 ---
 
-**MindIE Agent for OpenAI Codex CLI** (`mindie-agent-codex`) is the native OpenAI Codex CLI plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release `v0.1.35` (paired with `mindie-agent 0.1.13`) delivers three core capabilities: **local and community knowledge base retrieval with privacy redaction** (focused on `vLLM-Ascend` feature development and `AscendC` / `Triton` kernel engineering), **remote SSH / Docker development and NPU inspection**, and **unified fault diagnostics with sanitized reporting**; additional Ascend software domains are tracked on the project roadmap.
+**MindIE Agent for OpenAI Codex CLI** (`mindie-agent-codex`) is the native OpenAI Codex CLI plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release `v0.1.36` (paired with `mindie-agent 0.1.13`) delivers three core capabilities: **local and community knowledge base retrieval with privacy redaction** (focused on `vLLM-Ascend` feature development and `AscendC` / `Triton` kernel engineering), **remote SSH / Docker development and NPU inspection**, and **unified fault diagnostics with sanitized reporting**; additional Ascend software domains are tracked on the project roadmap.
 
 Designed around the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md), **domain knowledge and the Skill system are invoked manually on demand via `/mindie-agent` (or `$mindie-agent`)** so they never interfere with unrelated tasks, while **`mindie-remote-dev` remote NPU development and testing tools trigger automatically by default** in everyday conversation—keeping all errors and uncertain external effects explicitly visible to the caller.
 
@@ -73,8 +73,8 @@ MindIE Agent combines **manual on-demand activation for domain knowledge & skill
 > ```
 > **What Happens**: Community sharing is **off by default**. Once you opt in during setup, your saved consent persists across sessions; in any session where you have invoked `/mindie-agent` (or `$mindie-agent`), every turn end (`Stop`) extracts the session's public conversation messages from activation onward in the background, redacts secrets locally with deterministic rules and Gitleaks `8.30.1`, generates block navigation summaries, and opens a sanitized GitHub PR—without re-prompting for consent or requiring a closing command (ordinary sessions where `/mindie-agent` was not invoked short-circuit on `Stop` without reading sharing settings or transcripts).
 > - **Unified Contribution Switch (`mindie-consent.json` beside the adapter configuration)**: Community knowledge sharing and automatic tool fault reporting share a single persistent choice. Explicitly enabling (`contribute`) configures knowledge sharing and starts the native background reporter; disabling (`disabled`) stops subsequent outgoing sends for both paths. Saved choices (including `disabled`, `read-only`, and `later`) persist across upgrades without re-prompting; only when a legacy knowledge-only `contribute` record returns `needs_choice` does `/mindie-agent` ask once to confirm the unified setting (never prompting separately for knowledge vs. fault reporting or per task). The plugin strictly separates **(1) local consent configuration written**, **(2) background reporter worker running**, and **(3) external GitHub Issue/PR created**.
-> - Read the **[Contribution Notice / 用户须知](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md)** for full details on visible-message filtering, redaction limits, and public Git history.
-> - For an optional multi-task Git worktree layout for `vllm` and `vllm-ascend`, see **[Workspace Setup](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md)** and [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace).
+> - Read the **[Contribution Notice / 用户须知](docs/install/user-notice.md)** for full details on visible-message filtering, redaction limits, and public Git history.
+> - For an optional multi-task Git worktree layout for `vllm` and `vllm-ascend`, see **[Workspace Setup](docs/install/workspace-setup.md)** and [vllm-ascend-workspace](https://github.com/mindie-agent/vllm-ascend-workspace).
 
 ---
 
@@ -106,7 +106,7 @@ If you are an AI Agent asked by the user to install this plugin, execute the fol
      git ls-remote https://github.com/mindie-agent/mindie-agent-codex.git HEAD
    codex --version
    ```
-   - **Hard Gate (Never skip or silently ignore, and never mutate global or system-wide host Git config)**: If `gh` is missing, assist the user in installing it first (macOS: `brew install gh`; Windows: `winget install --id GitHub.cli`; Ubuntu / WSL: `sudo apt update && sudo apt install -y gh`). Reuse a working account. Otherwise follow [GitHub Sign-In](plugins/mindie-agent/skills/mindie-agent/references/github-authentication.md): browser login on ordinary networks, or token login on enterprise networks / blocked browser authorization. Use an existing token in the hidden `gh` prompt (or a supplied private file), or guide token creation. Verify transport strictly with process-scoped `GIT_CONFIG_COUNT` (and `UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true` on enterprise TLS networks) without mutating global host Git config.
+   - **Hard Gate (Never skip or silently ignore, and never mutate global or system-wide host Git config)**: If `gh` is missing, assist the user in installing it first (macOS: `brew install gh`; Windows: `winget install --id GitHub.cli`; Ubuntu / WSL: `sudo apt update && sudo apt install -y gh`). Reuse a working account. Otherwise follow [GitHub Sign-In](docs/install/github-authentication.md): browser login on ordinary networks, or token login on enterprise networks / blocked browser authorization. Use an existing token in the hidden `gh` prompt (or a supplied private file), or guide token creation. Verify transport strictly with process-scoped `GIT_CONFIG_COUNT` (and `UV_SYSTEM_CERTS=true UV_NATIVE_TLS=true` on enterprise TLS networks) without mutating global host Git config.
    - Verify `codex --version` falls inside a host version recorded in the compatibility declaration (declared in [`plugins/mindie-agent/harness-compatibility.json`](plugins/mindie-agent/harness-compatibility.json), matching the page badge `Codex CLI 0.153.4 | >=0.162.0-alpha.2`; do not exclude an exact version by operating system):
      - Exact `codex-cli 0.153.4`, and the range `>=0.162.0-alpha.2` through `<=0.999.999` (prereleases included), apply on macOS, native Windows, and Linux / Windows WSL.
      - macOS Homebrew `codex` `0.153.4` is in range without Codex.app. The alpha rows remain valid, including `0.162.0-alpha.2` and `0.164.0-alpha.11.1`.
@@ -118,7 +118,7 @@ If you are an AI Agent asked by the user to install this plugin, execute the fol
 
 3. **Add the plugin marketplace, install `mindie-agent`, and bootstrap the locked runtime**:
    ```sh
-   codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.1.35
+   codex plugin marketplace add https://github.com/mindie-agent/mindie-agent-codex.git --ref v0.1.36
    codex plugin add mindie-agent@mindie-agent --json
    BOOT_PY=$(python3 -c "import glob, os; p = sorted(glob.glob(os.path.expanduser('~/.codex/plugins/**/mindie-agent/scripts/bootstrap.py'), recursive=True)); print(p[-1] if p else '')")
    PLUGIN_DATA_DIR="${PLUGIN_DATA:-${CODEX_HOME:-$HOME/.codex}/plugins/data/mindie-agent-mindie-agent}"
@@ -132,18 +132,18 @@ If you are an AI Agent asked by the user to install this plugin, execute the fol
    SETUP_PY=$(python3 -c "import glob, os; p = sorted(glob.glob(os.path.expanduser('~/.codex/plugins/**/mindie-agent/scripts/setup.py'), recursive=True)); print(p[-1] if p else '')")
    uv run --no-project --python 3.13 python "$SETUP_PY" sharing --status
    ```
-   - Confirm `codex plugin list --json` shows `mindie-agent@mindie-agent` version `0.1.19` enabled in the active profile, and inspect the JSON returned by `setup.py sharing --status` (including `needs_onboarding_prompt`).
+   - Confirm `codex plugin list --json` shows `mindie-agent@mindie-agent` version `0.1.36` enabled in the active profile, and inspect the JSON returned by `setup.py sharing --status` (including `needs_onboarding_prompt`).
    - Report the verified GitHub account (`$GH_USER`), and inform the user that the locked runtime is ready and exposes `mindie-remote-dev` and `mindie-tools` by default; knowledge interfaces are loaded only by manual `/mindie-agent` (or `$mindie-agent`) entry.
 
    Continue immediately with Step 5 after verification, then report the complete setup result.
 
 5. **Present the Native Interactive Onboarding Popup (Step 5) and apply choices**:
-   - Right after installation or whenever `setup.py sharing --status` reports `"needs_onboarding_prompt": true`, summarize the [Contribution Notice](plugins/mindie-agent/skills/mindie-agent/references/user-notice.md) and **immediately invoke OpenAI Codex's native `request_user_input` tool** (falling back to a numbered prompt if unavailable in the current mode) to ask the 3 onboarding questions in a single popup:
+   - Right after installation or whenever `setup.py sharing --status` reports `"needs_onboarding_prompt": true`, summarize the [Contribution Notice](docs/install/user-notice.md) and **immediately invoke OpenAI Codex's native `request_user_input` tool** (falling back to a numbered prompt if unavailable in the current mode) to ask the 3 onboarding questions in a single popup:
      1. **Local Development Workspace `vllm-ascend-workspace`** (`id: "workspace_setup"`): `Initialize vllm-ascend-workspace (Recommended)` vs `Keep current directory` vs `Use existing workspace directory`
      2. **Community Knowledge Sharing & Automated Fault Reporting** (`id: "community_sharing"`): `Enable (Recommended)` vs `Keep Local-Only Mode`
      3. **Would you like to give mindie-agent a Star on GitHub ⭐?** (`id: "github_star"`): `Sure, star it ⭐ (Recommended)` (Star `mindie-agent/mindie-agent` on GitHub to support the project) vs `Maybe later` (Continue without starring)
    - Once the user responds, execute in this exact order:
-     1. **Resolve `WORKSPACE_ROOT` first**: If the user chose to initialize or use an existing workspace, follow [Workspace Setup](plugins/mindie-agent/skills/mindie-agent/references/workspace-setup.md) to initialize/resolve the directory and store it in `WORKSPACE_ROOT` (or `WORKSPACE_ROOT="$(pwd)"` if keeping the current directory). If only the Codex CLI is installed and Codex.app is absent, `codex -C "<absolute-path>"` is the success path: do not treat a missing Desktop app as an install failure.
+     1. **Resolve `WORKSPACE_ROOT` first**: If the user chose to initialize or use an existing workspace, follow [Workspace Setup](docs/install/workspace-setup.md) to initialize/resolve the directory and store it in `WORKSPACE_ROOT` (or `WORKSPACE_ROOT="$(pwd)"` if keeping the current directory). If only the Codex CLI is installed and Codex.app is absent, `codex -C "<absolute-path>"` is the success path: do not treat a missing Desktop app as an install failure.
      2. **Persist the unified contribution & sharing choice**:
         ```sh
         # If the user chose Enable (Recommended):
@@ -223,7 +223,7 @@ uv run --project plugins/mindie-agent --no-sync python tests/preflight.py
 uv run --project plugins/mindie-agent --no-sync python -m unittest discover -s tests -p 'test_*.py'
 ```
 
-- **Release Microbenchmark**: Each `0.1.19` plugin release attaches `benchmark-results.json` and `benchmark-results.md` measuring the `public-transcript` public-message parsing and hidden-reasoning filtering workload ([`benchmarks/release.json`](benchmarks/release.json)) in `us/op`. This serves as a reproducible CPU microbenchmark baseline, distinct from live A2/A3 NPU acceptance and end-to-end Agent productivity evaluation.
+- **Release Microbenchmark**: Each `0.1.36` plugin release attaches `benchmark-results.json` and `benchmark-results.md` measuring the `public-transcript` public-message parsing and hidden-reasoning filtering workload ([`benchmarks/release.json`](benchmarks/release.json)) in `us/op`. This serves as a reproducible CPU microbenchmark baseline, distinct from live A2/A3 NPU acceptance and end-to-end Agent productivity evaluation.
 
 ---
 

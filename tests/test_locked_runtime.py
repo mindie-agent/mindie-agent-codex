@@ -321,7 +321,8 @@ class RuntimeTests(unittest.TestCase):
 
     def test_source_files_exclude_build_caches_but_include_lock_and_resources(self):
         names={p.relative_to(SCRIPTS.parent).as_posix() for p in product_contract.package_files(SCRIPTS.parent)}
-        self.assertTrue({'uv.lock','pyproject.toml','product-contract.json','scripts/entry.py','skills/mindie-agent/references/user-notice.md'}<=names)
+        self.assertTrue({'uv.lock','pyproject.toml','product-contract.json','scripts/entry.py','skills/mindie-agent/SKILL.md','skills/mindie-agent/references/domain-skills.md'}<=names)
+        self.assertNotIn('skills/mindie-agent/references/user-notice.md',names)
         self.assertFalse(any('build/' in x or '.egg-info/' in x or '__pycache__' in x for x in names))
 
     def test_required_context_does_not_require_optional_native_auth_or_proxy(self):
