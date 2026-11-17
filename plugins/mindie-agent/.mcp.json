@@ -11,7 +11,7 @@
         "python",
         "-B",
         "-c",
-        "import os,runpy,sys,json\nfrom pathlib import Path\ndef load(p):\n with p.open('rb') as f:b=f.read(65537)\n if len(b)>65536:raise ValueError('MindIE metadata exceeds its byte bound')\n v=json.loads(b.decode('utf-8-sig'))\n if not isinstance(v,dict):raise ValueError('MindIE metadata must be an object')\n return v\nhome=Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex')))\ndata=Path(os.environ.get('PLUGIN_DATA',str(home/'plugins/data'/'mindie-agent-mindie-agent')))\nconfig=Path(os.environ.get('MINDIE_AGENT_CONFIG',str(Path.home()/'.config/mindie-agent/codex.json'))).expanduser().absolute()\nseed='0.1.34'\ncands=[]\nroot=os.environ.get('PLUGIN_ROOT')\nif root:cands.append(Path(root)/'scripts'/'hook_launcher.py')\ncands.append(data/'hook_launcher.py')\nif seed:cands.append(data/'releases'/seed/'hook_launcher.py')\nif config.is_file():\n a=load(config);v=a.get('product_validation',{}).get('native_version')\n if a.get('component_release'):cands.append(Path(a['component_release'])/'hook_launcher.py')\n elif isinstance(v,str):cands.append(data/'releases'/v/'hook_launcher.py')\ncands.append(Path(os.environ.get('PLUGIN_ROOT',str(home/'plugins/cache'/'mindie-agent'/'mindie-agent'/(seed or 'unprepared'))))/'scripts'/'hook_launcher.py')\np=next((c for c in cands if c.is_file()),None)\nif p is None:raise RuntimeError('MindIE launcher is unavailable')\nsys.argv=[str(p),*sys.argv[1:]]\nrunpy.run_path(str(p),run_name='__main__')",
+        "import json,os,runpy,sys;from pathlib import Path\nh=Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex')))\nd=Path(os.environ.get('PLUGIN_DATA',str(h/'plugins/data'/'mindie-agent-mindie-agent')))\nr,s=os.environ.get('PLUGIN_ROOT'),'0.1.34'\nc=([Path(r)/'scripts'/'hook_launcher.py'] if r else [])+[d/'hook_launcher.py']+([d/'releases'/s/'hook_launcher.py'] if s else [])+[h/'plugins/cache'/'mindie-agent'/'mindie-agent'/(s or 'unprepared')/'scripts'/'hook_launcher.py']\np=next((x for x in c if x.is_file()),None)\nif p is None:\n g=Path(os.environ.get('MINDIE_AGENT_CONFIG',str(Path.home()/'.config/mindie-agent/codex.json'))).expanduser()\n if g.is_file():\n  with g.open('rb') as f:b=f.read(65537)\n  a=json.loads(b.decode('utf-8-sig')) if len(b)<=65536 else {}\n  cr=a.get('component_release') if isinstance(a,dict) else None;v=(a.get('product_validation') or {}).get('native_version') if isinstance(a,dict) else None\n  p=next((x for x in ([Path(cr)/'hook_launcher.py'] if isinstance(cr,str) else [])+([d/'releases'/v/'hook_launcher.py'] if isinstance(v,str) else []) if x.is_file()),None)\nif p is None:raise RuntimeError('MindIE launcher is unavailable')\nsys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='__main__')",
         "--seed",
         "0.1.34",
         "remote-mcp"
@@ -19,6 +19,8 @@
       "startup_timeout_sec": 2760,
       "env_vars": [
         "CODEX_HOME",
+        "PLUGIN_ROOT",
+        "PLUGIN_DATA",
         "MINDIE_AGENT_CONFIG",
         "MINDIE_CONFIG_HOME",
         "MINDIE_DATA_HOME",
@@ -85,7 +87,7 @@
         "python",
         "-B",
         "-c",
-        "import os,runpy,sys,json\nfrom pathlib import Path\ndef load(p):\n with p.open('rb') as f:b=f.read(65537)\n if len(b)>65536:raise ValueError('MindIE metadata exceeds its byte bound')\n v=json.loads(b.decode('utf-8-sig'))\n if not isinstance(v,dict):raise ValueError('MindIE metadata must be an object')\n return v\nhome=Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex')))\ndata=Path(os.environ.get('PLUGIN_DATA',str(home/'plugins/data'/'mindie-agent-mindie-agent')))\nconfig=Path(os.environ.get('MINDIE_AGENT_CONFIG',str(Path.home()/'.config/mindie-agent/codex.json'))).expanduser().absolute()\nseed='0.1.34'\ncands=[]\nroot=os.environ.get('PLUGIN_ROOT')\nif root:cands.append(Path(root)/'scripts'/'hook_launcher.py')\ncands.append(data/'hook_launcher.py')\nif seed:cands.append(data/'releases'/seed/'hook_launcher.py')\nif config.is_file():\n a=load(config);v=a.get('product_validation',{}).get('native_version')\n if a.get('component_release'):cands.append(Path(a['component_release'])/'hook_launcher.py')\n elif isinstance(v,str):cands.append(data/'releases'/v/'hook_launcher.py')\ncands.append(Path(os.environ.get('PLUGIN_ROOT',str(home/'plugins/cache'/'mindie-agent'/'mindie-agent'/(seed or 'unprepared'))))/'scripts'/'hook_launcher.py')\np=next((c for c in cands if c.is_file()),None)\nif p is None:raise RuntimeError('MindIE launcher is unavailable')\nsys.argv=[str(p),*sys.argv[1:]]\nrunpy.run_path(str(p),run_name='__main__')",
+        "import json,os,runpy,sys;from pathlib import Path\nh=Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex')))\nd=Path(os.environ.get('PLUGIN_DATA',str(h/'plugins/data'/'mindie-agent-mindie-agent')))\nr,s=os.environ.get('PLUGIN_ROOT'),'0.1.34'\nc=([Path(r)/'scripts'/'hook_launcher.py'] if r else [])+[d/'hook_launcher.py']+([d/'releases'/s/'hook_launcher.py'] if s else [])+[h/'plugins/cache'/'mindie-agent'/'mindie-agent'/(s or 'unprepared')/'scripts'/'hook_launcher.py']\np=next((x for x in c if x.is_file()),None)\nif p is None:\n g=Path(os.environ.get('MINDIE_AGENT_CONFIG',str(Path.home()/'.config/mindie-agent/codex.json'))).expanduser()\n if g.is_file():\n  with g.open('rb') as f:b=f.read(65537)\n  a=json.loads(b.decode('utf-8-sig')) if len(b)<=65536 else {}\n  cr=a.get('component_release') if isinstance(a,dict) else None;v=(a.get('product_validation') or {}).get('native_version') if isinstance(a,dict) else None\n  p=next((x for x in ([Path(cr)/'hook_launcher.py'] if isinstance(cr,str) else [])+([d/'releases'/v/'hook_launcher.py'] if isinstance(v,str) else []) if x.is_file()),None)\nif p is None:raise RuntimeError('MindIE launcher is unavailable')\nsys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='__main__')",
         "--seed",
         "0.1.34",
         "tools-mcp"
@@ -93,6 +95,8 @@
       "startup_timeout_sec": 2760,
       "env_vars": [
         "CODEX_HOME",
+        "PLUGIN_ROOT",
+        "PLUGIN_DATA",
         "MINDIE_AGENT_CONFIG",
         "MINDIE_CONFIG_HOME",
         "MINDIE_DATA_HOME",

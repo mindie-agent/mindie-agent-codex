@@ -19,7 +19,6 @@ Implements the JSON-RPC MCP server gate (`Gate`, `serve`) for public `remote`/`c
 - `initialize` and `tools/list` read selected release catalogs without knowledge activation or service admission.
 """
 
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 import hashlib
 import json
@@ -57,6 +56,23 @@ REMOTE_GRACE_SECONDS = 60.0
 REMOTE_MIN_BUDGET_SECONDS = 180.0
 # remote-dev restarts the python RPC wait by this much after the worker is ready.
 REMOTE_RPC_FOLLOW_SECONDS = 5.0
+READ_ONLY_REMOTE_TOOLS = frozenset({
+    "remote_read", "remote_grep", "remote_glob", "remote_stat", "remote_ls",
+    "remote_list", "remote_cat", "remote_find", "remote_view_image",
+    "remote_job_status", "remote_job_output", "remote_job_poll", "remote_job_list",
+    "remote_hosts", "remote_probe", "remote_ping",
+})
+
+
+def is_read_only_tool(name, tools=()):
+    if name in READ_ONLY_REMOTE_TOOLS:
+        return True
+    for tool in tools or ():
+        if isinstance(tool, dict) and tool.get("name") == name:
+            annotations = tool.get("annotations")
+            if isinstance(annotations, dict) and annotations.get("readOnlyHint") is True:
+                return True
+    return False
 # Native outer wait contracts (milliseconds). write_stdin's empty poll may wait
 # 300000 ms even though a non-empty write yields sooner; the outer helper must
 # include the larger contract or it would cut off a legal inner poll.
@@ -393,12 +409,14 @@ class RemoteReceipts:
 
     def close(self):
         self._ownership.close()
+        self._sweep_owner_locks()
 
     def _sweep_owner_locks(self):
         try:
             sweep_idle_owner_locks(self.path.parent, keep={self.owner})
         except TimeoutError:
-            # A sidecar scan is maintenance; it never blocks receipt admission.
+            pass
+        except OSError:
             pass
 
     def _db(self):
@@ -419,7 +437,6 @@ class RemoteReceipts:
 
     def _open_db(self):
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self._sweep_owner_locks()
         with file_lock(self.path.with_suffix(".initialize.lock"), exclusive=True, blocking=True):
             existed = self.path.exists()
             db = sqlite3.connect(self.path, timeout=5.0)
@@ -442,22 +459,26 @@ class RemoteReceipts:
                 db.close()
                 raise
 
-    def claim(self, identity):
+    def claim(self, identity, *, read_only=False):
         db = self._db()
         try:
             self._ensure_owner()
             with db:
                 db.execute("BEGIN IMMEDIATE")
-                # Actual owner death leaves an uncertain consumed receipt.
-                # Elapsed time and earlier failures never reject new work.
+                # Actual owner death leaves an uncertain consumed receipt for mutations.
+                # Elapsed time, read-only calls, and earlier failures never reject new work.
                 for owner, in db.execute("SELECT DISTINCT owner FROM attempts WHERE status='running'").fetchall():
                     if not self._owner_alive(owner):
                         db.execute("UPDATE attempts SET status='unknown' WHERE status='running' AND owner=?", (owner,))
                 if db.execute("SELECT 1 FROM attempts WHERE identity=?", (identity,)).fetchone():
                     return False
-                if db.execute("SELECT count(*) FROM attempts WHERE status='running'").fetchone()[0] >= 4:
+                if not read_only and db.execute("SELECT count(*) FROM attempts WHERE status='running'").fetchone()[0] >= 4:
                     raise ValueError("Remote task concurrency limit reached; no automatic retry")
-                db.execute("INSERT INTO attempts(identity,started,status,owner) VALUES(?, ?, 'running', ?)", (identity, time.time(), self.owner))
+                initial_status = "reading" if read_only else "running"
+                db.execute(
+                    "INSERT INTO attempts(identity,started,status,owner) VALUES(?, ?, ?, ?)",
+                    (identity, time.time(), initial_status, self.owner),
+                )
                 return True
         finally:
             db.close()
@@ -468,8 +489,10 @@ class RemoteReceipts:
         db = self._db()
         try:
             with db:
-                changed = db.execute("UPDATE attempts SET status=? WHERE identity=? AND status='running' AND owner=?",
-                                     (outcome, identity, self.owner))
+                changed = db.execute(
+                    "UPDATE attempts SET status=? WHERE identity=? AND status IN ('running','reading') AND owner=?",
+                    (outcome, identity, self.owner),
+                )
                 if changed.rowcount != 1:
                     raise ValueError("remote outcome receipt no longer belongs to this owner")
         finally:
@@ -493,6 +516,7 @@ class Gate:
             self._tools = json.loads(CATALOG.read_text(encoding='utf-8'))[surface]
         self.connection_id = uuid.uuid4().hex
         self._remote_receipts = {}
+        self._receipts_lock = threading.Lock()
         self.config = config_path()
 
     def close(self):
@@ -602,23 +626,19 @@ class Gate:
                 if not isinstance(session, str) or not IDENTITY.fullmatch(session):
                     raise ValueError("Valid native task identity required")
             name, args = self._tool_args(request)
-            receipts = self._remote_receipts.get(session)
-            if receipts is None:
-                receipts = RemoteReceipts(session)
-                self._remote_receipts[session] = receipts
+            read_only = is_read_only_tool(name, self._tools)
+            with self._receipts_lock:
+                receipts = self._remote_receipts.get(session)
+                if receipts is None:
+                    receipts = RemoteReceipts(session)
+                    self._remote_receipts[session] = receipts
             if cli_identity is None:
-                # connection_id is this Gate, and one Gate serves one stdio
-                # process. Duplicate detection is connection-local: a numeric
-                # RPC id reused after reconnect is not the same invocation.
-                # An uncertain remote command is not automatically replayed.
                 prefix = turn + ":" + self.connection_id if turn is not None else "conn:" + self.connection_id
                 identity = prefix + ":" + self._request_identity(request)
             else:
-                # Domain CLI has no host turn id. Its existing nonce is this
-                # connection; do not add a second one.
                 turn = "cli-" + self.connection_id
                 identity = turn + ":" + self._request_identity(request)
-            if not receipts.claim(identity):
+            if not receipts.claim(identity, read_only=read_only):
                 raise ValueError("Duplicate MCP request; not executed again")
             admitted = True
             # Derive the outer budget from this tool's native inner wait, then
@@ -658,28 +678,7 @@ class Gate:
             outcome = "unknown" if uncertain else result.get("operation_outcome") or ("failed" if result.get("isError") is True else "succeeded")
             return result
         except Exception as exc:
-            # No traceback, credentials, model wakeup, reconnect loop or replay.
-            if stage == "admission":
-                exc.request_not_started = True
-            result = call_failure(exc)
-            if stage in ("helper_run", "helper_response") and not (
-                cancel is not None and cancel.is_set()
-            ):
-                if stage == "helper_response":
-                    category = "helper_protocol"
-                elif isinstance(exc, TimeoutError):
-                    category = helper_deadline_category(exc)
-                else:
-                    category = "helper_failed"
-                diagnostic = diagnostic_failure(
-                    "mcp." + self.surface + "." + name,
-                    stage,
-                    category,
-                    exception=exc,
-                    elapsed_ms=int((time.monotonic() - started) * 1000),
-                )
-                result = helper_failure(result, diagnostic, stage, category)
-            return result
+            return self._handle_dispatch_error(stage, name, started, cancel, exc)
         finally:
             if admitted and receipts is not None:
                 try:
@@ -695,6 +694,23 @@ class Gate:
                         result["content"].append(dict(type="text", text=
                             "Remote result preserved; local outcome accounting failed. Do not repeat the operation."))
 
+    def _handle_dispatch_error(self, stage, name, started, cancel, exc):
+        if stage == "admission":
+            exc.request_not_started = True
+        result = call_failure(exc)
+        if stage in ("helper_run", "helper_response") and not (cancel is not None and cancel.is_set()):
+            category = (
+                "helper_protocol" if stage == "helper_response"
+                else helper_deadline_category(exc) if isinstance(exc, TimeoutError)
+                else "helper_failed"
+            )
+            diagnostic = diagnostic_failure(
+                "mcp." + self.surface + "." + str(name), stage, category,
+                exception=exc, elapsed_ms=int((time.monotonic() - started) * 1000),
+            )
+            result = helper_failure(result, diagnostic, stage, category)
+        return result
+
     def _call(self, request, session, cancel=None, timeout=None):
         token = None
         stage = "admission"
@@ -704,33 +720,19 @@ class Gate:
             name, args = self._tool_args(request)
             config = json.loads(self.sessions.config.read_text(encoding='utf-8'))
             payload = dict(
-                surface=self.surface,
-                name=name,
-                arguments=args,
-                mindie_session_id=session,
-                native_session_verified=True,
+                surface=self.surface, name=name, arguments=args,
+                mindie_session_id=session, native_session_verified=True,
             )
             bound = knowledge_timeout(name, timeout)
             try:
-                # Exactly one installed runtime: the recorded interpreter
-                # plus the recorded scripts directory, read in one config load
-                # while the operation lock is held by Gate.call.
                 stage = "helper_run"
                 output = run(
-                    [
-                        config["python"],
-                        str(Path(runtime_scripts(config)) / "runtime_call.py"),
-                    ],
-                    json.dumps(payload),
-                    timeout=bound,
-                    cancel=cancel,
-                    env=runtime_env(self.sessions.config),
-                    max_output=KNOWLEDGE_MAX_OUTPUT,
+                    [config["python"], str(Path(runtime_scripts(config)) / "runtime_call.py")],
+                    json.dumps(payload), timeout=bound, cancel=cancel,
+                    env=runtime_env(self.sessions.config), max_output=KNOWLEDGE_MAX_OUTPUT,
                     allow_service=True,
                 )
             except Exception as exc:
-                # A timeout or refused connection is availability, not a
-                # paused grant. Protocol and configuration failures still count.
                 if token is not None and not (
                     isinstance(exc, (TimeoutError, ConnectionError))
                     or type(exc).__name__ in {"URLError", "TimeoutExpired"}
@@ -741,31 +743,9 @@ class Gate:
                         pass
                 raise
             stage = "helper_response"
-            result = runtime_result(output)
-            return result
+            return runtime_result(output)
         except Exception as exc:
-            # No traceback, credentials, model wakeup, reconnect loop or replay.
-            if stage == "admission":
-                exc.request_not_started = True
-            result = call_failure(exc)
-            if stage in ("helper_run", "helper_response") and not (
-                cancel is not None and cancel.is_set()
-            ):
-                if stage == "helper_response":
-                    category = "helper_protocol"
-                elif isinstance(exc, TimeoutError):
-                    category = helper_deadline_category(exc)
-                else:
-                    category = "helper_failed"
-                diagnostic = diagnostic_failure(
-                    "mcp." + self.surface + "." + name,
-                    stage,
-                    category,
-                    exception=exc,
-                    elapsed_ms=int((time.monotonic() - started) * 1000),
-                )
-                result = helper_failure(result, diagnostic, stage, category)
-            return result
+            return self._handle_dispatch_error(stage, name, started, cancel, exc)
 
 
 def serve(surface):

@@ -343,8 +343,6 @@ class SetupTests(unittest.TestCase):
                 "mindie_knowledge.loop.cli",
                 "mindie_knowledge.loop.documents",
                 "mindie_knowledge.loop.activation",
-                "mindie_knowledge.materials.reme_index",
-                "langmem.short_term",
                 "remote_dev.mcp.server",
             },
         )

@@ -17,6 +17,12 @@ dependencies = [
   "mindie-coordinator",
 ]
 
+[tool.mindie.substrate]
+package = "mindie-harness"
+min_version = "0.1.0"
+seed = "assets/mindie-harness-seed.pyz"
+seed_lock = "assets/seed-lock.json"
+
 [tool.uv.sources]
 mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "c991b64a1ead277b5ce91b7835337b01aed03998" }
 remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "c4d38f99c1ef5aace1c088af07647941adc2d394" }

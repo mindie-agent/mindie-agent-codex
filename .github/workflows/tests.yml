@@ -17,6 +17,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,6 +63,13 @@ jobs:
         run: uv run --project plugins/mindie-agent --no-sync python -c "import subprocess,sys; subprocess.run(['uv','pip','install','--python',sys.executable,'pytest==9.1.1'],check=True)"
       - name: Validate release compatibility and registered Harness interfaces
         run: uv run --project plugins/mindie-agent --no-sync python plugins/mindie-agent/scripts/release_metadata.py --source plugins/mindie-agent --tests tests --revision "${{ github.sha }}"
+      - name: Out-of-tree wheel build and seed verification smoke check
+        shell: bash
+        run: |
+          uv build --project plugins/mindie-agent --wheel --out-dir "$RUNNER_TEMP/mindie-codex-dist"
+          uv venv "$RUNNER_TEMP/mindie-codex-smoke-venv" --python 3.13
+          uv pip install --python "$RUNNER_TEMP/mindie-codex-smoke-venv" --no-deps "$RUNNER_TEMP"/mindie-codex-dist/*.whl
+          (cd "$RUNNER_TEMP" && "$RUNNER_TEMP/mindie-codex-smoke-venv/bin/python" -c "import mindie_codex.scripts.host_adapter as h; info = h.verify_bundled_seed(); assert info['schema'] == 'mindie-harness-seed/1'" 2>/dev/null || "$RUNNER_TEMP/mindie-codex-smoke-venv/Scripts/python.exe" -c "import mindie_codex.scripts.host_adapter as h; info = h.verify_bundled_seed(); assert info['schema'] == 'mindie-harness-seed/1'")
       # Contract tests archive these commits. They do not guess a sibling
       # checkout. Publish the exact core and peer revisions before adapter CI.
       # Peer 90f73e7 is an ancestor of the reviewed Kimi 86de2c3 revision.
@@ -109,6 +117,7 @@ jobs:
           - os: windows-latest
             codex: "0.166.0"
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
     defaults:
       run:
         shell: bash
@@ -150,6 +159,7 @@ jobs:
     needs: [adapter, native-harness]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - env:
           RESULTS: ${{ toJSON(needs) }}

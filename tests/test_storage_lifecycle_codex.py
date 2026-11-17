@@ -394,12 +394,14 @@ def test_remote_receipts_owner_lock_is_removed_and_dead_locks_swept(tmp_path, mo
     receipt_owners.sweep_idle_owner_locks(receipts.path.parent, min_age=0)
     assert not live.exists()
 
-    # A historical dead owner discovered during DB initialization is removed.
+    # Historical dead owner sidecars are swept on close/maintenance, never on hot-path DB opens.
     historical = receipt_owners.owner_path(receipts.path.parent, "d" * 32)
     historical.write_text("")
     _age(historical, 3600)
     db = receipts._open_db()
     db.close()
+    assert historical.exists()
+    receipts.close()
     assert not historical.exists()
 
 

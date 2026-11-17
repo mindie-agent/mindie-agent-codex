@@ -1,24 +1,21 @@
 ## 变更摘要 (Summary)
 
-- 
+- 简述本次变更解决的问题、影响范围与核心设计取舍：
 
-## 设计原则 Review (Pre-PR Checklist)
+## 设计原则 Review (Pre-PR Checklist — `host-plugin`)
 
-> 提交或更新 PR 前请对照 [`docs/design-principles.md#三开发-pr-提交前自查清单pre-pr-review`](docs/design-principles.md#三开发-pr-提交前自查清单pre-pr-review) 完成自查：
+- [ ] **HOST-NATIVE** — 原生宿主契约保持不变：`hooks/hooks.json` 字节级哈希（`ea80d0815485ba5f762ff5275f1e40817130694870405237dbd65d03f28f9981`）、MCP 服务名（`mindie-remote-dev`、`mindie-tools`）、`/mindie-agent` 与 `$mindie-agent` 入口语义及 Windows 零弹窗（`CREATE_NO_WINDOW`）全部通过校验。
+- [ ] **HOST-WIRE** — 薄适配层委托与协议边界：共享锁、RSI 与基础设施逻辑已委托 `mindie-harness`（含 `assets/seed-lock.json` 校验），`.mcp.json` 无内联状态机脚本，模块行数 `< 800` 且具备顶部四段契约注释。
+- [ ] **HOST-ADMISSION** — 准入与并发诚实性：确定性工具满足 `P2.7` 零前置会话门禁，只读远程调用不受 4 槽写并发限制且热路径无 `.owner.lock` 全目录扫描（`AD-09`），`knowledge_*` 严格遵循 `P2.1` 显式激活门禁。
+- [ ] **HOST-UPGRADE** — 升级/回滚连续性与收据诚实：兼容既有 `codex.json` / `prepare.lock` / `runtime.json` 布局，外部写入区分 `completed` / `failed` / `unknown`，主操作成功后本地记账异常保留 `isError=False`。
 
-- [ ] **1–8. 产品边界与机制复用**：总成本优先、封闭问题工具化、单一职责、按需介入、优先复用成熟组件并直接删除被替代的旧状态机。
-- [ ] **9. 错误可见性与反静默回退（Principle 9 & 14）**：无 `except Exception:` 静默返回 `{}` / `"active"` / `exit 0` 假成功，无 `except OSError:` 误吞 `TimeoutError`，无本地记账超时反杀已成功的远端主结果。
-- [ ] **10–11. 超时算术与 `v0.0.2` 反过度防御四大铁律（Principle 15）**：满足 `outer_timeout >= sum(inner_budgets) + cleanup_grace`；SQLite WAL + `3s~5s` 超时且零热路径 `.owner`/Schema 反射；仅不可逆外部写用 `unknown` 且零本地永久自锁死；零跨仓复制 `*_fallback.py`/`*_bootstrap.py`；零内嵌巨型 Python 字符串。
-- [ ] **12–13. 分级测试、宿主机零污染与 Agent-Native 规范（Principle 16 & 17）**：无防御性凑数/文本 grep 测试，符合 Tier 0 (`<5s`) ~ Tier 3 耗时预算；测试全流程隔离 `MINDIE_DIAGNOSTICS_ROOT` / `$HOME`（严禁污染宿主机 `~/.local`、`~/.config` 或系统后台服务）；核心模块 `< 800` 行且前 30 行具备 `[Role]`/`[Invariants]`/`[Timeouts & Locks]`/`[Side-Effect Policy]` 契约头。
-- [ ] **14. 编码性能、内存/显存有界性与本地/远端规格分流（Principle 18）**：
-  - **内存有界性**：主循环常驻内存严格保持 $O(\text{当前活跃状态})$ 而非无界累加全量历史，大文件（`> 50 MB`）采用流式处理；控制/分析组件单进程常规峰值 `<= 512 MiB`，严禁出现 `> 1 GiB` 算法膨胀缺陷。
-  - **性能与并发纪律**：热循环内无 `deepcopy` / 起子进程 / 逐行 Commit；并行 Worker 数同时受可用 CPU 核数与可用安全内存双重约束（$\min(\text{CPU}, \lfloor\text{可用内存}/\text{单 Worker 内存}\rfloor)$）。
-  - **显存（HBM/VRAM）安全**：控制与元数据路径保持“零权重、零设备上下文”；上卡操作启动前完成静态显存预算核验（`vram_free_mb >= Expected VRAM`）。
-  - **跨平台规格分流（Windows / macOS / Linux）**：无 `sys.platform == "darwin"` 等操作系统硬编码特判；重计算/重内存/需显存任务声明 `WorkloadExpectation`，按本机与远端（`fleet_probe.py`）的真实可用硬件规格自动分流（本机规格充裕则本地跑，不足则分流远端）。
-- [ ] **15. 自动更新、Windows 零弹窗与文件格式规范（Auto-Update, Zero Console Popup & PR Format Hygiene）**：涉及子进程调用、自动更新器、Hook、MCP 服务或后台任务时，已核验 Windows 下所有 Node.js `spawn`/`exec`/`execFile` 均显式设置 `windowsHide: true` 且 Python `subprocess.Popen`/`subprocess.run` 均包含 `CREATE_NO_WINDOW`（杜绝后台定时或工具调用闪现黑框弹窗）；全仓文本文件严格使用 Unix `LF`（`\n`）换行格式（严禁 Windows `CRLF` `\r\n` 或混合换行，Python 跨平台写文本/脚本显式指定 `newline="\n"`），并通过 `python3 .github/scripts/check_lf_eol.py` 校验。
-- [ ] **16. Codex Hook 信任无感继承与命令字节稳定性（Codex Hook Trust Preservation）**：涉及 `hooks/hooks.json`、`native_entry.py`、`hook_launcher.py`、`native_hooks.py`、`harness_update.py`、`release_migration.py` 或 `native_context.py` 时，已核验：（1）`hooks/hooks.json` 的 Hook 命令保持跨版本字节级稳定（不内嵌版本号），确保命令哈希 `trusted_hash` 不随版本号变化；（2）`_native_install` 在 `codex plugin add` 完成后、`ensure_runtime` 构建虚拟环境前立即执行 `_preserve_hook_trust` CAS 同步，且 `snapshot` / `reconcile` 能对 `trusted_hash` 不变而仅插件目录 `trusted_content_hash` 变更的已启用 Hook 自动延续信任（绝不自动批准未授权、已禁用或命令变更的 Hook），确保插件更新后无需用户重新点击 Allow Hook。
-- **自查结论与证据**：
+### 自查证据 (Evidence)
+
+- **HOST-NATIVE**:
+- **HOST-WIRE**:
+- **HOST-ADMISSION**:
+- **HOST-UPGRADE**:
 
 ## 验证结果 (Verification)
 
-- 
+- 本地测试、构建冒烟与静态门禁执行命令及结果：

@@ -145,39 +145,23 @@ def _launcher_flags(*, name="mindie-agent", marketplace="mindie-agent", seed_ver
 
 
 def mcp_locator_code(*, name="mindie-agent", marketplace="mindie-agent", seed_version):
-    """Locate `hook_launcher.py` without inlining the selector state machine.
-
-    Codex expands `${PLUGIN_ROOT}` in hook commands but not in `.mcp.json`
-    args, so MCP keeps this short path finder and falls back to the durable
-    published release copy after plugin-cache eviction. Hook commands avoid
-    that manifest token and read the `PLUGIN_ROOT` environment variable.
-    """
+    """Locate `hook_launcher.py` via direct file handoff with component-release fallback."""
     return (
-        "import os,runpy,sys,json\nfrom pathlib import Path\n"
-        "def load(p):\n"
-        " with p.open('rb') as f:b=f.read(65537)\n"
-        " if len(b)>65536:raise ValueError('MindIE metadata exceeds its byte bound')\n"
-        " v=json.loads(b.decode('utf-8-sig'))\n"
-        " if not isinstance(v,dict):raise ValueError('MindIE metadata must be an object')\n"
-        " return v\n"
-        "home=Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex')))\n"
-        f"data=Path(os.environ.get('PLUGIN_DATA',str(home/'plugins/data'/{(name + '-' + marketplace)!r})))\n"
-        "config=Path(os.environ.get('MINDIE_AGENT_CONFIG',str(Path.home()/'.config/mindie-agent/codex.json'))).expanduser().absolute()\n"
-        f"seed={seed_version!r}\n"
-        "cands=[]\n"
-        "root=os.environ.get('PLUGIN_ROOT')\n"
-        "if root:cands.append(Path(root)/'scripts'/'hook_launcher.py')\n"
-        "cands.append(data/'hook_launcher.py')\n"
-        "if seed:cands.append(data/'releases'/seed/'hook_launcher.py')\n"
-        "if config.is_file():\n"
-        " a=load(config);v=a.get('product_validation',{}).get('native_version')\n"
-        " if a.get('component_release'):cands.append(Path(a['component_release'])/'hook_launcher.py')\n"
-        " elif isinstance(v,str):cands.append(data/'releases'/v/'hook_launcher.py')\n"
-        f"cands.append(Path(os.environ.get('PLUGIN_ROOT',str(home/'plugins/cache'/{marketplace!r}/{name!r}/(seed or 'unprepared'))))/'scripts'/'hook_launcher.py')\n"
-        "p=next((c for c in cands if c.is_file()),None)\n"
+        "import json,os,runpy,sys;from pathlib import Path\n"
+        "h=Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex')))\n"
+        f"d=Path(os.environ.get('PLUGIN_DATA',str(h/'plugins/data'/{(name + '-' + marketplace)!r})))\n"
+        f"r,s=os.environ.get('PLUGIN_ROOT'),{seed_version!r}\n"
+        f"c=([Path(r)/'scripts'/'hook_launcher.py'] if r else [])+[d/'hook_launcher.py']+([d/'releases'/s/'hook_launcher.py'] if s else [])+[h/'plugins/cache'/{marketplace!r}/{name!r}/(s or 'unprepared')/'scripts'/'hook_launcher.py']\n"
+        "p=next((x for x in c if x.is_file()),None)\n"
+        "if p is None:\n"
+        " g=Path(os.environ.get('MINDIE_AGENT_CONFIG',str(Path.home()/'.config/mindie-agent/codex.json'))).expanduser()\n"
+        " if g.is_file():\n"
+        "  with g.open('rb') as f:b=f.read(65537)\n"
+        "  a=json.loads(b.decode('utf-8-sig')) if len(b)<=65536 else {}\n"
+        "  cr=a.get('component_release') if isinstance(a,dict) else None;v=(a.get('product_validation') or {}).get('native_version') if isinstance(a,dict) else None\n"
+        "  p=next((x for x in ([Path(cr)/'hook_launcher.py'] if isinstance(cr,str) else [])+([d/'releases'/v/'hook_launcher.py'] if isinstance(v,str) else []) if x.is_file()),None)\n"
         "if p is None:raise RuntimeError('MindIE launcher is unavailable')\n"
-        "sys.argv=[str(p),*sys.argv[1:]]\n"
-        "runpy.run_path(str(p),run_name='__main__')"
+        "sys.argv=[str(p),*sys.argv[1:]];runpy.run_path(str(p),run_name='__main__')"
     )
 
 
@@ -396,7 +380,8 @@ def write_manifests(root):
                       # migration drain/activation, and owned cleanup; it
                       # does not change business tool-call deadlines.
                       startup_timeout_sec=MCP_STARTUP_SECONDS,
-                      env_vars=["CODEX_HOME", "MINDIE_AGENT_CONFIG",
+                      env_vars=["CODEX_HOME", "PLUGIN_ROOT", "PLUGIN_DATA",
+                                "MINDIE_AGENT_CONFIG",
                                 "MINDIE_CONFIG_HOME", "MINDIE_DATA_HOME",
                                 "MINDIE_REMOTE_STATE_DIR",
                                 "MINDIE_CODEX_BIN", "MINDIE_DIAGNOSTICS_CONFIG",

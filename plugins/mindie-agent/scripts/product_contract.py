@@ -50,6 +50,7 @@ FAILURE_CODES = {
     "process": {"nonzero_exit"},
 }
 FAILURE_COMPONENTS = {
+    "mindie-harness",
     "mindie-knowledge",
     "remote-dev",
     "mindie-diagnostics",
@@ -57,6 +58,9 @@ FAILURE_COMPONENTS = {
     "mindie-profiler",
     "mindie-sim",
     "mindie-coordinator",
+}
+OPTIONAL_SUBSTRATE_PINS = {
+    "mindie-harness": "harness",
 }
 PUBLICATION_PROCESS_CODES = {"init_failed", "fetch_failed", "revision_read_failed"}
 FAILURE_CATEGORIES = {
@@ -192,9 +196,17 @@ def requirements(source):
                 or not isinstance(value["rev"], str) or not HEX40.fullmatch(value["rev"])):
             raise ValueError("runtime dependencies require exact official commit pins")
         pins[name] = value["rev"]
+    for name, repo in OPTIONAL_SUBSTRATE_PINS.items():
+        if name in sources:
+            value = sources.get(name, {})
+            if (set(value) != {"git", "rev"}
+                    or value["git"] != f"https://github.com/mindie-agent/{repo}"
+                    or not isinstance(value["rev"], str) or not HEX40.fullmatch(value["rev"])):
+                raise ValueError("substrate dependency requires an exact official commit pin")
+            pins[name] = value["rev"]
     lock = (source / "uv.lock").read_bytes()
     locked = tomllib.loads(lock.decode("utf-8"))
-    for name, repo in expected.items():
+    for name in pins:
         packages = [item for item in locked["package"] if item["name"] == name]
         if (len(packages) != 1
                 or packages[0].get("source", {}).get("git", "").split("#")[-1] != pins[name]):

@@ -1,13 +1,14 @@
-"""Shared/exclusive file locks with a platform boundary.
+"""Shared/exclusive file locks backed by `mindie_harness.locks` with fallback.
 
 [Role]
 Provides reentrant same-mode thread-aware file locking (`file_lock` and
-`update_lock`) backed by `mindie_knowledge.loop.locks`.
+`update_lock`) backed by `mindie_harness.locks` (falling back to
+`mindie_knowledge.loop.locks` on pre-harness runtimes).
 
 [Invariants]
 - Same-thread nested acquires of the *same* mode reenter cleanly.
-- Same-thread nested acquires of the *opposite* mode fail immediately (`RuntimeError`)
-  to prevent in-process shared-to-exclusive deadlocks.
+- Same-thread nested acquires of the *opposite* mode raise `BlockingIOError`
+  immediately to prevent in-process shared-to-exclusive deadlocks.
 
 [Timeouts & Locks]
 - Supports both non-blocking (`blocking=False`) and blocking acquisition via OS
@@ -16,27 +17,54 @@ Provides reentrant same-mode thread-aware file locking (`file_lock` and
 [Side-Effect Policy]
 - Creates/opens only the designated `.lock` sidecar file with `0o600` permissions.
 """
-
 from contextlib import contextmanager
 import os
 from pathlib import Path
 import threading
+import time
 
 _tls = threading.local()
 
+
+def _acquire_os_lock(descriptor: int, *, exclusive: bool, blocking: bool) -> None:
+    try:
+        from mindie_harness.locks import _try_lock_fd
+    except ModuleNotFoundError:
+        from mindie_knowledge.loop.locks import lock_file
+        lock_file(descriptor, exclusive=exclusive, blocking=blocking)
+        return
+    if _try_lock_fd(descriptor, exclusive=exclusive):
+        return
+    if not blocking:
+        raise BlockingIOError("lock is held by another process")
+    sleep_step = 0.01
+    while not _try_lock_fd(descriptor, exclusive=exclusive):
+        time.sleep(sleep_step)
+        sleep_step = min(0.1, sleep_step * 1.5)
+
+
+def _release_os_lock(descriptor: int) -> None:
+    try:
+        from mindie_harness.locks import _unlock_fd
+    except ModuleNotFoundError:
+        from mindie_knowledge.loop.locks import unlock_file
+        unlock_file(descriptor)
+        return
+    _unlock_fd(descriptor)
+
+
 @contextmanager
 def file_lock(path, *, exclusive=False, blocking=False):
-    from mindie_knowledge.loop.locks import lock_file, unlock_file
     descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     acquired = False
     try:
-        lock_file(descriptor, exclusive=exclusive, blocking=blocking)
+        _acquire_os_lock(descriptor, exclusive=exclusive, blocking=blocking)
         acquired = True
         yield descriptor
     finally:
         try:
             if acquired:
-                unlock_file(descriptor)
+                _release_os_lock(descriptor)
         finally:
             os.close(descriptor)
 

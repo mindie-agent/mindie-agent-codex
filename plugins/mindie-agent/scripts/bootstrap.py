@@ -496,10 +496,15 @@ def _publish_hook_launcher(scripts, release):
                     raise ValueError("immutable release launcher differs")
         finally:
             temporary.unlink(missing_ok=True)
-    if Path(release).parent.name != "releases":
+    rel_path = Path(release)
+    if rel_path.parent.name == "releases":
+        data_root = rel_path.parent.parent
+    elif rel_path.name == "release" and len(rel_path.parents) >= 3 and rel_path.parents[1].name == "component-runtimes":
+        data_root = rel_path.parents[2]
+    else:
         return
-    durable = Path(release).parent.parent / "hook_launcher.py"
-    staging = Path(release) / "hook_launcher.durable.tmp"
+    durable = data_root / "hook_launcher.py"
+    staging = rel_path / "hook_launcher.durable.tmp"
     staging.write_text(text, encoding="utf-8", newline="\n")
     os.replace(staging, durable)
 

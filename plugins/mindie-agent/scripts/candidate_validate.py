@@ -174,9 +174,14 @@ def adapter_check(source):
         "agent_diagnostics.py",
         "experiment_ledger.py",
         "rsi_loop.py",
+        "host_adapter.py",
+        "mcp_entry.py",
     ):
         if not (plugin / "scripts" / name).is_file():
             raise ValueError("missing bounded runtime entry: " + name)
+    if (plugin / "assets" / "seed-lock.json").is_file():
+        from host_adapter import verify_bundled_seed
+        verify_bundled_seed(plugin)
     catalog = read_catalog(plugin / "scripts" / "mcp_catalog.json")
     names = {tool.get("name") for tool in catalog.get("knowledge") or []}
     if not {"knowledge_query", "knowledge_explain", "knowledge_feedback", "knowledge_distill"} <= names:

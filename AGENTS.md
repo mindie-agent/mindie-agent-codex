@@ -1,99 +1,28 @@
-# MindIE Agent — Codex Native Harness Plugin (`mindie-agent-codex`)
+# MindIE Agent — Codex Host Plugin (`mindie-agent-codex`)
 
-This repository implements the **Codex Native Harness Plugin** (`plugins/mindie-agent/`) for MindIE Agent. It bridges the Codex CLI host lifecycle (Hooks, Skills, and stdio MCP server) to shared knowledge and deterministic remote-dev, diagnostics, profiler, sim and coordinator components without duplicating core domain engines. The human-facing `npu-top` dashboard is not an Agent tool.
+This repository implements the native OpenAI Codex plugin (`plugins/mindie-agent`) for MindIE Agent, backed by `mindie-harness` (`API_VERSION = 1`) and the shared runtime components (`knowledge`, `remote-dev`, `diagnostics`, `debugger`, `profiler`, `sim`, `coordinator`, `npu-top`).
 
----
+## 1. Frozen Host Contracts & Boundaries
 
-## 1. Plugin Script Navigation & Call Graph
+- **Byte-Frozen Hook Manifest (`HOST-NATIVE`)**: `plugins/mindie-agent/hooks/hooks.json` is trust-pinned by Codex (`25,650` bytes, `sha256 == ea80d0815485ba5f762ff5275f1e40817130694870405237dbd65d03f28f9981`). Never alter hook shell commands or `hooks/hooks.json` without explicit architecture approval.
+- **MCP Surfaces & Zero-Gate Deterministic Tools (`HOST-ADMISSION`, `P2.7`)**:
+  - Public MCP servers in `.mcp.json` (`mindie-remote-dev`, `mindie-tools`) work immediately in CLI, Desktop, Work mode, Automations, and Subagents without `/mindie-agent`, `x-codex-turn-metadata`, or `request_nonce`.
+  - Knowledge tools (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`) remain strictly private to explicit `/mindie-agent` or `$mindie-agent` sessions (`P2.1`) via `knowledge_cli.py`.
+  - Read-only remote tools (`remote_read`, `remote_grep`, `remote_glob`, `remote_stat`, `remote_ls`, `remote_job_status`, `remote_job_output`, `remote_job_list`) run concurrently without mutation-slot throttling or hot-path `.owner.lock` scans (`AD-09`).
+- **Thin Host Plugin Delegation (`HOST-WIRE`)**:
+  - Bundle deterministic `assets/{mindie-harness-seed.pyz, seed-lock.json}` and delegate shared RSI (`rsi_loop.py`, `rsi_explore.py`, `experiment_ledger.py`), file-locking, and `HostAdapter` contracts to `mindie_harness`.
+  - Keep core Python modules `< 800` lines with a top-30-line `[Role]` / `[Invariants]` / `[Timeouts & Locks]` / `[Side-Effect Policy]` docstring header.
+- **State Honesty & Upgrade Continuity (`HOST-UPGRADE`, Principles 9, 10, 14, 18)**:
+  - Distinguish `completed`, `failed`, and `unknown` external effects; never swallow `TimeoutError` inside `except OSError:`.
+  - Once a primary remote/component call succeeds, local receipt accounting errors must preserve `isError=False` (`operation_outcome="preserved"`).
+  - Preserve backward-compatible `codex.json`, `prepare.lock`, and `releases/<ver>/runtime.json` layouts across upgrades and rollbacks (`<= 2` active + rollback runtime generations).
 
-All plugin scripts live under `plugins/mindie-agent/scripts/` and include standardized top-of-file Agent Contract docstrings (`[Role]`, `[Invariants]`, `[Timeouts & Locks]`, `[Side-Effect Policy]`):
+## 2. Verification Commands
 
-| Layer | Script | Role & Key Responsibilities |
-| :--- | :--- | :--- |
-| **Native Entry & Bootstrap** | `native_entry.py` | Renders `hooks/hooks.json` and `.mcp.json` commands that invoke `hook_launcher.py` (hooks via the `$PLUGIN_ROOT` / `$PLUGIN_DATA` environment variables Codex sets; MCP via a short path locator because Codex does not expand `${PLUGIN_ROOT}` in `.mcp.json`). |
-| | `hook_launcher.py` | Selects the prepared release, first-run bootstrap, or MCP migration source and dispatches `runpy` into that entry. |
-| | `bootstrap.py` | Resolves/prepares the isolated Python runtime (`bootstrap_runtime.py`) and dispatches `entry`, `mcp-gate`, `remote-bridge`, or `bridge`. |
-| **Host Hook Lifecycle** | `entry.py` | Native hook & CLI entry controller (`session-start`, `user-prompt-submit`, `stop`, `bridge`). Ordinary prompts on `user-prompt-submit` return `{}` immediately before resolving the profile. |
-| | `manual_entry.py` | Handles explicit `/mindie-agent` and `$mindie-agent` (`$mindie-agent:mindie-agent`) gestures on `UserPromptSubmit` for main sessions (`not event.get("agent_id")`), granting `Admission.activate` (`entry_enabled=1`) or revoking registered domain leases on `/mindie-agent deactivate`. |
-| | `bridge.py` | CLI & Hook dispatcher for `activate` (requires prior `UserPromptSubmit` `knowledge_lease`), `deactivate`, `status` (factual control-plane status without onboarding prompts), `config`, `history-import`, `recover`, `shutdown`, and `stop` capture. Returns `status="degraded"` when capture fails so active leases stay intact. |
-| | `session_gate.py` / `admission_ops.py` | Entry-bound task lease management backed by `mindie_knowledge.loop.activation.Admission` (`knowledge_lease` / `entry_enabled=1`) under `update_lock`. |
-| **MCP Server & Receipts** | `mcp_gate.py` / `remote_bridge.py` / `component_tools.py` | Public stdio MCP discovery exposes remote-dev and deterministic components. Knowledge schemas stay private to `knowledge_cli.py` after manual entry. Remote calls use SQLite WAL `RemoteReceipts`. |
-| | `receipt_layout.py` | Resolves `<config>.remote-receipts.sqlite3` and cleans up legacy sidecar artifacts. |
-| | `mcp_identity.py` | Validates native task/turn metadata and signals matching in-flight requests for interruption; `mcp_gate.py` preserves the existing import names. |
-| | `runtime_call.py` | Verifies `Admission.knowledge_lease(session_id)` (`entry_enabled=1`, raising `KnowledgeInactive` when unactivated) and executes one authorized knowledge tool call inside the configured runtime without silent request replay. |
-| **Diagnostics & Transcript** | `agent_diagnostics.py` | Stdlib-only diagnostic event capture (`<config>.diagnostics/pending.sqlite3` with WAL + `busy_timeout=5000`). |
-| | `diagnostic_support.py` / `diagnostic_ops.py` / `diagnostic_Consumer.py` | Redacts paths/secrets, attaches diagnostic references, and drains pending SQLite events into the shared diagnostics store. |
-| | `codex_transcript.py` | Extracts redaction-ready transcript material (`identify`, `read_material`, `capture_source`, `history_source`) from Codex rollout files. |
-| **Configuration & Updates** | `setup.py` / `sharing.py` / `summary_provider.py` | Manages MindIE-owned adapter/engine configs, `mindie-community-config/1` consent state, and LLM summary provider credentials. |
-| | `update_lock.py` / `update_trigger.py` / `candidate_activate.py` / `candidate_validate.py` | Reentrant file locking (`flock`/`LockFileEx`), background MCP update checks, and transactional candidate validation/activation. |
-| **Subprocess & Service** | `bounded_process.py` / `capture_spool.py` / `windows_process.py` | Bounded subprocess execution with POSIX process-group and Windows Job Object (`CREATE_SUSPENDED`) tree termination; component calls spool output to bounded private files with a hard cap and recoverable receipts. |
-| | `service_client.py` / `service_control.py` / `session_maintenance.py` / `feed_sync.py` | Cold-start service connection, offline `status` / `shutdown`, and session maintenance. |
-
-### Call Graph
-
-```text
-Codex Host Hook (SessionStart / UserPromptSubmit / Stop) ──► hook_launcher.py
-  └─► bootstrap.py / installed entry.py (session-start / user-prompt-submit / stop / bridge)
-        ├─► manual_entry.py (UserPromptSubmit: /mindie-agent | $mindie-agent ──► Admission.activate)
-        ├─► session_maintenance.py (SessionStart: diagnostic_maintenance; skips service/feed when inactive)
-        └─► bridge.py ──► admission_ops.py / service_client.py / codex_transcript.py / agent_diagnostics.py
-
-Codex Host MCP Client (stdio JSON-RPC) ──► hook_launcher.py
-  └─► bootstrap.py / installed entry.py ──► mcp_gate.py
-        ├─► RemoteReceipts (<config>.remote-receipts.sqlite3, WAL + busy_timeout=5000)
-        ├─► component_tools.py (profiler, sim, coordinator and local diagnostics)
-        └─► remote_dev.mcp.server (remote-dev tools; available without /mindie-agent)
-```
-
----
-
-## 2. Host Lifecycle Contracts & Explicit `/mindie-agent` Gating
-
-1. **Passive Default (No Implicit Hijacking)**:
-   - Mere plugin installation, `SessionStart`, saved contribution consent, or MCP `tools/list` discovery **never** activates a knowledge lease (`entry_enabled=1`), starts the background knowledge service, syncs feeds, or captures transcripts.
-   - Default MCP discovery contains no knowledge names, descriptions or schemas, even if another task has activated knowledge. Manual Skill entry uses `knowledge_cli.py`; execution still enforces the session grant.
-   - Ordinary prompts without `/mindie-agent` or `$mindie-agent` short-circuit immediately on `UserPromptSubmit` (`entry.py` emits `{}` before resolving the profile).
-   - `SessionStart` (`session_maintenance.py`) runs `diagnostic_maintenance` and returns `{"status": "inactive", "diagnostics": ...}` whenever `Admission.knowledge_lease(CODEX_THREAD_ID)` is `None`.
-2. **Explicit `/mindie-agent` Entry (`UserPromptSubmit` + `bridge activate`)**:
-   - When a main-session prompt (`not event.get("agent_id")`) begins with `/mindie-agent` or `$mindie-agent` (`$mindie-agent:mindie-agent`), `manual_entry.py` calls `Admission.activate` (`entry_enabled=1`) and `entry.py` invokes `session_start(config, session_id=...)` to prepare the session (preserving the committed grant with `systemMessage` if preparation fails), returning `hookSpecificOutput` instructing the Agent to follow `SKILL.md` and run `entry.py bridge activate` once.
-   - `bridge.py activate` and `history_import.py` (`bridge history-import`) verify `Admission.knowledge_lease(native_session())` first (rejecting unactivated calls without auto-associating); `/mindie-agent deactivate` revokes the session's leases across registered domains via `deactivate_registered_domains`.
-3. **Turn-End Knowledge Capture (`Stop`)**:
-   - `bridge.py` (`stop`) and `admission_ops.py` (`stop_capture`) check `Admission.knowledge_lease(session)` (`entry_enabled=1`) before reading `sharing` settings or inspecting transcripts. Native transcript ownership and saved contribution scope remain authoritative; unactivated sessions are never auto-associated.
-   - If capture fails on an active session, `bridge.py` records a diagnostic reference and returns `status="degraded"` (keeping the session lease active).
-4. **MCP Tool Gating & Receipt Accounting (`mcp_gate.py`)**:
-   - Deterministic `remote-dev` and `components` (`coordinator`, `profiler`, `sim`, `debugger`, `diagnostics_*`) tools work in every session and entry mode (CLI, Desktop, ChatGPT Work mode, Automations, Subagents, and plain zero-`_meta` MCP clients) without `/mindie-agent` or mandatory `x-codex-turn-metadata`. Host `_meta` is an optional correlation/interruption hint, never an admission gate.
-   - Private `knowledge_*` calls (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`) check `Admission.knowledge_lease(session_id)` in `runtime_call.py` and fail with `KnowledgeInactive` (`code="knowledge_inactive"`) unless the current session was manually enabled via `/mindie-agent` or `$mindie-agent`.
-   - **Receipt Honesty Invariant**: Once a remote tool execution succeeds (`done=True`), if local SQLite receipt persistence (`finish()`) raises an `OSError`/`sqlite3.Error`, `mcp_gate.py` attaches `receipt_warning` + `diagnostic_ref` to `structuredContent` and **never** flips `isError=True` on the succeeded remote result.
-
----
-
-## 3. Timeout Budgets & `v0.0.2` Anti-Over-Defensive Iron Rules
-
-- **Timeout Hierarchy (`outer_timeout >= sum(inner_budgets) + cleanup_grace`)**:
-  - `bounded_process.run` enforces explicit wall-clock deadlines and kills the entire child process group / Windows Job Object on timeout before draining pipes.
-  - `STOP_DRAIN (15.0s) >= STOP_GRACE (12.0s) + 3.0s` in `entry.py` / `bridge.py`.
-  - Cold-start runtime preparation (`BOOTSTRAP_TOTAL = 540.0s` inside the 900s baseline) runs only when explicitly triggered and uses stage markers (`bootstrap.preparing`).
-  - Host hook outer timeouts cover inner budgets plus `uv` startup and cleanup: SessionStart 1545s (900 baseline + 225 first-use profile setup + 300 maintenance + 60 uv + 60 cleanup), UserPromptSubmit 1665s (900 + 225 setup + 420 forward + 60 uv + 60 cleanup), Stop 240s.
-- **Five Anti-Over-Defensive Iron Rules**:
-  1. **Lightweight SQLite Connections**: `agent_diagnostics.py` and `mcp_gate.py` (`RemoteReceipts`) open SQLite with `PRAGMA journal_mode=WAL`, `PRAGMA synchronous=NORMAL`, `PRAGMA busy_timeout=5000`, and `CREATE TABLE IF NOT EXISTS`. Never run `.owner` / `.authority.json` sidecar `lstat` ceremonies or `PRAGMA table_info` / `sqlite_master` schema reflection on every operation.
-  2. **Honest External Receipts**: Reserve `unknown` receipts for uncertain remote execution; never turn a succeeded remote call into `isError=True` over a local receipt write error, and never brick local state into permanent `fault`.
-  3. **Simple Regular-File I/O**: Use `Path.is_file()` and `Path.open("rb")` for local configuration and transcript reads; do not use `O_NOFOLLOW`/`O_NONBLOCK`/`fstat` inode-recheck paranoia or parent-directory symlink walks (`_present`).
-  4. **No Inline String-Blob Runtime Clones**: Keep runtime modules as clean standalone `.py` scripts tested directly via behavior, not byte-for-byte file copy assertions.
-  5. **Zero Pre-Call Session-Binding Gates on Deterministic Tools (`P2.7`)**: `remote` and `components` MCP surfaces execute over standard `tools/call` with zero `x-codex-turn-metadata` (`optional_turn_identity` / `optional_native_identity`); reserve strict `native_identity` and `Admission.knowledge_lease` exclusively for `knowledge` and `Stop` capture.
-
----
-
-## 4. Verification & Live NPU Acceptance Commands
-
-Run the test suite using the repository's isolated virtual environment (`uv` / `.venv`, cross-platform on Windows, macOS, and Linux):
+Run all tests inside an isolated environment (`HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `XDG_*`, `MINDIE_*`, `REMOTE_DEV_*`, `UV_CACHE_DIR`, `TMPDIR` isolated via `tests/conftest.py`):
 
 ```bash
-# 1. Full unit, contract, and E2E MCP knowledge suite (Tier 0 + Tier 1)
-uv run --project plugins/mindie-agent --locked --no-editable --group test python -m pytest tests -q --ignore=tests/test_live_npu_acceptance.py
-
-# 2. End-to-end MCP + Knowledge lifecycle verification
-uv run --project plugins/mindie-agent --locked --no-editable --group test python -m pytest tests/test_mcp_knowledge_e2e.py -q
-
-# 3. Live Ascend NPU acceptance on standing A2 (173.125.1.2) & A3 (192.168.13.165) clusters (Tier 2)
-uv run --project plugins/mindie-agent --locked --no-editable --group test python -m pytest tests/test_live_npu_acceptance.py -q
+python3 .github/scripts/check_lf_eol.py
+pytest -q tests/
+python3 plugins/mindie-agent/scripts/release_metadata.py --source plugins/mindie-agent --tests tests --revision "$(git rev-parse HEAD)"
 ```

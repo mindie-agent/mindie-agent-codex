@@ -38,7 +38,7 @@ class Probe:
         import mindie_knowledge.loop.summary_scratch as SS
         import mindie_knowledge.git_layout as G
         from mindie_knowledge.loop import locks as L
-        import mindie_knowledge.materials.reme_index as RI
+        import mindie_knowledge.loop.store as ST
 
         snapshots = [
             (S, dict(S.__dict__)),
@@ -59,7 +59,7 @@ class Probe:
         except BaseException as exc:
             raise RuntimeError(f"pinned runtime import: {exc}\n{buf.getvalue()}") from exc
         finally:
-            sys.modules['mindie_knowledge.materials.reme_index'] = RI
+            sys.modules['mindie_knowledge.loop.store'] = ST
             for target, saved in snapshots:
                 for k in list(target.__dict__):
                     if k not in saved:
@@ -96,7 +96,27 @@ class RuntimeCompatibilityTests(unittest.TestCase):
 
     def test_missing_retrieval_dependency_is_rejected_before_installation(self):
         with self.assertRaisesRegex(RuntimeError, "pinned runtime import"):
-            Probe("import sys; sys.modules['mindie_knowledge.materials.reme_index'] = None").probe_runtime(sys.executable)
+            Probe("import sys; sys.modules['mindie_knowledge.loop.store'] = None").probe_runtime(sys.executable)
+        # Private index internals (`reme_index` / `langmem.short_term`) are decoupled and never brick bootstrap.
+        saved_ri = sys.modules.get("mindie_knowledge.materials.reme_index")
+        saved_lm = sys.modules.get("langmem.short_term")
+        try:
+            self.assertEqual(
+                Probe(
+                    "import sys; sys.modules['mindie_knowledge.materials.reme_index'] = None; "
+                    "sys.modules['langmem.short_term'] = None"
+                ).probe_runtime(sys.executable).strip(),
+                "OK",
+            )
+        finally:
+            if saved_ri is None:
+                sys.modules.pop("mindie_knowledge.materials.reme_index", None)
+            else:
+                sys.modules["mindie_knowledge.materials.reme_index"] = saved_ri
+            if saved_lm is None:
+                sys.modules.pop("langmem.short_term", None)
+            else:
+                sys.modules["langmem.short_term"] = saved_lm
 
     def test_unmodified_pinned_runtime_passes_candidate_private_probe(self):
         self.assertEqual(Probe('', use_subprocess=True).probe_runtime(sys.executable).strip(), 'OK')

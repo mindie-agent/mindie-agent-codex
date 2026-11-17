@@ -322,7 +322,7 @@ def _close_fd(fd: int) -> None:
 
 
 def _read_bytes_bounded(path: Path, limit: int = 16384, *, head_only: bool = False, tail_only: bool = False) -> bytes | None:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
     fd = -1
     try:
         fd = os.open(str(path), flags)
@@ -382,7 +382,7 @@ def _scan_subdirs_bounded(parent: Path, *, prefix: str = "", suffix: str = "") -
                 if idx >= 512 or len(matches) >= 4:
                     break
                 if (not prefix or entry.name.startswith(prefix)) and (not suffix or entry.name.endswith(suffix)):
-                    if entry.is_dir(follow_symlinks=False):
+                    if entry.is_dir(follow_symlinks=True):
                         matches.append(Path(entry.path))
     except TimeoutError:
         raise
@@ -557,12 +557,15 @@ def _verified_failure_ids(comp_name: str, *, invocation_token: str | None = None
         ev_dir = Path(raw_root).expanduser() / "events" / comp_name
     cands: list[tuple[int, Path]] = []
     try:
+        ev_root = ev_dir.resolve()
         with os.scandir(ev_dir) as it:
             for idx, entry in enumerate(it):
                 if idx >= 64:
                     break
-                if entry.name.endswith(".jsonl") and entry.is_file(follow_symlinks=False):
-                    cands.append((entry.stat(follow_symlinks=False).st_mtime_ns, Path(entry.path)))
+                if entry.name.endswith(".jsonl") and entry.is_file(follow_symlinks=True):
+                    resolved = Path(entry.path).resolve()
+                    if resolved.is_relative_to(ev_root):
+                        cands.append((entry.stat(follow_symlinks=True).st_mtime_ns, resolved))
     except TimeoutError:
         raise
     except OSError:
@@ -718,14 +721,11 @@ def acknowledge_pending(result):
         from agent_diagnostics import acknowledge
         acknowledge((result.get('structuredContent') or {}).get('agent_diagnostics'))
     except Exception:
-        # A failed acknowledgment remains pending; the business result has
-        # already been written and must never be replayed to repair it.
         pass
 
 
 def reporting_config_path(config_file=None):
-    explicit = os.environ.get("MINDIE_DIAGNOSTICS_CONFIG")
-    if explicit:
+    if explicit := os.environ.get("MINDIE_DIAGNOSTICS_CONFIG"):
         return Path(explicit).expanduser().absolute()
     from session_gate import config_path
     profile = Path(config_file) if config_file is not None else config_path()
@@ -735,8 +735,7 @@ def reporting_config_path(config_file=None):
 
 def _unavailable(stage, error_type):
     return {
-        "enabled": None, "status": "unavailable",
-        "error": {"stage": stage, "type": error_type},
+        "enabled": None, "status": "unavailable", "error": {"stage": stage, "type": error_type},
         "hint": "Inspect the selected MindIE runtime; no repair or retry was started.",
     }
 
