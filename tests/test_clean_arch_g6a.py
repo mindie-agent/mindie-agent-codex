@@ -250,7 +250,7 @@ def test_ad07_diagnostic_support_allows_symlinks_within_root_and_blocks_escape(
     import diagnostic_support
 
     target = tmp_path / "real-meta.txt"
-    target.write_text("Version: 0.2.0\n", encoding="utf-8")
+    target.write_text("Version: 0.2.0\n", encoding="utf-8", newline="\n")
     link = tmp_path / "link-meta.txt"
     try:
         os.symlink(target, link)
