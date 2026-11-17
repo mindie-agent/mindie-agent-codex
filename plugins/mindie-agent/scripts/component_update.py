@@ -284,8 +284,10 @@ def _verified_publication(adapter, expected):
 
 def _lock_baseline_floor(source, baseline_pins):
     """Read official VCS floor metadata for `baseline_pins` from local `uv.lock`."""
-    from mindie_knowledge.runtime_inventory import COMPONENTS, validate_targets
+    from mindie_knowledge.runtime_inventory import COMPONENTS, COMPONENTS_V2, validate_targets
 
+    include_substrate = "mindie-harness" in baseline_pins
+    registry = COMPONENTS_V2 if include_substrate else COMPONENTS
     lock_path = Path(source) / "uv.lock"
     if not lock_path.is_file():
         return None
@@ -293,17 +295,17 @@ def _lock_baseline_floor(source, baseline_pins):
     floor = {}
     for pkg in parsed.get("package", ()):
         name = pkg.get("name")
-        if name not in baseline_pins or name not in COMPONENTS:
+        if name not in baseline_pins or name not in registry:
             continue
         git_url = (pkg.get("source") or {}).get("git", "")
         commit = git_url.rsplit("#", 1)[-1] if "#" in git_url else ""
-        repo = COMPONENTS[name]
+        repo = registry[name]
         if ("github.com/" + repo) not in git_url or commit != baseline_pins[name]:
             return None
         floor[name] = dict(repository=repo, version=str(pkg.get("version", "")), revision=commit)
     if set(floor) != set(baseline_pins):
         return None
-    validate_targets(floor)
+    validate_targets(floor, include_substrate=include_substrate)
     return floor
 
 
@@ -313,11 +315,13 @@ def _inherit_local_floor(source, current_python, baseline, required, adapter, ca
     from semantic_version import Version
     from mindie_knowledge.runtime_inventory import validate_targets
 
+    include_substrate = "mindie-harness" in baseline["runtime"]
+    inv_kw = {"include_substrate": True} if include_substrate else {}
     lock_floor = _lock_baseline_floor(source, baseline["runtime"])
     if lock_floor is None:
         raise catalog_exc
     installed = {
-        k: v for k, v in component_runtime.read_inventory(current_python).items()
+        k: v for k, v in component_runtime.read_inventory(current_python, **inv_kw).items()
         if k not in RETIRED_COMPONENTS
     }
     targets = dict(lock_floor)
@@ -329,7 +333,7 @@ def _inherit_local_floor(source, current_python, baseline, required, adapter, ca
             continue
         seen_pythons.add(py_str)
         try:
-            ext_inv = component_runtime.read_inventory(bound_python)
+            ext_inv = component_runtime.read_inventory(bound_python, **inv_kw)
         except TimeoutError:
             raise
         except Exception:  # noqa: BLE001 - non-VCS external wheels cannot supply SHA receipts
@@ -342,7 +346,7 @@ def _inherit_local_floor(source, current_python, baseline, required, adapter, ca
                 targets[name] = row
             elif Version(row["version"]) == Version(targets[name]["version"]) and row["revision"] != targets[name]["revision"]:
                 raise catalog_exc
-    validate_targets(targets)
+    validate_targets(targets, include_substrate=include_substrate)
     for name, req_version in (required or {}).items():
         if name not in targets or (
             req_version is not None and Version(targets[name]["version"]) < Version(req_version)
@@ -362,6 +366,8 @@ def prepare(source, python, data, *, current_python=None, force=False, current_s
     # artifact paths below, where Python imports and profile I/O need them.
     source, data = Path(source), Path(data)
     baseline = identity(source)
+    include_substrate = "mindie-harness" in baseline["runtime"]
+    sub_kw = {"include_substrate": True} if include_substrate else {}
     publication = _verified_publication(adapter, baseline)
     required = {
         name: version for name, version in (required_components(adapter) if adapter else {}).items()
@@ -371,7 +377,7 @@ def prepare(source, python, data, *, current_python=None, force=False, current_s
     with _without_retired_inventory(component_runtime, retired_state):
         try:
             selection = _discover_catalog(current_python or python, baseline["runtime"], force=force,
-                                          required_components=required)
+                                          required_components=required, **sub_kw)
         except CatalogError as exc:
             if current_python is None or force:
                 raise
@@ -395,7 +401,8 @@ def prepare(source, python, data, *, current_python=None, force=False, current_s
         return None
     artifact = build(source, data / "component-runtimes", baseline, selection["runtime"],
                      python=python, adapter_distribution="mindie-agent-codex",
-                     files=[str(path.relative_to(source)) for path in package_files(source)])
+                     files=[str(path.relative_to(source)) for path in package_files(source)],
+                     **sub_kw)
     python, retained = native_path(artifact["python"]), native_path(artifact["source"])
     scripts = readback(python, retained)
     release = native_path(artifact["generation"]) / "release"

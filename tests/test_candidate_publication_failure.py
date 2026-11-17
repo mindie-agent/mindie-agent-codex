@@ -260,7 +260,7 @@ class PublicationFailureTests(unittest.TestCase):
                     patch("mindie_knowledge.runtime_inventory.verify_lock",
                           side_effect=lambda value: calls.append("lock")), \
                     patch("mindie_knowledge.runtime_inventory.verify",
-                          side_effect=lambda value: calls.append("verify")), \
+                          side_effect=lambda value, **_kw: calls.append("verify")), \
                     patch.object(candidate, "adapter_check",
                                  side_effect=lambda plugin: calls.append("adapter")), \
                     patch.object(candidate, "runtime_check",

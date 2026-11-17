@@ -349,7 +349,8 @@ def validate(source, expected, verified_receipt=None, *, verified_publication=No
     if "component_updates" in actual:
         from mindie_knowledge.runtime_inventory import verify, verify_lock
         checked("runtime_pins", "receipt_invalid", lambda: verify_lock(actual["component_updates"]))
-        checked("runtime_pins", "revision_mismatch", lambda: verify(actual["component_updates"]["runtime"]))
+        sub_kw = {"include_substrate": True} if "mindie-harness" in actual["component_updates"]["runtime"] else {}
+        checked("runtime_pins", "revision_mismatch", lambda: verify(actual["component_updates"]["runtime"], **sub_kw))
     checked("adapter", "adapter_incompatible", lambda: adapter_check(Path(source)))
     checked("runtime_api", "api_incompatible", lambda: runtime_check(Path(__file__).resolve().parent))
     # Service capability is required even when a generic immutable receipt is

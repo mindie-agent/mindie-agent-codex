@@ -352,7 +352,10 @@ def identity(source, revision=None, *, components=None):
     from mindie_knowledge.component_releases import runtime_identity
     if isinstance(components, dict) and "generation_key" in components:
         components = {k: v for k, v in components.items() if k != "generation_key"}
-    return runtime_identity(baseline, components)
+    has_substrate = "mindie-harness" in baseline["runtime"] or (
+        isinstance(components, dict) and "mindie-harness" in (components.get("runtime") or {})
+    )
+    return runtime_identity(baseline, components, include_substrate=has_substrate)
 
 
 def validate_receipt(output, expected):

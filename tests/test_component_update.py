@@ -84,7 +84,7 @@ def test_an_unchanged_independent_runtime_is_not_rebuilt(tmp_path):
         assert component_update.prepare(SCRIPTS.parent, sys.executable, tmp_path,
                                         current_source=baseline["source_sha256"]) is None
     discover.assert_called_once_with(sys.executable, baseline["runtime"], force=False,
-                                    required_components={})
+                                    required_components={}, include_substrate=True)
     build.assert_not_called()
 
 
@@ -231,6 +231,7 @@ def test_plugin_upgrade_rebinds_a_core_component_even_when_pins_match_the_baseli
         "diagnostics": [old_python, "-I", "-m", "mindie_diagnostics.cli"],
     })
     repositories = {
+        "mindie-harness": "mindie-agent/harness",
         "mindie-knowledge": "mindie-agent/knowledge",
         "remote-dev": "mindie-agent/remote-dev",
         "mindie-diagnostics": "mindie-agent/diagnostics",
@@ -264,6 +265,7 @@ def test_upgrade_drops_retired_mindie_bench_from_inherited_inventory_before_cata
         "diagnostics": [old_python, "-I", "-m", "mindie_diagnostics.cli"],
     })
     repositories = {
+        "mindie-harness": "mindie-agent/harness",
         "mindie-knowledge": "mindie-agent/knowledge",
         "remote-dev": "mindie-agent/remote-dev",
         "mindie-diagnostics": "mindie-agent/diagnostics",
@@ -748,7 +750,7 @@ def test_inheritance_falls_back_to_local_floor_on_catalog_403_and_fast_reuses_ge
     baseline = identity(source)
     floor_meta = component_update._lock_baseline_floor(source, baseline["runtime"])
     assert floor_meta is not None
-    sim_newer = dict(repository="mindie-agent/sim", version="0.9.16", revision="3" * 40)
+    sim_newer = dict(repository="mindie-agent/sim", version="0.9.99", revision="3" * 40)
     installed_inv = dict(floor_meta, **{"mindie-sim": sim_newer})
 
     gen_dir = tmp_path / "generation"
@@ -772,7 +774,7 @@ def test_inheritance_falls_back_to_local_floor_on_catalog_403_and_fast_reuses_ge
     err_403 = component_update._catalog_error("release_http_error", category="temporary_network", status=403)
     adapter = {"component_commands": {"sim": ["/ext/python", "-I", "-X", "utf8", "-m", "mindie_sim"]}}
     with patch.object(component_update, "_discover_catalog", side_effect=err_403), \
-            patch.object(component_update, "required_components", return_value={"mindie-sim": "0.9.16"}), \
+            patch.object(component_update, "required_components", return_value={"mindie-sim": "0.9.99"}), \
             patch("mindie_knowledge.component_runtime.read_inventory", return_value=installed_inv), \
             patch("mindie_knowledge.component_runtime.build", return_value={
                 "python": str(py_path),
