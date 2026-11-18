@@ -25,22 +25,38 @@ Fixed release entrypoint (`releases/<version>/entry.py`) that validates `runtime
 - First-use `profile(..., prepare=True)` runs headless `setup.install` under `exclusive=True` `update_lock`; subsequent calls validate and dispatch without mutating config.
 """
 from __future__ import annotations
-import argparse
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 import json
 import os
 from pathlib import Path
 import re
-import runpy
 import sys
 
 # All native entries use -I and this exact installed package.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+SCRIPTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPTS))
 import product_contract
 from session_gate import bind_explicit_config, runtime_scripts, runtime_env
-from setup import install
-from update_lock import update_lock
-SCRIPTS = Path(__file__).resolve().parent
+
+
+def __getattr__(name):
+    if name == "install":
+        from setup import install as _install
+        return _install
+    if name == "update_lock":
+        from update_lock import update_lock as _update_lock
+        return _update_lock
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+@contextmanager
+def _lazy_preparing(stage):
+    try:
+        yield
+    except (Exception, SystemExit):
+        from bootstrap import preparing
+        with preparing(stage):
+            raise
 
 
 def read(path):
@@ -79,6 +95,8 @@ def _installed_profile(config, receipt, *, adapter=None):
 
 
 def profile(release, source=None, *, prepare=True):
+    import argparse
+    from update_lock import update_lock
     receipt = read(release / "runtime.json")
     if not isinstance(receipt, dict) or not product_contract.same_interpreter(receipt.get("python"), sys.executable):
         raise ValueError("release interpreter differs from its prepared runtime")
@@ -93,6 +111,7 @@ def profile(release, source=None, *, prepare=True):
     config.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with update_lock(config, exclusive=True, blocking=True):
         if not os.path.lexists(config):
+            from setup import install
             args = argparse.Namespace(knowledge_python=sys.executable, config=config,
                 root=Path.home() / ".local/share/mindie-agent", domain="vllm-ascend",
                 no_public_feed=False, interactive=False, community_repository=None,
@@ -245,6 +264,7 @@ def dispatch(args, config, *, stop_adapter=None):
         # This stable facade owns the native protocol. Each tools/call
         # dispatches the complete selected helper under the operation lock.
         # A resident server holds its managed generation against any GC sweep.
+        import runpy
         from storage_gc import serving_runtime_lease
         script = SCRIPTS / target
         sys.argv = [str(script), *arguments]
@@ -269,6 +289,31 @@ def dispatch(args, config, *, stop_adapter=None):
 
 def main():
     global _ACTIVE_ARGS
+    raw = sys.argv[1:]
+    if len(raw) == 3 and raw[0] == "--release" and raw[2] in {"stop", "user-prompt-submit"}:
+        class _FastArgs:
+            release = Path(raw[1])
+            source = None
+            role = raw[2]
+            arguments = []
+        args = _FastArgs()
+        _ACTIVE_ARGS = args
+        if args.role == "user-prompt-submit":
+            print("{}")
+            return 0
+        with _lazy_preparing("profile-binding"):
+            receipt = read(args.release / "runtime.json")
+            if not isinstance(receipt, dict) or not product_contract.same_interpreter(receipt.get("python"), sys.executable):
+                raise ValueError("release interpreter differs from its prepared runtime")
+            config = Path(os.environ.get("MINDIE_AGENT_CONFIG", Path.home() / ".config/mindie-agent/codex.json")).expanduser().absolute()
+            adapter = read(config)
+            _installed_profile(config, receipt, adapter=adapter)
+            bind_explicit_config(config)
+        if _stop_fast_inactive(adapter):
+            print("{}")
+            return 0
+        return dispatch(args, config, stop_adapter=adapter)
+    import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--release', type=Path, required=True)
     parser.add_argument('--source', type=Path)
@@ -295,6 +340,7 @@ def main():
         return 0
     from bootstrap import preparing
     from session_gate import runtime_env
+    from update_lock import update_lock
     if args.role == "stop":
         with preparing("profile-binding"):
             # Atomic canonical publication gives this invocation one complete
