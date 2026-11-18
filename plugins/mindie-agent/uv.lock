@@ -18,7 +18,7 @@ overrides = [
     { name = "mindie-coordinator", git = "https://github.com/mindie-agent/coordinator?rev=a3c7336faa0bc14ebdb8f2fd75606c82e96422e9" },
     { name = "mindie-debugger", git = "https://github.com/mindie-agent/debugger?rev=e15c2ed38d8f928db67c5bb1a94269f62207227c" },
     { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=7464cbb4381e9dc996871d192eb3f05f61dfdb28" },
-    { name = "mindie-harness", git = "https://github.com/mindie-agent/harness?rev=ee77300887debb0b769794eb3ee0c2b45eab87ed" },
+    { name = "mindie-harness", git = "https://github.com/mindie-agent/harness?rev=14313b8ba58c888b20c9c216ec41d14f5e62f4f7" },
     { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=9f48272a3ba87248bfda0e4068692511aac4dfa4" },
     { name = "mindie-profiler", git = "https://github.com/mindie-agent/profiler?rev=b702893129724b852c5abcb8971724b8b0a6e870" },
     { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=83fb8288aa998e0a6ad345ca7a16269f0181545b" },
@@ -2066,7 +2066,7 @@ requires-dist = [
     { name = "mindie-coordinator", git = "https://github.com/mindie-agent/coordinator?rev=a3c7336faa0bc14ebdb8f2fd75606c82e96422e9" },
     { name = "mindie-debugger", git = "https://github.com/mindie-agent/debugger?rev=e15c2ed38d8f928db67c5bb1a94269f62207227c" },
     { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=7464cbb4381e9dc996871d192eb3f05f61dfdb28" },
-    { name = "mindie-harness", git = "https://github.com/mindie-agent/harness?rev=ee77300887debb0b769794eb3ee0c2b45eab87ed" },
+    { name = "mindie-harness", git = "https://github.com/mindie-agent/harness?rev=14313b8ba58c888b20c9c216ec41d14f5e62f4f7" },
     { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=9f48272a3ba87248bfda0e4068692511aac4dfa4" },
     { name = "mindie-profiler", git = "https://github.com/mindie-agent/profiler?rev=b702893129724b852c5abcb8971724b8b0a6e870" },
     { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=83fb8288aa998e0a6ad345ca7a16269f0181545b" },
@@ -2096,7 +2096,7 @@ source = { git = "https://github.com/mindie-agent/diagnostics?rev=7464cbb4381e9d
 [[package]]
 name = "mindie-harness"
 version = "0.1.4"
-source = { git = "https://github.com/mindie-agent/harness?rev=ee77300887debb0b769794eb3ee0c2b45eab87ed#ee77300887debb0b769794eb3ee0c2b45eab87ed" }
+source = { git = "https://github.com/mindie-agent/harness?rev=14313b8ba58c888b20c9c216ec41d14f5e62f4f7#14313b8ba58c888b20c9c216ec41d14f5e62f4f7" }
 
 [[package]]
 name = "mindie-knowledge"

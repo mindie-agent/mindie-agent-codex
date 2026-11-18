@@ -75,6 +75,10 @@ def _mock(tmp_path, monkeypatch, *, stop_disabled=False):
     monkeypatch.setenv("MOCK_PLUGIN", str(PLUGIN))
     monkeypatch.setenv("MOCK_STATE", str(state))
     monkeypatch.setenv("MOCK_STOP_DISABLED", "1" if stop_disabled else "0")
+    if os.name == "nt":
+        cmd = tmp_path / "app-server.cmd"
+        cmd.write_text(f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n', encoding="utf-8")
+        return str(cmd)
     return str(script)
 
 

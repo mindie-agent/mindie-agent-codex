@@ -122,7 +122,9 @@ def _write_pending() -> None:
 def _emit() -> int: sys.stdout.write("{}\n"); sys.stdout.flush(); return 0
 def _execute(python: Path, argv: list[str]) -> int:
     if os.name != "nt": os.execv(str(python), [str(python), *argv])
-    return subprocess.run([str(python), *argv], creationflags=_NO_WIN).returncode
+    try: sys.stdin.fileno(); sys.stdout.fileno(); sys.stderr.fileno(); io_kw = {"stdin": sys.stdin, "stdout": sys.stdout, "stderr": sys.stderr}
+    except Exception: io_kw = {}
+    return subprocess.run([str(python), *argv], **io_kw, creationflags=_NO_WIN).returncode
 def fast_path(role: str, *, name: str, marketplace: str, config: Path, data: Path) -> int | None:
     if role == "user-prompt-submit":
         return _emit()

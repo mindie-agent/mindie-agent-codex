@@ -1,7 +1,7 @@
 {
   "artifact": "mindie-harness-seed.pyz",
   "schema": "mindie-harness-seed/1",
-  "sha256": "04e3c477ba4b738bbdad8e66cf6e734acd62cf82ea9e6f3e8d77853ab8d11de9",
-  "size_bytes": 7914,
+  "sha256": "6d81e97a34df2e8fea27840f19685dc94ec170dbdf8e5bd6b1cab1360687f864",
+  "size_bytes": 8057,
   "version": "0.1.4"
 }

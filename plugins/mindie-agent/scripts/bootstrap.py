@@ -69,7 +69,11 @@ def _lock(path: Path, *, timeout: float = 600.0):
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 def _env(runtime: Path, data: Path) -> dict[str, str]:
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
-    env.update(UV_PROJECT_ENVIRONMENT=str(runtime), UV_CACHE_DIR=str(data / ".uv-cache"), UV_NATIVE_TLS="true", UV_NO_PROGRESS="1", GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never")
+    cache_dir = env.get("UV_CACHE_DIR") or str(data / ".uv-cache")
+    env.update(UV_PROJECT_ENVIRONMENT=str(runtime), UV_CACHE_DIR=cache_dir, UV_SYSTEM_CERTS="true", UV_NO_PROGRESS="1", GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never",
+               GIT_CONFIG_COUNT="3" if os.name == "nt" else "2", GIT_CONFIG_KEY_0="core.longpaths", GIT_CONFIG_VALUE_0="true", GIT_CONFIG_KEY_1="core.autocrlf", GIT_CONFIG_VALUE_1="false")
+    if os.name == "nt":
+        env.update(GIT_CONFIG_KEY_2="http.sslBackend", GIT_CONFIG_VALUE_2="schannel")
     return env
 def _run(argv: list[str], *, env: dict[str, str], timeout: float) -> None:
     if subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, stdout=sys.stderr, stderr=sys.stderr, timeout=timeout, check=False, creationflags=_NO_WIN).returncode:
@@ -117,7 +121,7 @@ def _publish(python: Path, scripts: Path, release: Path, data: Path, source: Pat
     launcher = (Path(scripts) / "hook_launcher.py").read_text(encoding="utf-8")
     entry = ("import os,subprocess,sys\n" f"python={str(python)!r}\nentry={str(Path(scripts)/'entry.py')!r}\nrelease={str(release)!r}\nsource={str(source)!r}\n"
              "env={k:v for k,v in os.environ.items() if k!='PYTHONPATH'}\ncmd=[python,'-I','-X','utf8',entry,'--release',release,'--source',source,*sys.argv[1:]]\n"
-             "if os.name=='nt':\n raise SystemExit(subprocess.run(cmd,env=env,creationflags=0x08000000).returncode)\nos.execve(python,cmd,env)\n")
+             "if os.name=='nt':\n raise SystemExit(subprocess.run(cmd,env=env,stdin=sys.stdin,stdout=sys.stdout,stderr=sys.stderr,creationflags=0x08000000).returncode)\nos.execve(python,cmd,env)\n")
     release.mkdir(parents=True, exist_ok=True)
     for target, text in ((release / "entry.py", entry), (release / "hook_launcher.py", launcher), (data / "hook_launcher.py", launcher)):
         descriptor, raw = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent); temporary = Path(raw)
@@ -163,6 +167,6 @@ def main(argv: list[str] | None = None) -> int:
         index = args.index("--source"); source = Path(args[index + 1]).resolve(); del args[index:index + 2]
     python, scripts, release = ensure_runtime(source, data); command = [str(python), "-I", "-X", "utf8", str(scripts / "entry.py"), "--release", str(release), "--source", str(source), *args]
     if os.name != "nt": os.execv(str(python), command)
-    return subprocess.run(command, creationflags=_NO_WIN).returncode
+    return subprocess.run(command, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, creationflags=_NO_WIN).returncode
 if __name__ == "__main__":
     raise SystemExit(main())
