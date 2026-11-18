@@ -22,7 +22,8 @@ if sys.argv[1:3] == ["features", "list"]:
 hooks_json = json.loads((plugin / "hooks/hooks.json").read_text(encoding="utf-8"))
 rows = []
 for event, name in (("SessionStart", "sessionStart"), ("UserPromptSubmit", "userPromptSubmit"), ("Stop", "stop")):
-    command = hooks_json["hooks"][event][0]["hooks"][0]["command"]
+    entry = hooks_json["hooks"][event][0]["hooks"][0]
+    command = entry.get("commandWindows", entry["command"]) if os.name == "nt" else entry["command"]
     rows.append({"pluginId": "mindie-agent@mindie-agent", "eventName": name,
                  "sourcePath": str(plugin / "hooks/hooks.json"), "handlerType": "command",
                  "command": command, "key": f"k-{name}",
