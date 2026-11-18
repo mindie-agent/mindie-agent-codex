@@ -152,7 +152,7 @@ def ensure_runtime(source, data) -> tuple[Path, Path, Path]:
         if old is not None:
             _restore_floors(old, python)
         scripts = _scripts(python, version)
-        _atomic(release / "runtime.json", {"key": key, "python": str(python), "validation": {"schema": "mindie-candidate-check/1", "status": "validated", "native_version": version}})
+        _atomic(release / "runtime.json", {"key": key, "python": str(python), "source": str(source), "validation": {"schema": "mindie-candidate-check/1", "status": "validated", "native_version": version}})
         _publish(python, scripts, release, data, source)
         keep = {runtime.resolve()} | ({old.resolve().parents[1]} if old is not None and old.exists() else set())
         for item in (data / "runtimes").iterdir() if (data / "runtimes").is_dir() else ():

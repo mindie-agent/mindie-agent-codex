@@ -16,29 +16,22 @@ def plugin_root_dir(source: str | Path | None = None) -> Path:
     return nested if source is not None and nested.is_dir() else candidate
 def verify_bundled_seed(source: str | Path | None = None) -> dict[str, Any]:
     assets = plugin_root_dir(source) / "assets"; lock_path = assets / "seed-lock.json"
-    if not lock_path.is_file():
-        raise ValueError(f"missing bundled harness seed lock: {lock_path}")
+    if not lock_path.is_file(): raise ValueError(f"missing bundled harness seed lock: {lock_path}")
     raw = lock_path.read_bytes()
-    if len(raw) > 16384:
-        raise ValueError("seed-lock.json exceeds metadata byte bound")
+    if len(raw) > 16384: raise ValueError("seed-lock.json exceeds metadata byte bound")
     lock = json.loads(raw.decode("utf-8"))
-    if not isinstance(lock, dict) or lock.get("schema") != SEED_SCHEMA:
-        raise ValueError("unsupported bundled harness seed schema")
+    if not isinstance(lock, dict) or lock.get("schema") != SEED_SCHEMA: raise ValueError("unsupported bundled harness seed schema")
     artifact, sha, size = lock.get("artifact"), lock.get("sha256"), lock.get("size_bytes")
     if not isinstance(artifact, str) or "/" in artifact or "\\" in artifact or not isinstance(sha, str) or len(sha) != 64 or type(size) is not int or size <= 0:
         raise ValueError("invalid seed-lock.json fields")
     seed_path = assets / artifact
-    if not seed_path.is_file():
-        raise ValueError(f"missing bundled harness seed archive: {seed_path}")
+    if not seed_path.is_file(): raise ValueError(f"missing bundled harness seed archive: {seed_path}")
     payload = seed_path.read_bytes()
-    if len(payload) != size or hashlib.sha256(payload).hexdigest() != sha:
-        raise ValueError("bundled harness seed integrity mismatch")
+    if len(payload) != size or hashlib.sha256(payload).hexdigest() != sha: raise ValueError("bundled harness seed integrity mismatch")
     return dict(lock, path=str(seed_path))
 def harness_available() -> bool:
-    try:
-        import mindie_harness.api as api
-    except ModuleNotFoundError:
-        return False
+    try: import mindie_harness.api as api
+    except ModuleNotFoundError: return False
     return getattr(api, "API_VERSION", None) == 1
 class CodexHostAdapter:
     """Thin Codex `HostAdapter` delegating to the shared managed gateway."""

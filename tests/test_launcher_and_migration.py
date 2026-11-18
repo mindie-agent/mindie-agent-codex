@@ -205,3 +205,76 @@ def test_isolated_entry_subprocess_and_corrupt_config_guard(tmp_path):
     with pytest.raises(ValueError):
         entry._prepare(None, PLUGIN, False)
     assert corrupt.read_text(encoding="utf-8") == "{corrupt-json"
+
+
+def test_legacy_release_activation_cas_and_recovery(tmp_path):
+    import subprocess
+    import entry
+    import release_activation
+
+    config = _config()
+    legacy_engine = tmp_path / "legacy-release/profile-deadbeef.engine.json"
+    _write_json(legacy_engine, {
+        "root": str(tmp_path / "knowledge"),
+        "domain": "vllm-ascend",
+        "admission_path": str(config.parent / "codex.admission.sqlite3"),
+        "community_config": str(config.parent / "mindie-community.json"),
+        "transcript_adapter": "/old/codex_transcript.py",
+    })
+    base_cfg = {
+        "python": "/old/python",
+        "runtime_scripts": "/old/scripts",
+        "component_release": str(tmp_path / "legacy-release"),
+        "engine_config": str(legacy_engine),
+        "domain_configs": {"vllm-ascend": str(legacy_engine)},
+        "product_validation": {"schema": "mindie-candidate-check/1", "status": "validated", "native_version": "0.1.23"},
+        "component_commands": {},
+    }
+    expected_stale = release_activation.runtime_binding(base_cfg)
+    mutated = dict(base_cfg, component_commands={
+        "sim": ["/ext/python", "-I", "-X", "utf8", "-m", "mindie_sim"],
+        "profiler": ["/ext/python", "-I", "-X", "utf8", "-m", "mindie_profiler"],
+    })
+    _write_json(config, mutated)
+    candidate_release = tmp_path / "releases/0.1.38"
+    _write_json(candidate_release / "runtime.json", {
+        "key": "k",
+        "python": sys.executable,
+        "source": str(PLUGIN),
+        "validation": {"schema": "mindie-candidate-check/1", "status": "validated", "native_version": "0.1.38"},
+    })
+    proc = subprocess.run(
+        [sys.executable, "-I", str(SCRIPTS / "release_activation.py"), str(config), str(candidate_release), "--attempt"],
+        input=json.dumps({"schema": "mindie-activation-attempt/1", "expected_binding": expected_stale}),
+        capture_output=True, text=True, timeout=20,
+    )
+    assert proc.returncode == 0
+    assert json.loads(proc.stdout) == {
+        "execution": "not_started",
+        "reason": "installation_changed",
+        "status": "deferred",
+    }
+    assert json.loads(config.read_text(encoding="utf-8")) == mutated
+    assert not (config.parent / "codex.engine.json").exists()
+
+    # Subsequent MCP startup migration preserves legacy engine root and rebinds external commands
+    entry._prepare(candidate_release, PLUGIN, True)
+    recovered = json.loads(config.read_text(encoding="utf-8"))
+    recovered_engine = json.loads((config.parent / "codex.engine.json").read_text(encoding="utf-8"))
+    assert recovered["product_validation"]["native_version"] == "0.1.38"
+    assert recovered["component_commands"]["sim"] == [sys.executable, "-I", "-X", "utf8", "-m", "mindie_sim"]
+    assert recovered["component_commands"]["profiler"] == [sys.executable, "-I", "-X", "utf8", "-m", "mindie_profiler"]
+    assert recovered_engine["root"] == str(tmp_path / "knowledge")
+
+    # Matching expected_binding activates directly
+    _write_json(config, mutated)
+    proc_ok = subprocess.run(
+        [sys.executable, "-I", str(SCRIPTS / "release_activation.py"), str(config), str(candidate_release), "--attempt"],
+        input=json.dumps({"schema": "mindie-activation-attempt/1", "expected_binding": release_activation.runtime_binding(mutated)}),
+        capture_output=True, text=True, timeout=20,
+    )
+    assert proc_ok.returncode == 0
+    assert json.loads(proc_ok.stdout)["status"] == "active"
+    activated = json.loads(config.read_text(encoding="utf-8"))
+    assert activated["python"] == sys.executable
+    assert activated["component_commands"]["sim"][0] == sys.executable
