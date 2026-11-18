@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.38-0F766E.svg" alt="Release v0.1.38"></a>
+  <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.39-0F766E.svg" alt="Release v0.1.39"></a>
   <a href="plugins/mindie-agent/harness-compatibility.json"><img src="https://img.shields.io/badge/Codex_CLI-0.153.4_%7C_%3E%3D0.162.0--alpha.2-10A37F.svg" alt="Codex CLI 0.153.4 | >=0.162.0-alpha.2"></a>
   <a href="plugins/mindie-agent/pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
@@ -27,7 +27,7 @@
 
 ---
 
-**MindIE Agent for OpenAI Codex CLI** (`mindie-agent-codex`) is the native OpenAI Codex CLI plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release `v0.1.38` delivers three core capabilities: **local and community knowledge base retrieval with privacy redaction** (covering `vLLM-Ascend`, `xLLM`, and `MindIE-SD` feature development plus `AscendC` / `Triton` kernel engineering), **remote SSH / Docker development and NPU inspection**, and **unified fault diagnostics with sanitized reporting**; additional Ascend software domains are tracked on the project roadmap.
+**MindIE Agent for OpenAI Codex CLI** (`mindie-agent-codex`) is the native OpenAI Codex CLI plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release `v0.1.39` delivers three core capabilities: **local and community knowledge base retrieval with privacy redaction** (covering `vLLM-Ascend`, `xLLM`, and `MindIE-SD` feature development plus `AscendC` / `Triton` kernel engineering), **remote SSH / Docker development and NPU inspection**, and **unified fault diagnostics with sanitized reporting**; additional Ascend software domains are tracked on the project roadmap.
 
 Designed around the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md), **every capability runs in Silent Default-On mode**—requiring zero slash or prompt-prefix commands so the Ascend domain Skill, `mindie-tools` (including `L1–L4` `knowledge_*` tools), and `mindie-remote-dev` work out of the box across CLI, Desktop Work mode, Automations, and Subagents while keeping all errors and uncertain external effects explicitly visible to the caller.
 
@@ -106,7 +106,7 @@ If you are an AI agent asked to install MindIE Agent, execute these steps in ord
    uv run https://github.com/mindie-agent/mindie-agent/releases/latest/download/install.py --host codex
    ```
    - Do not clone manually or assemble `bootstrap.py`/`setup.py` paths; `install.py --host codex` is the only stable entry.
-   - Verify with `codex plugin list --json` that `mindie-agent@mindie-agent` version `0.1.38` is enabled.
+   - Verify with `codex plugin list --json` that `mindie-agent@mindie-agent` version `0.1.39` is enabled.
 
 3. **Show the 3-question dynamic onboarding (use the native Codex `request_user_input`; if unavailable, print numbered options and wait)**:
    1. **Workspace** (`id: "workspace"`): `Initialize vllm-ascend-workspace (Recommended)` / `Keep the current directory` / `Use an existing workspace`.
@@ -192,7 +192,7 @@ uv run --project plugins/mindie-agent --no-sync python -m pytest -q -m "not live
 uv run --project plugins/mindie-agent --no-sync python plugins/mindie-agent/scripts/setup.py release-metadata --source plugins/mindie-agent --tests tests --revision "$(git rev-parse HEAD)"
 ```
 
-- **Release Microbenchmark**: Each `0.1.38` plugin release attaches `benchmark-results.json` and `benchmark-results.md` measuring the `public-transcript` public-message parsing and hidden-reasoning filtering workload ([`benchmarks/release.json`](benchmarks/release.json)) in `us/op`. This serves as a reproducible CPU microbenchmark baseline, distinct from live A2/A3 NPU acceptance and end-to-end Agent productivity evaluation.
+- **Release Microbenchmark**: Each `0.1.39` plugin release attaches `benchmark-results.json` and `benchmark-results.md` measuring the `public-transcript` public-message parsing and hidden-reasoning filtering workload ([`benchmarks/release.json`](benchmarks/release.json)) in `us/op`. This serves as a reproducible CPU microbenchmark baseline, distinct from live A2/A3 NPU acceptance and end-to-end Agent productivity evaluation.
 
 ---
 

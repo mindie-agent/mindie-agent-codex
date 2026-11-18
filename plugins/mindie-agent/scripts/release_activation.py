@@ -41,11 +41,15 @@ def main(argv: list[str] | None = None, stdin=None) -> dict:
             return {"status": "deferred", "reason": "installation_changed", "execution": "not_started"}
         old_ep = current.get("engine_config")
         if isinstance(old_ep, str) and Path(old_ep).is_file():
-            from mindie_knowledge.loop.lifecycle import retire_service
-            try: busy = retire_service(Path(old_ep), control_timeout=15.0).get("idle") is False
-            except TimeoutError: raise
-            except (OSError, ValueError): busy = False
-            if busy: return {"status": "deferred", "reason": "service_busy", "execution": "not_started"}
+            old_eng = entry._read(Path(old_ep))
+            old_root, old_dom = old_eng.get("root"), old_eng.get("domain")
+            if isinstance(old_root, str) and old_root and isinstance(old_dom, str) and old_dom and (Path(old_root) / old_dom).is_dir():
+                from mindie_knowledge.loop.lifecycle import retire_service
+                try: retirement = retire_service(Path(old_ep), control_timeout=15.0)
+                except TimeoutError: raise
+                except (OSError, ValueError): return {"status": "incomplete", "reason": "old_retirement_unconfirmed", "execution": "not_started"}
+                if retirement.get("idle") is not True: return {"status": "deferred", "reason": "service_busy", "execution": "not_started"}
+                if retirement.get("cleanup_failed"): return {"status": "incomplete", "reason": "old_retirement_unconfirmed", "execution": "not_started"}
         source = Path(receipt["source"]) if isinstance(receipt.get("source"), str) and Path(receipt["source"]).is_dir() else SCRIPTS.parent
         engine_path = config.with_name(config.stem + ".engine.json")
         entry._rebind_unlocked(config, engine_path, source=source, release=release, version=entry._current_version(source), current=current)

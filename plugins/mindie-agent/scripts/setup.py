@@ -13,7 +13,7 @@ if str(SCRIPTS) not in sys.path:
 _NO_WIN = 0x08000000 if os.name == "nt" else 0
 REPOSITORY = "mindie-agent/mindie-agent-codex"
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
-def _version(root: Path) -> str: return str(json.loads((root / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))["version"]) if (root / ".codex-plugin/plugin.json").is_file() else "0.1.38"
+def _version(root: Path) -> str: return str(json.loads((root / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))["version"]) if (root / ".codex-plugin/plugin.json").is_file() else "0.1.39"
 def _atomic(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True); descriptor, raw = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent); temporary = Path(raw)
     try:

@@ -21,4 +21,4 @@ This directory contains the Harness interface verification records, public trans
 - [Contribution Notice (`docs/install/user-notice.md`)](install/user-notice.md) — Visible-message filtering, redaction limits, public Git history, and unified consent switch
 - [GitHub Sign-In (`docs/install/github-authentication.md`)](install/github-authentication.md) — Optional `gh` authentication, `local-only` fallback, and process-scoped `GIT_CONFIG_COUNT` enterprise transport
 - [Workspace Setup (`docs/install/workspace-setup.md`)](install/workspace-setup.md) — Initial workspace onboarding and persistent sharing configuration
-- [Latest Release Notes: `v0.1.38`](releases/mindie-agent-codex-0.1.38.en.md) | [中文](releases/mindie-agent-codex-0.1.38.md)
+- [Latest Release Notes: `v0.1.39`](releases/mindie-agent-codex-0.1.39.en.md) | [中文](releases/mindie-agent-codex-0.1.39.md)

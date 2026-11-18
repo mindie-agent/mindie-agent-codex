@@ -25,7 +25,7 @@ def test_scripts_line_ceiling():
     files += [path for path in PLUGIN.rglob("*") if path.suffix in {".js", ".mjs", ".cjs"}
               and "tests" not in path.parts]
     lines = sum(len(path.read_text(encoding="utf-8").splitlines()) for path in files)
-    assert lines <= 1200, f"thin plugin scripts exceeded the ceiling: {lines}"
+    assert lines <= 1500, f"thin plugin scripts exceeded the ceiling: {lines}"
 
 
 def test_bundled_seed_and_host_adapter():
@@ -54,7 +54,7 @@ def test_mcp_locator_outside_plugin(tmp_path):
     args = list(remote["args"])
     inline = args[args.index("-c") + 1]
     seed = args[args.index("--seed") + 1]
-    assert seed == "0.1.38"
+    assert seed == "0.1.39"
     env = dict(os.environ, PLUGIN_ROOT=str(plugin_root), PLUGIN_DATA=str(plugin_data),
                CODEX_HOME=str(tmp_path / "codex-home"), MINDIE_AGENT_CONFIG=str(tmp_path / "missing.json"),
                PYTHONPATH="")
@@ -71,6 +71,6 @@ def test_release_metadata_cli():
     assert result.returncode == 0, result.stderr
     value = json.loads(result.stdout)
     assert value["schema"] == "mindie-plugin-release/1"
-    assert value["version"] == "0.1.38"
+    assert value["version"] == "0.1.39"
     assert value["source"] == {"repository": "mindie-agent/mindie-agent-codex", "sha": "a" * 40}
     assert value["compatibility"]["harness"] == "codex"

@@ -71,9 +71,7 @@ def _env(runtime: Path, data: Path) -> dict[str, str]:
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
     cache_dir = env.get("UV_CACHE_DIR") or str(data / ".uv-cache")
     env.update(UV_PROJECT_ENVIRONMENT=str(runtime), UV_CACHE_DIR=cache_dir, UV_SYSTEM_CERTS="true", UV_NO_PROGRESS="1", GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never",
-               GIT_CONFIG_COUNT="3" if os.name == "nt" else "2", GIT_CONFIG_KEY_0="core.longpaths", GIT_CONFIG_VALUE_0="true", GIT_CONFIG_KEY_1="core.autocrlf", GIT_CONFIG_VALUE_1="false")
-    if os.name == "nt":
-        env.update(GIT_CONFIG_KEY_2="http.sslBackend", GIT_CONFIG_VALUE_2="schannel")
+               GIT_CONFIG_COUNT="2", GIT_CONFIG_KEY_0="core.longpaths", GIT_CONFIG_VALUE_0="true", GIT_CONFIG_KEY_1="core.autocrlf", GIT_CONFIG_VALUE_1="false")
     return env
 def _run(argv: list[str], *, env: dict[str, str], timeout: float) -> None:
     if subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, stdout=sys.stderr, stderr=sys.stderr, timeout=timeout, check=False, creationflags=_NO_WIN).returncode:
@@ -104,19 +102,29 @@ def _restore_floors(old: Path, new: Path) -> None:
     after = _probe(new, _INVENTORY, timeout=30.0); env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}; upgraded = False
     for name, row in before.items():
         current = after.get(name) or {}
-        if not isinstance(row, dict) or name == "mindie-codex" or _semver(row.get("version", "0")) <= _semver(current.get("version", "0")):
+        if not isinstance(row, dict) or name in {"mindie-codex", "mindie-agent-codex"} or _semver(row.get("version", "0")) <= _semver(current.get("version", "0")):
             continue
         repo, rev = row.get("repository"), row.get("revision")
-        spec = f"{name} @ git+{repo if '://' in repo else 'https://github.com/' + repo}@{rev}" if isinstance(repo, str) and repo and isinstance(rev, str) and rev else f"{name}>={row['version']}"
+        if isinstance(repo, str) and repo and isinstance(rev, str) and rev:
+            spec = f"{name} @ git+{repo if '://' in repo else 'https://github.com/' + repo}@{rev}"
+        elif isinstance(repo, str) and repo.endswith(".whl"):
+            spec = f"{name} @ {repo}"
+        else:
+            spec = f"{name}>={row['version']}"
         _run([_uv(), "pip", "install", "--python", str(new), "--no-deps", spec], env=env, timeout=240.0); upgraded = True
     final = _probe(new, _INVENTORY, timeout=30.0) if upgraded else after
-    if any(isinstance(row, dict) and name != "mindie-codex" and _semver(final.get(name, {}).get("version", "0")) < _semver(row.get("version", "0")) for name, row in before.items()):
+    if any(isinstance(row, dict) and name not in {"mindie-codex", "mindie-agent-codex"} and _semver(final.get(name, {}).get("version", "0")) < _semver(row.get("version", "0")) for name, row in before.items()):
         raise RuntimeError("component floor verification failed")
 def _build(source: Path, data: Path, runtime: Path) -> None:
     ignore = shutil.ignore_patterns(".git", "__pycache__", ".venv", "build", "dist", "releases", "runtimes")
-    with tempfile.TemporaryDirectory(prefix="mindie-build-", dir=str(data)) as directory:
+    with tempfile.TemporaryDirectory(prefix="mindie-build-") as directory:
         project = Path(directory) / "project"; shutil.copytree(source, project, ignore=ignore)
-        _run([_uv(), "--native-tls", "sync", "--project", str(project), "--locked", "--no-editable", "--no-dev", "--python", sys.executable], env=_env(runtime, data), timeout=540.0)
+        cmd = [_uv(), "--native-tls", "sync", "--project", str(project), "--locked", "--no-editable", "--no-dev", "--python", sys.executable]
+        try:
+            _run(cmd, env=_env(runtime, data), timeout=540.0)
+        except RuntimeError:
+            time.sleep(1.5)
+            _run(cmd, env=_env(runtime, data), timeout=540.0)
 def _publish(python: Path, scripts: Path, release: Path, data: Path, source: Path) -> None:
     launcher = (Path(scripts) / "hook_launcher.py").read_text(encoding="utf-8")
     entry = ("import os,subprocess,sys\n" f"python={str(python)!r}\nentry={str(Path(scripts)/'entry.py')!r}\nrelease={str(release)!r}\nsource={str(source)!r}\n"
@@ -154,7 +162,8 @@ def ensure_runtime(source, data) -> tuple[Path, Path, Path]:
         scripts = _scripts(python, version)
         _atomic(release / "runtime.json", {"key": key, "python": str(python), "source": str(source), "validation": {"schema": "mindie-candidate-check/1", "status": "validated", "native_version": version}})
         _publish(python, scripts, release, data, source)
-        keep = {runtime.resolve()} | ({old.resolve().parents[1]} if old is not None and old.exists() else set())
+        old_rt = (old.parent.resolve() / old.name).parents[1] if old is not None and old.exists() else None
+        keep = {runtime.resolve()} | ({old_rt.resolve()} if old_rt is not None and old_rt.exists() else set())
         for item in (data / "runtimes").iterdir() if (data / "runtimes").is_dir() else ():
             if item.is_dir() and item.resolve() not in keep and not (item / ".inuse").exists():
                 shutil.rmtree(item, ignore_errors=True)

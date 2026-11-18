@@ -15,8 +15,8 @@ VERSION = re.compile(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\Z")
 def _current_version(source: Path) -> str:
     try: value = json.loads((Path(source) / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
     except TimeoutError: raise
-    except (OSError, ValueError, KeyError, TypeError): return "0.1.38"
-    return value if isinstance(value, str) and VERSION.fullmatch(value) else "0.1.38"
+    except (OSError, ValueError, KeyError, TypeError): return "0.1.39"
+    return value if isinstance(value, str) and VERSION.fullmatch(value) else "0.1.39"
 def _read(path: Path) -> dict:
     target = Path(path)
     if not target.exists(): return {}
@@ -130,8 +130,31 @@ def main(argv: list[str] | None = None) -> int:
         write_pending_update_check(profile, reason="session_start"); print("{}"); return 0
     if role in MCP_ROLES:
         from host_adapter import CodexHostAdapter
-        from mindie_harness.api import serve_mcp
-        return serve_mcp(MCP_ROLES[role], profile=profile, adapter=CodexHostAdapter(plugin_root=source or SCRIPTS.parent, config_path=os.environ.get("MINDIE_AGENT_CONFIG"), data_dir=os.environ.get("PLUGIN_DATA")))
+        from mindie_harness.mcp.router import MCPRouter
+        from mindie_harness.mcp.server import MCPStdioServer
+        surface = MCP_ROLES[role]
+        cadapter = CodexHostAdapter(plugin_root=source or SCRIPTS.parent, config_path=os.environ.get("MINDIE_AGENT_CONFIG"), data_dir=os.environ.get("PLUGIN_DATA"))
+        class _CodexRouter(MCPRouter):
+            def _validate_and_clean_args(self, name: str, raw_args):
+                schema = ((self._tool_map.get(name) or {}).get("inputSchema") or {})
+                if not (isinstance(raw_args, dict) and "session_id" in raw_args and "session_id" in (schema.get("properties") or {})):
+                    return super()._validate_and_clean_args(name, raw_args)
+                from mindie_harness.errors import HarnessError
+                from mindie_harness.mcp.router import CORRELATION_STRIP_KEYS, FORGED_IDENTITY_KEYS
+                if (FORGED_IDENTITY_KEYS - {"session_id"}).intersection(raw_args.keys()):
+                    raise HarnessError("Model-supplied identity override arguments are forbidden", stage="tool_schema", reason="forged_identity_argument", reportable=False)
+                args = {k: v for k, v in raw_args.items() if k not in CORRELATION_STRIP_KEYS}
+                if missing := [r for r in (schema.get("required") or ()) if r not in args]:
+                    raise HarnessError(f"Missing required argument `{missing[0]}` for {name}", stage="tool_schema", reason="schema_missing_field", reportable=False, details={"field": missing[0]})
+                if isinstance(schema.get("properties"), dict) and schema.get("additionalProperties") is False and (set(args) - set(schema["properties"])):
+                    raise HarnessError(f"Undeclared arguments supplied to {name}", stage="tool_schema", reason="schema_unknown_field", reportable=False)
+                return args
+        os.environ.setdefault("REMOTE_DEV_STATE_DIR", str(profile.state_dir / "remote"))
+        os.environ.setdefault("REMOTE_DEV_HARNESS_PROFILE", "codex")
+        router = _CodexRouter(profile, surface=surface, tools=cadapter.mcp_tools(surface, profile),
+                              handler=lambda ctx, args: cadapter.dispatch_tool(ctx, args, profile),
+                              session_extractor=cadapter.extract_session_identity)
+        return MCPStdioServer(router, server_name=f"mindie-{surface}", server_version=_current_version(source or SCRIPTS.parent)).serve()
     if role in {"status", "doctor", "configure"}:
         import setup
         return setup.main([{"status": "sharing", "doctor": "doctor", "configure": "configure"}[role], *([] if role != "status" else ["--status"]), *rest])

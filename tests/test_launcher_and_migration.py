@@ -103,7 +103,7 @@ def test_migrate_rebinds_components(monkeypatch):
     adapter, _engine, _profile = entry._prepare(None, PLUGIN, True)
     saved = json.loads(config.read_text(encoding="utf-8"))
     assert saved["runtime_scripts"] == str(SCRIPTS)
-    assert saved["product_validation"]["native_version"] == "0.1.38"
+    assert saved["product_validation"]["native_version"] == "0.1.39"
     assert saved["python"] == sys.executable
     for name in ("sim", "profiler"):
         assert saved["component_commands"][name][0] == sys.executable
@@ -236,12 +236,12 @@ def test_legacy_release_activation_cas_and_recovery(tmp_path):
         "profiler": ["/ext/python", "-I", "-X", "utf8", "-m", "mindie_profiler"],
     })
     _write_json(config, mutated)
-    candidate_release = tmp_path / "releases/0.1.38"
+    candidate_release = tmp_path / "releases/0.1.39"
     _write_json(candidate_release / "runtime.json", {
         "key": "k",
         "python": sys.executable,
         "source": str(PLUGIN),
-        "validation": {"schema": "mindie-candidate-check/1", "status": "validated", "native_version": "0.1.38"},
+        "validation": {"schema": "mindie-candidate-check/1", "status": "validated", "native_version": "0.1.39"},
     })
     proc = subprocess.run(
         [sys.executable, "-I", str(SCRIPTS / "release_activation.py"), str(config), str(candidate_release), "--attempt"],
@@ -261,7 +261,7 @@ def test_legacy_release_activation_cas_and_recovery(tmp_path):
     entry._prepare(candidate_release, PLUGIN, True)
     recovered = json.loads(config.read_text(encoding="utf-8"))
     recovered_engine = json.loads((config.parent / "codex.engine.json").read_text(encoding="utf-8"))
-    assert recovered["product_validation"]["native_version"] == "0.1.38"
+    assert recovered["product_validation"]["native_version"] == "0.1.39"
     assert recovered["component_commands"]["sim"] == [sys.executable, "-I", "-X", "utf8", "-m", "mindie_sim"]
     assert recovered["component_commands"]["profiler"] == [sys.executable, "-I", "-X", "utf8", "-m", "mindie_profiler"]
     assert recovered_engine["root"] == str(tmp_path / "knowledge")

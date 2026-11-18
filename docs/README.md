@@ -21,4 +21,4 @@
 - [用户须知 (`docs/install/user-notice.md`)](install/user-notice.md) — 社区经验共享脱敏范围、公开 Git 历史说明与统一贡献开关
 - [GitHub 登录引导 (`docs/install/github-authentication.md`)](install/github-authentication.md) — 可选 `gh` 认证、`local-only` 回退与企业网络进程级 `GIT_CONFIG_COUNT` 配置
 - [开发工作区配置指南 (`docs/install/workspace-setup.md`)](install/workspace-setup.md) — 首次安装交互式工作区初始化与共享偏好持久化
-- [最新发布说明：`v0.1.38`](releases/mindie-agent-codex-0.1.38.md) | [English](releases/mindie-agent-codex-0.1.38.en.md)
+- [最新发布说明：`v0.1.39`](releases/mindie-agent-codex-0.1.39.md) | [English](releases/mindie-agent-codex-0.1.39.en.md)

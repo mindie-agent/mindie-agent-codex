@@ -8,7 +8,7 @@ The `history-import` command lets you explicitly import selected historical Code
 
 ## 1. Command Usage & Authorization Checks
 
-`v0.1.38` no longer exposes a `bridge.py` command. Historical import is not a thin-plugin entrypoint; when the user explicitly requests it, call the shared `mindie_knowledge.loop.history_import` API with one or more selected JSONL paths and the current task's verified lease. No automatic discovery or directory scan is performed.
+`v0.1.39` no longer exposes a `bridge.py` command. Historical import is not a thin-plugin entrypoint; when the user explicitly requests it, call the shared `mindie_knowledge.loop.history_import` API with one or more selected JSONL paths and the current task's verified lease. No automatic discovery or directory scan is performed.
 
 - **No Automatic Discovery**: Only the exact files passed via `--source` are read; there is no directory watcher or background history scanner.
 - **Requires Active Task Lease & Approved Scope**: The requesting session (`CODEX_THREAD_ID`) must hold an active task lease (`authority.knowledge_lease(session)`)—Historical import never auto-associates an unactivated session. Both the requesting session and the historical transcript's working directory must fall within your already approved contribution project scope (`sharing.capture_allowed`). No duplicate consent prompt is shown, and historical sessions remain inactive.
