@@ -8,7 +8,7 @@ On WSL Linux, both added versions pass `tests/test_native_harness_acceptance.py`
 
 The official source for [0.162.1](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/mcp_tool_call.rs) and [0.164.0](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/mcp_tool_call.rs) retains the native thread and turn metadata used by the adapter. Existing protocol tests continue to cover identity rejection and targeted cancellation.
 
-In CI, `plugins/mindie-agent/scripts/release_metadata.py` verifies that every registered production symbol and contract test exists and validates the declared version intervals against all consumed interfaces.
+In CI, `plugins/mindie-agent/scripts/setup.py release-metadata` verifies that every registered production symbol and contract test exists and validates the declared version intervals against all consumed interfaces.
 
 ---
 

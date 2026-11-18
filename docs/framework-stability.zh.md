@@ -29,7 +29,7 @@
 export MINDIE_CORE_REPO=/path/to/knowledge
 export MINDIE_KIMI_REPO=/path/to/mindie-agent-kimi
 uv sync --project plugins/mindie-agent --locked --no-editable
-uv run --project plugins/mindie-agent --no-sync python tests/run_ci.py
+uv run --project plugins/mindie-agent --no-sync python -m pytest -q -m "not live_npu" tests
 ```
 
 - **随版 CPU 微基准测试（Release Microbenchmark）**：每个 `0.0.2` 发行版均运行 [`benchmarks/release.json`](../benchmarks/release.json)（[`benchmarks/release.py`](../benchmarks/release.py)）测量 `public-transcript` 公开消息解析与隐藏推理过滤的延迟（`us/op`），并随 GitHub Release 附带 `benchmark-results.json` 和 `benchmark-results.md` 作为可复现的本地 CPU 性能基线。

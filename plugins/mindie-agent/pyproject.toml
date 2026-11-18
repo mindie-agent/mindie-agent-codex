@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mindie-agent-codex"
-version = "0.1.37"
+version = "0.1.38"
 description = "Codex adapter for MindIE Agent"
 requires-python = ">=3.11"
 dependencies = [
@@ -25,10 +25,10 @@ seed = "assets/mindie-harness-seed.pyz"
 seed_lock = "assets/seed-lock.json"
 
 [tool.uv.sources]
-mindie-harness = { git = "https://github.com/mindie-agent/harness", rev = "f05569947dbf0131061d8698bb779d024df0c43b" }
-mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "8fe8455669e88ef6963314332422653841518900" }
-remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "64c5a8d0ca9fe344e7af05f89fc0de6249f2368a" }
-mindie-diagnostics = { git = "https://github.com/mindie-agent/diagnostics", rev = "54ac7c03c78f9e02f379051d1613a4427559e10d" }
+mindie-harness = { git = "https://github.com/mindie-agent/harness", rev = "ee77300887debb0b769794eb3ee0c2b45eab87ed" }
+mindie-knowledge = { git = "https://github.com/mindie-agent/knowledge", rev = "9f48272a3ba87248bfda0e4068692511aac4dfa4" }
+remote-dev = { git = "https://github.com/mindie-agent/remote-dev", rev = "b33ca60baac81c237dd1bd6e7a8068945820727b" }
+mindie-diagnostics = { git = "https://github.com/mindie-agent/diagnostics", rev = "7464cbb4381e9dc996871d192eb3f05f61dfdb28" }
 mindie-debugger = { git = "https://github.com/mindie-agent/debugger", rev = "e15c2ed38d8f928db67c5bb1a94269f62207227c" }
 mindie-profiler = { git = "https://github.com/mindie-agent/profiler", rev = "b702893129724b852c5abcb8971724b8b0a6e870" }
 mindie-sim = { git = "https://github.com/mindie-agent/sim", rev = "83fb8288aa998e0a6ad345ca7a16269f0181545b" }
@@ -37,10 +37,10 @@ mindie-coordinator = { git = "https://github.com/mindie-agent/coordinator", rev 
 [tool.uv]
 # The reviewed plugin selection also replaces older transitive component pins.
 override-dependencies = [
-  "mindie-harness @ git+https://github.com/mindie-agent/harness@f05569947dbf0131061d8698bb779d024df0c43b",
-  "mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@8fe8455669e88ef6963314332422653841518900",
-  "remote-dev @ git+https://github.com/mindie-agent/remote-dev@64c5a8d0ca9fe344e7af05f89fc0de6249f2368a",
-  "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@54ac7c03c78f9e02f379051d1613a4427559e10d",
+  "mindie-harness @ git+https://github.com/mindie-agent/harness@ee77300887debb0b769794eb3ee0c2b45eab87ed",
+  "mindie-knowledge @ git+https://github.com/mindie-agent/knowledge@9f48272a3ba87248bfda0e4068692511aac4dfa4",
+  "remote-dev @ git+https://github.com/mindie-agent/remote-dev@b33ca60baac81c237dd1bd6e7a8068945820727b",
+  "mindie-diagnostics @ git+https://github.com/mindie-agent/diagnostics@7464cbb4381e9dc996871d192eb3f05f61dfdb28",
   "mindie-debugger @ git+https://github.com/mindie-agent/debugger@e15c2ed38d8f928db67c5bb1a94269f62207227c",
   "mindie-profiler @ git+https://github.com/mindie-agent/profiler@b702893129724b852c5abcb8971724b8b0a6e870",
   "mindie-sim @ git+https://github.com/mindie-agent/sim@83fb8288aa998e0a6ad345ca7a16269f0181545b",

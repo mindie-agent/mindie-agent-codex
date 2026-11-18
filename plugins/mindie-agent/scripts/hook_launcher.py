@@ -1,248 +1,176 @@
 """Select the prepared native entry for Codex hooks and MCP startup.
-
-[Role]
-Resolves the canonical installed release (or first-run bootstrap, or MCP
-migration source) and dispatches `runpy` into that entry. `hooks.json` and
-`.mcp.json` invoke this module instead of inlining the selector as `python -c`.
-
-[Invariants]
-- Hooks never pass `--seed`, so they never migrate; only MCP/startup roles with
-  a newer seed may route to the migration bootstrap.
-- `stop` never prepares an unconfigured installation.
-- Prepared `runtime.json` identity is compared exactly; a mismatch is not a
-  first install and does not fall back to plugin cache.
-
-[Timeouts & Locks]
-- No locks or subprocesses; the selected entry owns timeouts.
-
-[Side-Effect Policy]
-- Importing this module is side-effect free. Running it as `__main__` or via
-  `launch()` executes the selected entry.
+[Role] Implement the frozen `hooks.json` fast paths and the `.mcp.json` seed-aware selector.
+[Invariants] `user-prompt-submit` never reads stdin; disabled/out-of-scope `stop` never reads stdin, imports `mindie_harness`, or creates SQLite; hooks never migrate.
+[Timeouts & Locks] No locks or third-party imports; selected entries own deadlines.
+[Side-Effect Policy] `session-start` writes one atomic pending-check marker.
 """
 from __future__ import annotations
-
-import hashlib
-import json
-import ntpath
-import os
-import re
-import runpy
-import sys
-import tempfile
-import time
+import json, os, re, runpy, subprocess, sys, tempfile, time
 from pathlib import Path
-
 MCP_ROLES = ("remote-mcp", "tools-mcp", "knowledge-mcp")
-VERSION_PATTERN = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+!-]{0,79}")
-NUMERIC_VERSION = re.compile(r"[0-9]+(?:\.[0-9]+)*")
-_IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
-
-
-def _same_interpreter(left, right, *, windows=None):
-    """Compare runtime interpreter paths across Windows extended-path aliases."""
-    if not isinstance(left, str) or not isinstance(right, str) or not left or not right:
-        return False
-    if os.name == "nt" if windows is None else windows:
-        def _norm(value):
-            text = value.replace("/", "\\")
-            if text[:8].upper() == "\\\\?\\UNC\\":
-                text = "\\\\" + text[8:]
-            elif text.startswith("\\\\?\\"):
-                text = text[4:]
-            return ntpath.normcase(ntpath.abspath(text))
-        return _norm(left) == _norm(right)
-    return os.path.abspath(left) == os.path.abspath(right)
-
-
-def read(path):
-    path = Path(path)
-    if not path.is_file():
-        raise ValueError("MindIE metadata must be regular")
-    with path.open("rb") as handle:
-        raw = handle.read(65537)
-    if len(raw) > 65536:
-        raise ValueError("MindIE metadata exceeds its byte bound")
-    value = json.loads(raw.decode("utf-8-sig"))
-    if not isinstance(value, dict):
-        raise ValueError("MindIE metadata must be an object")
-    return value
-
-
-def version_key(value):
-    match = NUMERIC_VERSION.fullmatch(value)
-    return tuple(int(part) for part in match.group(0).split(".")) if match else None
-
-
+VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+!-]{0,79}")
+_NO_WIN = 0x08000000 if os.name == "nt" else 0
+def _config_path() -> Path:
+    if explicit := os.environ.get("MINDIE_AGENT_CONFIG"):
+        return Path(explicit).expanduser().resolve()
+    base = Path(os.environ.get("APPDATA") or Path.home() / "AppData/Roaming") if os.name == "nt" else Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    return (Path(os.environ.get("MINDIE_CONFIG_HOME") or base / "mindie-agent").expanduser() / "codex.json").resolve()
+def _data_dir(name: str, marketplace: str) -> Path:
+    return Path(os.environ["PLUGIN_DATA"]).expanduser() if os.environ.get("PLUGIN_DATA") else Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "plugins/data" / f"{name}-{marketplace}"
+def _state_dir() -> Path:
+    root = os.environ.get("MINDIE_DATA_HOME")
+    if not root:
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData/Local") if os.name == "nt" else Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
+        root = str(base / "mindie-agent")
+    return Path(root).expanduser() / "state/codex"
+def read_json(path: Path) -> dict | None:
+    try:
+        raw = path.read_bytes(); value = json.loads(raw.decode("utf-8-sig")) if len(raw) <= 65536 else None
+    except TimeoutError:
+        raise
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
 def parse_argv(argv):
-    name = "mindie-agent"
-    marketplace = "mindie-agent"
-    seed = None
-    index = 0
+    name, marketplace, seed, index = "mindie-agent", "mindie-agent", None, 0
     while index < len(argv):
-        current = argv[index]
-        if current == "--name" and index + 1 < len(argv):
-            name = argv[index + 1]
+        token = argv[index]
+        if token in {"--name", "--marketplace", "--seed"} and index + 1 < len(argv):
+            if token == "--name": name = argv[index + 1]
+            elif token == "--marketplace": marketplace = argv[index + 1]
+            else: seed = argv[index + 1]
             index += 2
-        elif current == "--marketplace" and index + 1 < len(argv):
-            marketplace = argv[index + 1]
-            index += 2
-        elif current == "--seed" and index + 1 < len(argv):
-            seed = argv[index + 1]
-            index += 2
-        elif current == "--":
-            return name, marketplace, seed, list(argv[index + 1 :])
+        elif token == "--":
+            return name, marketplace, seed, list(argv[index + 1:])
         else:
             return name, marketplace, seed, list(argv[index:])
     return name, marketplace, seed, []
-
-
-def _plugin_source(home, marketplace, name, seed):
-    default = home / "plugins/cache" / marketplace / name / (seed or "unprepared")
-    return Path(os.environ.get("PLUGIN_ROOT", str(default)))
-
-
-def _prepared_entry(adapter, data):
-    validation = adapter.get("product_validation")
-    if not isinstance(validation, dict):
-        raise ValueError("MindIE release identity is invalid")
-    version = validation.get("native_version")
-    if not isinstance(version, str) or not VERSION_PATTERN.fullmatch(version):
-        raise ValueError("MindIE release identity is invalid")
-    comp_rel = adapter.get("component_release")
-    if comp_rel is not None and (not isinstance(comp_rel, str) or not os.path.isabs(comp_rel)):
-        raise ValueError("MindIE release identity is invalid")
-    release = Path(comp_rel) if comp_rel else data / "releases" / version
-    receipt = read(release / "runtime.json")
-    entry = release / "entry.py"
-    if (not _same_interpreter(receipt.get("python"), adapter.get("python"))
-            or receipt.get("validation") != validation
-            or validation.get("status") != "validated"
-            or validation.get("schema") != "mindie-candidate-check/1"):
-        raise ValueError("MindIE installed runtime receipt differs")
-    return entry
-
-
-def select_entry(*, name="mindie-agent", marketplace="mindie-agent", seed=None, args=None):
-    args = [] if args is None else list(args)
-    home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
-    data = Path(os.environ.get("PLUGIN_DATA", str(home / "plugins/data" / (name + "-" + marketplace))))
-    config = Path(os.environ.get(
-        "MINDIE_AGENT_CONFIG", str(Path.home() / ".config/mindie-agent/codex.json"))).expanduser().absolute()
-    role = args[0] if args else ""
-    if config.exists():
-        adapter = read(config)
-        migrate = False
-        if seed and (role in MCP_ROLES or (role == "bridge" and args[1:2] == ["mcp"])):
-            validation = adapter.get("product_validation")
-            installed = validation.get("native_version") if isinstance(validation, dict) else None
-            if not isinstance(installed, str) or not VERSION_PATTERN.fullmatch(installed):
-                raise ValueError("MindIE release identity is invalid")
-            current, target = version_key(installed), version_key(seed)
-            migrate = current is not None and target is not None and target > current
-        if migrate:
-            source = _plugin_source(home, marketplace, name, seed)
-            bootstrap = source / "scripts/bootstrap.py"
-            if bootstrap.is_file():
-                return bootstrap, [str(data), "--source", str(source), "migrate", *args]
-            entry = data / "releases" / seed / "entry.py"
-            if not entry.is_file():
-                raise RuntimeError("MindIE migration source is unavailable")
-            return entry, ["migrate", *args]
-        return _prepared_entry(adapter, data), args
-    fixed = data / "releases" / seed / "entry.py" if seed else None
-    if fixed is not None and fixed.is_file():
-        return fixed, args
-    if args[:1] == ["stop"]:
-        raise RuntimeError("MindIE runtime is not prepared; start a new native session")
-    source = _plugin_source(home, marketplace, name, seed)
-    entry = source / "scripts/bootstrap.py"
-    return entry, [str(data), "--source", str(source), *args]
-
-
-def launch(argv=None):
-    name, marketplace, seed, args = parse_argv(sys.argv[1:] if argv is None else argv)
-    entry, forwarded = select_entry(name=name, marketplace=marketplace, seed=seed, args=args)
-    if not entry.is_file():
-        raise RuntimeError("MindIE installed entry is unavailable")
-    sys.path.insert(0, str(entry.parent))
-    sys.argv = [str(entry), *forwarded]
-    runpy.run_path(str(entry), run_name="__main__")
-
-
-def _record_launcher_failure(session_id, error_type):
-    config = Path(os.environ.get(
-        "MINDIE_AGENT_CONFIG", str(Path.home() / ".config/mindie-agent/codex.json"))).expanduser().absolute()
-    target = config.with_suffix(".entry-status.json")
-    if not target.parent.is_dir():
-        return
-    digest = (
-        hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:16]
-        if isinstance(session_id, str) and _IDENTITY.fullmatch(session_id)
-        else None
-    )
-    entry = dict(
-        updated_at=time.time(),
-        stage="hook-launcher",
-        status="failed",
-        error_type=error_type,
-    )
-    store = {"schema": "mindie-manual-entry/2", "sessions": {}}
-    try:
-        if target.is_file():
-            raw = target.read_bytes()
-            if len(raw) <= 16384:
-                loaded = json.loads(raw.decode("utf-8"))
-                if (isinstance(loaded, dict)
-                        and loaded.get("schema") == "mindie-manual-entry/2"
-                        and isinstance(loaded.get("sessions"), dict)):
-                    store["sessions"] = dict(loaded["sessions"])
-                    if isinstance(loaded.get("unscoped_failure"), dict):
-                        store["unscoped_failure"] = loaded["unscoped_failure"]
-    except (OSError, ValueError, TypeError):
-        pass
-    if digest is not None:
-        store["sessions"][digest] = entry
-        if len(store["sessions"]) > 16:
-            ordered = sorted(
-                store["sessions"].items(),
-                key=lambda pair: pair[1].get("updated_at", 0) if isinstance(pair[1], dict) else 0,
-            )
-            store["sessions"] = dict(ordered[-16:])
+def _version(value):
+    if not isinstance(value, str) or not VERSION.fullmatch(value): return None
+    return tuple(int(part) if part.isdigit() else 0 for part in value.split(".")[:3])
+def _roots(adapter: dict, config: Path) -> list[str]:
+    community_path = Path(adapter["community_config"]) if isinstance(adapter.get("community_config"), str) and os.path.isabs(adapter["community_config"]) else config.parent / "mindie-community.json"
+    community, consent_path = read_json(community_path), config.parent / "mindie-consent.json"
+    for source in (community, adapter):
+        if isinstance((raw := (source or {}).get("consent_config")), str) and os.path.isabs(raw):
+            consent_path = Path(raw); break
+    consent = read_json(consent_path); allowed = (consent or {}).get("choice") in {"contribute", "local-only"} or ("choice" not in (consent or {}) and (consent or {}).get("enabled") is True)
+    if community is not None:
+        if community.get("enabled") is not True or not allowed:
+            return []
+        source = community
+    elif consent is not None and allowed:
+        source = consent
     else:
-        store["unscoped_failure"] = entry
-    temporary = None
+        return []
+    values = source.get("project_roots")
+    if not isinstance(values, list) or not values or not all(isinstance(value, str) and os.path.isabs(value) for value in values):
+        return []
+    return [os.path.normcase(os.path.abspath(value)) for value in values]
+def _in_scope(raw: bytes, roots: list[str]) -> bool:
     try:
-        descriptor, temporary = tempfile.mkstemp(prefix=target.name + ".", dir=target.parent)
+        event = json.loads(raw.decode("utf-8-sig")) if 0 < len(raw) <= 1048576 and raw.strip() else None
+    except ValueError:
+        return False
+    if not isinstance(event, dict):
+        return False
+    keys = ("cwd",) if isinstance(event.get("cwd"), str) and os.path.isabs(event["cwd"]) else ("cwd", "workspace", "project_root")
+    for key in keys:
+        value = event.get(key)
+        if not isinstance(value, str) or not os.path.isabs(value):
+            continue
+        candidate = os.path.normcase(os.path.abspath(value))
+        for root in roots:
+            try:
+                if os.path.splitdrive(candidate)[0] == os.path.splitdrive(root)[0] and os.path.commonpath([candidate, root]) == root:
+                    return True
+            except ValueError:
+                continue
+    return False
+def _active_python(adapter: dict) -> Path | None:
+    raw = adapter.get("python")
+    return Path(raw) if isinstance(raw, str) and Path(raw).is_file() else None
+def _active_entry(adapter: dict, data: Path) -> tuple[Path, Path] | None:
+    version = (adapter.get("product_validation") or {}).get("native_version")
+    for root in (adapter.get("runtime_scripts"), adapter.get("component_release"), str(data / "releases" / version) if isinstance(version, str) else None):
+        if isinstance(root, str) and os.path.isabs(root) and (entry := Path(root) / "entry.py").is_file():
+            return entry, entry.parent
+    return None
+def _source(home: Path, marketplace: str, name: str, seed: str | None) -> Path:
+    if explicit := os.environ.get("PLUGIN_ROOT"): return Path(explicit)
+    cached = home / "plugins/cache" / marketplace / name / (seed or "unprepared")
+    return cached if cached.is_dir() else Path(__file__).resolve().parents[1]
+def _write_pending() -> None:
+    state = _state_dir()
+    try:
+        state.mkdir(mode=0o700, parents=True, exist_ok=True); descriptor, raw = tempfile.mkstemp(prefix=".pending.", dir=state)
+    except TimeoutError:
+        raise
+    except OSError:
+        return
+    temporary = Path(raw)
+    try:
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-            json.dump(store, stream, sort_keys=True)
-            stream.flush()
-        os.replace(temporary, target)
+            json.dump({"schema": "mindie-pending-update/1", "host": "codex", "reason": "session_start", "requested_at": time.time()}, stream); stream.write("\n")
+        os.replace(temporary, state / "pending-update-check.json")
     except TimeoutError:
         raise
     except OSError:
         return
     finally:
-        if temporary is not None:
-            try:
-                Path(temporary).unlink(missing_ok=True)
-            except OSError:
-                pass
-
-
-def _report_prompt_launcher_failure(exc):
-    try:
-        sys.stdin.buffer.read(32 * 1024 * 1024 + 1)
-    except OSError:
-        pass
-    print("{}")
-    raise SystemExit(0)
-
-
+        temporary.unlink(missing_ok=True)
+def _emit() -> int: sys.stdout.write("{}\n"); sys.stdout.flush(); return 0
+def _execute(python: Path, argv: list[str]) -> int:
+    if os.name != "nt": os.execv(str(python), [str(python), *argv])
+    return subprocess.run([str(python), *argv], creationflags=_NO_WIN).returncode
+def fast_path(role: str, *, name: str, marketplace: str, config: Path, data: Path) -> int | None:
+    if role == "user-prompt-submit":
+        return _emit()
+    adapter = read_json(config)
+    if role == "stop":
+        if not isinstance(adapter, dict) or not (roots := _roots(adapter, config)):
+            return _emit()
+        raw = sys.stdin.buffer.read(1048577)
+        if not _in_scope(raw, roots) or (python := _active_python(adapter)) is None or (selected := _active_entry(adapter, data)) is None:
+            return _emit()
+        entry, release = selected
+        try:
+            subprocess.run([str(python), "-I", "-X", "utf8", str(entry), "--release", str(release), "stop"], input=raw, capture_output=True, timeout=8.0, creationflags=_NO_WIN)
+        except subprocess.TimeoutExpired:
+            pass
+        return _emit()
+    if role == "session-start" and isinstance(adapter, dict) and _active_python(adapter) is not None:
+        _write_pending(); return _emit()
+    return None
+def _selection(*, name: str, marketplace: str, seed: str | None, args: list[str]):
+    home, data, config = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex"), _data_dir(name, marketplace), _config_path()
+    adapter, source = read_json(config), _source(home, marketplace, name, seed)
+    if isinstance(adapter, dict) and _active_python(adapter) is not None:
+        migration = False
+        if seed and args[:1] and args[0] in MCP_ROLES:
+            installed, target = _version((adapter.get("product_validation") or {}).get("native_version")), _version(seed)
+            migration = installed is not None and target is not None and target > installed
+        if migration and (source / "scripts/bootstrap.py").is_file():
+            return source / "scripts/bootstrap.py", [str(data), "--source", str(source), "migrate", *args], None
+        if (selected := _active_entry(adapter, data)) is not None:
+            return selected[0], args, _active_python(adapter)
+    bootstrap = source / "scripts/bootstrap.py"
+    if bootstrap.is_file():
+        return bootstrap, [str(data), "--source", str(source), *args], None
+    seed_archive = source / "assets/mindie-harness-seed.pyz"
+    if not (source / "pyproject.toml").is_file() and seed_archive.is_file():
+        return seed_archive, ["--host", "codex", "--plugin-root", str(source), "--config", str(config), *args], Path(sys.executable)
+    raise RuntimeError("MindIE runtime is unavailable; install the plugin before starting a session")
+def select_entry(*, name="mindie-agent", marketplace="mindie-agent", seed=None, args=None):
+    entry, forwarded, _python = _selection(name=name, marketplace=marketplace, seed=seed, args=list(args or []))
+    return entry, forwarded
+def launch(argv=None) -> int:
+    name, marketplace, seed, args = parse_argv(sys.argv[1:] if argv is None else argv)
+    if args and (code := fast_path(args[0], name=name, marketplace=marketplace, config=_config_path(), data=_data_dir(name, marketplace))) is not None:
+        return code
+    entry, forwarded, python = _selection(name=name, marketplace=marketplace, seed=seed, args=args)
+    if python is not None:
+        return _execute(python, ["-I", "-X", "utf8", str(entry), *forwarded])
+    sys.argv = [str(entry), *forwarded]; runpy.run_path(str(entry), run_name="__main__"); return 0
 if __name__ == "__main__":
-    try:
-        launch()
-    except Exception as exc:
-        _, _, _, _forwarded = parse_argv(sys.argv[1:])
-        if _forwarded[:1] == ["user-prompt-submit"]:
-            _report_prompt_launcher_failure(exc)
-        raise
+    raise SystemExit(launch())

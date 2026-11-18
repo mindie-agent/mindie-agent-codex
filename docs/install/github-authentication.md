@@ -1,5 +1,26 @@
 # GitHub Sign-In During Setup
 
+## Install First, Authenticate Only When Needed
+
+Install through the deterministic bootstrap; `gh` is optional and never a hard blocker:
+
+```sh
+uv run https://github.com/mindie-agent/mindie-agent/releases/latest/download/install.py --host codex
+```
+
+The 3-question dynamic onboarding then asks for:
+
+1. **Workspace**: initialize `vllm-ascend-workspace`, keep the current directory, or use an existing workspace.
+2. **Experience & privacy mode**: `contribute` is recommended when `gh` is authenticated; `local-only` is recommended when `gh` is missing, unauthenticated, or unreachable (local capture, zero GitHub upload, no `gh` required); `read-only` disables capture.
+3. **Optional one-step SSH NPU access**: prefer `remote_auth(save_default=True, discover=True)`, or in a terminal only:
+   ```sh
+    <python> -m remote_dev auth setup --host <REAL_IP> --port 22 --user <REAL_USER> --save-default --discover --password
+   ```
+   Keep `--password` last and preserve the leading space so it stays out of shell history.
+
+After applying the choices, run the read-only `mindie_doctor` check and show the readiness card. End with one polite Star line; perform the Star action only after explicit consent.
+
+
 Use this flow during installation, first-use setup, or when GitHub authentication fails:
 
 1. **Check existing login**: Install `gh` if missing and run `gh api --hostname github.com user --jq .login` with a bounded timeout. If the expected account is already authenticated (including via `GH_TOKEN`), proceed directly to step 6. A failed read does not establish invalid credentials: DNS/TCP timeouts, proxy failures and TLS errors must first be diagnosed in the same host process and network context. Opening github.com in a browser does not verify api.github.com access from `gh` or a scheduled worker. Only an actual HTTP authentication response justifies credential repair.

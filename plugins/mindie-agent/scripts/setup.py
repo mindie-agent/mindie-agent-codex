@@ -1,737 +1,130 @@
-#!/usr/bin/env python3
-"""Configure only MindIE-owned files; install/trust the plugin through Codex.
-
-[Role]
-Writes and updates MindIE-owned adapter, engine, and community sharing
-configuration files during installation and `configure` operations.
-
-[Invariants]
-- Plugin activation and community sharing are separate; community sharing
-  defaults OFF and is only enabled when explicitly configured.
-- `configure` never refuses merely because the engine configuration already exists.
-- Records neutral `admission_path`, `transcript_adapter` (`codex_transcript.py`),
-  and `runtime_scripts` in the MindIE configuration files.
-
-[Timeouts & Locks]
-- Acquires exclusive `update_lock` when mutating profile configuration files.
-
-[Side-Effect Policy]
-- Modifies only MindIE-owned configuration files; never touches unrelated Codex
-  plugins or global user settings.
+"""Thin MindIE profile, sharing, doctor, update, and release-metadata CLI.
+[Role] Initialize adapter/engine config, persist sharing, delegate `doctor`/`update` to `mindie_harness`, and validate release metadata.
+[Invariants] Config writes are atomic; `transcript_adapter` points at `codex_transcript.py`; every interface code path and test id must resolve.
+[Timeouts & Locks] Doctor/update deadlines come from `mindie_harness`; no local locks.
+[Side-Effect Policy] Only install/configure write; status and metadata are read-only.
 """
-
-import argparse
-import json
-import os
+from __future__ import annotations
+import ast, importlib.util, json, os, re, shutil, subprocess, sys, tempfile
 from pathlib import Path
-import re
-import secrets
-import sys
-import time
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from bounded_process import run
-try:
-    import consent
-except ModuleNotFoundError:
-    consent = None
-from runtime_probe import PROBE_MODULES
-import product_contract
-import sharing
-
-SCRIPTS = Path(__file__).parent.absolute()
-
-# Setup and bootstrap use the same material-index and runtime API contract.
-
-
-def probe_runtime(python):
-    """Fail clearly, before any configuration write, when a pin is missing.
-
-    Parser load goes through the configured interpreter's shared
-    ``load_transcript_adapter`` (registers the module before exec). This
-    process does not grow a second dynamic importer.
-    """
+SCRIPTS = Path(__file__).resolve().parent
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+_NO_WIN = 0x08000000 if os.name == "nt" else 0
+REPOSITORY = "mindie-agent/mindie-agent-codex"
+SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
+def _version(root: Path) -> str: return str(json.loads((root / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))["version"]) if (root / ".codex-plugin/plugin.json").is_file() else "0.1.38"
+def _atomic(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True); descriptor, raw = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent); temporary = Path(raw)
     try:
-        return product_contract.probe(
-            python, SCRIPTS, lambda argv, **kwargs: run(argv, "", **kwargs).checked_stdout())
-    except Exception as exc:
-        raise SystemExit(
-            f"knowledge runtime probe failed to run in {python}: "
-            f"{type(exc).__name__}: {str(exc)[:200]}"
-        )
-
-
-def write_private(path, value):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        json.dump(value, stream, ensure_ascii=False, indent=2)
-        stream.write("\n")
-
-
-def community_settings(args, parser, python, *, scripts=SCRIPTS):
-    """Explicitly selected sharing settings; None leaves sharing OFF."""
-    selected = any(
-        getattr(args, key)
-        for key in (
-            "community_repository",
-            "community_project_root",
-            "community_account",
-            "community_fork",
-            "community_visibility",
-        )
-    )
-    if not selected:
-        if args.community_branch is not None:
-            parser.error("--community-branch requires --community-repository")
-        return None
-    if not args.community_repository:
-        parser.error("community sharing requires --community-repository owner/repo")
-    if not args.community_project_root:
-        parser.error("community sharing requires at least one --community-project-root")
-    if args.community_visibility != "public":
-        parser.error(
-            "community sharing requires --community-visibility public; "
-            "no other visibility is supported"
-        )
-    roots = []
-    for root in args.community_project_root:
-        canonical = sharing.canonical_root(str(Path(root).expanduser().absolute()))
-        if not Path(canonical).is_dir():
-            parser.error("community project root does not exist: " + canonical)
-        if canonical not in roots:
-            roots.append(canonical)
-    settings = dict(
-        schema=sharing.SCHEMA,
-        enabled=True,
-        generation=secrets.token_hex(16),
-        enabled_at=time.time(),
-        repository=args.community_repository,
-        branch=args.community_branch or "main",
-        project_roots=roots,
-        idle_seconds=300,
-    )
-    for key in ("fork", "account"):
-        value = getattr(args, "community_" + key)
-        if value:
-            settings[key] = value
-    settings["visibility"] = args.community_visibility
-    try:
-        structural = sharing.validate(settings)
-        return sharing.normalize_with_runtime(structural, python)
-    except sharing.SharingError as exc:
-        parser.error(str(exc))
-
-
-def interactive_choice(args, parser):
-    """Confirm the supplied destination; there are no partial product modes."""
-    print(sharing.CHOICES, file=sys.stderr)
-    try:
-        line = input("Configure the supplied public destination and scope? [yes/no]: ").strip()
-    except EOFError:
-        parser.error("interactive setup needs a response; configuration is incomplete")
-    if line.lower() == "yes":
-        if not (
-            args.community_repository
-            and args.community_project_root
-            and args.community_visibility == "public"
-        ):
-            parser.error(
-                "configuration requires --community-repository OWNER/REPO "
-                "--community-project-root PATH --community-visibility public"
-            )
-        return "contribute"
-    parser.error("configuration was not completed; no product mode was selected")
-
-
-def install(args, parser, *, validation=None):
-    if not args.knowledge_python:
-        parser.error("install requires --knowledge-python")
-    python = str(Path(args.knowledge_python).expanduser().absolute())
-    # Keep the venv executable path; resolving its symlink loses its site-packages.
-    if validation is None:
-        validation = probe_runtime(python)
-    else:
-        # Only bootstrap's exact verified immutable runtime reuses its
-        # publication read. There is no command-line bypass.
-        product_contract.validate_receipt(
-            json.dumps(validation), product_contract.identity(SCRIPTS.parent))
-    from release_metadata import require_harness
-    require_harness(SCRIPTS.parent)
-    declaration, _ = product_contract.product(product_contract.source_root(SCRIPTS))
-    transcript_adapter = str(SCRIPTS / "codex_transcript.py")
-    if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args.domain):
-        parser.error("invalid domain name")
-    config = args.config.expanduser().absolute()
-    engine_config = config.with_name(config.stem + ".engine.json")
-    community_config = config.with_name("mindie-community.json")
-    admission_path = config.with_name(config.stem + ".admission.sqlite3")
-    if os.path.lexists(config) or os.path.lexists(engine_config):
-        parser.error(
-            "configuration already exists; use setup.py configure to record "
-            "sharing on this installation, or choose --config"
-        )
-    # The profile consent authority is shared with every adapter in this
-    # profile: an existing saved choice is reused and never re-asked or
-    # overwritten by a fresh install. A damaged document is a fault to fix
-    # first, never a state to silently clear.
-    saved = consent.load(config)
-    reused_choice = None
-    if saved["state"] == "ok" and saved["choice"]:
-        reused_choice = saved["choice"]
-    elif saved["state"] in {"corrupt", "unreadable"}:
-        parser.error(
-            f"existing consent document is {saved['state']} "
-            f"({saved['error']}); inspect and remove it explicitly before "
-            "recording a new choice"
-        )
-    shared_community = None
-    if os.path.lexists(community_config):
-        from mindie_knowledge.loop.settings import normalize
-        try:
-            shared_community = product_contract.read_json(community_config)[0]
-            normalize(sharing.validate(shared_community))
-            if (shared_community.get("consent_config") != str(consent.consent_path_for(config))
-                    or shared_community["enabled"]
-                    and (saved["state"] != "ok" or not saved["choice"])):
-                raise ValueError("shared settings lack explicit profile consent")
-        except TimeoutError:
-            raise
-        except (OSError, ValueError) as exc:
-            parser.error(
-                "existing shared community configuration is unavailable or unsupported; "
-                f"configuration was not changed ({type(exc).__name__})"
-            )
-        if any(getattr(args, name) for name in (
-            "community_repository", "community_project_root", "community_account",
-            "community_fork", "community_visibility", "community_branch",
-        )):
-            parser.error(
-                "shared community settings already exist and will be reused; "
-                "use configure after installation to change the saved selection"
-            )
-    sharing_choice = None
-    if args.interactive and reused_choice is None:
-        sharing_choice = interactive_choice(args, parser)
-    community = community_settings(args, parser, python)
-    if community is not None:
-        sharing_choice = "contribute"
-    value = dict(
-        root=str(args.root.expanduser().absolute()),
-        domain=args.domain,
-        admission_path=str(admission_path),
-        transcript_adapter=transcript_adapter,
-        community_config=str(community_config),
-        product_validation=validation,
-    )
-    from capture_config import prepare, prepare_store
-    value.update(prepare(python, SCRIPTS))
-    published = product_contract.publication_feed(declaration, domain=args.domain)
-    if published is not None and not args.no_public_feed:
-        value["feeds"] = [published]
-    adapter = dict(
-        python=python,
-        engine_config=str(engine_config),
-        community_config=str(community_config),
-        admission_path=str(admission_path),
-        runtime_scripts=str(SCRIPTS),
-        product_validation=validation,
-    )
-    from diagnostic_support import capture_environment_context
-    diagnostic_context = capture_environment_context()
-    if diagnostic_context:
-        adapter["diagnostics_context"] = diagnostic_context
-    from native_context import capture as capture_native_context, service_launch_context
-    adapter["native_context"] = capture_native_context()
-    value["service_launch_context"] = service_launch_context(config, adapter)
-    # The short Stop path only admits into an existing store. Initialize it
-    # with the pinned core here, without starting a service or calling a model.
-    # A damaged existing authority fails before installation config is written.
-    prepare_store(python, SCRIPTS, value)
-    from capture_config import prepare_domains
-    adapter['domain_configs'] = prepare_domains(
-        python, adapter, value, config_directory=str(config.with_name(config.stem + '.domains')),
-        authority_directory=str(config.parent / 'knowledge-domains'),
-        consent_config=str(consent.consent_path_for(config)), public_feeds=not args.no_public_feed,
-        domains=product_contract.official_feeds())
-    write_private(engine_config, value)
-    write_private(config, adapter)
-    if sharing_choice:
-        # The explicit install-time choice lands directly in the consent
-        # authority; the retired adapter-config sharing_choice key is never
-        # written as a record.
-        try:
-            consent.record_choice(sharing_choice, config)
-        except consent.ConsentError as exc:
-            parser.error(str(exc))
-    if community is not None:
-        # The user explicitly selected repository, scope, account and
-        # visibility: record them and enable sharing from this moment. Only
-        # material authorized after enabled_at is ever captured. The consent
-        # authority pointer wires the core gate to this profile's document.
-        community["consent_config"] = str(consent.consent_path_for(config))
-        sharing.write(community_config, community)
-    from diagnostic_support import activate_reporting
-    reporting = activate_reporting(config)
-    from native_hooks import configure_catalog_refresh
-    tool_catalog_refresh = configure_catalog_refresh()
-    print(
-        json.dumps(
-            dict(
-                status="configured" if reporting["status"] in {"running", "disabled", "needs_choice"} else "degraded",
-                reporting=reporting,
-                tool_catalog_refresh=tool_catalog_refresh,
-                config=str(config),
-                engine_config=str(engine_config),
-                community_config=str(community_config),
-                admission_path=str(admission_path),
-                transcript_adapter=transcript_adapter,
-                domain=args.domain,
-                sharing="enabled" if (community or shared_community or {}).get("enabled") is True
-                        and (sharing_choice or reused_choice) == "contribute" else "off",
-                sharing_choice=sharing_choice,
-                reused_choice=reused_choice,
-                next=(
-                    None
-                    if community is not None or reused_choice is not None
-                    else "sharing is off/unconfigured; when explicitly requested, "
-                    "record the destination and scope with scripts/setup.py configure "
-                    "--community-repository OWNER/REPO "
-                    "--community-project-root PATH --community-visibility public"
-                ),
-            ),
-            indent=2,
-        )
-    )
-    if reporting["status"] not in {"running", "disabled", "needs_choice"}:
-        raise SystemExit(1)
-
-
-
-
-def configure(args, parser):
-    """Supported post-install sharing configuration.
-
-    Works on an existing installation by design: it never refuses merely
-    because the engine configuration already exists. Enabling requires the
-    full explicit selection (repository, scope, public visibility); sibling
-    components' extension keys in an existing settings file are preserved.
-    This explicit boundary updates only the declared profile authority.
-    """
-    config = args.config.expanduser().absolute()
-    if not config.is_file():
-        parser.error(
-            "no existing configuration; run setup.py install "
-            "--knowledge-python PYTHON first"
-        )
-    adapter = product_contract.read_json(config)[0]
-    python = adapter.get("python")
-    if not isinstance(python, str) or not python:
-        parser.error("existing configuration has no runtime interpreter")
-    scripts = adapter.get("runtime_scripts")
-    if not isinstance(scripts, str) or not Path(scripts).is_absolute():
-        parser.error("existing configuration has no selected product scripts")
-    from mindie_knowledge.loop.cli import config_at
-    try:
-        engine_path = adapter["engine_config"]
-        if not isinstance(engine_path, str) or not Path(engine_path).is_absolute():
-            raise ValueError("engine_config must be absolute")
-        config_at(engine_path)
-    except TimeoutError:
-        raise
-    except (OSError, ValueError, KeyError) as exc:
-        parser.error(
-            "existing engine configuration is unavailable or unsupported; "
-            f"configuration was not changed ({type(exc).__name__})"
-        )
-    community = community_settings(args, parser, python, scripts=Path(scripts))
-    if community is None:
-        parser.error(
-            "configure requires the explicit community selection "
-            "(--community-repository, --community-project-root, "
-            "--community-visibility public)"
-        )
-    # Validate the consent authority first, but do not claim completed setup
-    # before the real configuration writes succeed.
-    saved = consent.load(config)
-    if saved["state"] in {"corrupt", "unreadable"}:
-        parser.error("saved setup state is damaged; configuration was not changed")
-    with sharing.community_write_lock(config):
-        community_config = sharing.configured_path(config)
-        old, extensions = _read_existing_community(community_config, parser)
-        merged = sharing.normalize_with_runtime(
-            {**extensions, **community}, python, config, previous=old
-        )
-        merged["consent_config"] = str(consent.consent_path_for(config))
-        community_config.parent.mkdir(parents=True, exist_ok=True)
-        if merged != old:
-            sharing.write(community_config, merged)
-    consent.record_choice("contribute", config)
-    from diagnostic_support import activate_reporting
-    reporting = activate_reporting(config)
-    print(
-        json.dumps(
-            dict(
-                status="configured" if reporting["status"] == "running" else "degraded",
-                configuration_status="configured",
-                reporting=reporting,
-                community_config=str(community_config),
-                sharing="enabled",
-                sharing_choice="contribute",
-                repository=merged["repository"],
-                project_roots=merged["project_roots"],
-                enabled_at=merged["enabled_at"],
-                note="only material authorized after enabled_at is captured; "
-                "toggle with bridge.py sharing-enable / sharing-disable. "
-                "Existing engine configuration was left in place.",
-            ),
-            indent=2,
-        )
-    )
-    if reporting["status"] != "running":
-        raise SystemExit(1)
-
-
-def _read_existing_community(community_config, parser):
-    try:
-        raw = community_config.read_bytes()
-    except FileNotFoundError:
-        return {}, {}
-    except TimeoutError:
-        raise
-    except OSError as exc:
-        parser.error(
-            "community settings file is unreadable; inspect and repair "
-            f"the designated file explicitly ({type(exc).__name__})"
-        )
-    try:
-        old = json.loads(raw)
-    except ValueError:
-        parser.error(
-            "community settings file is damaged; its bytes are preserved. "
-            "Inspect and remove it explicitly before configuring again."
-        )
-    if not isinstance(old, dict) or old.get("schema") != sharing.SCHEMA:
-        parser.error(
-            "community settings file is not a valid mindie-community-config/1 "
-            "document; its bytes are preserved."
-        )
-    extensions = {
-        key: value
-        for key, value in old.items()
-        if key not in sharing.CORE_KEYS
-        and key not in {"consent_config", "publication_contract_sha256"}
-    }
-    return old, extensions
-
-
-def sharing_command(args, parser):
-    """Unified `setup.py sharing --status|--enable|--disable` entry point."""
-    if sum(bool(flag) for flag in (args.status, args.enable, args.disable)) != 1:
-        parser.error("sharing requires exactly one of --status, --enable, or --disable")
-    config = args.config.expanduser().absolute()
-    if args.status:
-        print(json.dumps(sharing.cli_status(config, harness="codex"), indent=2))
-        return
-    saved = consent.load(config)
-    if saved["state"] in {"corrupt", "unreadable"}:
-        parser.error("saved setup state is damaged; configuration was not changed")
-    adapter = None
-    python = sys.executable
-    if config.is_file():
-        adapter = product_contract.read_json(config)[0]
-        python = adapter.get("python") or sys.executable
-    with sharing.community_write_lock(config):
-        try:
-            community_config = (
-                sharing.configured_path(config, adapter=adapter)
-                if adapter is not None
-                else consent.shared_community_path_for(config)
-            )
-        except sharing.SharingError as exc:
-            parser.error(str(exc))
-        old, extensions = _read_existing_community(community_config, parser)
-        if args.disable:
-            disabled_input = {
-                **extensions,
-                "schema": sharing.SCHEMA,
-                "enabled": False,
-                "generation": old.get("generation"),
-                "enabled_at": None,
-                "repository": old.get("repository"),
-                "branch": old.get("branch") or "main",
-                "project_roots": list(old.get("project_roots") or []),
-                "idle_seconds": old.get("idle_seconds", 300),
-            }
-            try:
-                structural = sharing.validate(disabled_input)
-                merged = sharing.normalize_with_runtime(
-                    structural,
-                    python,
-                    config if adapter is not None else None,
-                    previous=old or None,
-                )
-            except sharing.SharingError as exc:
-                parser.error(str(exc))
-            merged["consent_config"] = str(consent.consent_path_for(config))
-            consent.record_choice("disabled", config)
-            community_config.parent.mkdir(parents=True, exist_ok=True)
-            if merged != old:
-                sharing.write(community_config, merged)
-            from diagnostic_support import activate_reporting
-
-            reporting = activate_reporting(config)
-            print(
-                json.dumps(
-                    dict(
-                        status="configured"
-                        if reporting["status"] in {"running", "disabled"}
-                        else "degraded",
-                        configuration_status="configured",
-                        reporting=reporting,
-                        community_config=str(community_config),
-                        sharing="disabled",
-                        sharing_choice="disabled",
-                        repository=merged.get("repository"),
-                        project_roots=merged.get("project_roots", []),
-                    ),
-                    indent=2,
-                )
-            )
-            if reporting["status"] not in {"running", "disabled"}:
-                raise SystemExit(1)
-            return
-        repository = (
-            args.repository
-            or args.community_repository
-            or old.get("repository")
-            or "mindie-agent/knowledge-vllm-ascend"
-        )
-        if not isinstance(repository, str) or not sharing.REPOSITORY.fullmatch(repository):
-            parser.error("community repository must be owner/repo")
-        visibility = (
-            args.visibility
-            if args.visibility is not None
-            else (
-                args.community_visibility
-                if args.community_visibility is not None
-                else "public"
-            )
-        )
-        if visibility != "public":
-            parser.error(
-                "community sharing requires --visibility public; "
-                "no other visibility is supported"
-            )
-        branch = args.branch or args.community_branch or old.get("branch") or "main"
-        if (
-            not isinstance(branch, str)
-            or not sharing.NAME.fullmatch(branch)
-            or ".." in branch
-        ):
-            parser.error("community branch is invalid")
-        raw_roots = (args.project_root or []) + (args.community_project_root or [])
-        if not raw_roots:
-            raw_roots = list(old.get("project_roots") or [str(Path.cwd().resolve())])
-        roots = []
-        for root in raw_roots:
-            try:
-                canonical = sharing.canonical_root(str(Path(root).expanduser().absolute()))
-            except sharing.SharingError as exc:
-                parser.error(str(exc))
-            if not Path(canonical).is_dir():
-                parser.error("community project root does not exist: " + canonical)
-            if canonical not in roots:
-                roots.append(canonical)
-        if not roots:
-            parser.error("community sharing requires at least one --project-root")
-        account = args.account or args.community_account or old.get("account")
-        fork = args.fork or args.community_fork or old.get("fork")
-        if account is not None and (
-            not isinstance(account, str)
-            or "/" in account
-            or not sharing.NAME.fullmatch(account)
-        ):
-            parser.error("community account is invalid")
-        if fork is not None and (
-            not isinstance(fork, str) or not sharing.REPOSITORY.fullmatch(fork)
-        ):
-            parser.error("community fork must be owner/repo")
-        if not fork:
-            account, fork = sharing.resolve_github_identity(
-                repository, account=account, fork=fork
-            )
-        enabled_input = {
-            **extensions,
-            "schema": sharing.SCHEMA,
-            "enabled": True,
-            "generation": secrets.token_hex(16),
-            "enabled_at": time.time(),
-            "repository": repository,
-            "branch": branch,
-            "project_roots": roots,
-            "idle_seconds": old.get("idle_seconds", 300),
-            "visibility": "public",
-        }
-        if account:
-            enabled_input["account"] = account
-        if fork:
-            enabled_input["fork"] = fork
-        try:
-            structural = sharing.validate(enabled_input)
-            merged = sharing.normalize_with_runtime(
-                structural,
-                python,
-                config if adapter is not None else None,
-                previous=old or None,
-            )
-        except sharing.SharingError as exc:
-            parser.error(str(exc))
-        merged["consent_config"] = str(consent.consent_path_for(config))
-        community_config.parent.mkdir(parents=True, exist_ok=True)
-        if merged != old:
-            sharing.write(community_config, merged)
-    consent.record_choice("contribute", config)
-    from diagnostic_support import activate_reporting
-
-    reporting = activate_reporting(config)
-    print(
-        json.dumps(
-            dict(
-                status="configured" if reporting["status"] == "running" else "degraded",
-                configuration_status="configured",
-                reporting=reporting,
-                community_config=str(community_config),
-                sharing="enabled",
-                sharing_choice="contribute",
-                repository=merged["repository"],
-                fork=merged.get("fork"),
-                account=merged.get("account"),
-                project_roots=merged["project_roots"],
-                enabled_at=merged["enabled_at"],
-            ),
-            indent=2,
-        )
-    )
-    if reporting["status"] != "running":
-        raise SystemExit(1)
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "operation",
-        nargs="?",
-        default="install",
-        choices=["install", "configure", "sharing"],
-        help="install writes a fresh configuration; configure/sharing records sharing "
-        "settings on an existing installation",
-    )
-    parser.add_argument(
-        "--status",
-        action="store_true",
-        help="Print read-only sharing and onboarding status JSON (with `sharing`)",
-    )
-    parser.add_argument(
-        "--enable",
-        action="store_true",
-        help="Enable community sharing and fault reporting (with `sharing`)",
-    )
-    parser.add_argument(
-        "--disable",
-        action="store_true",
-        help="Disable community sharing and fault reporting (with `sharing`)",
-    )
-    parser.add_argument(
-        "--project-root",
-        action="append",
-        dest="project_root",
-        metavar="PATH",
-        help="Authorized local task scope; repeatable (with `sharing --enable`)",
-    )
-    parser.add_argument(
-        "--fork",
-        dest="fork",
-        metavar="OWNER/REPO",
-        help="Contributor-controlled fork for contribution branches (with `sharing --enable`)",
-    )
-    parser.add_argument(
-        "--account",
-        dest="account",
-        help="Explicit publishing account name (with `sharing --enable`)",
-    )
-    parser.add_argument(
-        "--repository",
-        dest="repository",
-        metavar="OWNER/REPO",
-        help="Content repository (default mindie-agent/knowledge-vllm-ascend with `sharing --enable`)",
-    )
-    parser.add_argument(
-        "--branch",
-        dest="branch",
-        help="Content branch (default main with `sharing --enable`)",
-    )
-    parser.add_argument(
-        "--visibility",
-        dest="visibility",
-        help="Contribution visibility (default public with `sharing --enable`)",
-    )
-    parser.add_argument(
-        "--knowledge-python",
-        help="Python 3.11+ interpreter with the MindIE knowledge runtime installed",
-    )
-    parser.add_argument(
-        "--config", type=Path, default=Path.home() / ".config/mindie-agent/codex.json"
-    )
-    parser.add_argument(
-        "--root", type=Path, default=Path.home() / ".local/share/mindie-agent"
-    )
-    parser.add_argument("--domain", default="vllm-ascend")
-    parser.add_argument(
-        "--no-public-feed",
-        action="store_true",
-        help="Do not read the official vLLM-Ascend domain feed",
-    )
-    parser.add_argument(
-        "--community-repository",
-        metavar="OWNER/REPO",
-        help="Explicitly enable community sharing against this content repository",
-    )
-    parser.add_argument(
-        "--community-project-root",
-        action="append",
-        metavar="PATH",
-        help="Authorized local task scope; repeatable",
-    )
-    parser.add_argument("--community-branch", help="Content branch (default main)")
-    parser.add_argument(
-        "--community-account", help="Explicit publishing account name (no tokens)"
-    )
-    parser.add_argument(
-        "--community-fork",
-        metavar="OWNER/REPO",
-        help="Contributor-controlled fork for contribution branches",
-    )
-    parser.add_argument(
-        "--community-visibility",
-        choices=["public"],
-        help="Required with community sharing: contributions are public",
-    )
-    parser.add_argument(
-        "--interactive",
-        action="store_true",
-        help="Confirm the explicit contribution destination and scope; never default yes. "
-        "Headless install (the default) leaves sharing unconfigured/off.",
-    )
-    args = parser.parse_args()
-    if args.operation == "sharing":
-        sharing_command(args, parser)
-    elif args.operation == "configure":
-        configure(args, parser)
-    else:
-        install(args, parser)
-
-
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            json.dump(value, stream, indent=2, sort_keys=True); stream.write("\n")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+def ensure_initialized(profile, *, python: Path, scripts_dir: Path, release_dir: Path):
+    """Write the canonical adapter and engine documents once; return both."""
+    config, engine = Path(profile.config_path), Path(profile.config_path).with_name(Path(profile.config_path).stem + ".engine.json")
+    if config.is_file() and engine.is_file():
+        return json.loads(config.read_text(encoding="utf-8")), json.loads(engine.read_text(encoding="utf-8"))
+    version = _version(Path(scripts_dir).parent); validation = {"schema": "mindie-candidate-check/1", "status": "validated", "native_version": version}
+    community = config.parent / "mindie-community.json"; admission = config.parent / (config.stem + ".admission.sqlite3")
+    engine_doc = {"root": str(Path(os.environ.get("MINDIE_KNOWLEDGE_ROOT") or Path(profile.data_dir) / "knowledge")), "domain": "vllm-ascend", "admission_path": str(admission), "transcript_adapter": str(Path(scripts_dir) / "codex_transcript.py"), "community_config": str(community), "product_validation": validation}
+    existing = json.loads(config.read_text(encoding="utf-8")) if config.is_file() else {}; adapter = {**existing, "host": "codex", "python": str(python), "engine_config": str(engine), "community_config": str(community), "consent_config": str(config.parent / "mindie-consent.json"), "admission_path": str(admission), "runtime_scripts": str(scripts_dir), "source_root": str(Path(scripts_dir).parent), "component_release": str(release_dir), "product_validation": validation, "domain_configs": existing.get("domain_configs", {})}
+    if redactor := (shutil.which("gitleaks") or os.environ.get("MINDIE_REDACTOR_EXECUTABLE")):
+        engine_doc["redactor_executable"] = redactor
+    _atomic(engine, engine_doc); _atomic(config, adapter); return adapter, engine_doc
+def _profile(config: str | None):
+    from mindie_harness.paths import ProfileRef
+    return ProfileRef.resolve("codex", config_path=config or os.environ.get("MINDIE_AGENT_CONFIG"), plugin_root=SCRIPTS.parent)
+def _has(relative: str, root: Path) -> bool:
+    file_part, _, symbol = relative.partition("::")
+    if not symbol:
+        file_part, _, symbol = file_part.partition(":")
+    path = root / (Path(file_part).name if file_part.startswith("tests/") else file_part)
+    if not path.is_file():
+        return False
+    if not symbol:
+        return True
+    node = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for name in symbol.split("."):
+        node = next((child for child in ast.iter_child_nodes(node) if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and child.name == name), None)
+        if node is None:
+            return False
+    return True
+def release_metadata(source: Path, tests: Path | None, revision: str | None) -> dict:
+    from mindie_knowledge.releases import validate_compatibility
+    if revision is not None and not SHA_RE.fullmatch(revision):
+        raise ValueError("revision must be a 40-character lowercase SHA")
+    version = _version(source); compatibility = json.loads((source / "harness-compatibility.json").read_text(encoding="utf-8")); validate_compatibility(compatibility, harness_name="codex")
+    for entry in compatibility["interface_registry"].values():
+        if any(not _has(path, source) for path in entry["code_paths"]) or (tests is not None and any(not _has(test, tests) for test in entry["test_ids"])):
+            raise ValueError("harness-compatibility code_paths/test_ids do not resolve")
+    servers = json.loads((source / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"].values()
+    seed = {argv[index + 1] for server in servers for argv in [server.get("args", [])] for index, token in enumerate(argv[:-1]) if token == "--seed"}
+    if seed != {version}:
+        raise ValueError("inline .mcp.json seed does not match the plugin version")
+    return {"schema": "mindie-plugin-release/1", "version": version, "source": {"repository": REPOSITORY, "sha": revision or "0" * 40}, "compatibility": compatibility}
+def _flags(argv: list[str], spec: dict[str, bool]) -> dict:
+    values, index = {}, 0
+    while index < len(argv):
+        token = argv[index]
+        if token not in spec: index += 1
+        elif spec[token]: values[token] = True; index += 1
+        elif index + 1 < len(argv): values[token] = argv[index + 1]; index += 2
+        else: raise SystemExit(f"{token} requires a value")
+    return values
+def _install(argv: list[str]) -> dict:
+    flags = _flags(argv, {"--knowledge-python": False, "--config": False, "--root": False, "--domain": False, "--no-public-feed": True})
+    profile = _profile(flags.get("--config"))
+    existing = json.loads(Path(profile.config_path).read_text(encoding="utf-8")) if Path(profile.config_path).is_file() else {}
+    chosen_py = flags.get("--knowledge-python") or (existing.get("python") if isinstance(existing.get("python"), str) and Path(existing["python"]).is_file() else sys.executable)
+    adapter, engine = ensure_initialized(profile, python=Path(chosen_py), scripts_dir=SCRIPTS, release_dir=SCRIPTS.parent)
+    if root := flags.get("--root"):
+        engine["root"] = str(Path(root).expanduser().absolute())
+    if domain := flags.get("--domain"):
+        engine["domain"] = domain
+    _atomic(Path(profile.config_path).with_name(Path(profile.config_path).stem + ".engine.json"), engine)
+    return {"status": "configured", "config": str(profile.config_path), "engine_config": str(adapter["engine_config"]), "admission_path": adapter["admission_path"], "transcript_adapter": engine["transcript_adapter"], "domain": engine["domain"]}
+def _sharing(argv: list[str]) -> dict:
+    flags = _flags(argv, {"--config": False, "--status": True, "--enable": True, "--local-only": True, "--disable": True, "--project-root": False, "--repository": False, "--fork": False, "--account": False})
+    if sum(bool(flags.get(key)) for key in ("--status", "--enable", "--local-only", "--disable")) > 1:
+        raise SystemExit("conflicting sharing flags: choose at most one of --status, --enable, --local-only, --disable")
+    from mindie_harness.sharing import configure_sharing, sharing_status
+    profile = _profile(flags.get("--config"))
+    if flags.get("--status") or not any(key in flags for key in ("--enable", "--local-only", "--disable")):
+        return sharing_status(profile)
+    choice = "contribute" if flags.get("--enable") else "local-only" if flags.get("--local-only") else "disabled"
+    return configure_sharing(profile, choice=choice, project_roots=[flags["--project-root"]] if flags.get("--project-root") else [], repository=flags.get("--repository"), fork=flags.get("--fork"), account=flags.get("--account"))
+def _doctor(argv: list[str]) -> int:
+    flags = _flags(argv, {"--probe-remote": True, "--cwd": False, "--timeout": False}); from mindie_harness.api import run_host
+    forwarded = ["--host", "codex", "doctor"] + (["--probe-remote"] if flags.get("--probe-remote") else []) + (["--cwd", flags["--cwd"]] if flags.get("--cwd") else []) + (["--timeout", flags["--timeout"]] if flags.get("--timeout") else [])
+    return run_host(forwarded)
+def _update(argv: list[str]) -> dict:
+    from mindie_harness.runtime.wheelhouse import update_runtime
+    flags = _flags(argv, {"--config": False, "--force": True, "--offline": True, "--channel-base-url": False, "--background": True})
+    return update_runtime(_profile(flags.get("--config")), force=bool(flags.get("--force")), offline=bool(flags.get("--offline")), channel_base_url=flags.get("--channel-base-url"), background=bool(flags.get("--background")))
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if not args:
+        print("usage: setup.py {install|init|configure|sharing|doctor|update|release-metadata} ...", file=sys.stderr); return 2
+    if importlib.util.find_spec("mindie_harness") is None:
+        from with_runtime import selected_python
+        runtime_py = selected_python()
+        if Path(runtime_py).resolve() != Path(sys.executable).resolve():
+            return subprocess.run([runtime_py, "-I", "-X", "utf8", str(Path(__file__).resolve()), *args], creationflags=_NO_WIN).returncode
+    command, rest = args[0], args[1:]
+    if command in {"install", "init", "configure"}:
+        print(json.dumps(_install(rest), sort_keys=True)); return 0
+    if command == "sharing":
+        print(json.dumps(_sharing(rest), sort_keys=True)); return 0
+    if command == "doctor":
+        return _doctor(rest)
+    if command == "update":
+        print(json.dumps(_update(rest), sort_keys=True)); return 0
+    if command == "release-metadata":
+        flags = _flags(rest, {"--source": False, "--tests": False, "--revision": False})
+        print(json.dumps(release_metadata(Path(flags.get("--source") or SCRIPTS.parent).resolve(), Path(flags["--tests"]).resolve() if flags.get("--tests") else None, flags.get("--revision")), sort_keys=True)); return 0
+    raise SystemExit(f"unknown setup command: {command}")
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -25,6 +25,6 @@ Thank you for contributing to `mindie-agent-codex`, the native OpenAI Codex plug
 ```bash
 python3 .github/scripts/check_lf_eol.py
 pytest -q tests/
-python3 plugins/mindie-agent/scripts/release_metadata.py --source plugins/mindie-agent --tests tests --revision "$(git rev-parse HEAD)"
+python3 plugins/mindie-agent/scripts/setup.py release-metadata --source plugins/mindie-agent --tests tests --revision "$(git rev-parse HEAD)"
 python3 .github/scripts/check_pr_checklist.py --profile host-plugin --body-file <pr_body.md>
 ```

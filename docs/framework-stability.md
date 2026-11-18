@@ -29,7 +29,7 @@ Component checks use committed parser fixtures and exact Git revisions pinned in
 export MINDIE_CORE_REPO=/path/to/knowledge
 export MINDIE_KIMI_REPO=/path/to/mindie-agent-kimi
 uv sync --project plugins/mindie-agent --locked --no-editable
-uv run --project plugins/mindie-agent --no-sync python tests/run_ci.py
+uv run --project plugins/mindie-agent --no-sync python -m pytest -q -m "not live_npu" tests
 ```
 
 - **Per-Release CPU Microbenchmark**: Each `0.0.2` release runs [`benchmarks/release.json`](../benchmarks/release.json) ([`benchmarks/release.py`](../benchmarks/release.py)) to measure `public-transcript` public-message parsing and hidden-reasoning filtering latency in `us/op`, publishing `benchmark-results.json` and `benchmark-results.md` as a reproducible CPU baseline.

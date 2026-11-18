@@ -1,55 +1,53 @@
-# Capture and Operation Lifecycle
+# Capture, Sharing, and Runtime Operations
 
-## Default-On Knowledge & Opt-In Background Capture
+## Default-On Tools, Opt-In Capture
 
-- Knowledge tools (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`) and deterministic component tools are exposed by default on `mindie-tools` (`tools-mcp`) and via `knowledge_cli.py` with zero session-activation prefix or `_meta` prerequisite.
-- `SessionStart` and `UserPromptSubmit` are fast passive hooks that never create SQLite databases on cold start.
-- On `Stop`, the hook checks community sharing consent and authorized `project_roots` first before touching SQLite. When community sharing is unconfigured, disabled, or outside authorized `project_roots`, `Stop` exits cleanly in `< 100ms` without creating SQLite state. When community sharing IS enabled and `cwd` is inside authorized `project_roots`, `Stop` auto-ensures an active session lease (`not_before=0.0`) and hands off the completed turn's redacted public transcript slice to the background organizer.
-- A single-turn host `Stop` event only hands off the completed turn's public transcript slice; it does not mark a multi-turn or long-horizon engineering task as completed.
+- `mindie-remote-dev` and `mindie-tools` are available immediately in CLI, Desktop, Work mode, Automations, and Subagents. No session prefix, activation gate, `_meta` prerequisite, or `request_nonce` is required.
+- `SessionStart` and `UserPromptSubmit` are passive, sub-15ms hooks. They never create SQLite state.
+- `Stop` first reads the saved consent + `project_roots`. Unconfigured, `disabled`, `read-only`, or out-of-scope sessions print `{}` in under 30ms without importing `mindie_harness` or opening SQLite.
+- When `contribute` or `local-only` is enabled and the event `cwd` is inside an absolute authorized root, `Stop` ensures a default admission lease (`not_before=0.0`), prepares the store schema, and hands the completed turn's redacted public transcript slice to `mindie_knowledge.loop.cli.capture_hook` (6s bound).
+- `local-only` captures locally with zero GitHub upload and does not require `gh`.
 
-## Knowledge CLI Input & Failure Stages
+## Privacy Modes
 
-- Invoke `knowledge_cli.py` as `describe`, `<operation>` with UTF-8 JSON on binary stdin, or `<operation> --input-file <path>`. A selected file is the only source; an unreadable file never falls back to stdin. Input is bounded to 1 MiB and accepts UTF-8 with an optional BOM. UTF-16/GBK, empty, oversized, malformed and non-object JSON are rejected before dispatch.
-- On Windows PowerShell 5.1, write the payload as UTF-8 (its BOM is accepted) and pass the file instead of relying on the console pipe:
-  ```powershell
-  $payload | Set-Content -LiteralPath $inputFile -Encoding UTF8 -ErrorAction Stop
-  & $runtimePython -I $cli knowledge_query --input-file $inputFile
-  if ($LASTEXITCODE -ne 0) { throw "knowledge_cli.py failed with exit code $LASTEXITCODE" }
+- `contribute`: scoped community knowledge PRs plus sanitized fault reporting. Recommended when `gh` is authenticated.
+- `local-only`: local capture and retrieval only; no community PR and no GitHub upload. Recommended when `gh` is unavailable.
+- `read-only`: no transcript capture, no outbound publication.
+- A saved choice persists across upgrades. An explicit `disabled`/`read-only` choice is never silently widened. `Stop` never re-enables a disabled hook.
+
+## Readiness, SSH, and Sharing Operations
+
+Use the installed runtime interpreter (`<python>`) for these commands.
+
+- **Read-only health card**:
+  ```sh
+  <python> -m mindie_harness.cli --host codex doctor
   ```
-- Closed failure stages: `cli_input` (`argv_invalid`, `input_empty`, `input_too_large`, `input_encoding`, `input_json` with optional `line`/`column`, `input_not_object`), `input_read` (`code="input_unavailable"`), and `tool_schema` (`unknown_operation`, `schema_missing_field`, `schema_unknown_field`, `schema_unknown_input_field`).
-- Windows service preparation may fail at `windows_service_interpreter` with `windowless_interpreter_missing` or `windowless_interpreter_invalid`. An invalid candidate never retires the current service owner or publishes its binding; API-only preparation remains usable without scheduled-service capability.
+  The same check is exposed as the `mindie_doctor` MCP tool. It reports runtime, config, consent, and optional SSH/NPU probe facts without mutating profile state.
 
-## Explicit Configuration, Status & Multi-Domain Routing (`entry.py bridge`)
+- **One-step SSH NPU setup** (password is requested at the end and is never stored in argv history):
+  ```sh
+  <python> -m remote_dev auth setup --host <REAL_IP> --port 22 --user <REAL_USER> --save-default --discover --password
+  ```
+  MCP callers can use `remote_auth(save_default=True, discover=True)` instead. After enrollment, run `mindie_doctor` to show the readiness card.
 
-Use the installed `<release-entry.py> bridge` in the active profile (`CODEX_THREAD_ID` is provided by the native shell when running inside a Codex thread):
+- **Sharing state**:
+  ```sh
+  <python> plugins/mindie-agent/scripts/setup.py sharing --status
+  <python> plugins/mindie-agent/scripts/setup.py sharing --enable --project-root /absolute/workspace
+  <python> plugins/mindie-agent/scripts/setup.py sharing --local-only --project-root /absolute/workspace
+  <python> plugins/mindie-agent/scripts/setup.py sharing --disable
+  ```
 
-- **`entry.py bridge status`**: returns factual read-only status (`experience`, `sharing`, `admission`, `service`, `diagnostics`, `updates`, or `configured: false`).
-- **`entry.py bridge activate`**: binds or inspects a session lease (`--domain <domain>` for non-default domains).
-- **Unified Contribution & Fault-Reporting Switch (`entry.py bridge config`)**:
-  - `adapter_config.parent / "mindie-consent.json"` stores the single persistent choice governing both community knowledge PRs and sanitized product fault Issues.
-  - Enabling `contribute` configures scoped knowledge sharing and starts the background fault reporter (`reporting.status == "running"`). Run `entry.py bridge config` with at least a 180-second timeout budget.
-  - When enabling contribution for a public knowledge repository `owner/repo` (e.g., `mindie-agent/knowledge-vllm-ascend`) under account `USER`, ensure the personal fork exists (`gh repo fork owner/repo --clone=false --remote=false`) and pass `--community-fork USER/repo --community-repository owner/repo --community-account USER --community-project-root /absolute/path --community-visibility public`.
-  - Keep three states distinct when reporting back: (1) local consent config written, (2) background reporter worker running, and (3) external GitHub Issue/PR created.
-- **Multi-Domain Registration, Target Activation & Session Mute (`bridge deactivate`)**:
-  - Register an additional domain route with:
-    ```sh
-    <python> -m mindie_knowledge.loop.domain_routes register --adapter-config "<adapter-config.json>" --domain "<domain>" --engine-config "<domain-engine-config.json>"
-    ```
-  - Distilling or contributing to a non-default registered `domain` requires that domain's own consent and project scope plus explicit domain lease activation:
-    ```sh
-    <python> "<release-entry.py>" bridge activate --domain "<domain>"
-    ```
-  - Running `<python> "<release-entry.py>" bridge deactivate` revokes the current `CODEX_THREAD_ID` session across the default domain and all registered `domain_configs`, returning `status="partial"` with per-domain `domains[]` details if any domain fails during revocation.
+- **Runtime inspection and repair**:
+  ```sh
+  <python> -m mindie_harness.cli --host codex inspect
+  <python> plugins/mindie-agent/scripts/setup.py update --offline
+  ```
+  `update` uses the prebuilt wheelhouse and preserves the active generation until a validated candidate is ready.
 
-## Historical Experience Import (Explicit User Request Only)
+## Failure Stages
 
-Run historical import only when the user explicitly asks to import past session transcripts into the knowledge base:
-
-1. Verify that the current session has an active task lease and approved sharing scope.
-2. Confirm which Codex JSONL transcript files the user wants to import.
-3. Run:
-   ```sh
-   <python> "<release-entry.py>" bridge history-import --source "ABSOLUTE_TRANSCRIPT.jsonl"
-   ```
-   (Repeat `--source` for multiple files; add `--retry-summary` only when explicitly retrying an interrupted index step.)
-4. Report per-file status (`imported` / `extended`, `unchanged`, `empty`, or `failed`).
+- Readiness failures are reported as concrete stages (`runtime`, `config`, `consent`, `ssh`, `npu`) by `mindie_doctor`. A failed readiness probe is not a reason to block the engineering task; continue with native SSH or local scripts after reporting it once.
+- Remote writes with an `unknown` outcome must be reconciled before any repeat. Never resubmit an uncertain mutation automatically.
+- Historical experience import is never automatic; only an explicit user request may process a selected transcript source.

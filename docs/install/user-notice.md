@@ -1,5 +1,25 @@
 # MindIE Agent 用户须知
 
+## 安装与首次配置
+
+使用确定性 bootstrap 完成安装，无需手工 clone 或拼接脚本路径：
+
+```sh
+uv run https://github.com/mindie-agent/mindie-agent/releases/latest/download/install.py --host codex
+```
+
+安装后由 Codex 原生 `request_user_input` 发起 3 问动态 Onboarding（`gh` 探测结果决定推荐顺序）：
+
+1. **工作区**：初始化 `vllm-ascend-workspace`、保持当前目录，或使用已有工作区目录。
+2. **经验与隐私模式**：`gh` 已认证时推荐 `contribute`；`gh` 缺失、未登录或不可达时推荐 `local-only`（本地采集，零 GitHub 上传，无需 `gh`）；也可选择 `read-only`（不采集）。
+3. **可选的一步 SSH NPU 接入**：优先 `remote_auth(save_default=True, discover=True)`；终端场景使用下方命令，`--password` 放在最后并保留行首空格：
+   ```sh
+    <python> -m remote_dev auth setup --host <REAL_IP> --port 22 --user <REAL_USER> --save-default --discover --password
+   ```
+
+完成后运行只读 `mindie_doctor` 展示运行时、配置、共享模式与 SSH/NPU 就绪卡片，并以单行礼貌 Star 附言收尾（仅在用户明确同意后 Star）。
+
+
 本页说明已开启社区贡献时的数据处理方式，供使用前及使用中查阅。阅读本页不增加确认、授权或逐次发布操作；已有的贡献选择和项目范围继续生效。
 
 ## 会共享什么
@@ -30,8 +50,8 @@ GitHub PR、提交及版本历史是公开发布的一部分。从当前知识�
 
 ## 统一贡献开关与故障上报
 
-社区知识贡献与自动工具故障上报共用适配器配置文件同目录的 `mindie-consent.json`（`adapter_config.parent / "mindie-consent.json"`）。可通过 `setup.py sharing` 或 `entry.py bridge config` 修改这一选择，无需手动编辑文件：
-- **统一开启与关闭**：显式开启社区贡献（`contribute`）会同时授权配置范围内的知识 PR 与脱敏产品故障 Issue，并启动后台上报服务；关闭贡献（`disabled`）会同时停止两条路径的后续外发，待发送队列在发送前会重新核验授权并终止外发，且不会补报关闭期间产生的故障。已有的 `disabled`、`later` 与 `read-only` 选择在版本升级后保持关闭。
+社区知识贡献与自动工具故障上报共用适配器配置文件同目录的 `mindie-consent.json`（`adapter_config.parent / "mindie-consent.json"`）。可通过 `setup.py sharing` 修改这一选择，无需手动编辑文件：
+- **统一开启与关闭**：显式开启社区贡献（`contribute`）会同时授权配置范围内的知识 PR 与脱敏产品故障 Issue，并启动后台上报服务；`local-only` 只做本地采集，零 GitHub 上传且无需 `gh`；关闭贡献（`disabled`）会同时停止两条路径的后续外发，待发送队列在发送前会重新核验授权并终止外发，且不会补报关闭期间产生的故障。已有的 `disabled`、`later` 与 `read-only` 选择在版本升级后保持关闭。
 - **最小化脱敏载荷**：故障上报仅包含静态产品阶段、错误分类与已安装版本号，不包含任务对话、命令、文件路径、环境变量、凭据或原始异常堆栈。
 - **旧版配置升级说明**：有效的已保存选择直接复用，不重复询问。仅当旧版仅知识 `contribute` 记录返回 `needs_choice` 时，才需要确认一次统一选择。旧 `disabled`、`read-only`、`later` 选择直接保留、不提示；启动过程不自动扩大权限。同一配置流程中已经表达的贡献意愿直接使用，不再单独确认故障授权，也不逐次任务询问。
 - **清晰的状态区分**：系统在状态回执中严格区分**本地授权配置已写入**、**后台 reporter 服务运行中**与**外部 GitHub Issue/PR 已实际创建**三种状态，绝不将本地配置保存直接报告为远端已送达。

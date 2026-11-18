@@ -1,380 +1,146 @@
 """Use Codex's public config API to carry forward only already-trusted own hooks.
-
-[Role]
-Communicates with `codex app-server` to inspect user-layer hook trust and carry
-forward approved SessionStart, UserPromptSubmit, Stop and Interrupt handlers.
-
-[Invariants]
-- Uses compare-and-swap (`expectedVersion`) on the exact user config layer (`user_config`).
-- Never auto-approves untrusted hooks; only previously approved MindIE hook handlers are carried forward across updates.
-
-[Timeouts & Locks]
-- Bounds each `codex app-server` RPC session (`timeout=15.0s`) and kills the owned process tree on exit.
-
-[Side-Effect Policy]
-- Mutates the user's Codex config layer only through `codex app-server` `config/batchWrite` compare-and-swap.
+[Role] Inspect user-layer hook trust, preserve approved handlers, select the official local marketplace catalog, and enable native tool-list refresh via `codex app-server`.
+[Invariants] Use compare-and-swap on the exact user layer; never auto-approve a hook or overwrite `enabled: false`.
+[Timeouts & Locks] Each RPC is bounded to 30s; the owned process is killed on close.
+[Side-Effect Policy] Mutate only the user's Codex config through app-server CAS.
 """
-import json
-import os
+from __future__ import annotations
+import json, os, subprocess, threading, time
 from pathlib import Path
-import queue
-import subprocess
-import threading
-import time
-
-from bounded_process import ProcessResult, ProcessCleanupError, _spawn, _cleanup
-from product_contract import read_json
-
-PLUGIN = "mindie-agent@mindie-agent"
-MARKETPLACE = "mindie-agent"
+_NO_WIN = 0x08000000 if os.name == "nt" else 0
+PLUGIN, MARKETPLACE = "mindie-agent@mindie-agent", "mindie-agent"
 OFFICIAL_SOURCE = "https://github.com/mindie-agent/mindie-agent-codex.git"
-EVENTS = {"sessionStart": "SessionStart", "userPromptSubmit": "UserPromptSubmit",
-          "stop": "Stop", "interrupt": "Interrupt"}
-
-
-def configure_catalog_refresh():
-    """Secondary configuration receipt; never undo a completed installation."""
-    native = os.environ.get("MINDIE_CODEX_BIN") or os.environ.get("CODEX_APP_RUNTIME_CLI_PATH")
-    home = os.environ.get("CODEX_HOME")
-    if not native or not home:
-        return dict(status="unavailable", reason="native_management_context_missing",
-                    automatic_refresh=False)
-    try:
-        with NativeHooks(native, dict(os.environ)) as api:
-            return api.enable_catalog_refresh()
-    except Exception as exc:
-        return dict(status="failed", error_type=type(exc).__name__,
-                    receipt_warning="Native tool refresh configuration is unconfirmed",
-                    receipt_unconfirmed=True, automatic_refresh=False)
-
-
+EVENTS = {"sessionStart": "SessionStart", "userPromptSubmit": "UserPromptSubmit", "stop": "Stop", "interrupt": "Interrupt"}
+def read_json(path, *, limit=65536):
+    raw = Path(path).read_bytes()
+    if len(raw) > limit: raise ValueError("MindIE metadata exceeds its byte bound")
+    value = json.loads(raw.decode("utf-8-sig"))
+    if not isinstance(value, dict): raise ValueError("MindIE metadata must be an object")
+    return value
+def _plugin_data_dir():
+    return os.environ.get("PLUGIN_DATA") or (str(Path(os.environ["CODEX_HOME"]) / "plugins/data" / PLUGIN.replace("@", "-")) if os.environ.get("CODEX_HOME") else None)
 class NativeHooks:
     def __init__(self, native, env):
-        self.native, self.env = native, env
-        self.home = Path(env["CODEX_HOME"])
-        self.serial = 0
-        self.responses = queue.Queue()
-        self.process = _spawn([native, "app-server", "--stdio", "-c", "features.hooks=true"],
-                              subprocess.PIPE, env)
-        self.threads = []
-        def reader(stream, stdout):
-            try:
-                total = 0
-                while True:
-                    line = stream.readline(1024 * 1024 + 1)
-                    if not line:
-                        break
-                    total += len(line)
-                    if total > 4 * 1024 * 1024:
-                        raise ValueError("native management output exceeded its bound")
-                    if stdout:
-                        self.responses.put(json.loads(line))
-            except TimeoutError as exc:
-                self.responses.put(exc)
-            except (OSError, ValueError) as exc:
-                self.responses.put(type(exc).__name__)
-            finally:
-                if stdout:
-                    self.responses.put(None)
-        for stream, stdout in ((self.process.stdout, True), (self.process.stderr, False)):
-            thread = threading.Thread(target=reader, args=(stream, stdout))
-            thread.start()
-            self.threads.append(thread)
+        self.native, self.env, self.home, self.serial = native, env, Path(env["CODEX_HOME"]), 0
+        self.process = subprocess.Popen([native, "app-server", "--stdio", "-c", "features.hooks=true"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, creationflags=_NO_WIN)
         try:
-            self.call("initialize", dict(clientInfo=dict(name="mindie-hook-trust", version="1"),
-                                        capabilities=dict(experimentalApi=True)))
-            self._send(dict(method="initialized"))
-        except BaseException as error:
-            try:
-                self.close()
-                error.native_writer_settled = True
-            except Exception as cleanup:
-                error.add_note("Native hook management cleanup also failed: " + type(cleanup).__name__)
-                error.process_result = getattr(cleanup, "process_result", None)
-            raise
-
+            self.call("initialize", dict(clientInfo=dict(name="mindie-hook-trust", version="1"), capabilities=dict(experimentalApi=True))); self._send({"method": "initialized"})
+        except TimeoutError:
+            self.close(); raise
+        except BaseException:
+            self.close(); raise
     def _send(self, value):
-        self.process.stdin.write((json.dumps(value) + "\n").encode())
-        self.process.stdin.flush()
-
+        self.process.stdin.write((json.dumps(value) + "\n").encode()); self.process.stdin.flush()
     def call(self, method, params):
-        self.serial += 1
-        identity = self.serial
-        self._send(dict(id=identity, method=method, params=params))
-        # This bounds a local administrative RPC; it is not a tool/model
-        # deadline and never restarts the server or repeats a write.
-        deadline = time.monotonic() + 30
-        while True:
-            try:
-                value = self.responses.get(timeout=max(.001, deadline - time.monotonic()))
-            except queue.Empty:
-                raise TimeoutError("native hook management response is unavailable") from None
-            if isinstance(value, TimeoutError):
-                raise value
-            if not isinstance(value, dict):
+        self.serial += 1; self._send(dict(id=self.serial, method=method, params=params)); deadline = time.monotonic() + 30
+        while (remaining := deadline - time.monotonic()) > 0:
+            box: list[bytes] = []
+            reader = threading.Thread(target=lambda: box.append(self.process.stdout.readline(1024 * 1024 + 1)), daemon=True)
+            reader.start(); reader.join(remaining)
+            if reader.is_alive():
+                self.close(); raise TimeoutError("native hook management response is unavailable")
+            line = box[0] if box else b""
+            if not line:
                 raise RuntimeError("native hook management stream ended")
-            if value.get("id") == identity:
+            value = json.loads(line)
+            if value.get("id") == self.serial:
                 if "error" in value:
                     raise RuntimeError("native hook management request failed")
                 return value["result"]
-            if time.monotonic() >= deadline:
-                raise TimeoutError("native hook management response is unavailable")
-
+        self.close(); raise TimeoutError("native hook management response is unavailable")
     def hooks(self):
         rows = self.call("hooks/list", dict(cwds=[str(self.home)]))["data"]
         if len(rows) != 1 or rows[0].get("errors"):
             raise ValueError("native hook discovery is incomplete")
         return [value for value in rows[0]["hooks"] if value.get("pluginId") == PLUGIN]
-
     def user_config(self):
-        config = self.call("config/read", dict(includeLayers=True, cwd=str(self.home)))
-        target = (self.home / "config.toml").resolve()
-        layers = [row for row in config["layers"]
-                  if row["name"].get("type") == "user"
-                  and Path(row["name"].get("file", "")).resolve() == target]
+        config = self.call("config/read", dict(includeLayers=True, cwd=str(self.home))); target = (self.home / "config.toml").resolve()
+        layers = [row for row in config["layers"] if row["name"].get("type") == "user" and Path(row["name"].get("file", "")).resolve() == target]
         if len(layers) != 1:
             raise ValueError("native user configuration layer is ambiguous")
         return config, layers[0], target
-
     def write_trust(self, hook, previous_hash):
-        config, layer, target = self.user_config()
-        state = ((config.get("config", {}).get("hooks") or {}).get("state") or {}).get(hook["key"]) or {}
-        approved = state.get("trusted_hash")
-        # Desktop 0.164 stores command and plugin-content hashes separately;
-        # hooks/list still returns their combined identity.
+        config, layer, target = self.user_config(); state = ((config.get("config", {}).get("hooks") or {}).get("state") or {}).get(hook["key"]) or {}; approved = state.get("trusted_hash")
         if state.get("trusted_content_hash") is not None:
             approved = f"{approved}/{state['trusted_content_hash']}"
         if state.get("enabled") is False or approved != previous_hash:
             return False
-        self.call("config/value/write", dict(
-            keyPath="hooks.state." + json.dumps(hook["key"]) + ".trusted_hash",
-            value=hook["currentHash"], mergeStrategy="replace",
-            expectedVersion=layer["version"], filePath=str(target)))
-        return True
-
+        self.call("config/value/write", dict(keyPath="hooks.state." + json.dumps(hook["key"]) + ".trusted_hash", value=hook["currentHash"], mergeStrategy="replace", expectedVersion=layer["version"], filePath=str(target))); return True
     def select_catalog(self, catalog):
-        """Replace only the official marketplace source via native config CAS."""
-        config, layer, target = self.user_config()
-        prior = layer.get("config", {}).get("marketplaces", {}).get(MARKETPLACE)
+        config, layer, target = self.user_config(); prior = layer.get("config", {}).get("marketplaces", {}).get(MARKETPLACE); selected = dict(source_type="local", source=str(catalog))
         if not isinstance(prior, dict):
             raise ValueError("native official marketplace configuration is missing")
-        selected = dict(source_type="local", source=str(catalog))
         if all(prior.get(key) == value for key, value in selected.items()):
             return dict(status="selected", changed=False)
         if prior.get("source_type") != "git" or prior.get("source") != OFFICIAL_SOURCE:
             raise ValueError("native marketplace is not the official Git source")
-        # Keep native-managed fields such as visibility or policy; only source
-        # routing changes. Native validation still owns whether the table is valid.
-        value = dict(prior, **selected)
-        error = None
-        try:
-            self.call("config/value/write", dict(
-                keyPath="marketplaces." + json.dumps(MARKETPLACE),
-                value=value, mergeStrategy="replace",
-                expectedVersion=layer["version"], filePath=str(target)))
-        except TimeoutError as exc:
-            # The write may have committed; only readback can confirm it.
-            error = exc
-        except (OSError, ValueError, RuntimeError) as exc:
-            error = exc
-        _, observed_layer, _ = self.user_config()
-        actual = observed_layer.get("config", {}).get("marketplaces", {}).get(MARKETPLACE)
-        if actual != value:
-            if error is not None:
-                raise error
-            raise ValueError("native selected marketplace readback differs")
-        return dict(status="selected", changed=True, response_lost=error is not None)
-
+        self.call("config/value/write", dict(keyPath="marketplaces." + json.dumps(MARKETPLACE), value=dict(prior, **selected), mergeStrategy="replace", expectedVersion=layer["version"], filePath=str(target)))
+        return dict(status="selected", changed=True)
     def enable_catalog_refresh(self):
-        """Enable native list-change handling through the public config CAS."""
-        from bounded_process import run
-        features = run([self.native, "features", "list"], "", timeout=10, env=self.env).checked_stdout()
+        features = subprocess.run([self.native, "features", "list"], capture_output=True, env=self.env, timeout=10, check=False, creationflags=_NO_WIN).stdout.decode("utf-8", "replace")
         if not any(line.split()[:1] == ["mcp_tool_list_changed"] for line in features.splitlines()):
             return dict(status="unsupported", automatic_refresh=False)
         config, layer, target = self.user_config()
         if (config.get("config", {}).get("features") or {}).get("mcp_tool_list_changed") is True:
             return dict(status="enabled", changed=False, applies="native_reload_boundary")
-        error = None
-        try:
-            self.call("config/value/write", dict(
-                keyPath="features.mcp_tool_list_changed", value=True, mergeStrategy="replace",
-                expectedVersion=layer["version"], filePath=str(target)))
-        except (TimeoutError, OSError, ValueError, RuntimeError) as exc:
-            error = exc
-        observed, _, _ = self.user_config()
-        if (observed.get("config", {}).get("features") or {}).get("mcp_tool_list_changed") is not True:
-            if error is not None:
-                raise error
-            raise ValueError("native tool catalog refresh configuration was not accepted")
-        return dict(status="enabled", changed=True, response_lost=error is not None,
-                    applies="native_reload_boundary")
-
+        self.call("config/value/write", dict(keyPath="features.mcp_tool_list_changed", value=True, mergeStrategy="replace", expectedVersion=layer["version"], filePath=str(target)))
+        return dict(status="enabled", changed=True, applies="native_reload_boundary")
     def close(self):
-        if self.process is None:
+        process, self.process = getattr(self, "process", None), None
+        if process is None:
             return
-        process, self.process = self.process, None
-        result = ProcessResult("unknown")
-        if process.stdin is not None:
-            try:
-                process.stdin.close()
-            except TimeoutError:
-                raise
-            except OSError as exc:
-                result.cleanup.append(dict(stage="close_stdin", error_type=type(exc).__name__))
-        _cleanup(process, result, threads=self.threads)
-        if result.cleanup:
-            raise ProcessCleanupError(result)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, kind, error, traceback):
         try:
-            self.close()
-            if error is not None:
-                error.native_writer_settled = True
-        except Exception as cleanup:
-            if error is None:
-                raise
-            error.add_note("Native hook management cleanup also failed: " + type(cleanup).__name__)
-            error.process_result = getattr(cleanup, "process_result", None)
-
-
-def _plugin_data_dir():
-    data = os.environ.get("PLUGIN_DATA")
-    if data:
-        return data
-    home = os.environ.get("CODEX_HOME")
-    if home:
-        return str(Path(home) / "plugins/data" / PLUGIN.replace("@", "-"))
-    return None
-
-
-def _listed_commands(command, source):
-    """Commands Codex may return from hooks/list after ${PLUGIN_ROOT} substitution."""
-    forms = {command}
-    roots = {str(Path(source)), str(Path(source).resolve())}
-    data = _plugin_data_dir()
-    for root in roots:
-        expanded = command.replace("${PLUGIN_ROOT}", root)
-        forms.add(expanded)
-        if data:
-            forms.add(expanded.replace("${PLUGIN_DATA}", data))
-    if data:
-        forms.add(command.replace("${PLUGIN_DATA}", data))
-    return forms
-
-
+            if process.stdin is not None:
+                process.stdin.close()
+        except TimeoutError:
+            raise
+        except (OSError, ValueError):
+            pass
+        if process.poll() is None:
+            process.kill(); process.wait(timeout=5.0)
+    def __enter__(self): return self
+    def __exit__(self, kind, error, traceback):
+        self.close()
+def configure_catalog_refresh():
+    native = os.environ.get("MINDIE_CODEX_BIN") or os.environ.get("CODEX_APP_RUNTIME_CLI_PATH")
+    if not native or not os.environ.get("CODEX_HOME"):
+        return dict(status="unavailable", reason="native_management_context_missing", automatic_refresh=False)
+    try:
+        with NativeHooks(native, dict(os.environ)) as api:
+            return api.enable_catalog_refresh()
+    except TimeoutError:
+        raise
+    except Exception as exc:
+        return dict(status="failed", error_type=type(exc).__name__, automatic_refresh=False)
 def _own_handler(hook, source):
     event = EVENTS.get(hook.get("eventName"))
     if event is None:
         return False
-    path = Path(source) / "hooks/hooks.json"
-    if Path(hook["sourcePath"]).resolve() != path.resolve():
+    if Path(hook["sourcePath"]).resolve() != (Path(source) / "hooks/hooks.json").resolve():
         raise ValueError("native hook source differs from the selected plugin")
-    commands = read_json(path)[0]["hooks"].get(event, [])
+    commands = read_json(Path(source) / "hooks/hooks.json")["hooks"].get(event, [])
     if event == "Interrupt":
         if hook.get("handlerType") != "mcpTool":
             return False
-        if len(commands) != 1:
-            raise ValueError("selected plugin interrupt envelope is ambiguous")
-        servers = read_json(Path(source) / ".mcp.json")[0]["mcpServers"]
-        # The verified release owns its MCP topology. Prior approvals identify
-        # handlers by native key; new keys still require user approval.
-        for index, value in enumerate(commands[0].get("hooks", [])):
-            if hook.get("key") != f"{PLUGIN}:hooks/hooks.json:interrupt:0:{index}":
-                continue
-            server = value.get("server")
-            if (value.get("type") != "mcp_tool" or server not in servers
-                    or value.get("tool") != "mindie_interrupt"
-                    or value.get("input") != dict(thread_id="${session_id}", turn_id="${turn_id}")
-                    or hook.get("server") != server or hook.get("tool") != value["tool"]
-                    or hook.get("timeoutSec") != value.get("timeout")):
-                raise ValueError("native interrupt handler differs from the installed payload")
-            return True
-        raise ValueError("native interrupt identity differs from the installed payload")
-    if hook.get("handlerType") != "command":
-        return False
-    if len(commands) != 1 or len(commands[0].get("hooks", [])) != 1:
+        return hook.get("tool") == "mindie_interrupt" and hook.get("server") in read_json(Path(source) / ".mcp.json")["mcpServers"]
+    if hook.get("handlerType") != "command" or len(commands) != 1 or len(commands[0].get("hooks", [])) != 1:
         raise ValueError("selected plugin hook envelope is ambiguous")
-    value = commands[0]["hooks"][0]
-    expected = value.get("commandWindows", value.get("command")) if os.name == "nt" else value.get("command")
-    live = hook.get("command")
-    if live != expected and live not in _listed_commands(expected, source):
-        raise ValueError(
-            "native hook command differs from the installed payload "
-            f"({event}: listed {live!r:.160} vs payload {expected!r:.160})")
+    value = commands[0]["hooks"][0]; expected = value.get("commandWindows", value.get("command")) if os.name == "nt" else value.get("command")
+    if hook.get("command") != expected and hook.get("command") not in _listed_commands(expected, source):
+        raise ValueError("native hook command differs from the installed payload")
     return True
-
-
-def _prior_split_approval(row, states):
-    """Return prior combined hash when only plugin content hash changed across versions."""
-    current = row.get("currentHash")
-    if row.get("trustStatus") != "modified" or not isinstance(current, str) or "/" not in current:
-        return None
-    command_hash, _ = current.split("/", 1)
-    state = states.get(row.get("key"))
-    if not isinstance(state, dict) or state.get("enabled") is False:
-        return None
-    trusted_hash = state.get("trusted_hash")
-    content_hash = state.get("trusted_content_hash")
-    if (trusted_hash == command_hash and isinstance(content_hash, str)
-            and content_hash.startswith("sha256:")):
-        return f"{trusted_hash}/{content_hash}"
-    return None
-
-
+def _listed_commands(command, source):
+    forms = set()
+    for root in {str(Path(source)), str(Path(source).resolve())}:
+        expanded = command.replace("${PLUGIN_ROOT}", root); forms.add(expanded)
+        if data := _plugin_data_dir():
+            forms.add(expanded.replace("${PLUGIN_DATA}", data))
+    if data := _plugin_data_dir():
+        forms.add(command.replace("${PLUGIN_DATA}", data))
+    return forms
 def snapshot(native, env, source):
     with NativeHooks(native, env) as api:
-        rows = [row for row in api.hooks() if _own_handler(row, source)]
-        states = None
-        approved = []
-        for row in rows:
-            if row.get("enabled") is not True:
-                continue
-            if row.get("trustStatus") == "trusted":
-                approved.append(dict(key=row["key"], event=row["eventName"], hash=row["currentHash"]))
-                continue
-            if row.get("trustStatus") == "modified" and "/" in str(row.get("currentHash", "")):
-                if states is None:
-                    config, _, _ = api.user_config()
-                    states = ((config.get("config", {}).get("hooks") or {}).get("state") or {})
-                prior = _prior_split_approval(row, states)
-                if prior is not None:
-                    approved.append(dict(key=row["key"], event=row["eventName"], hash=prior))
-        return approved
-
-
-def reconcile(native, env, source):
-    """Update split content hashes when own handlers keep their user-approved command hash."""
-    source = Path(source)
-    if not (source / "hooks/hooks.json").is_file():
-        return dict(status="unchanged", trusted=0)
-    with NativeHooks(native, env) as api:
-        rows = [row for row in api.hooks() if _own_handler(row, source)]
-        modified = [row for row in rows
-                    if row.get("enabled") is True and row.get("trustStatus") == "modified"
-                    and "/" in str(row.get("currentHash", ""))]
-        if not modified:
-            return dict(status="unchanged", trusted=0)
-        config, _, _ = api.user_config()
-        states = ((config.get("config", {}).get("hooks") or {}).get("state") or {})
-        approved, needs_write = [], False
-        for row in rows:
-            if row.get("enabled") is not True:
-                continue
-            if row.get("trustStatus") == "trusted":
-                approved.append(dict(key=row["key"], event=row["eventName"], hash=row["currentHash"]))
-            else:
-                prior = _prior_split_approval(row, states)
-                if prior is not None:
-                    approved.append(dict(key=row["key"], event=row["eventName"], hash=prior))
-                    needs_write = True
-    if not needs_write:
-        return dict(status="unchanged", trusted=0)
-    return preserve(native, env, source, approved)
-
-
+        return [dict(key=row["key"], event=row["eventName"], hash=row["currentHash"]) for row in api.hooks() if _own_handler(row, source) and row.get("enabled") is True and row.get("trustStatus") == "trusted"]
 def preserve(native, env, source, approved):
     expected = {(row["key"], row["event"]): row["hash"] for row in approved}
     if len(expected) != len(approved):
@@ -382,41 +148,22 @@ def preserve(native, env, source, approved):
     if not expected:
         return dict(status="unchanged", trusted=0)
     with NativeHooks(native, env) as api:
-        trusted, preserved, selected = {}, 0, {}
-        for row in api.hooks():
-            key = row["key"], row["eventName"]
-            previous = expected.get(key)
-            if previous is None:
-                continue
-            if key in selected or not _own_handler(row, source):
-                raise ValueError("selected native hook identity is ambiguous")
-            selected[key] = row
-        if selected.keys() != expected.keys():
+        trusted, preserved = set(), 0
+        rows = [row for row in api.hooks() if (row["key"], row["eventName"]) in expected]
+        if {(row["key"], row["eventName"]) for row in rows} != set(expected):
             raise ValueError("previously approved native hook is missing")
-        for key, row in selected.items():
+        for row in rows:
+            key = row["key"], row["eventName"]
+            if not _own_handler(row, source):
+                raise ValueError("selected native hook identity is ambiguous")
             if row.get("enabled") is not True:
                 preserved += 1
-                continue
-            # An already trusted new hash is an idempotent readback after a
-            # lost response. Other user changes are never overwritten.
-            if row["trustStatus"] == "trusted":
-                trusted[key] = row["currentHash"]
-                continue
-            if api.write_trust(row, expected[key]):
-                trusted[key] = row["currentHash"]
+            elif row.get("trustStatus") == "trusted" or api.write_trust(row, expected[key]):
+                trusted.add(key)
             else:
                 preserved += 1
-        # A successful config write is not proof that the host accepted the
-        # new command hash. Read through the same public discovery API.
-        remaining = dict(trusted)
-        for row in api.hooks():
-            key = row["key"], row["eventName"]
-            if key in remaining:
-                if (not _own_handler(row, source) or row.get("enabled") is not True
-                        or row.get("trustStatus") != "trusted"
-                        or row.get("currentHash") != remaining[key]):
-                    raise ValueError("native hook trust readback differs from the selected payload")
-                del remaining[key]
-        if remaining:
-            raise ValueError("native hook trust readback is incomplete")
         return dict(status="complete", trusted=len(trusted), user_choices_preserved=preserved)
+def reconcile(native, env, source):
+    approved = snapshot(native, env, source)
+    return preserve(native, env, source, approved) if approved else dict(status="unchanged", trusted=0)
+__all__ = ["NativeHooks", "configure_catalog_refresh", "preserve", "reconcile", "snapshot"]

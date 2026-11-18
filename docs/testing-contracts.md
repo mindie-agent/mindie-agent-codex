@@ -2,7 +2,7 @@
 
 <a href="testing-contracts.zh.md">中文</a> | <b>English</b> · <a href="README.en.md">Documentation Index</a>
 
-`mindie-agent-codex` uses a layered verification pipeline starting with `tests/preflight.py` followed by the standard `unittest` suite. In CI, every Python file is compiled first, pinned Git commits are verified, and native ownership, Unicode, and service-lifecycle contracts run before the full component test suite.
+`mindie-agent-codex` uses a fast, isolated verification pipeline: `tests/conftest.py` isolates every host environment variable, `pytest -q -m "not live_npu" tests` runs the thin-plugin contract suite, and `setup.py release-metadata` validates the interface registry and release metadata.
 
 ---
 

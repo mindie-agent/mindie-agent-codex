@@ -1,92 +1,43 @@
-#!/usr/bin/env python3
-"""Direct file-based MCP entrypoint for `mindie-agent-codex`.
-
-[Role]
-Resolves the durable or cache-resident `hook_launcher.py` without inline JSON
-state-machine blobs and forwards CLI arguments (`--seed <ver> remote-mcp|tools-mcp`).
-
-[Invariants]
-- Pure Python stdlib; zero imports of `mindie_knowledge` or `torch` at startup.
-- Prefers `$PLUGIN_ROOT/scripts/hook_launcher.py`, then `$PLUGIN_DATA/hook_launcher.py`,
-  then `$PLUGIN_DATA/releases/<seed>/hook_launcher.py`, then the Codex plugin cache.
-
-[Timeouts & Locks]
-- Pure file-existence checks before `runpy.run_path` handoff.
-
-[Side-Effect Policy]
-- Strictly read-only locator before delegating to `hook_launcher.py`.
+"""Direct file-based MCP locator forwarding to `hook_launcher.py`.
+[Role] Resolve the plugin-root, durable, seeded, cache, or configured launcher and forward `--seed` plus the MCP role.
+[Invariants] Pure stdlib; zero substrate, knowledge, or device imports.
+[Timeouts & Locks] File-existence checks only.
+[Side-Effect Policy] Strictly read-only locator before `runpy` handoff.
 """
 from __future__ import annotations
-
-import json
-import os
+import json, os, runpy, sys
 from pathlib import Path
-import runpy
-import sys
-
-
-def resolve_launcher(
-    *,
-    seed_version: str | None = None,
-    name: str = "mindie-agent",
-    marketplace: str = "mindie-agent",
-) -> Path:
-    home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
-    data = Path(
-        os.environ.get(
-            "PLUGIN_DATA",
-            str(home / "plugins" / "data" / f"{name}-{marketplace}"),
-        )
-    )
-    candidates: list[Path] = []
-    root = os.environ.get("PLUGIN_ROOT")
-    if root:
-        candidates.append(Path(root) / "scripts" / "hook_launcher.py")
-    candidates.append(data / "hook_launcher.py")
-    if seed_version:
-        candidates.append(data / "releases" / seed_version / "hook_launcher.py")
-    candidates.append(
-        home
-        / "plugins"
-        / "cache"
-        / marketplace
-        / name
-        / (seed_version or "unprepared")
-        / "scripts"
-        / "hook_launcher.py"
-    )
+def _config_path() -> Path:
+    if explicit := os.environ.get("MINDIE_AGENT_CONFIG"):
+        return Path(explicit).expanduser()
+    base = Path(os.environ.get("APPDATA") or Path.home() / "AppData/Roaming") if os.name == "nt" else Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    return Path(os.environ.get("MINDIE_CONFIG_HOME") or base / "mindie-agent").expanduser() / "codex.json"
+def resolve_launcher(*, seed_version: str | None = None, name: str = "mindie-agent", marketplace: str = "mindie-agent") -> Path:
+    home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    data = Path(os.environ.get("PLUGIN_DATA") or home / "plugins/data" / f"{name}-{marketplace}")
+    candidates = [Path(os.environ["PLUGIN_ROOT"]) / "scripts/hook_launcher.py"] if os.environ.get("PLUGIN_ROOT") else []
+    candidates += [data / "hook_launcher.py"] + ([data / "releases" / seed_version / "hook_launcher.py"] if seed_version else [])
+    candidates.append(home / "plugins/cache" / marketplace / name / (seed_version or "unprepared") / "scripts/hook_launcher.py")
     for candidate in candidates:
         if candidate.is_file():
             return candidate
-    cfg = Path(
-        os.environ.get("MINDIE_AGENT_CONFIG", str(Path.home() / ".config/mindie-agent/codex.json"))
-    ).expanduser()
-    if cfg.is_file():
-        with cfg.open("rb") as handle:
-            raw = handle.read(65537)
-        if len(raw) <= 65536:
-            parsed = json.loads(raw.decode("utf-8-sig"))
-            if isinstance(parsed, dict):
-                comp_rel = parsed.get("component_release")
-                if isinstance(comp_rel, str) and (Path(comp_rel) / "hook_launcher.py").is_file():
-                    return Path(comp_rel) / "hook_launcher.py"
-                ver = (parsed.get("product_validation") or {}).get("native_version")
-                if isinstance(ver, str) and (data / "releases" / ver / "hook_launcher.py").is_file():
-                    return data / "releases" / ver / "hook_launcher.py"
+    try:
+        raw = _config_path().read_bytes(); parsed = json.loads(raw.decode("utf-8-sig")) if len(raw) <= 65536 else None
+    except TimeoutError:
+        raise
+    except (OSError, ValueError):
+        parsed = None
+    if isinstance(parsed, dict):
+        release, version = parsed.get("component_release"), (parsed.get("product_validation") or {}).get("native_version")
+        for candidate in (Path(release) / "hook_launcher.py" if isinstance(release, str) else None, data / "releases" / version / "hook_launcher.py" if isinstance(version, str) else None):
+            if candidate is not None and candidate.is_file():
+                return candidate
     raise RuntimeError("MindIE launcher is unavailable")
-
-
 def main(argv: list[str] | None = None) -> None:
     args = list(sys.argv[1:] if argv is None else argv)
-    seed: str | None = None
-    for idx, token in enumerate(args[:-1]):
-        if token == "--seed":
-            seed = args[idx + 1]
-            break
+    seed = next((args[index + 1] for index, token in enumerate(args[:-1]) if token == "--seed"), None)
     launcher = resolve_launcher(seed_version=seed)
     sys.argv = [str(launcher), *args]
     runpy.run_path(str(launcher), run_name="__main__")
-
-
 if __name__ == "__main__":
     main()

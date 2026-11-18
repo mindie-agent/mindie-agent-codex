@@ -6,7 +6,7 @@
 - **`0.153.4`**（对应官方上游源码提交 `3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`）
 - **`0.162.0-alpha.17.2`**（对应官方上游源码提交 `740e5af33c71225640e0c1c1555c514c2c93ab74`）
 
-在 CI 流程中，`plugins/mindie-agent/scripts/release_metadata.py` 会自动核对每个已登记的生产代码符号与契约测试方法，并校验所有使用接口与声明版本区间的一致性。
+在 CI 流程中，`plugins/mindie-agent/scripts/setup.py release-metadata` 会自动核对每个已登记的生产代码符号与契约测试方法，并校验所有使用接口与声明版本区间的一致性。
 
 ---
 

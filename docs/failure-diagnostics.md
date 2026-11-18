@@ -6,11 +6,11 @@ Following Principle 9 of the [MindIE Agent Engineering Design Principles](https:
 
 ---
 
-## 1. Read-Only Status Inspection (`bridge status`)
+## 1. Read-Only Status Inspection (`mindie_doctor` / `setup.py sharing --status`)
 
-- **Clear State Distinction**: `bridge.py status` distinguishes between a missing configuration, a corrupted/invalid configuration file, an occupied update lock, and a failed runtime. Corrupted settings are reported directly as a diagnostic error and never trigger a fresh install/onboarding prompt.
-- **Task-Scoped Snapshot**: Using the native `CODEX_THREAD_ID`, `status` returns factual control-plane state (`experience`, `sharing`, `admission` lease state, startup stage, configuration/storage/service health, `diagnostics.reporting` status, `updates` check state, and the latest 5 captures, summaries, and contribution batches for that task; or `configured: false` when unconfigured) without injecting onboarding prompt fields (`first_use`, `next`, `recovery`). When called outside a task identity, it returns no task records.
-- **Strictly Read-Only**: Running `status` (within its 5-second execution budget) never binds a task, resets failure counters, starts background services, or replays failed work. Uncertain external PR publications must be reconciled before any explicit `recover` retry.
+- **Clear State Distinction**: `mindie_doctor` and `setup.py sharing --status` distinguish a missing configuration, a corrupted file, an occupied update lock, and a failed runtime. Corrupted settings are reported directly as a diagnostic error and never trigger a fresh install/onboarding prompt.
+- **Task-Scoped Snapshot**: `mindie_doctor` returns a read-only readiness card (runtime, config, consent, SSH/NPU probe facts) and `sharing --status` returns the saved tier, `project_roots`, `cwd_in_scope`, and `gh` recommendation. Neither injects onboarding prompt fields or mutates task state.
+- **Strictly Read-Only**: Readiness checks never bind a task, reset failure counters, start background services, or replay failed work. Uncertain external PR publications must be reconciled before any explicit retry.
 
 ---
 

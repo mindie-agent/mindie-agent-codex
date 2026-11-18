@@ -15,7 +15,7 @@ jobs:
     secrets:
       MINDIE_RELEASE_DEPLOY_KEY: ${{ secrets.MINDIE_RELEASE_DEPLOY_KEY }}
     with:
-      release-notes-path: docs/releases/mindie-agent-codex-0.1.37.md
+      release-notes-path: docs/releases/mindie-agent-codex-0.1.38.md
       version-files: |
         plugins/mindie-agent/pyproject.toml
         plugins/mindie-agent/.codex-plugin/plugin.json
@@ -23,18 +23,7 @@ jobs:
         UV_PROJECT_ENVIRONMENT="$PWD/.venv" uv sync --project plugins/mindie-agent --locked --no-editable && uv pip install --python .venv/bin/python pytest
       python: .venv/bin/python
       test-command: |
-        export MINDIE_CORE_REPO="$RUNNER_TEMP/release-knowledge"
-        knowledge_sha=$(.venv/bin/python -c 'import importlib.metadata as m,json; print(json.loads(m.distribution("mindie-knowledge").read_text("direct_url.json"))["vcs_info"]["commit_id"])')
-        git clone --no-checkout --filter=blob:none https://github.com/mindie-agent/knowledge "$MINDIE_CORE_REPO"
-        git -C "$MINDIE_CORE_REPO" checkout --detach "$knowledge_sha"
-        # The legacy-module regression archives these already-published tags.
-        # The shared candidate checkout is shallow, so fetch only these exact
-        # tag refs at depth 1 before tests run.
-        git fetch --no-tags --depth=1 origin \
-          refs/tags/v0.1.8:refs/tags/v0.1.8 \
-          refs/tags/v0.1.9:refs/tags/v0.1.9
-        .venv/bin/python tests/preflight.py
         .venv/bin/python -m pytest tests -q -m "not live_npu"
       build-command: |
         uv build --project plugins/mindie-agent --out-dir "$RELEASE_ASSETS_DIR"
-        .venv/bin/python plugins/mindie-agent/scripts/release_metadata.py --source plugins/mindie-agent --tests tests --revision "$GITHUB_SHA" > "$RELEASE_ASSETS_DIR/mindie-plugin-release.json"
+        .venv/bin/python plugins/mindie-agent/scripts/setup.py release-metadata --source plugins/mindie-agent --tests tests --revision "$GITHUB_SHA" > "$RELEASE_ASSETS_DIR/mindie-plugin-release.json"

@@ -23,7 +23,7 @@ English version: [`CONTRIBUTING.en.md`](CONTRIBUTING.en.md)
 ## 2. 本地验证与提交前检查
 
 1. 在隔离环境变量下运行完整测试套件：`pytest -q tests/`。
-2. 校验发布元数据与接口注册表：`python3 plugins/mindie-agent/scripts/release_metadata.py --source plugins/mindie-agent --tests tests --revision "$(git rev-parse HEAD)"`。
+2. 校验发布元数据与接口注册表：`python3 plugins/mindie-agent/scripts/setup.py release-metadata --source plugins/mindie-agent --tests tests --revision "$(git rev-parse HEAD)"`。
 3. 校验 LF 行尾与 PR 自查清单（`.github/pull_request_template.md` 中的 `HOST-NATIVE`、`HOST-WIRE`、`HOST-ADMISSION`、`HOST-UPGRADE`）：
    ```bash
    python3 .github/scripts/check_lf_eol.py

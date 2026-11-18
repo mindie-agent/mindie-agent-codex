@@ -20,10 +20,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-        with:
-          # The legacy-module regression uses `git archive v0.1.8`/`v0.1.9`.
-          # A shallow checkout does not fetch those tags.
-          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -62,7 +58,7 @@ jobs:
       - name: Install component test collector
         run: uv run --project plugins/mindie-agent --no-sync python -c "import subprocess,sys; subprocess.run(['uv','pip','install','--python',sys.executable,'pytest==9.1.1'],check=True)"
       - name: Validate release compatibility and registered Harness interfaces
-        run: uv run --project plugins/mindie-agent --no-sync python plugins/mindie-agent/scripts/release_metadata.py --source plugins/mindie-agent --tests tests --revision "${{ github.sha }}"
+        run: uv run --project plugins/mindie-agent --no-sync python plugins/mindie-agent/scripts/setup.py release-metadata --source plugins/mindie-agent --tests tests --revision "${{ github.sha }}"
       - name: Out-of-tree wheel build and seed verification smoke check
         shell: bash
         run: |
@@ -70,39 +66,10 @@ jobs:
           uv venv "$RUNNER_TEMP/mindie-codex-smoke-venv" --python 3.13
           uv pip install --python "$RUNNER_TEMP/mindie-codex-smoke-venv" --no-deps "$RUNNER_TEMP"/mindie-codex-dist/*.whl
           (cd "$RUNNER_TEMP" && "$RUNNER_TEMP/mindie-codex-smoke-venv/bin/python" -c "import mindie_codex.scripts.host_adapter as h; info = h.verify_bundled_seed(); assert info['schema'] == 'mindie-harness-seed/1'" 2>/dev/null || "$RUNNER_TEMP/mindie-codex-smoke-venv/Scripts/python.exe" -c "import mindie_codex.scripts.host_adapter as h; info = h.verify_bundled_seed(); assert info['schema'] == 'mindie-harness-seed/1'")
-      # Contract tests archive these commits. They do not guess a sibling
-      # checkout. Publish the exact core and peer revisions before adapter CI.
-      # Peer 90f73e7 is an ancestor of the reviewed Kimi 86de2c3 revision.
-      - name: Read product runtime pin
-        id: product
-        shell: bash
-        run: |
-          python -c 'import os,sys; sys.path.insert(0,"plugins/mindie-agent/scripts"); from product_contract import requirements; open(os.environ["GITHUB_OUTPUT"],"a").write("knowledge="+requirements(".")[0]["mindie-knowledge"]+"\n")'
-      - name: Checkout pinned core
-        uses: actions/checkout@v4
-        with:
-          repository: mindie-agent/knowledge
-          ref: ${{ steps.product.outputs.knowledge }}
-          path: .ci/core
-      - name: Checkout pinned peer adapter
-        uses: actions/checkout@v4
-        with:
-          repository: mindie-agent/mindie-agent-kimi
-          ref: 90f73e76c6087ce091570f2d151b709145c913bc
-          path: .ci/kimi
-      - name: Pin preflight
+      - name: Thin-plugin contract suite
         env:
-          MINDIE_CORE_REPO: ${{ github.workspace }}/.ci/core
-          MINDIE_KIMI_REPO: ${{ github.workspace }}/.ci/kimi
-        run: uv run --project plugins/mindie-agent --no-sync python tests/preflight.py
-      - name: Contract-first component tests (each case once)
-        env:
-          # Preserve the host's native encoding so the harness cannot hide
-          # implicit text I/O. Protocol encoding belongs to product code.
           PYTHONUTF8: '0'
-          MINDIE_CORE_REPO: ${{ github.workspace }}/.ci/core
-          MINDIE_KIMI_REPO: ${{ github.workspace }}/.ci/kimi
-        run: uv run --project plugins/mindie-agent --no-sync python tests/run_ci.py
+        run: uv run --project plugins/mindie-agent --no-sync python -m pytest -q -m "not live_npu" tests
 
   native-harness:
     # Model-free native management and MCP discovery; no account or NPU needed.

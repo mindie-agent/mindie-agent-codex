@@ -2,7 +2,7 @@
 
 <b>中文</b> | <a href="testing-contracts.md">English</a> · <a href="README.md">返回文档索引</a>
 
-`mindie-agent-codex` 采用分层确定性验证流水线：先通过 `tests/preflight.py` 完成环境与锁定依赖预检，再运行标准 `unittest` 测试套件。CI 会依次完成 Python 字节码编译、锁定 Git 提交核验、安装与更新探针，以及进程归属、Unicode 路径与服务生命周期契约测试。
+`mindie-agent-codex` 采用快速、隔离的确定性验证流水线：`tests/conftest.py` 隔离全部宿主环境变量，`pytest -q -m "not live_npu" tests` 运行薄插件契约测试，`setup.py release-metadata` 校验接口注册表与发布元数据。
 
 ---
 

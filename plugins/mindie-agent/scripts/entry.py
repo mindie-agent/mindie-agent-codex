@@ -1,410 +1,158 @@
-"""Execute this installed release; no native mutation or current-generation selector.
-
-[Role]
-Fixed release entrypoint (`releases/<version>/entry.py`) that validates `runtime.json` and `codex.json`, initializes the default profile on first `session-start`/MCP launch, and dispatches `session-start`, `stop`, `knowledge-mcp`, `remote-mcp`, `tools-mcp`, `sync`, `configure`, `status`, or `bridge`. The hidden `migrate` role activates a newer installed seed before dispatching an MCP role; hooks and Stop never migrate.
-
-[Invariants]
-- `stop` never prepares an unconfigured installation and snapshots the active `adapter` binding before reading stdin.
-- Verifies `receipt["python"] == sys.executable` and profile consistency. A
-  cutover after launcher selection transfers startup to the committed release
-  before any operation dispatch; old and new runtime packages never mix.
-
-[Timeouts & Locks]
-- Acquires `update_lock(config)` (`blocking=True` except on `stop`) around profile validation and initialization.
-- Every long-lived MCP role, including `tools-mcp`, releases that shared lock before serve dispatch; `Gate.call` acquires it again only for an actual tool call.
-- Every long-lived MCP role holds `acquire_runtime_lease` on its owning managed
-  generation for the entire serve loop; non-blocking lease failure falls back
-  to live-process protection instead of refusing the session.
-- Session maintenance has a 300-second execution budget for reporter, feed,
-  and knowledge readiness, followed by bounded owned-process cleanup.
-- Release dispatch to helper scripts is bounded at 120.0s.
-- A consumed explicit prompt is forwarded within 420s (300s maintenance plus
-  admission/entry and cleanup); unread MCP streams transfer without buffering.
-
-[Side-Effect Policy]
-- First-use `profile(..., prepare=True)` runs headless `setup.install` under `exclusive=True` `update_lock`; subsequent calls validate and dispatch without mutating config.
+"""Thin runtime dispatcher delegating to `mindie_harness` (`API_VERSION = 1`).
+[Role] Dispatch `session-start`, `user-prompt-submit`, `stop`, the three MCP roles, `status`, `doctor`, and `configure`; initialize and migrate adapter/engine config.
+[Invariants] `stop` never initializes, migrates, or opens SQLite before consent+scope verification; MCP stdio stays clean; explicit hook disables survive.
+[Timeouts & Locks] Migration holds the update lock for 15s; Stop capture is bounded to 6s.
+[Side-Effect Policy] First use writes only MindIE-owned config; `stop` writes one authorized capture row.
 """
 from __future__ import annotations
-from contextlib import contextmanager, redirect_stdout
-import json
-import os
+import json, os, re, sys, tempfile, time
 from pathlib import Path
-import re
-import sys
-
-# All native entries use -I and this exact installed package.
 SCRIPTS = Path(__file__).resolve().parent
-sys.path.insert(0, str(SCRIPTS))
-import product_contract
-import session_gate as session_gate_mod
-from session_gate import bind_explicit_config, runtime_scripts, runtime_env
-
-
-def __getattr__(name):
-    if name == "install":
-        from setup import install as _install
-        return _install
-    if name == "update_lock":
-        from update_lock import update_lock as _update_lock
-        return _update_lock
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-@contextmanager
-def _lazy_preparing(stage):
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+MCP_ROLES = {"remote-mcp": "remote", "tools-mcp": "tools", "knowledge-mcp": "knowledge"}
+VERSION = re.compile(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\Z")
+def _current_version(source: Path) -> str:
     try:
-        yield
-    except (Exception, SystemExit):
-        from bootstrap import preparing
-        with preparing(stage):
-            raise
-
-
-def read(path):
-    return product_contract.read_json(path)[0]
-
-
-class ProfileUnavailable(ValueError):
-    """Static caller guidance for an unsupported or replaced installation."""
-    _mindie_prepare_category = "configuration"
-
-
-def _installed_profile(config, receipt, *, adapter=None):
-    adapter = read(config) if adapter is None else adapter
-    if not isinstance(adapter, dict) or not isinstance(receipt, dict):
-        raise ProfileUnavailable("installed profile metadata must be JSON objects")
-    python = adapter.get("python")
-    try:
-        scripts = Path(runtime_scripts(adapter))
-    except ValueError as exc:
-        raise ProfileUnavailable("installed profile lacks an absolute runtime_scripts path") from exc
-    if not isinstance(python, str) or not os.path.isabs(python):
-        raise ProfileUnavailable("installed profile lacks an absolute runtime interpreter")
-    engine_raw = adapter.get("engine_config")
-    if not isinstance(engine_raw, str) or not os.path.isabs(engine_raw):
-        raise ProfileUnavailable("installed profile lacks an absolute engine_config path")
-    engine = Path(engine_raw)
-    value = read(engine)
-    if (not isinstance(value, dict)
-            or "client_contract" in value
-            or not product_contract.same_interpreter(
-                value.get("transcript_adapter"),
-                str(scripts / "codex_transcript.py"))
-            or value.get("product_validation") != adapter.get("product_validation")):
-        raise ProfileUnavailable("unsupported installation profile; configuration, data and consent are preserved")
-    return config
-
-
-def profile(release, source=None, *, prepare=True):
-    import argparse
-    mod = sys.modules[__name__]
-    receipt = read(release / "runtime.json")
-    if not isinstance(receipt, dict) or not product_contract.same_interpreter(receipt.get("python"), sys.executable):
-        raise ValueError("release interpreter differs from its prepared runtime")
-    config = Path(os.environ.get("MINDIE_AGENT_CONFIG", Path.home() / ".config/mindie-agent/codex.json")).expanduser().absolute()
-    if os.path.lexists(config):
-        with mod.update_lock(config, blocking=prepare):
-            return _installed_profile(config, receipt)
-    if not prepare:
-        raise RuntimeError("MindIE release profile is not prepared; start a new native session")
-    if source is not None and source.is_dir():
-        product_contract.validate_receipt(json.dumps(receipt["validation"]), product_contract.identity(source))
-    config.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with mod.update_lock(config, exclusive=True, blocking=True):
-        if not os.path.lexists(config):
-            args = argparse.Namespace(knowledge_python=sys.executable, config=config,
-                root=Path.home() / ".local/share/mindie-agent", domain="vllm-ascend",
-                no_public_feed=False, interactive=False, community_repository=None,
-                community_project_root=None, community_account=None, community_fork=None,
-                community_visibility=None, community_branch=None)
-            with redirect_stdout(sys.stderr):
-                mod.install(args, argparse.ArgumentParser(), validation=receipt["validation"])
-        return _installed_profile(config, receipt)
-
-
-def replacement_entry(release, adapter):
-    """Use the canonical launcher's release identity, including first setup."""
-    if not isinstance(adapter, dict):
-        raise ProfileUnavailable("installed profile metadata must be a JSON object")
-    validation = adapter.get("product_validation")
-    if not isinstance(validation, dict):
-        raise ProfileUnavailable("installed profile points at another runtime with an invalid release identity")
-    version = validation.get("native_version")
-    if not isinstance(version, str) or not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+!-]{0,79}", version):
-        raise ProfileUnavailable("installed profile points at another runtime with an invalid release identity")
-    home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
-    data = Path(os.environ.get("PLUGIN_DATA", home / "plugins/data/mindie-agent-mindie-agent"))
-    comp_rel = adapter.get("component_release")
-    if comp_rel is not None and (not isinstance(comp_rel, str) or not os.path.isabs(comp_rel)):
-        raise ProfileUnavailable("installed profile points at another runtime without a prepared entry")
-    target = Path(comp_rel) if comp_rel else data / "releases" / version
-    if (product_contract.same_directory(str(target), str(release))
-            or not (target / "entry.py").is_file()
-            or not (target / "runtime.json").is_file()):
-        raise ProfileUnavailable("installed profile points at another runtime without a prepared entry")
-    receipt = read(target / "runtime.json")
-    if (not isinstance(receipt, dict)
-            or not product_contract.same_interpreter(receipt.get("python"), adapter.get("python"))
-            or receipt.get("validation") != validation
-            or validation.get("schema") != "mindie-candidate-check/1"
-            or validation.get("status") != "validated"):
-        raise ProfileUnavailable("installed profile differs from its prepared runtime receipt")
-    return [adapter["python"], "-I", str(target / "entry.py")]
-
-
-def transfer_entry(command, args, environment):
-    command = [*command, args.role, *args.arguments]
-    if args.role == "user-prompt-submit":
-        # Ordinary prompts already returned. This explicit event was consumed
-        # before profile resolution; forward it once, before granting a lease.
-        # Keep Unicode in UTF-8 and omit added whitespace within the native byte budget.
-        from bounded_process import run
-        data = json.dumps(args.prompt_event, ensure_ascii=False, separators=(",", ":"))
-        result = run(command, data, timeout=420.0,
-                     env=environment, allow_service=True, allowed_returncodes=None)
-        # These streams were already decoded from UTF-8 pipes. A second text
-        # newline conversion on Windows would turn CRLF into CRCRLF.
-        sys.stderr.buffer.write(result.stderr.encode("utf-8"))
-        sys.stdout.buffer.write(result.checked_stdout().encode("utf-8"))
-        return result.returncode
-    from windows_process import exec_or_wait
-    return exec_or_wait(command, environment)
-
-
-def session_start(config, *, session_id=None):
-    from bounded_process import run
-    adapter = read(config)
-    environment = runtime_env(config)
-    if session_id is not None:
-        environment["CODEX_THREAD_ID"] = session_id
-    result = run([adapter["python"], "-I",
-                  str(Path(runtime_scripts(adapter)) / "session_maintenance.py"), str(config)],
-                 "", timeout=300.0, env=environment, allow_service=True)
-    print(result.checked_stdout(), file=sys.stderr)
-
-
-_ACTIVE_ARGS = None
-
-
-def _stop_fast_inactive(adapter):
-    """Return True when saved sharing/consent is unconfigured or disabled (skip stdin & re-exec)."""
-    if not isinstance(adapter, dict):
-        return False
-    comm_raw = adapter.get("community_config")
-    if not comm_raw:
-        return True
-    if not isinstance(comm_raw, str) or not os.path.isabs(comm_raw):
-        return False
-    comm_path = Path(comm_raw)
-    try:
-        if not comm_path.exists():
-            return True
-        if not comm_path.is_file():
-            return False
-        raw = comm_path.read_bytes()
-        if len(raw) > 262144:
-            return False
-        data = json.loads(raw.decode("utf-8"))
+        value = json.loads((Path(source) / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
     except TimeoutError:
         raise
-    except (OSError, ValueError):
-        return False
-    if not isinstance(data, dict) or data.get("schema") != "mindie-community-config/1":
-        return False
-    enabled = data.get("enabled")
-    if not isinstance(enabled, bool):
-        return False
-    roots = data.get("project_roots")
-    if not isinstance(roots, list):
-        return False
-    if not enabled or not roots:
-        return True
-    consent_raw = data.get("consent_config")
-    if not isinstance(consent_raw, str) or not os.path.isabs(consent_raw):
-        return False
-    consent_path = Path(consent_raw)
+    except (OSError, ValueError, KeyError, TypeError):
+        return "0.1.38"
+    return value if isinstance(value, str) and VERSION.fullmatch(value) else "0.1.38"
+def _read(path: Path) -> dict:
+    target = Path(path)
+    if not target.exists():
+        return {}
+    value = json.loads(target.read_text(encoding="utf-8-sig"))
+    if not isinstance(value, dict):
+        raise ValueError(f"expected JSON object in {target}")
+    return value
+def _atomic(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True); descriptor, raw = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent); temporary = Path(raw)
     try:
-        if not consent_path.exists():
-            return True
-        if not consent_path.is_file():
-            return False
-        consent_data = json.loads(consent_path.read_bytes().decode("utf-8"))
-    except TimeoutError:
-        raise
-    except (OSError, ValueError):
-        return False
-    if not isinstance(consent_data, dict) or consent_data.get("schema") != "mindie-consent/1":
-        return False
-    return consent_data.get("choice") != "contribute"
-
-
-def dispatch(args, config, *, stop_adapter=None):
-    remaining = args.arguments
-    if args.role == 'user-prompt-submit':
-        print("{}")
-        return 0
-    if args.role == 'session-start':
-        session_start(config)
-        return
-    if args.role == 'sync':
-        target, arguments = 'feed_sync.py', [str(config)]
-    elif args.role == 'configure':
-        target, arguments = 'setup.py', ['configure', '--config', str(config), *remaining]
-    elif args.role == 'bridge':
-        target, arguments = 'bridge.py', remaining
-    elif args.role == 'status':
-        target, arguments = 'bridge.py', ['status', *remaining]
-    else:
-        target, arguments = {'stop': ('bridge.py', ['stop']),
-                             'knowledge-mcp': ('bridge.py', ['mcp']),
-                             'tools-mcp': ('mcp_gate.py', ['components']),
-                             'remote-mcp': ('remote_bridge.py', [])}[args.role]
-    if args.role in {"knowledge-mcp", "remote-mcp", "tools-mcp"} or (
-            args.role == "bridge" and remaining[:1] == ["mcp"]):
-        # This stable facade owns the native protocol. Each tools/call
-        # dispatches the complete selected helper under the operation lock.
-        # A resident server holds its managed generation against any GC sweep.
-        import runpy
-        from storage_gc import serving_runtime_lease
-        script = SCRIPTS / target
-        sys.argv = [str(script), *arguments]
-        with serving_runtime_lease():
-            runpy.run_path(str(script), run_name='__main__')
-    else:
-        from bounded_process import run
-        adapter = stop_adapter if stop_adapter is not None else read(config)
-        script = Path(runtime_scripts(adapter)) / target
-        data = ""
-        if args.role == "stop":
-            from bridge import _read_hook_stdin
-            data = _read_hook_stdin().decode("utf-8-sig")
-            data = json.dumps(dict(adapter=adapter, hook_input=data), ensure_ascii=False)
-            arguments = ["stop", "--snapshot"]
-        result = run([adapter["python"], "-I", str(script), *arguments],
-                     data, timeout=120.0, env=runtime_env(config, adapter=adapter), allow_service=True,
-                     allowed_returncodes=(0, 1, 2))
-        print(result.checked_stdout(), end="")
-        return result.returncode
-
-
-def main():
-    global _ACTIVE_ARGS
-    raw = sys.argv[1:]
-    if len(raw) == 3 and raw[0] == "--release" and raw[2] in {"stop", "user-prompt-submit"}:
-        class _FastArgs:
-            release = Path(raw[1])
-            source = None
-            role = raw[2]
-            arguments = []
-        args = _FastArgs()
-        _ACTIVE_ARGS = args
-        if args.role == "user-prompt-submit":
-            print("{}")
-            return 0
-        with _lazy_preparing("profile-binding"):
-            receipt = read(args.release / "runtime.json")
-            if not isinstance(receipt, dict) or not product_contract.same_interpreter(receipt.get("python"), sys.executable):
-                raise ValueError("release interpreter differs from its prepared runtime")
-            config = Path(os.environ.get("MINDIE_AGENT_CONFIG", Path.home() / ".config/mindie-agent/codex.json")).expanduser().absolute()
-            adapter = read(config)
-            _installed_profile(config, receipt, adapter=adapter)
-            bind_explicit_config(config)
-        if _stop_fast_inactive(adapter):
-            print("{}")
-            return 0
-        return dispatch(args, config, stop_adapter=adapter)
-    import argparse
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--release', type=Path, required=True)
-    parser.add_argument('--source', type=Path)
-    parser.add_argument('role', choices=['session-start', 'user-prompt-submit', 'stop', 'knowledge-mcp', 'remote-mcp', 'tools-mcp', 'sync', 'configure', 'status', 'bridge', 'migrate'])
-    parser.add_argument('arguments', nargs=argparse.REMAINDER)
-    args = parser.parse_args()
-    _ACTIVE_ARGS = args
-    if args.role == 'migrate':
-        if not args.arguments:
-            raise ValueError("migration role requires the original role")
-        role, arguments = args.arguments[0], args.arguments[1:]
-        if role not in {'knowledge-mcp', 'remote-mcp', 'tools-mcp', 'bridge'}:
-            raise ValueError("migration cannot dispatch this role")
-        if role == 'bridge' and arguments[:1] != ['mcp']:
-            raise ValueError("migration cannot dispatch this bridge command")
-        from release_migration import run as migrate
-        outcome = migrate(args.release, role, arguments)
-        if outcome.get("status") != "ready":
-            print(json.dumps(outcome, sort_keys=True), file=sys.stderr)
-            return 1
-        args.role, args.arguments = role, arguments
-    if args.role == 'user-prompt-submit':
-        print("{}")
-        return 0
-    from bootstrap import preparing
-    mod = sys.modules[__name__]
-    if args.role == "stop":
-        with preparing("profile-binding"):
-            # Atomic canonical publication gives this invocation one complete
-            # runtime identity; its immutable engine can enqueue after retirement.
-            receipt = read(args.release / "runtime.json")
-            if not isinstance(receipt, dict) or not product_contract.same_interpreter(receipt.get("python"), sys.executable):
-                raise ValueError("release interpreter differs from its prepared runtime")
-            config = Path(os.environ.get("MINDIE_AGENT_CONFIG", Path.home() / ".config/mindie-agent/codex.json")).expanduser().absolute()
-            adapter = read(config)
-            _installed_profile(config, receipt, adapter=adapter)
-            bind_explicit_config(config)
-        if _stop_fast_inactive(adapter):
-            print("{}")
-            return 0
-        return dispatch(args, config, stop_adapter=adapter)
-    with preparing("profile-binding"):
-        config = profile(
-            args.release, args.source if args.role == 'session-start' else None,
-            prepare=True)
-    mcp = args.role in {'knowledge-mcp', 'remote-mcp', 'tools-mcp'} or (
-        args.role == 'bridge' and args.arguments[:1] == ['mcp'])
-    with mod.update_lock(config, blocking=True):
-        with preparing("profile-binding"):
-            # Bind before any helper side effect. MCP keeps this identity in
-            # memory and reacquires the same lock for each request.
-            adapter = read(config)
-            _installed_profile(config, read(args.release / "runtime.json"), adapter=adapter)
-            if (not product_contract.same_interpreter(adapter.get("python"), sys.executable)
-                    or not product_contract.same_directory(runtime_scripts(adapter), str(SCRIPTS))):
-                # The native facade selected this entry before activation
-                # acquired the lock. No business operation has started yet.
-                command = replacement_entry(args.release, adapter)
-                environment = session_gate_mod.runtime_env(config, adapter=adapter)
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            json.dump(value, stream, indent=2, sort_keys=True); stream.write("\n")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+def parse_args(argv: list[str]):
+    values = list(argv); release = source = None
+    for name in ("--release", "--source"):
+        if name in values:
+            index = values.index(name); target = Path(values[index + 1]).expanduser().resolve()
+            if name == "--release":
+                release = target
             else:
-                command = None
-                bind_explicit_config(config)
-                os.environ.update(session_gate_mod.runtime_env(config))
-        if command is None and not mcp:
-            return mod.dispatch(args, config)
-    if command is not None:
-        # Release the old operation lock before entering another interpreter.
-        return transfer_entry(command, args, environment)
-    return mod.dispatch(args, config)
-
-
-if __name__ == '__main__':
+                source = target
+            del values[index:index + 2]
+    migrate = bool(values[:1] == ["migrate"])
+    if migrate:
+        values.pop(0)
+    return release, source, migrate, (values.pop(0) if values else ""), values
+def _profile(source: Path):
+    from host_adapter import CodexHostAdapter
+    adapter = CodexHostAdapter(plugin_root=source or SCRIPTS.parent, config_path=os.environ.get("MINDIE_AGENT_CONFIG"), data_dir=os.environ.get("PLUGIN_DATA"))
+    return adapter, adapter.resolve_profile()
+def _rebind(config_path: Path, engine_path: Path, *, source: Path, release: Path, version: str) -> dict:
+    from mindie_harness.locks import FileLock
+    lock = FileLock(config_path.with_name(f".{config_path.name}.update.lock"), exclusive=True, timeout=15.0); lock.acquire()
     try:
-        _rc = main()
-    except (Exception, SystemExit) as exc:
-        if isinstance(exc, SystemExit) and (
-            exc.code in (None, 0) or getattr(exc, "_mindie_forwarded_child", False)
-        ):
+        adapter = _read(config_path); validation = dict(adapter.get("product_validation") or {}); validation.update(schema="mindie-candidate-check/1", status="validated", native_version=version)
+        adapter.update(python=sys.executable, runtime_scripts=str(SCRIPTS), source_root=str(source), component_release=str(release), product_validation=validation, engine_config=str(engine_path), updated_at=time.time())
+        commands = dict(adapter.get("component_commands") or {})
+        for name, module in (("sim", "mindie_sim"), ("profiler", "mindie_profiler"), ("coordinator", "mindie_coordinator"), ("diagnostics", "mindie_diagnostics"), ("debugger", "mindie_debugger")):
+            if name in commands:
+                commands[name] = [sys.executable, "-I", "-X", "utf8", "-m", module]
+        adapter["component_commands"] = commands; engine = _read(engine_path); engine.update(transcript_adapter=str(SCRIPTS / "codex_transcript.py"), product_validation=validation)
+        _atomic(engine_path, engine); _atomic(config_path, adapter); return adapter
+    finally:
+        lock.release()
+def _prepare(release: Path | None, source: Path | None, migrate: bool):
+    source = source or SCRIPTS.parent; version = _current_version(source); _handle, profile = _profile(source)
+    config_path = Path(profile.config_path); engine_path = config_path.with_name(config_path.stem + ".engine.json")
+    if not config_path.is_file() or not engine_path.is_file():
+        from setup import ensure_initialized
+        ensure_initialized(profile, python=Path(sys.executable), scripts_dir=SCRIPTS, release_dir=release or Path(profile.data_dir) / "releases" / version)
+    adapter = _read(config_path); native = (adapter.get("product_validation") or {}).get("native_version")
+    if migrate or native != version or adapter.get("python") != sys.executable:
+        approved = None
+        if os.environ.get("MINDIE_CODEX_BIN") and os.environ.get("CODEX_HOME"):
+            try:
+                from native_hooks import preserve, snapshot
+                prev = Path(adapter["source_root"]) if isinstance(adapter.get("source_root"), str) else source
+                approved = snapshot(os.environ["MINDIE_CODEX_BIN"], dict(os.environ), prev if (prev / "hooks/hooks.json").is_file() else source)
+            except TimeoutError:
+                raise
+            except Exception:
+                approved = None
+        adapter = _rebind(config_path, engine_path, source=source, release=release or Path(adapter.get("component_release") or SCRIPTS.parent), version=version)
+        if approved:
+            try:
+                preserve(os.environ["MINDIE_CODEX_BIN"], dict(os.environ), source, approved)
+            except TimeoutError:
+                raise
+            except Exception:
+                pass
+    return adapter, _read(engine_path), profile
+def _stop(profile, adapter: dict) -> int:
+    raw = sys.stdin.buffer.read(1048577)
+    try:
+        event = json.loads(raw.decode("utf-8-sig")) if raw.strip() else {}
+    except ValueError:
+        print("{}"); return 0
+    if not isinstance(event, dict): print("{}"); return 0
+    cwd = event["cwd"] if "cwd" in event else (event.get("workspace") or event.get("project_root"))
+    from mindie_harness.sharing import sharing_status
+    status = sharing_status(profile, cwd=cwd)
+    if status.get("tier") not in {"contribute", "local-only"} or not status.get("cwd_in_scope"):
+        print("{}"); return 0
+    engine_path = Path(adapter.get("engine_config") or Path(profile.config_path).with_name(Path(profile.config_path).stem + ".engine.json"))
+    if not engine_path.is_file(): print("{}"); return 0
+    from mindie_knowledge.loop.handoff import prepare_schema
+    prepare_schema(engine_path)
+    session = event.get("session_id") or event.get("thread_id") or os.environ.get("CODEX_THREAD_ID")
+    if not isinstance(session, str) or not session: print("{}"); return 0
+    admission_path = adapter.get("admission_path")
+    if isinstance(admission_path, str) and os.path.isabs(admission_path):
+        from mindie_knowledge.loop.activation import Admission
+        admission = Admission(admission_path); observed = admission.inspect(session).get("status")
+        if observed == "inactive":
+            print("{}"); return 0
+        lease = admission.active_lease(session)
+        if lease is None and isinstance(cwd, str) and os.path.isabs(cwd):
+            admission.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            lease = admission.activate(session, project_root=str(Path(cwd).resolve()), root_session=session, not_before=0.0)
+        if isinstance(lease, dict) and isinstance(lease.get("token"), str):
+            event["mindie_activation"] = lease["token"]
+    event["session_id"] = session
+    from mindie_knowledge.loop.cli import capture_hook
+    capture_hook(engine_path, event, timeout=6.0); print("{}"); return 0
+def main(argv: list[str] | None = None) -> int:
+    release, source, migrate, role, rest = parse_args(list(sys.argv[1:] if argv is None else argv))
+    if role == "user-prompt-submit":
+        print("{}"); return 0
+    if role == "stop":
+        _handle, profile = _profile(source or SCRIPTS.parent); config_path = Path(profile.config_path)
+        if not config_path.is_file():
+            print("{}"); return 0
+        try:
+            return _stop(profile, _read(config_path))
+        except TimeoutError:
             raise
-        if isinstance(exc, ProfileUnavailable):
-            print(str(exc), file=sys.stderr)
-        if not getattr(exc, "_mindie_prepare_reported", False):
-            from diagnostic_support import failure
-            failure('entry.prepare', 'release-entry', 'configuration',
-                    exception=exc, reportable=False,
-                    exit_code=exc.code if isinstance(exc, SystemExit) and type(exc.code) is int else None)
-            print(f'MindIE release entry failed: {type(exc).__name__}; inspect local diagnostics.', file=sys.stderr)
-        if _ACTIVE_ARGS is not None and _ACTIVE_ARGS.role == 'user-prompt-submit':
-            print("{}")
-            raise SystemExit(0)
-        if isinstance(exc, SystemExit):
-            raise
-        raise SystemExit(1)
-    raise SystemExit(_rc)
+        except Exception:
+            print("{}"); return 0
+    adapter, engine, profile = _prepare(release, source, migrate)
+    if role == "session-start":
+        from mindie_harness.runtime.activation import write_pending_update_check
+        write_pending_update_check(profile, reason="session_start"); print("{}"); return 0
+    if role in MCP_ROLES:
+        from host_adapter import CodexHostAdapter
+        from mindie_harness.api import serve_mcp
+        return serve_mcp(MCP_ROLES[role], profile=profile, adapter=CodexHostAdapter(plugin_root=source or SCRIPTS.parent, config_path=os.environ.get("MINDIE_AGENT_CONFIG"), data_dir=os.environ.get("PLUGIN_DATA")))
+    if role in {"status", "doctor", "configure"}:
+        import setup
+        return setup.main([{"status": "sharing", "doctor": "doctor", "configure": "configure"}[role], *([] if role != "status" else ["--status"]), *rest])
+    print("{}"); return 0
+if __name__ == "__main__":
+    raise SystemExit(main())
