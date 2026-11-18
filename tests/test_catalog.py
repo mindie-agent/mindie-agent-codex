@@ -235,6 +235,47 @@ class CatalogTests(unittest.TestCase):
                 tool["inputSchema"]["properties"]["timeout_ms"]["type"], "integer"
             )
 
+    def test_rollback_helper_catalog_does_not_append_unadvertised_knowledge_sync(self):
+        import live_catalog
+        from bounded_process import ProcessResult
+        from mcp_gate import Gate
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old_scripts = root / "old-helper"
+            old_scripts.mkdir()
+            (old_scripts / "mcp_catalog.json").write_text(
+                json.dumps(dict(components=[], knowledge=[], remote=[])),
+                encoding="utf-8",
+            )
+            config = root / "adapter.json"
+            config.write_text(
+                json.dumps(dict(
+                    python=sys.executable,
+                    runtime_scripts=str(old_scripts),
+                    product_validation=dict(native_version="0.1.36"),
+                )),
+                encoding="utf-8",
+            )
+            old_helper_tools = [
+                dict(
+                    name="diagnostics_status",
+                    description="old helper tool",
+                    inputSchema=dict(type="object", properties={}, required=[], additionalProperties=False),
+                )
+            ]
+            with patch.dict(os.environ, MINDIE_AGENT_CONFIG=str(config)), \
+                    patch.dict(live_catalog._cache, clear=True), \
+                    patch.object(
+                        live_catalog,
+                        "run",
+                        return_value=ProcessResult("completed", json.dumps(old_helper_tools), 0),
+                    ):
+                gate = Gate("components")
+                names = [t["name"] for t in gate.tools]
+                self.assertEqual(names, ["diagnostics_status"])
+                self.assertNotIn("knowledge_sync", names)
+
 
 if __name__ == "__main__":
     unittest.main()

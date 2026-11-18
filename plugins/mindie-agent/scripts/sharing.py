@@ -114,9 +114,21 @@ def configured_path(config_file=None, *, adapter=None):
 
 
 
+def strip_windows_extended_prefix(value):
+    if not isinstance(value, str):
+        return value
+    if value[:8].casefold() in ("\\\\?\\unc\\", "//?/unc/"):
+        return "\\\\" + value[8:].replace("/", "\\")
+    if value.startswith(("\\\\?\\", "//?/")):
+        return value[4:]
+    return value
+
+
 def canonical_root(value):
     if not isinstance(value, str) or not value:
         raise SharingError("community project roots must be path strings")
+    if os.name == 'nt':
+        value = strip_windows_extended_prefix(value)
     if not os.path.isabs(value):
         raise SharingError("community project roots must be absolute: " + value[:80])
     if os.name == 'nt':
@@ -126,11 +138,7 @@ def canonical_root(value):
     root = str(Path(value).resolve())
     if os.name == 'nt':
         # Comparison only: preserve extended paths at the actual I/O boundary.
-        if root[:8].casefold() == '\\\\?\\unc\\':
-            root = '\\\\' + root[8:]
-        elif root.startswith('\\\\?\\'):
-            root = root[4:]
-        root = ntpath.normcase(root)
+        root = ntpath.normcase(strip_windows_extended_prefix(root))
     return Path(root).as_posix()
 
 

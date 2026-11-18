@@ -458,5 +458,40 @@ class MultiDomainEntryTests(ServiceCase):
         self.assertTrue(self.marker.exists())
 
 
+    def test_distill_auto_provisions_authorized_non_default_domain_lease(self):
+        import os
+        from mindie_knowledge import consent_store
+        from mindie_knowledge.loop.activation import Admission
+
+        target_consent = self.root / "vllm-ascend-consent.json"
+        consent_store.record_choice(target_consent, "contribute")
+        self.target_community.write_text(json.dumps(dict(
+            schema="mindie-community-config/1", enabled=True,
+            generation="target-generation", enabled_at=time.time(),
+            repository="owner/vllm-ascend", branch="main",
+            project_roots=[str(self.scope)], idle_seconds=300,
+            consent_config=str(target_consent),
+        )), encoding="utf-8")
+        self.assertFalse(self.target_admission.exists())
+
+        prev_cwd = os.getcwd()
+        os.chdir(self.scope)
+        try:
+            gate = mcp_gate.Gate("knowledge")
+            result = gate.call(self._request(1400, "knowledge_distill", {
+                "inputs": EVIDENCE,
+                "task_state": "verified_milestone",
+                "domain": self.target_domain,
+            }))
+        finally:
+            os.chdir(prev_cwd)
+
+        self.assertFalse(result["isError"], result)
+        value = result["structuredContent"]
+        self.assertEqual(value["status"], "applied")
+        self.assertIn("unit-mcp-distill-fixture", value["admitted_unit_ids"])
+        self.assertIsNotNone(Admission(self.target_admission).active_lease(SESSION))
+
+
 if __name__ == "__main__":
     unittest.main()

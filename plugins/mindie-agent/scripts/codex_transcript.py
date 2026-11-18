@@ -265,11 +265,14 @@ def history_source(path):
                                       hashlib.sha256(anchor).hexdigest()))
 
 
-def capture_source(path, session_id):
+def capture_source(path, session_id, *, codex_home=None):
     """Verify only the current event's native profile artifact and its header."""
     from capture_errors import TranscriptSourceError
     try:
-        profile = _resolved_path(os.environ.get('CODEX_HOME') or Path.home() / '.codex')
+        raw_profile = codex_home if codex_home is not None else (
+            os.environ.get('CODEX_HOME') or Path.home() / '.codex'
+        )
+        profile = _resolved_path(raw_profile)
         selected = _resolved_path(path, strict=True)
     except TimeoutError:
         raise

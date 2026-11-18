@@ -255,9 +255,21 @@ class GateTests(SharingFixture):
     def test_scope_comes_from_native_metadata_not_the_event_cwd(self):
         wake = recorded_wake_runtime(self.config, self.root / "recorded-wake")
         self.write_sharing()
-        self.activate()
         outside = self.root / "outside"
         outside.mkdir()
+        # Current event cwd outside approved project_roots exits inert BEFORE
+        # opening the transcript or creating admission.sqlite3.
+        cold_out = self.bridge(
+            "stop",
+            self.event(
+                cwd=str(outside),
+                transcript_path=str(self.codex_home / "sessions/unread-missing.jsonl"),
+                last_assistant_message="Done",
+            ),
+        )
+        self.assertEqual((cold_out.returncode, json.loads(cold_out.stdout)), (0, {}))
+        self.assertFalse(self.admission.exists())
+        self.activate()
         # A relative event cwd is rejected at envelope validation.
         result = self.bridge(
             "stop", self.event(cwd="relative/path", last_assistant_message="Done")
@@ -266,12 +278,20 @@ class GateTests(SharingFixture):
         self.assertEqual(self.attempts(), 0)
         self.assertEqual(wake_requests(wake), [])
         self.prepare_store()
-        # An absolute event cwd outside the scope does not block capture: the
-        # authorized scope comes from the named native transcript metadata.
+        # Current event cwd outside approved project_roots captures 0 rows even
+        # when initial session_meta.cwd started inside scope.
         result = self.bridge(
             "stop", self.event(cwd=str(outside), last_assistant_message="Done")
         )
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        self.assertEqual(self.captures(), 0)
+        self.assertEqual(self.attempts(), 0)
+        self.assertEqual(wake_requests(wake), [])
+        # When both current event cwd and native metadata are in scope, capture runs.
+        in_scope = self.bridge(
+            "stop", self.event(cwd=str(self.scope), last_assistant_message="Done")
+        )
+        self.assertEqual((in_scope.returncode, json.loads(in_scope.stdout)), (0, {}))
         self.assertEqual(self.captures(), 1)
         self.assertEqual(self.attempts(), 0)
         self.assertEqual({row["session"] for row in wake_requests(wake)}, {"manual-A"})
@@ -415,7 +435,26 @@ class GateTests(SharingFixture):
         self.assertEqual({row["session"] for row in wake_requests(wake)}, {"manual-A"})
         updated_lease = authority.knowledge_lease("manual-A")
         self.assertIsNotNone(updated_lease)
-        self.assertEqual(Path(updated_lease["project_root"]).resolve(), self.scope.resolve())
+        self.assertEqual(
+            sharing.canonical_root(updated_lease["project_root"]),
+            sharing.canonical_root(str(self.scope)),
+        )
+        self.assertEqual(
+            sharing.strip_windows_extended_prefix(r"\\?\C:\Users\runneradmin\Temp\scope"),
+            r"C:\Users\runneradmin\Temp\scope",
+        )
+        self.assertEqual(
+            sharing.strip_windows_extended_prefix("//?/C:/Users/runneradmin/Temp/scope"),
+            "C:/Users/runneradmin/Temp/scope",
+        )
+        self.assertEqual(
+            sharing.strip_windows_extended_prefix(r"\\?\UNC\server\share\scope"),
+            r"\\server\share\scope",
+        )
+        self.assertEqual(
+            sharing.strip_windows_extended_prefix("//?/unc/server/share/scope"),
+            r"\\server\share\scope",
+        )
 
     def test_sharing_toggle_does_not_invalidate_ordinary_activation(self):
         self.write_sharing()

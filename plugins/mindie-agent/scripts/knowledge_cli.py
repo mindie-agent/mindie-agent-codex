@@ -16,6 +16,7 @@
 - Describe never activates knowledge or starts a service. Calls retain the
   knowledge engine's domain, contribution and capture checks.
 """
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -28,12 +29,16 @@ from mcp_gate import Gate, InputUnavailableError, InvalidToolArguments, call_fai
 from runtime_call import KnowledgeInactive
 
 INPUT_LIMIT = 1024 * 1024
-DEFAULT_CLI_SESSION = "codex-cli-default"
 
 
 def _cli_session():
     raw = os.environ.get("CODEX_THREAD_ID", "")
-    return raw if IDENTITY.fullmatch(raw) else DEFAULT_CLI_SESSION
+    if IDENTITY.fullmatch(raw):
+        return raw
+    import sharing
+    norm_cwd = sharing.canonical_root(str(Path.cwd().resolve()))
+    digest = hashlib.sha256(norm_cwd.encode("utf-8")).hexdigest()[:12]
+    return f"codex-cli-{digest}"
 
 
 def _read_arguments(argv):

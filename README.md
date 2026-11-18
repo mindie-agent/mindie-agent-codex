@@ -41,12 +41,12 @@ MindIE Agent 采用**「100% 静默默认启用 + 社区贡献显式授权按范
 | :--- | :--- | :--- | :--- |
 | **经验、知识库与 Skill 系统**<br/>（`mindie-knowledge` + `mindie-agent` Skill） | **⚡ 默认自动触发** | 开展昇腾 AI Infra 架构设计、`vLLM-Ascend` / `xLLM` / `MindIE-SD` 特性开发、`AscendC` / `Triton` 算子实现、单测/精度测试构建、性能调优或问题定位时 | **无需输入任何激活前缀**，直接用自然语言描述昇腾任务即可自动调用 `knowledge_query`、`knowledge_explain`、`knowledge_feedback`、`knowledge_distill` 与 `knowledge_sync` |
 | **远端昇腾 NPU 开发与测试**<br/>（`mindie-remote-dev` MCP 工具集 + 事实状态查询） | **⚡ 默认自动触发** | 日常需要将本地代码或测试同步到远端昇腾服务器/容器、在 NPU 上跑编译/测试、查看 `npu-smi` 或实时轮询长日志时 | 直接用自然语言描述远端操作即可 |
-| **Profiling、仿真、资源协调与本地诊断**<br/>（`mindie-tools` MCP 工具集） | **⚡ 默认自动触发** | 调用已安装的 `profiler`、`sim`、`debugger`、`coordinator`、`npu_top`、`rsi_loop`、`experiment_ledger`，或查看本地 `diagnostics` 状态与导出诊断包 | 直接在任意会话、Desktop Work 模式、自动化任务或子代理中调用 |
+| **Profiling、仿真、资源协调与本地诊断**<br/>（`mindie-tools` MCP 工具集） | **⚡ 默认自动触发** | 调用已安装的 `profiler`、`sim`、`debugger`、`coordinator`、`rsi_loop`、`experiment_ledger`，或查看本地 `diagnostics` 状态与导出诊断包 | 直接在任意会话、Desktop Work 模式、自动化任务或子代理中调用 |
 | **研发经验沉淀与社区共建**<br/>（`Stop` 后台采集 + Gitleaks 脱敏） | **🔄 已授权目录后台自动运行** | 希望将有价值的架构设计、算子开发、测试验证或调优经验脱敏沉淀回开源知识库时 | **授权一次配置，在批准项目目录内自动生效**——开启社区贡献后，处于已批准 `project_roots` 内的会话在回合结束自动完成本地脱敏与知识 PR 整理；未开启或目录外的会话 `< 100ms` 零 SQLite 直接退出 |
 
 > **默认启用工具面与组件自动更新说明**：
-> - **全量 MCP 工具开箱即用**：`mindie-remote-dev` 与 `mindie-tools`（含 `knowledge_query`、`knowledge_explain`、`knowledge_feedback`、`knowledge_distill`、`knowledge_sync`、`coordinator`、`profiler`、`debugger`、`sim`、`npu_top`、`diagnostics_status`、`diagnostics_bundle`、`rsi_loop`、`experiment_ledger`）在启动时即默认暴露，无需任何前置会话绑定门禁。
-> - **`mindie-tools` 零拷贝桥接**：直接复用 `PATH`（或适配器配置 `component_commands` 中显式指定的独立虚拟环境解释器）下的 `mindie-profiler`、`mindie-sim`、`mindie-coordinator`、`npu-top` 与内置 `diagnostics`，完整保留原始退出码与输出，大体积报告直接通过组件的 `--output` 落盘。
+> - **全量 MCP 工具开箱即用**：`mindie-remote-dev` 与 `mindie-tools`（含 `knowledge_query`、`knowledge_explain`、`knowledge_feedback`、`knowledge_distill`、`knowledge_sync`、`coordinator`、`profiler`、`debugger`、`sim`、`diagnostics_status`、`diagnostics_bundle`、`rsi_loop`、`experiment_ledger`）在启动时即默认暴露，无需任何前置会话绑定门禁。
+> - **`mindie-tools` 零拷贝桥接**：直接复用 `PATH`（或适配器配置 `component_commands` 中显式指定的独立虚拟环境解释器）下的 `mindie-profiler`、`mindie-sim`、`mindie-debugger`、`mindie-coordinator` 与内置 `diagnostics`，完整保留原始退出码与输出，大体积报告直接通过组件的 `--output` 落盘。
 > - **共享组件平滑自动更新**：后台维护机制会自动检查受管运行时中已安装的官方组件及 `component_commands` 标准模块绑定的最新正式版 Release，在旁路构建并通过校验后，趁空闲时将标准命令与解释器原子切换至新版本（保留你的本地知识库、授权设置与在途任务，也不会覆盖自定义 wrapper）。
 
 ### 场景 1：自然语言直接唤醒知识库与 Skill 辅助设计、开发与测试（静默默认启用）

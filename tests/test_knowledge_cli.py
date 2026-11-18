@@ -320,3 +320,61 @@ def test_windows_powershell_51_round_trips_chinese_through_input_file(tmp_path):
 
 def _ps_quote(path):
     return str(path).replace("'", "''")
+
+
+def test_cli_fallback_session_is_scoped_per_workspace_directory(tmp_path, monkeypatch):
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    ws_a = tmp_path / "workspace-a"
+    ws_b = tmp_path / "workspace-b"
+    ws_a.mkdir()
+    ws_b.mkdir()
+    monkeypatch.chdir(ws_a)
+    sess_a = knowledge_cli._cli_session()
+    monkeypatch.chdir(ws_b)
+    sess_b = knowledge_cli._cli_session()
+    assert sess_a.startswith("codex-cli-") and len(sess_a) == len("codex-cli-") + 12
+    assert sess_b.startswith("codex-cli-") and len(sess_b) == len("codex-cli-") + 12
+    assert sess_a != sess_b
+
+
+def test_knowledge_sync_omitted_arguments_timeout_and_cross_surface_dispatch(tmp_path, monkeypatch):
+    import mcp_gate
+    import mcp_identity
+    import runtime_call
+
+    req_omitted = {"id": 1, "params": {"name": "knowledge_sync"}}
+    assert mcp_identity.optional_native_identity(req_omitted, default_session="mcp-1") == "mcp-1"
+    assert req_omitted["params"]["arguments"] == {}
+
+    req_null = {"id": 2, "params": {"name": "knowledge_sync", "arguments": None}}
+    gate = mcp_gate.Gate("components")
+    name, args = gate._tool_args(req_null)
+    assert (name, args) == ("knowledge_sync", {})
+
+    assert runtime_call.sync_rpc_timeout() >= 330.0
+    assert mcp_gate.knowledge_timeout("knowledge_sync", None) >= 360.0
+
+    admission = tmp_path / "admission.sqlite3"
+    config = tmp_path / "adapter.json"
+    engine = tmp_path / "engine.json"
+    config.write_text(json.dumps(dict(admission_path=str(admission), engine_config=str(engine))))
+    engine.write_text(json.dumps(dict(
+        root=str(tmp_path / "corpus"), domain="test", admission_path=str(admission))))
+    monkeypatch.setenv("MINDIE_AGENT_CONFIG", str(config))
+
+    seen_timeouts = []
+
+    def fake_rpc(_conn, method, _rpc_args, timeout=None):
+        seen_timeouts.append((method, timeout))
+        return [{"repository": "mindie-agent/knowledge-vllm-ascend", "status": "unchanged"}]
+
+    for surf in ("knowledge", "components", "tools"):
+        with patch("service_client.connect", return_value={}), \
+                patch("mindie_knowledge.loop.transport.rpc", side_effect=fake_rpc):
+            res = runtime_call.call(dict(
+                surface=surf, name="knowledge_sync", arguments=None,
+                mindie_session_id="mcp-1", native_session_verified=True))
+        assert res["isError"] is False
+        assert res["structuredContent"]["status"] == "ok"
+        assert len(res["structuredContent"]["feeds"]) == 1
+    assert all(method == "sync" and timeout >= 330.0 for method, timeout in seen_timeouts)

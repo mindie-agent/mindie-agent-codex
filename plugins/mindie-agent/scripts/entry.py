@@ -167,51 +167,63 @@ def session_start(config, *, session_id=None):
 _ACTIVE_ARGS = None
 
 
+def _stop_fast_inactive(adapter):
+    """Return True when saved sharing/consent is unconfigured or disabled (skip stdin & re-exec)."""
+    if not isinstance(adapter, dict):
+        return False
+    comm_raw = adapter.get("community_config")
+    if not comm_raw:
+        return True
+    if not isinstance(comm_raw, str) or not os.path.isabs(comm_raw):
+        return False
+    comm_path = Path(comm_raw)
+    try:
+        if not comm_path.exists():
+            return True
+        if not comm_path.is_file():
+            return False
+        raw = comm_path.read_bytes()
+        if len(raw) > 262144:
+            return False
+        data = json.loads(raw.decode("utf-8"))
+    except TimeoutError:
+        raise
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict) or data.get("schema") != "mindie-community-config/1":
+        return False
+    enabled = data.get("enabled")
+    if not isinstance(enabled, bool):
+        return False
+    roots = data.get("project_roots")
+    if not isinstance(roots, list):
+        return False
+    if not enabled or not roots:
+        return True
+    consent_raw = data.get("consent_config")
+    if not isinstance(consent_raw, str) or not os.path.isabs(consent_raw):
+        return False
+    consent_path = Path(consent_raw)
+    try:
+        if not consent_path.exists():
+            return True
+        if not consent_path.is_file():
+            return False
+        consent_data = json.loads(consent_path.read_bytes().decode("utf-8"))
+    except TimeoutError:
+        raise
+    except (OSError, ValueError):
+        return False
+    if not isinstance(consent_data, dict) or consent_data.get("schema") != "mindie-consent/1":
+        return False
+    return consent_data.get("choice") != "contribute"
+
+
 def dispatch(args, config, *, stop_adapter=None):
     remaining = args.arguments
     if args.role == 'user-prompt-submit':
-        from manual_entry import action, authorize, record_entry_status
-        result = authorize(read(config), args.prompt_event)
-        is_deactivate = action(args.prompt_event) == "deactivate"
-        partial_deactivate = is_deactivate and "systemMessage" in result
-        warnings = []
-        if not partial_deactivate:
-            try:
-                record_entry_status(
-                    config,
-                    stage="authorize",
-                    status="deactivated" if is_deactivate else "authorized",
-                    session_id=args.prompt_event.get("session_id"),
-                )
-            except Exception as exc:
-                # Primary Admission mutation already committed (P4.1 Receipt Honesty):
-                # keep the committed response and surface local receipt accounting warning.
-                warnings.append(f"local entry receipt update failed ({type(exc).__name__})")
-        if not is_deactivate:
-            try:
-                session_start(config, session_id=args.prompt_event["session_id"])
-            except Exception as exc:
-                # The grant is committed. Readiness failure must remain
-                # visible without discarding that known activation result.
-                warnings.append(f"knowledge preparation failed ({type(exc).__name__})")
-        if warnings:
-            existing_msg = result.get("systemMessage")
-            if isinstance(existing_msg, str) and existing_msg:
-                result["systemMessage"] = existing_msg.rstrip(".") + "; " + " and ".join(warnings) + "."
-            else:
-                state_word = "deactivation" if is_deactivate else "entry"
-                result["systemMessage"] = (
-                    f"MindIE session {state_word} succeeded, but "
-                    + " and ".join(warnings)
-                    + "; inspect local status before recovery."
-                )
-            hook_out = result.get("hookSpecificOutput")
-            if isinstance(hook_out, dict) and isinstance(hook_out.get("additionalContext"), str):
-                hook_out["additionalContext"] += (
-                    " Receipt warning (receipt_unconfirmed=true): " + "; ".join(warnings) + "."
-                )
-        print(json.dumps(result))
-        return
+        print("{}")
+        return 0
     if args.role == 'session-start':
         session_start(config)
         return
@@ -279,11 +291,8 @@ def main():
             return 1
         args.role, args.arguments = role, arguments
     if args.role == 'user-prompt-submit':
-        from manual_entry import read_event, requested
-        args.prompt_event = read_event(sys.stdin.buffer)
-        if not requested(args.prompt_event):
-            print("{}")
-            return
+        print("{}")
+        return 0
     from bootstrap import preparing
     from session_gate import runtime_env
     if args.role == "stop":
@@ -297,6 +306,9 @@ def main():
             adapter = read(config)
             _installed_profile(config, receipt, adapter=adapter)
             bind_explicit_config(config)
+        if _stop_fast_inactive(adapter):
+            print("{}")
+            return 0
         return dispatch(args, config, stop_adapter=adapter)
     with preparing("profile-binding"):
         config = profile(
@@ -345,27 +357,7 @@ if __name__ == '__main__':
                     exit_code=exc.code if isinstance(exc, SystemExit) and type(exc.code) is int else None)
             print(f'MindIE release entry failed: {type(exc).__name__}; inspect local diagnostics.', file=sys.stderr)
         if _ACTIVE_ARGS is not None and _ACTIVE_ARGS.role == 'user-prompt-submit':
-            from manual_entry import prompt_failure_response, record_entry_status, requested
-            event = getattr(_ACTIVE_ARGS, "prompt_event", None)
-            if requested(event):
-                config_guess = Path(os.environ.get(
-                    "MINDIE_AGENT_CONFIG",
-                    Path.home() / ".config/mindie-agent/codex.json",
-                )).expanduser().absolute()
-                stage = getattr(exc, "_mindie_prepare_stage", None) or "release-entry"
-                try:
-                    record_entry_status(
-                        config_guess,
-                        stage=stage,
-                        status="failed",
-                        session_id=event.get("session_id"),
-                        error_type=type(exc).__name__,
-                    )
-                except Exception:
-                    pass
-                print(json.dumps(prompt_failure_response(stage, type(exc).__name__)))
-            else:
-                print("{}")
+            print("{}")
             raise SystemExit(0)
         if isinstance(exc, SystemExit):
             raise

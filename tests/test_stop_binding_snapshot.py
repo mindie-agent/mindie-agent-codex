@@ -67,6 +67,24 @@ class StopBindingTests(unittest.TestCase):
         (self.release / "runtime.json").write_text(json.dumps(dict(python=sys.executable)))
 
     def test_native_stop_entry_reads_binding_once_without_cutover_lock(self):
+        # Unconfigured sharing exits before reading stdin or re-execing bridge.py.
+        with patch.dict(os.environ, MINDIE_AGENT_CONFIG=str(self.config)), \
+                patch.object(sys, "argv", ["entry.py", "--release", str(self.release), "stop"]), \
+                patch.object(entry, "bind_explicit_config"), \
+                patch.object(bridge, "_read_hook_stdin", side_effect=AssertionError("unconfigured Stop read stdin")), \
+                patch("bounded_process.run", side_effect=AssertionError("unconfigured Stop spawned child")), \
+                redirect_stdout(io.StringIO()) as fast_out:
+            self.assertEqual(entry.main(), 0)
+        self.assertEqual(fast_out.getvalue(), "{}\n")
+
+        consent_file = self.root / "mindie-consent.json"
+        consent_file.write_text(json.dumps(dict(
+            schema="mindie-consent/1", choice="contribute", choice_revision=1)))
+        (self.root / "mindie-community.json").write_text(json.dumps(dict(
+            schema="mindie-community-config/1", enabled=True, generation="g1",
+            enabled_at=1.0, repository="owner/repo", branch="main",
+            project_roots=[str(self.root)], idle_seconds=300,
+            consent_config=str(consent_file))))
         calls = []
 
         def dispatch(argv, data, **options):

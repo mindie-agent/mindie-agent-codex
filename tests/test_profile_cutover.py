@@ -125,7 +125,8 @@ def test_mcp_preserves_unread_stdio_and_serves_the_committed_catalog(installatio
     else:
         assert any(tool["name"] == "knowledge_query" for tool in tools)
         assert any(tool["name"] == "knowledge_sync" for tool in tools)
-        assert any(tool["name"] == "npu_top" for tool in tools)
+        assert any(tool["name"] == "rsi_loop" for tool in tools)
+        assert not any(tool["name"] == "npu_top" for tool in tools)
 
 
 def test_explicit_prompt_is_forwarded_once_after_it_was_read(installation, tmp_path):

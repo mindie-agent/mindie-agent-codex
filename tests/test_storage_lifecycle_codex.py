@@ -110,7 +110,11 @@ def test_historical_backlog_is_reclaimed_to_bounded_counts(tmp_path, monkeypatch
         nested = _write(releases_root / "0.0.9" / f"prepare-live-{index}.log", "recent")
         _age(nested, 60)
 
-    result = host.reclaim()
+    result = host.reclaim(budget_seconds=15.0)
+    for _ in range(2):
+        if result["status"] != "partial":
+            break
+        result = host.reclaim(budget_seconds=15.0)
 
     remaining_components = sorted(
         entry for entry in (host.plugin / "component-runtimes").iterdir() if entry.is_dir())
@@ -459,7 +463,11 @@ def test_staged_newer_release_keeps_bound_release_and_one_rollback(tmp_path, mon
     (host.config / "codex.json").write_text(json.dumps(dict(
         component_release=None, python=str(releases[33][1]))), encoding="utf-8")
 
-    result = host.reclaim()
+    result = host.reclaim(budget_seconds=15.0)
+    for _ in range(2):
+        if result["status"] != "partial":
+            break
+        result = host.reclaim(budget_seconds=15.0)
 
     retained = {entry.name for entry in (host.plugin / "releases").iterdir()
                 if entry.is_dir()}
@@ -502,7 +510,11 @@ def test_native_metadata_version_protects_candidate_and_rollback(tmp_path, monke
     native.write_text(json.dumps(dict(
         stage="installed", metadata=dict(version="0.1.34"))), encoding="utf-8")
 
-    result = host.reclaim()
+    result = host.reclaim(budget_seconds=15.0)
+    for _ in range(2):
+        if result["status"] != "partial":
+            break
+        result = host.reclaim(budget_seconds=15.0)
 
     assert releases[34][0].is_dir() and releases[33][0].is_dir()
     assert (host.plugin / "runtimes" / "key-34").is_dir()

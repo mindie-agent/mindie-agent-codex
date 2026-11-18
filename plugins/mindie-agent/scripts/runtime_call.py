@@ -65,32 +65,26 @@ def distill_helper_timeout():
     return distill_rpc_timeout() + 30.0
 
 
-def _codex_native_accepts_timeout(name):
-    """Whether a Codex native wire allows timeout_ms before normalize.
+def sync_rpc_timeout():
+    """Cover the 300s feed sync budget plus local SQLite/RPC framing."""
+    return 330.0
 
-    None means the name is not a Codex native wire. dispatch_native validates
-    the wire properties and endpoint fields first, so an undeclared timeout_ms
-    is an unsupported argument and never reaches the canonical call.
-    """
+
+def sync_helper_timeout():
+    """Leave process start, serialization and cleanup outside the inner RPC."""
+    return sync_rpc_timeout() + 30.0
+
+
+def _codex_native_accepts_timeout(name):
+    """Return whether a Codex native wire declares timeout_ms (None if non-native)."""
     from remote_dev.mcp.harness_profiles import spec_by_wire
 
     spec = spec_by_wire("codex", name)
-    if spec is None:
-        return None
-    return "timeout_ms" in spec.properties
+    return None if spec is None else ("timeout_ms" in spec.properties)
 
 
 def apply_remote_deadline(name, arguments, outer_seconds):
-    """Give a cutoff to a remote tool that would otherwise wait without one.
-
-    remote-dev treats a missing timeout as no wall-clock limit, so the helper
-    sits until this process is killed and the only public failure is
-    TimeoutError. Native long polls, an explicit timeout/yield, and a Codex
-    native wire that does not declare timeout_ms keep their own contract. The
-    injected deadline stays inside the helper budget by the cleanup grace and
-    the python RPC follow-on wait. A slow handshake can restart that wait; the
-    outer helper deadline still stops the overlap.
-    """
+    """Inject finite timeout_ms inside outer_seconds when allowed by wire schema."""
     from mcp_gate import REMOTE_GRACE_SECONDS, REMOTE_NATIVE_MAX_WAIT_MS, REMOTE_RPC_FOLLOW_SECONDS
 
     args = dict(arguments or {})
@@ -151,6 +145,18 @@ def resolve_lease(config, token):
     return lease
 
 
+def _provision_authorized_lease(adm, engine_cfg, session):
+    from mindie_knowledge.loop.cli import config_at
+    from mindie_knowledge.loop.settings import from_engine_config
+
+    cwd_str = str(Path.cwd().resolve())
+    target_settings = from_engine_config(config_at(engine_cfg))
+    if not (target_settings.allows_capture() and target_settings.in_scope(cwd_str)):
+        return None
+    adm.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return adm.activate(session, project_root=cwd_str, root_session=session, not_before=0.0)
+
+
 def finish_outcome(config, session, token, succeeded):
     _admission(config).finish(session, token, succeeded)
 
@@ -165,7 +171,7 @@ def call(payload):
     if payload["surface"] == "catalog":
         _DISPATCH_STATE["stage"] = "catalog"
         surface = payload["catalog_surface"]
-        if surface == "components":
+        if surface in {"components", "tools"}:
             from component_tools import catalog
             from export_catalog import catalog as exported_catalog
             return [*catalog(), *exported_catalog()["knowledge"]]
@@ -178,7 +184,11 @@ def call(payload):
         raise ValueError("unknown catalog surface")
     if payload["surface"] == "remote":
         return remote(payload)
-    if payload["surface"] == "components":
+    req_name = payload.get("name")
+    is_knowledge_tool = req_name in knowledge_names() or (
+        req_name == "knowledge_attach" and payload.get("internal") is True
+    )
+    if payload["surface"] in {"components", "tools"} and not is_knowledge_tool:
         from component_tools import execute
         from mcp_gate import call_failure
         if payload.get("native_session_verified") is not True:
@@ -189,7 +199,8 @@ def call(payload):
         except Exception as exc:
             return call_failure(exc)
     config = json.loads(config_path().read_text(encoding='utf-8'))
-    args, name = payload["arguments"], payload["name"]
+    args = payload["arguments"] if payload.get("arguments") is not None else {}
+    name = payload["name"]
     if name in {"knowledge_query", "knowledge_explain"}:
         args = forwarded_exploration(args)
     token = payload.get("mindie_activation")
@@ -197,7 +208,7 @@ def call(payload):
     if (not isinstance(session, str) or not IDENTITY.fullmatch(session)
             or token is None and payload.get('native_session_verified') is not True):
         raise ValueError("MindIE runtime identity mismatch")
-    if payload["surface"] != "knowledge":
+    if payload["surface"] not in {"knowledge", "components", "tools"}:
         raise ValueError("unknown plugin surface")
     internal = payload.get("internal") is True
     if name in knowledge_names() and not internal:
@@ -246,29 +257,18 @@ def call(payload):
         if same_admission:
             default_adm.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             default_lease = default_adm.activate(
-                session,
-                project_root=str(Path.cwd().resolve()),
-                root_session=session,
-                not_before=0.0,
+                session, project_root=str(Path.cwd().resolve()), root_session=session, not_before=0.0
             )
             target_lease = default_lease
         else:
-            raise LeaseRequired("the selected domain requires an active task lease")
-    elif name == "knowledge_feedback" and same_admission and default_lease is None:
+            target_lease = _provision_authorized_lease(target_adm, selected, session)
+            if target_lease is None:
+                raise LeaseRequired("the selected domain requires an active task lease")
+    elif name == "knowledge_feedback" and target_lease is None:
         try:
-            import sharing
-            settings = sharing.read(adapter=config)
-            if settings is not None and settings["enabled"] and sharing.consent_allows(settings) is not False:
-                cwd_root = Path(sharing.canonical_root(str(Path.cwd().resolve())))
-                if any(cwd_root.is_relative_to(Path(allowed)) for allowed in settings["project_roots"]):
-                    default_adm.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-                    default_lease = default_adm.activate(
-                        session,
-                        project_root=str(cwd_root),
-                        root_session=session,
-                        not_before=0.0,
-                    )
-                    target_lease = default_lease
+            target_lease = _provision_authorized_lease(target_adm, selected, session)
+            if same_admission and target_lease is not None:
+                default_lease = target_lease
         except TimeoutError:
             raise
         except Exception:
@@ -325,7 +325,7 @@ def call(payload):
             rpc_timeout = (
                 distill_rpc_timeout()
                 if name == "knowledge_distill"
-                else (90.0 if name == "knowledge_sync" else None)
+                else (sync_rpc_timeout() if name == "knowledge_sync" else None)
             )
             _DISPATCH_STATE["execution"] = (
                 "not_started" if name in _READ_ONLY_KNOWLEDGE else "outcome_unconfirmed"

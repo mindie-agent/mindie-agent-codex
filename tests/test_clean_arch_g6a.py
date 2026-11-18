@@ -80,7 +80,10 @@ def test_manual_skill_trigger_and_pure_runtime_skill_boundary():
     assert len(skill_md.splitlines()) <= 30
     frontmatter = skill_md.split("\n---\n", 1)[0]
     assert "disable-model-invocation" not in frontmatter
+    assert "disableModelInvocation" not in frontmatter
     parsed_fm = yaml.safe_load(frontmatter[4:])
+    assert "disable-model-invocation" not in parsed_fm
+    assert "disableModelInvocation" not in parsed_fm
     assert parsed_fm["name"] == "mindie-agent"
     assert isinstance(parsed_fm["description"], str) and parsed_fm["description"]
 

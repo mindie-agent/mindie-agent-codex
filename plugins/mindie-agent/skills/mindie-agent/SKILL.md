@@ -6,7 +6,7 @@ description: "Ascend NPU, vLLM-Ascend, xLLM, MindIE-SD, AscendC, and Triton engi
 # MindIE Agent (Ascend NPU Engineering Workflow)
 
 ## 1. Silent Default-On Tooling & Task Continuity
-- **Ready out of the box**: `mindie-remote-dev` (`remote_*`) and `mindie-tools` (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`, `coordinator`, `profiler`, `debugger`, `sim`, `npu_top`, `diagnostics_status`, `diagnostics_bundle`, `rsi_loop`, `experiment_ledger`) work in CLI, Desktop, Work mode, Automations, and Subagents with zero session-activation gates.
+- **Ready out of the box**: `mindie-remote-dev` (`remote_*`) and `mindie-tools` (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`, `coordinator`, `profiler`, `debugger`, `sim`, `diagnostics_status`, `diagnostics_bundle`, `rsi_loop`, `experiment_ledger`) work in CLI, Desktop, Work mode, Automations, and Subagents with zero session-activation gates.
 - **Task continuity**: Helpers are optional. If any helper fails, report that specific error once and continue via deterministic MCP or host-native tools. Reconcile any `unknown` remote write before repeating it.
 - **Physical NPU exclusivity**: Acquire a `coordinator` lease (or verify an existing host reservation) before running benchmarks, profiling, or workloads on physical NPUs; check existing `execution_id` / `job_id` handles before resubmitting.
 

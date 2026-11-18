@@ -275,19 +275,10 @@ def test_handled_helper_returncode_and_forwarded_child_emit_no_false_diagnostics
     assert not list(win_diag.rglob("*.jsonl"))
 
 
-def test_entry_status_receipt_and_inactive_message_contain_no_manual_prefix(tmp_path):
+def test_entry_user_prompt_submit_returns_empty_json_without_status_files(tmp_path, capsys):
     config = tmp_path / "codex.json"
     config.write_text("{}", encoding="utf-8")
-    manual_entry.record_entry_status(
-        config,
-        stage="profile-binding",
-        status="failed",
-        session_id="session-a",
-        error_type="ProfileUnavailable",
-    )
-    msg = manual_entry.explain_inactive_session(config, "session-a")
-    assert "profile-binding (ProfileUnavailable)" in msg
-    assert "/mindie-agent" not in msg
-    assert "$mindie-agent" not in msg
-    other_msg = manual_entry.explain_inactive_session(config, "session-b")
-    assert "/mindie-agent" not in other_msg
+    args = SimpleNamespace(role="user-prompt-submit", arguments=[])
+    assert entry.dispatch(args, config) == 0
+    assert capsys.readouterr().out == "{}\n"
+    assert not config.with_suffix(".entry-status.json").exists()

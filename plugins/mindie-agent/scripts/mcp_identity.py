@@ -36,7 +36,12 @@ def native_identity(request):
     Tool arguments and a parent lease are never fallbacks.
     """
     params = request.get("params")
-    if not isinstance(params, dict) or not isinstance(params.get("arguments"), dict):
+    if not isinstance(params, dict):
+        raise ValueError("Invalid MindIE tool arguments")
+    args = params.get("arguments")
+    if args is None:
+        params["arguments"] = {}
+    elif not isinstance(args, dict):
         raise ValueError("Invalid MindIE tool arguments")
     meta = params.get("_meta")
     turn = meta.get("x-codex-turn-metadata") if isinstance(meta, dict) else None
@@ -83,7 +88,12 @@ def optional_native_identity(request, *, default_session: str) -> str:
     fields that ARE present must still be well-formed and non-contradictory.
     """
     params = request.get("params")
-    if not isinstance(params, dict) or not isinstance(params.get("arguments"), dict):
+    if not isinstance(params, dict):
+        raise ValueError("Invalid MindIE tool arguments")
+    args = params.get("arguments")
+    if args is None:
+        params["arguments"] = {}
+    elif not isinstance(args, dict):
         raise ValueError("Invalid MindIE tool arguments")
     meta = params.get("_meta")
     if meta is None:

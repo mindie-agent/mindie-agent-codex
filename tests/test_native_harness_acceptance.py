@@ -139,11 +139,11 @@ def test_native_locked_runtime_and_mcp_discovery(monkeypatch, tmp_path):
             "knowledge_feedback",
             "knowledge_distill",
             "knowledge_sync",
-            "npu_top",
             "rsi_loop",
             "experiment_ledger",
         ):
             assert expected_tool in components["tools"]
+        assert "npu_top" not in components["tools"]
         print("native MCP discovery:", len(remote["tools"]), "remote tools,",
               len(components["tools"]), "component tools; thread", thread)
     upgraded = invoke([

@@ -84,15 +84,10 @@ DESCRIPTIONS = {
         "CANN `plog`s in-place (`python3 -m mindie_debugger.cli triage`) or run `ACLGraphCaptureGuard`, "
         "`ACLGraphAddressTracker`, `ACLGraphDumper`, `ACLGraphVllmInspector`, and `precision` inside the NPU container."
     ),
-    "npu_top": (
-        "Observe live Ascend NPU fleet telemetry, per-Die HBM/utilization, and active "
-        "processes across A2/A3/A5 servers using npu-top. Pass CLI arguments as an argv "
-        "array, e.g. ['snapshot', '--json'] or ['--help']."
-    ),
     "rsi_loop": (
         "Coordinate optional iterative optimization rounds (init, next, complete, finish) "
         "over an experiment ledger via mindie_harness.rsi.rsi_loop. Pass CLI arguments as "
-        "an argv array, e.g. ['--help'] or ['next', '--ledger', 'experiment-ledger.jsonl']."
+        "an argv array, e.g. ['--help'] or ['next', '--state', 'rsi-state.json']."
     ),
     "experiment_ledger": (
         "Manage deterministic experiment ledger fingerprinting, paired-trial statistical "
@@ -156,7 +151,7 @@ def command(adapter, component):
     if component in {"rsi_loop", "experiment_ledger"}:
         scripts_dir = Path(adapter.get("runtime_scripts") or Path(__file__).resolve().parent)
         return [adapter["python"], "-I", "-X", "utf8", str(scripts_dir / (component + ".py"))]
-    name = "npu-top" if component == "npu_top" else "mindie-" + component
+    name = "mindie-" + component
     runtime_bins = [str(Path(adapter["python"]).parent)]
     if Path(adapter["python"]) == Path(sys.executable):
         runtime_bins.append(sysconfig.get_path("scripts"))

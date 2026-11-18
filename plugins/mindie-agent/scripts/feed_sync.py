@@ -106,7 +106,7 @@ def _feed_error_summary(rows):
 
 
 
-def sync(config, *, timeout: float | None = 120.0):
+def sync(config, *, timeout: float | None = 330.0):
     import sys
     from bounded_process import run
     result = run([sys.executable, '-m', 'mindie_knowledge.loop.cli', 'sync',

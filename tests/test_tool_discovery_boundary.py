@@ -55,7 +55,10 @@ def test_public_wire_discovery_never_leaks_another_chats_knowledge(tmp_path, mon
         comp_names = {t["name"] for t in comp_tools}
         assert expected_knowledge <= comp_names
         assert {"diagnostics_status", "diagnostics_bundle", "debugger", "coordinator",
-                "profiler", "sim", "npu_top", "rsi_loop", "experiment_ledger"} <= comp_names
+                "profiler", "sim", "rsi_loop", "experiment_ledger"} <= comp_names
+        assert "npu_top" not in comp_names
+        rsi_tool = next(t for t in comp_tools if t["name"] == "rsi_loop")
+        assert "'--state'" in rsi_tool["description"]
         assert not admission.exists()
 
         monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
@@ -84,7 +87,6 @@ def test_manifest_routes_every_public_server_to_nonknowledge_discovery(tmp_path)
     assert {
         "remote_bash",
         "profiler",
-        "npu_top",
         "rsi_loop",
         "experiment_ledger",
         "knowledge_query",
@@ -93,3 +95,4 @@ def test_manifest_routes_every_public_server_to_nonknowledge_discovery(tmp_path)
         "knowledge_distill",
         "knowledge_sync",
     } <= names
+    assert "npu_top" not in names

@@ -204,6 +204,10 @@ def hook_event(raw):
         turn_id=event["turn_id"],
         cwd=cwd,
     )
+    if event.get("workspace_root") is not None:
+        forwarded["workspace_root"] = _bounded_path(
+            event.get("workspace_root"), "workspace_root"
+        )
     forwarded["transcript_path"] = transcript
     return forwarded
 
@@ -392,32 +396,38 @@ def _observe_stop(result):
     return False
 
 
-def _fast_out_of_scope(event, settings, adapter):
-    """Fast <5ms pre-SQLite scope check on the transcript's session_meta cwd."""
+def _in_project_scope(path_value, settings):
+    if not isinstance(path_value, str) or not os.path.isabs(path_value):
+        return False
     try:
+        root = Path(sharing.canonical_root(path_value))
+    except TimeoutError:
+        raise
+    except (OSError, ValueError):
+        return False
+    return any(root.is_relative_to(Path(allowed)) for allowed in settings["project_roots"])
+
+
+def _event_out_of_scope(event, settings):
+    """Verify current Stop cwd/workspace_root before opening transcript or SQLite."""
+    if not _in_project_scope(event.get("cwd"), settings):
+        return True
+    workspace_root = event.get("workspace_root")
+    if workspace_root is not None and not _in_project_scope(workspace_root, settings):
+        return True
+    return False
+
+
+def _transcript_out_of_scope(event, settings, adapter):
+    """Pre-SQLite scope check reusing codex_transcript's single 1 MiB header parser."""
+    try:
+        import codex_transcript
         native_ctx = adapter.get("native_context") if isinstance(adapter, dict) else None
         raw_home = (native_ctx or {}).get("CODEX_HOME") or os.environ.get("CODEX_HOME")
-        codex_home = Path(raw_home).resolve() if raw_home else (Path.home() / ".codex").resolve()
-        transcript = Path(event["transcript_path"]).resolve()
-        if not any(transcript.is_relative_to(codex_home / sub) for sub in ("sessions", "archived_sessions")):
-            return False
-        if not transcript.is_file():
-            return False
-        with transcript.open("rb") as handle:
-            first_line = handle.readline(65537)
-        if not first_line or len(first_line) > 65536:
-            return False
-        record = json.loads(first_line.decode("utf-8-sig"))
-        if not isinstance(record, dict) or record.get("type") != "session_meta":
-            return False
-        payload = record.get("payload")
-        if not isinstance(payload, dict) or payload.get("id") != event["session_id"]:
-            return False
-        meta_cwd = payload.get("cwd")
-        if not isinstance(meta_cwd, str) or not os.path.isabs(meta_cwd):
-            return False
-        meta_root = Path(sharing.canonical_root(meta_cwd))
-        return not any(meta_root.is_relative_to(Path(allowed)) for allowed in settings["project_roots"])
+        source = codex_transcript.capture_source(
+            event["transcript_path"], event["session_id"], codex_home=raw_home
+        )
+        return not _in_project_scope(source["project_root"], settings)
     except TimeoutError:
         raise
     except Exception:
@@ -467,7 +477,7 @@ def stop(*, adapter=None, hook_input=None):
             _record_stop("envelope", "identity_mismatch")
             print("{}")
             return 1
-        if _fast_out_of_scope(event, settings, adapter):
+        if _event_out_of_scope(event, settings) or _transcript_out_of_scope(event, settings, adapter):
             print("{}")
             return 0
         adm_raw = adapter.get("admission_path")

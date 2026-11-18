@@ -169,7 +169,13 @@ def knowledge_timeout(name, timeout):
     """Bind helper and inner RPC budgets; never hand C6 an unbounded deadline."""
     timeout = coerce_timeout(timeout)
     if name == "knowledge_sync":
-        return timeout or 120.0
+        import runtime_call
+        minimum = runtime_call.sync_helper_timeout()
+        if timeout is not None and timeout < minimum:
+            raise InvalidToolArguments(
+                "knowledge_sync timeout cannot be shorter than its inner RPC and cleanup budget"
+            )
+        return minimum if timeout is None else timeout
     if name != "knowledge_distill":
         return timeout or 45.0
     import runtime_call
@@ -571,6 +577,8 @@ class Gate:
     def _tool_args(self, request):
         params = request.get("params", {})
         name, args = params.get("name"), params.get("arguments")
+        if args is None:
+            args = {}
         tool = next((tool for tool in self.tools if tool["name"] == name), None)
         if tool is None:
             raise InvalidToolArguments("Unknown MindIE tool or invalid arguments",

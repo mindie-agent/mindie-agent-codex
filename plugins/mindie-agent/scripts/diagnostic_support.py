@@ -283,7 +283,6 @@ def failure(operation, stage, category, *, exception=None, revision=None,
 _COMPONENT_PACKAGES = {
     "profiler": ("mindie-profiler", "mindie_profiler"), "sim": ("mindie-sim", "mindie_sim"),
     "coordinator": ("mindie-coordinator", "mindie_coordinator"), "debugger": ("mindie-debugger", "mindie_debugger"),
-    "npu_top": ("npu-top", "npu_top"),
 }
 _REPORTABLE_EXC_TYPES = {
     cls.__name__: cls for cls in (
@@ -300,7 +299,6 @@ _KNOWN_COMPONENT_STAGES = {
     "sim": frozenset({"solve", "calibrate", "sweep", "roofline", "predict", "inspect", "catalog", "doctor", "version"}),
     "coordinator": frozenset({"hosts", "run", "exec", "status", "logs", "cancel", "stop", "probe", "doctor", "version"}),
     "debugger": frozenset({"precision", "hang", "oom", "accuracy", "triage", "capsule", "inspect", "doctor", "version"}),
-    "npu_top": frozenset({"snapshot", "watch", "top", "serve", "daemon", "status", "doctor", "version"}),
 }
 _PKG_TO_COMP = {pkg: comp for comp, pkg in _COMPONENT_PACKAGES.values()}
 _CHAIN_SEPARATORS = frozenset({

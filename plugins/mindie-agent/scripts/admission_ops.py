@@ -153,6 +153,13 @@ def operation(name, payload):
                 raise ValueError(
                     "multi-domain deactivation is unavailable in the installed knowledge runtime"
                 ) from exc
+            for candidate_cfg in [config, *domain_configs.values()]:
+                try:
+                    _seed_missing_for_deactivation(admission(candidate_cfg), session)
+                except TimeoutError:
+                    raise
+                except Exception:
+                    pass
             result = deactivate_registered_domains(
                 config["engine_config"],
                 domain_configs=domain_configs,
@@ -162,6 +169,7 @@ def operation(name, payload):
         # No configured domains: preserve the installed default-only path and
         # do not import the newer helper.
         store = admission(config)
+        _seed_missing_for_deactivation(store, session)
         store.deactivate(session)
         return dict(status="inactive", session_id=session)
     if name == "stop_capture":
@@ -181,6 +189,12 @@ def operation(name, payload):
             return dict(stage="inert", reason="sharing-disabled")
         if not settings["enabled"] or sharing.consent_allows(settings) is False:
             return dict(stage="inert", reason="sharing-disabled")
+        if not _event_in_scope(event.get("cwd"), settings):
+            return dict(stage="inert", reason="out-of-scope")
+        if event.get("workspace_root") is not None and not _event_in_scope(
+            event.get("workspace_root"), settings
+        ):
+            return dict(stage="inert", reason="out-of-scope")
         import codex_transcript
         source = codex_transcript.capture_source(event.get("transcript_path"), session)
         candidate = dict(project_root=source["project_root"], root_session=session,
@@ -198,15 +212,20 @@ def operation(name, payload):
             return dict(stage="inert", reason="task-revoked")
         lease = store.knowledge_lease(session)
         from mindie_knowledge.filesystem import path_identity
+        lease_root = (
+            sharing.strip_windows_extended_prefix(source["project_root"])
+            if os.name == "nt"
+            else source["project_root"]
+        )
         if (
             lease is None
             or not isinstance(lease.get("project_root"), str)
-            or path_identity(lease["project_root"]) != path_identity(source["project_root"])
+            or path_identity(lease["project_root"]) != path_identity(lease_root)
         ):
             store.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             lease = store.activate(
                 session,
-                project_root=source["project_root"],
+                project_root=lease_root,
                 root_session=session,
                 not_before=0.0,
             )
@@ -261,6 +280,28 @@ def operation(name, payload):
     raise ValueError("unsupported admission operation")
 
 
+def _seed_missing_for_deactivation(store, session):
+    if store.inspect(session).get("status") == "missing":
+        store.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        store.activate(
+            session,
+            project_root=str(Path.cwd().resolve()),
+            root_session=session,
+            not_before=0.0,
+        )
+
+
+def _event_in_scope(path_value, settings):
+    import sharing
+    if not isinstance(path_value, str) or not os.path.isabs(path_value):
+        return False
+    try:
+        target = Path(sharing.canonical_root(path_value))
+    except TimeoutError:
+        raise
+    except (OSError, ValueError):
+        return False
+    return any(target.is_relative_to(Path(allowed)) for allowed in settings["project_roots"])
 def main():
     try:
         if len(sys.argv) not in (2, 3):

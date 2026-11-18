@@ -1,6 +1,6 @@
 # Domain Tooling, Graded Knowledge & Long-Horizon Execution
 
-The `mindie-remote-dev` and `mindie-tools` MCP servers (including `knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`, `coordinator`, `profiler`, `debugger`, `sim`, `npu_top`, `diagnostics_status`, `diagnostics_bundle`, `rsi_loop`, and `experiment_ledger`) are enabled by default in every session with zero activation gate. Pass explicit host, port, user, container, and working directory parameters, and poll or manage returned job/execution handles directly.
+The `mindie-remote-dev` and `mindie-tools` MCP servers (including `knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`, `coordinator`, `profiler`, `debugger`, `sim`, `diagnostics_status`, `diagnostics_bundle`, `rsi_loop`, and `experiment_ledger`) are enabled by default in every session with zero activation gate. Pass explicit host, port, user, container, and working directory parameters, and poll or manage returned job/execution handles directly.
 
 ## 1. Graded Knowledge (`L1–L4`), Reference Identity & `knowledge_distill`
 
