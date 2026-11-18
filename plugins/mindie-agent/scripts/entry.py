@@ -36,6 +36,7 @@ import sys
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 import product_contract
+import session_gate as session_gate_mod
 from session_gate import bind_explicit_config, runtime_scripts, runtime_env
 
 
@@ -96,29 +97,28 @@ def _installed_profile(config, receipt, *, adapter=None):
 
 def profile(release, source=None, *, prepare=True):
     import argparse
-    from update_lock import update_lock
+    mod = sys.modules[__name__]
     receipt = read(release / "runtime.json")
     if not isinstance(receipt, dict) or not product_contract.same_interpreter(receipt.get("python"), sys.executable):
         raise ValueError("release interpreter differs from its prepared runtime")
     config = Path(os.environ.get("MINDIE_AGENT_CONFIG", Path.home() / ".config/mindie-agent/codex.json")).expanduser().absolute()
     if os.path.lexists(config):
-        with update_lock(config, blocking=prepare):
+        with mod.update_lock(config, blocking=prepare):
             return _installed_profile(config, receipt)
     if not prepare:
         raise RuntimeError("MindIE release profile is not prepared; start a new native session")
     if source is not None and source.is_dir():
         product_contract.validate_receipt(json.dumps(receipt["validation"]), product_contract.identity(source))
     config.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with update_lock(config, exclusive=True, blocking=True):
+    with mod.update_lock(config, exclusive=True, blocking=True):
         if not os.path.lexists(config):
-            from setup import install
             args = argparse.Namespace(knowledge_python=sys.executable, config=config,
                 root=Path.home() / ".local/share/mindie-agent", domain="vllm-ascend",
                 no_public_feed=False, interactive=False, community_repository=None,
                 community_project_root=None, community_account=None, community_fork=None,
                 community_visibility=None, community_branch=None)
             with redirect_stdout(sys.stderr):
-                install(args, argparse.ArgumentParser(), validation=receipt["validation"])
+                mod.install(args, argparse.ArgumentParser(), validation=receipt["validation"])
         return _installed_profile(config, receipt)
 
 
@@ -339,8 +339,7 @@ def main():
         print("{}")
         return 0
     from bootstrap import preparing
-    from session_gate import runtime_env
-    from update_lock import update_lock
+    mod = sys.modules[__name__]
     if args.role == "stop":
         with preparing("profile-binding"):
             # Atomic canonical publication gives this invocation one complete
@@ -362,7 +361,7 @@ def main():
             prepare=True)
     mcp = args.role in {'knowledge-mcp', 'remote-mcp', 'tools-mcp'} or (
         args.role == 'bridge' and args.arguments[:1] == ['mcp'])
-    with update_lock(config, blocking=True):
+    with mod.update_lock(config, blocking=True):
         with preparing("profile-binding"):
             # Bind before any helper side effect. MCP keeps this identity in
             # memory and reacquires the same lock for each request.
@@ -373,17 +372,17 @@ def main():
                 # The native facade selected this entry before activation
                 # acquired the lock. No business operation has started yet.
                 command = replacement_entry(args.release, adapter)
-                environment = runtime_env(config, adapter=adapter)
+                environment = session_gate_mod.runtime_env(config, adapter=adapter)
             else:
                 command = None
                 bind_explicit_config(config)
-                os.environ.update(runtime_env(config))
+                os.environ.update(session_gate_mod.runtime_env(config))
         if command is None and not mcp:
-            return dispatch(args, config)
+            return mod.dispatch(args, config)
     if command is not None:
         # Release the old operation lock before entering another interpreter.
         return transfer_entry(command, args, environment)
-    return dispatch(args, config)
+    return mod.dispatch(args, config)
 
 
 if __name__ == '__main__':
