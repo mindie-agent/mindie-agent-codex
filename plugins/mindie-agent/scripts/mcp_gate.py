@@ -1,19 +1,15 @@
 """Selected catalogs plus host-identity-bound, bounded, one-shot runtime calls.
 
 [Role]
-Implements the JSON-RPC MCP server gate (`Gate`, `serve`) for public `remote`/`components` and private `knowledge` surfaces, including native `mindie_interrupt` cancellation and `RemoteReceipts` replay protection.
+Implements the JSON-RPC MCP server gate (`Gate`, `serve`) for public `remote` and `components` (which includes default-enabled `knowledge_*` tools) plus `knowledge` surfaces, including native `mindie_interrupt` cancellation and `RemoteReceipts` replay protection.
 
 [Invariants]
-- Remote tools are available to any native Codex task without a knowledge lease, scoped by `REMOTE_DEV_SESSION_ID`.
-- Every knowledge tool requires this task's explicit manual-entry grant;
-  distillation additionally requires the selected target's capture lease.
-- Knowledge schemas are private to the manual Skill entry, never MCP discovery.
-- Deterministic component tools need native identity but no knowledge lease.
-- When a remote operation has already succeeded (`outcome == "succeeded"`), a local receipt-accounting failure NEVER overwrites the business result with `isError=True` (`receipt_unconfirmed=True` is attached instead).
+- Remote, component, and knowledge tools are available out of the box without prior manual activation or `_meta` turn headers, falling back to connection-scoped session identity when `_meta` is absent.
+- When a primary remote or knowledge operation has already succeeded, a local receipt-accounting failure NEVER overwrites the business result with `isError=True` (`receipt_warning` + `receipt_unconfirmed=True` are attached instead).
 - An idle `<owner>.owner.lock` sidecar is removed only after a non-blocking exclusive probe; held or unreadable sidecars are always kept.
 
 [Timeouts & Locks]
-- Uses shared `update_lock` around bounded runtime subprocess dispatch (per-tool remote budget derived from the native inner wait plus 60s grace, knowledge `45.0s`, distill helper budget). Tools whose accepted arguments include `timeout_ms` and that have no native wait get an inner `timeout_ms` inside that budget. SQLite WAL mode with `busy_timeout=5000` for `RemoteReceipts`, and per-request cancellation events triggered by `notifications/cancelled` or `mindie_interrupt`.
+- Uses shared `update_lock` around bounded runtime subprocess dispatch (per-tool remote budget derived from the native inner wait plus 60s grace, knowledge `45.0s` / `120.0s` sync, distill helper budget). Tools whose accepted arguments include `timeout_ms` and that have no native wait get an inner `timeout_ms` inside that budget. SQLite WAL mode with `busy_timeout=5000` for `RemoteReceipts`, and per-request cancellation events triggered by `notifications/cancelled` or `mindie_interrupt`.
 
 [Side-Effect Policy]
 - `initialize` and `tools/list` read selected release catalogs without knowledge activation or service admission.
@@ -172,6 +168,8 @@ def remote_timeout(name, args=None, *, native_wait_ms=None, grace=REMOTE_GRACE_S
 def knowledge_timeout(name, timeout):
     """Bind helper and inner RPC budgets; never hand C6 an unbounded deadline."""
     timeout = coerce_timeout(timeout)
+    if name == "knowledge_sync":
+        return timeout or 120.0
     if name != "knowledge_distill":
         return timeout or 45.0
     import runtime_call
@@ -508,12 +506,15 @@ def _adapter_config():
 class Gate:
     def __init__(self, surface):
         self.surface = surface
-        self.sessions = Sessions() if surface == "knowledge" else None
+        self.sessions = Sessions() if surface in ("knowledge", "components") else None
         if surface == "components":
             from component_tools import catalog
-            self._tools = catalog()
+            knowledge_tools = json.loads(CATALOG.read_text(encoding='utf-8'))["knowledge"]
+            self._tools = [*catalog(), *knowledge_tools]
+            self._knowledge_names = frozenset(tool["name"] for tool in knowledge_tools)
         else:
             self._tools = json.loads(CATALOG.read_text(encoding='utf-8'))[surface]
+            self._knowledge_names = frozenset()
         self.connection_id = uuid.uuid4().hex
         self._remote_receipts = {}
         self._receipts_lock = threading.Lock()
@@ -542,17 +543,24 @@ class Gate:
                 if self.surface == "remote":
                     dispatched = True
                     return self._remote_call(request, cancel, timeout, cli_identity)
-                if self.surface == "components":
-                    from live_catalog import component_call
-                    session = (
-                        optional_native_identity(request, default_session="mcp-" + self.connection_id)
-                        if cli_identity is None
-                        else cli_identity[0]
+                if cli_identity is None:
+                    session = optional_native_identity(
+                        request, default_session="mcp-" + self.connection_id
                     )
+                else:
+                    session = cli_identity[0]
+                    if not isinstance(session, str) or not IDENTITY.fullmatch(session):
+                        raise ValueError("Valid native task identity required")
+                if self.surface == "components":
+                    req_name = (request.get("params") or {}).get("name")
+                    if req_name in self._knowledge_names:
+                        dispatched = True
+                        return self._call(
+                            request, session, cancel, timeout=timeout, surface_override="knowledge"
+                        )
+                    from live_catalog import component_call
                     dispatched = True
                     return component_call(request, session, self.config, cancel=cancel, timeout=timeout)
-                # Private knowledge surface still requires verified native metadata or CLI identity.
-                session = native_identity(request) if cli_identity is None else cli_identity[0]
                 dispatched = True
                 return self._call(request, session, cancel, timeout=timeout)
         except Exception as exc:
@@ -685,10 +693,20 @@ class Gate:
                     receipts.finish(identity, outcome)
                 except Exception as accounting_error:
                     if isinstance(result, dict):
+                        msg = f"{type(accounting_error).__name__}: {accounting_error}"
                         warning = dict(status="failed", error_type=type(accounting_error).__name__,
                                        operation_outcome="preserved", automatic_retry=False)
                         result["accounting"] = warning
                         result["local_accounting_warning"] = warning
+                        if result.get("isError") is False:
+                            result["receipt_warning"] = msg
+                            result["receipt_unconfirmed"] = True
+                            if isinstance(result.get("structuredContent"), dict):
+                                result["structuredContent"] = dict(
+                                    result["structuredContent"],
+                                    receipt_warning=msg,
+                                    receipt_unconfirmed=True,
+                                )
                         if not isinstance(result.get("content"), list):
                             result["content"] = []
                         result["content"].append(dict(type="text", text=
@@ -711,16 +729,17 @@ class Gate:
             result = helper_failure(result, diagnostic, stage, category)
         return result
 
-    def _call(self, request, session, cancel=None, timeout=None):
+    def _call(self, request, session, cancel=None, timeout=None, *, surface_override=None):
         token = None
         stage = "admission"
         started = time.monotonic()
         name = None
+        target_surface = surface_override or self.surface
         try:
             name, args = self._tool_args(request)
             config = json.loads(self.sessions.config.read_text(encoding='utf-8'))
             payload = dict(
-                surface=self.surface, name=name, arguments=args,
+                surface=target_surface, name=name, arguments=args,
                 mindie_session_id=session, native_session_verified=True,
             )
             bound = knowledge_timeout(name, timeout)

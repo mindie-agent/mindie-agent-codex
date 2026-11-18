@@ -66,14 +66,26 @@ def test_hooks_json_exact_sha256_and_byte_length_frozen():
 
 
 def test_manual_skill_trigger_and_pure_runtime_skill_boundary():
+    import re
+    import yaml
+
+    gesture_pat = re.compile(r"(?<![A-Za-z0-9_.-])(?:/|\$)mindie-agent")
     skill_dir = PLUGIN / "skills" / "mindie-agent"
     openai_yaml = (skill_dir / "agents" / "openai.yaml").read_text(encoding="utf-8")
-    assert "allow_implicit_invocation: false" in openai_yaml
+    assert "allow_implicit_invocation: true" in openai_yaml
+    assert not gesture_pat.search(openai_yaml)
 
     skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
     assert skill_md.startswith("---\n")
+    assert len(skill_md.splitlines()) <= 30
     frontmatter = skill_md.split("\n---\n", 1)[0]
-    assert "disable-model-invocation: true" in frontmatter
+    assert "disable-model-invocation" not in frontmatter
+    parsed_fm = yaml.safe_load(frontmatter[4:])
+    assert parsed_fm["name"] == "mindie-agent"
+    assert isinstance(parsed_fm["description"], str) and parsed_fm["description"]
+
+    plugin_json = (PLUGIN / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
+    assert not gesture_pat.search(plugin_json)
 
     for moved in ("user-notice.md", "workspace-setup.md", "github-authentication.md"):
         assert (ROOT / "docs" / "install" / moved).is_file()
@@ -93,6 +105,7 @@ def test_manual_skill_trigger_and_pure_runtime_skill_boundary():
     )
     for md_path in sorted(skill_dir.rglob("*.md")):
         body = md_path.read_text(encoding="utf-8")
+        assert not gesture_pat.search(body), f"{md_path.relative_to(ROOT)} still contains a manual prefix"
         for snippet in forbidden_snippets:
             assert snippet not in body, f"{md_path.relative_to(ROOT)} still contains {snippet!r}"
 

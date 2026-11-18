@@ -114,7 +114,11 @@ class FailureVisibilityTests(unittest.TestCase):
                  patch('mindie_knowledge.loop.transport.rpc', return_value={'status': 'recorded'}) as rpc:
                 result = runtime_call.call(payload)
                 self.assertFalse(result['isError'])
-                self.assertEqual(result['structuredContent'], {'status': 'recorded'})
+                self.assertTrue(result['receipt_unconfirmed'])
+                self.assertIn('OSError', result['receipt_warning'])
+                self.assertEqual(result['structuredContent']['status'], 'recorded')
+                self.assertTrue(result['structuredContent']['receipt_unconfirmed'])
+                self.assertIn('OSError', result['structuredContent']['receipt_warning'])
                 self.assertEqual(result['accounting']['status'], 'failed')
                 self.assertFalse(result['accounting']['automatic_retry'])
                 rpc.assert_called_once()

@@ -197,11 +197,15 @@ class KnowledgePageTests(unittest.TestCase):
         self.assertEqual(checked["knowledge"][1]["name"], "knowledge_explain")
 
     def test_identity_seam_fails_before_the_service(self):
+        from mindie_knowledge.loop.activation import Admission
         page = self.tmp / "empty.json"
         page.write_text("{}", encoding="utf-8")
+        adm = Admission(self.admission)
+        adm.activate("nobody", project_root=str(self.tmp))
+        adm.deactivate("nobody")
         missing = json.loads(self._run("unbound", "mindie://vllm-ascend/none", 0, page, session="nobody"))
         self.assertEqual(missing["seam"], "KnowledgeInactive")
-        self.assertIn("/mindie-agent", missing["message"])
+        self.assertIn("deactivated", missing["message"])
         self.assertIs(missing["service_started"], False)
         mismatched = json.loads(self._run("mismatch", "mindie://vllm-ascend/none", 0, page, session="other-session"))
         self.assertEqual(mismatched["seam"], "ValueError")

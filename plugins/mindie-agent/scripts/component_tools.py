@@ -84,6 +84,22 @@ DESCRIPTIONS = {
         "CANN `plog`s in-place (`python3 -m mindie_debugger.cli triage`) or run `ACLGraphCaptureGuard`, "
         "`ACLGraphAddressTracker`, `ACLGraphDumper`, `ACLGraphVllmInspector`, and `precision` inside the NPU container."
     ),
+    "npu_top": (
+        "Observe live Ascend NPU fleet telemetry, per-Die HBM/utilization, and active "
+        "processes across A2/A3/A5 servers using npu-top. Pass CLI arguments as an argv "
+        "array, e.g. ['snapshot', '--json'] or ['--help']."
+    ),
+    "rsi_loop": (
+        "Coordinate optional iterative optimization rounds (init, next, complete, finish) "
+        "over an experiment ledger via mindie_harness.rsi.rsi_loop. Pass CLI arguments as "
+        "an argv array, e.g. ['--help'] or ['next', '--ledger', 'experiment-ledger.jsonl']."
+    ),
+    "experiment_ledger": (
+        "Manage deterministic experiment ledger fingerprinting, paired-trial statistical "
+        "judging, leave-one-out attribution checks, and rendering via "
+        "mindie_harness.rsi.experiment_ledger. Pass CLI arguments as an argv array, e.g. "
+        "['fingerprint', '.'] or ['--help']."
+    ),
 }
 
 
@@ -137,7 +153,10 @@ def command(adapter, component):
         return configured
     if component == "diagnostics":
         return [adapter["python"], "-I", "-X", "utf8", "-m", "mindie_diagnostics.cli"]
-    name = "mindie-" + component
+    if component in {"rsi_loop", "experiment_ledger"}:
+        scripts_dir = Path(adapter.get("runtime_scripts") or Path(__file__).resolve().parent)
+        return [adapter["python"], "-I", "-X", "utf8", str(scripts_dir / (component + ".py"))]
+    name = "npu-top" if component == "npu_top" else "mindie-" + component
     runtime_bins = [str(Path(adapter["python"]).parent)]
     if Path(adapter["python"]) == Path(sys.executable):
         runtime_bins.append(sysconfig.get_path("scripts"))
@@ -148,7 +167,7 @@ def command(adapter, component):
     )
     if executable is None:
         raise FileNotFoundError(
-            "mindie-" + component + " is not installed on PATH; install the component "
+            name + " is not installed on PATH; install the component "
             "or configure component_commands." + component + " in the adapter")
     return [executable]
 

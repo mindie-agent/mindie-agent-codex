@@ -116,8 +116,8 @@ def adapter_check(source):
         raise ValueError("plugin package exceeds 16 MiB")
     import yaml
     skill = yaml.safe_load((plugin / "skills/mindie-agent/agents/openai.yaml").read_text(encoding='utf-8'))
-    if skill.get("policy", {}).get("allow_implicit_invocation") is not False:
-        raise ValueError("knowledge skill requires explicit user invocation")
+    if skill.get("policy", {}).get("allow_implicit_invocation") is not True:
+        raise ValueError("mindie-agent skill requires implicit invocation enabled")
     hooks = read_json(plugin / "hooks/hooks.json")[0]["hooks"]
     if set(hooks) != {"SessionStart", "UserPromptSubmit", "Stop", "Interrupt"} or any(len(v) != 1 for v in hooks.values()):
         raise ValueError("one SessionStart, UserPromptSubmit, Stop and Interrupt hook group is required")
@@ -184,7 +184,7 @@ def adapter_check(source):
         verify_bundled_seed(plugin)
     catalog = read_catalog(plugin / "scripts" / "mcp_catalog.json")
     names = {tool.get("name") for tool in catalog.get("knowledge") or []}
-    if not {"knowledge_query", "knowledge_explain", "knowledge_feedback", "knowledge_distill"} <= names:
+    if not {"knowledge_query", "knowledge_explain", "knowledge_feedback", "knowledge_distill", "knowledge_sync"} <= names:
         raise ValueError("adapter knowledge catalogue is incomplete")
     if "knowledge_use" in names or "knowledge_judge" in names:
         raise ValueError("retired knowledge tools are advertised")

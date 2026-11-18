@@ -10,9 +10,9 @@ Thank you for contributing to `mindie-agent-codex`, the native OpenAI Codex plug
    - `plugins/mindie-agent/hooks/hooks.json` is byte-frozen (`sha256 == ea80d0815485ba5f762ff5275f1e40817130694870405237dbd65d03f28f9981`) so Codex hook trust survives plugin cache updates.
    - `.mcp.json` uses a thin file locator without inline JSON state-machine blobs.
    - Delegate shared process supervision, file locking, and RSI helpers (`rsi_loop.py`, `rsi_explore.py`, `experiment_ledger.py`) to `mindie-harness`; keep Codex-specific logic focused on native session identity, `codex_transcript.py`, and profile binding.
-2. **Zero-Gate Deterministic Tools & Explicit Knowledge Gate (`HOST-ADMISSION`)**:
-   - `mindie-remote-dev` and `mindie-tools` must work in every session and Subagent without `/mindie-agent` or `_meta` turn headers; read-only tools (`remote_read`, `remote_grep`) bypass mutation concurrency caps and hot-path `.owner.lock` scans.
-   - `knowledge_*` operations require explicit `/mindie-agent` or `$mindie-agent` activation in the active session (`P2.1`).
+2. **Silent Default-On Tools & Admission Boundaries (`HOST-ADMISSION`)**:
+   - `mindie-remote-dev` and `mindie-tools` (including `knowledge_*`) must work out of the box in every session, Desktop Work mode, Automation, and Subagent without prompt-prefix gates or `_meta` turn headers; read-only tools (`remote_read`, `remote_grep`, `knowledge_query`, `knowledge_explain`) bypass mutation concurrency caps and hot-path `.owner.lock` scans.
+   - `SessionStart` and `UserPromptSubmit` remain passive with zero cold-start SQLite writes; `Stop` checks community sharing consent and `project_roots` first (`< 100ms` exit without SQLite when unconfigured, disabled, or out of scope).
 3. **Upgrade Continuity & State Honesty (`HOST-UPGRADE`)**:
    - Maintain backward compatibility with `codex.json`, `prepare.lock`, and `releases/<version>/runtime.json` across upgrades and rollbacks.
    - Distinguish `completed`, `failed`, and `unknown` external effects, and precede every `except OSError:` handler with `except TimeoutError: raise`.

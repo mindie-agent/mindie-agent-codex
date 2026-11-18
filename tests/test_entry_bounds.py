@@ -92,9 +92,15 @@ class EntryBoundsTests(unittest.TestCase):
                     env={**os.environ, "MINDIE_AGENT_CONFIG": str(config)},
                     timeout=3,
                 )
-                # No manual session grant: even malformed unrelated Stop
-                # input cannot start knowledge work or inject a warning.
-                self.assertEqual(result.returncode, 0)
+                # Malformed or unrelated Stop input never invokes runtime capture.
+                expected_rc = (
+                    1
+                    if isinstance(case, dict)
+                    and case.get("hook_event_name") == "Stop"
+                    and case.get("stop_hook_active", False) is False
+                    else 0
+                )
+                self.assertEqual(result.returncode, expected_rc)
                 self.assertEqual(json.loads(result.stdout), {})
                 self.assertFalse(marker.exists())
 

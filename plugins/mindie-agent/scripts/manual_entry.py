@@ -1,16 +1,15 @@
-"""[Role] Bind an explicit native UserPromptSubmit gesture to its session.
+"""[Role] Passive UserPromptSubmit hook handler and session status receipt helper.
 
 [Invariants]
-- Ordinary prompts return no knowledge context and never read configuration.
-- Only the native hook's session/cwd can establish the manual entry grant.
-- A later turn keeps the grant; new sessions and subagents never inherit it.
+- All prompts pass through passively without requiring prompt prefixes or gestures.
+- Cold prompts never read configuration or initialize SQLite state.
 
 [Timeouts & Locks]
-- Input is bounded at 32 MiB; writes use Admission's WAL/5-second lock budget.
+- Input is bounded at 32 MiB; receipt writes use atomic os.replace().
 
 [Side-Effect Policy]
-- Explicit entry mutates only the existing Admission lease; no knowledge
-  service, corpus, model, transcript or contribution worker is started here.
+- Passive UserPromptSubmit mutates no Admission lease and starts no service,
+  corpus, model, transcript or contribution worker.
 """
 import hashlib
 import json
@@ -29,16 +28,6 @@ _UNSCOPED_FAILURE_TTL = 300.0
 _STAGE = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
 _ERROR_TYPE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
 _DIGEST = re.compile(r"[0-9a-f]{16}\Z")
-# Match explicit start-of-prompt /mindie-agent, $mindie-agent, and Codex
-# Composer's linked skill/plugin pill forms (plus optional leading UTF-8 BOM).
-GESTURE = re.compile(
-    r"^[\s\ufeff]*(?:"
-    r"/mindie-agent"
-    r"|\$mindie-agent(?::mindie-agent)?"
-    r"|\[\$mindie-agent(?::mindie-agent)?\]\([^\r\n)]+\)"
-    r"|\[@mindie-agent\]\(plugin://mindie-agent@[^\r\n)]+\)"
-    r")(?=\s|$)"
-)
 
 
 def entry_status_path(config_file):
@@ -89,13 +78,13 @@ def _load_status_store(target):
 
 
 def record_entry_status(config_file, *, stage, status, session_id=None, error_type=None):
-    """Persist a session-keyed manual-entry receipt when the config directory exists."""
+    """Persist a session-keyed status receipt when the config directory exists."""
     if status not in {"authorized", "deactivated", "failed"}:
         return
     target = entry_status_path(config_file)
     if not target.parent.is_dir():
         if status in {"authorized", "deactivated"}:
-            raise FileNotFoundError("manual entry receipt directory does not exist")
+            raise FileNotFoundError("entry status receipt directory does not exist")
         return
     safe_stage = stage if isinstance(stage, str) and _STAGE.fullmatch(stage) else "entry"
     safe_error = (
@@ -163,16 +152,14 @@ def prompt_failure_response(stage, error_type):
     )
     return dict(
         systemMessage=(
-            f"MindIE session authorization failed at {safe_stage} ({safe_error}); "
-            "inspect local status/permissions and do not repeat /mindie-agent in a loop."
+            f"MindIE prompt hook failed at {safe_stage} ({safe_error}); "
+            "inspect local status/permissions and continue with available tools."
         ),
         hookSpecificOutput=dict(
             hookEventName="UserPromptSubmit",
             additionalContext=(
-                f"MindIE UserPromptSubmit failed at stage '{safe_stage}' ({safe_error}) "
-                "before session authorization completed. Do NOT ask the user to resend "
-                "/mindie-agent in a loop; inspect local status/permissions if needed and "
-                "continue independent task work with native or deterministic tools."
+                f"MindIE UserPromptSubmit failed at stage '{safe_stage}' ({safe_error}); "
+                "inspect local status/permissions if needed and continue independent task work."
             ),
         ),
     )
@@ -207,42 +194,26 @@ def explain_inactive_session(config_file, session, *, admission_path=None):
             else "RuntimeError"
         )
         if status == "failed":
-            prefix = "a recent /mindie-agent hook" if receipt.get("unscoped") else "/mindie-agent"
             return (
-                f"Knowledge is not authorized in this session: {prefix} failed at "
-                f"{stage} ({error_type}); inspect status/permissions, do not repeat "
-                "/mindie-agent in a loop, and continue with native/deterministic tools"
+                f"Knowledge is unavailable in this session: hook failed at "
+                f"{stage} ({error_type}); inspect status/permissions and continue with native tools"
             )
         if status == "deactivated":
             return (
-                "Knowledge is not authorized in this session: /mindie-agent was deactivated; "
-                "send /mindie-agent only to re-enable, or continue with native/deterministic tools"
-            )
-        if status == "authorized":
-            return (
-                "Knowledge is not authorized in this session (admission_mismatch: /mindie-agent "
-                "ran for this session, but the active admission store has no matching lease; "
-                "inspect config/cwd, do not resend in a loop, and continue with native tools)"
+                "Knowledge was explicitly deactivated for this session; "
+                "continue with native or deterministic tools"
             )
     if config_file is not None and _unwritable_state_hint(config_file, admission_path=admission_path):
         return (
-            "Knowledge is not authorized in this session (admission_unwritable: sandbox or "
-            "permissions blocked /mindie-agent state writes); do not repeat /mindie-agent in "
-            "a loop; continue with native/deterministic tools"
+            "Knowledge state is unwritable (admission_unwritable: sandbox or "
+            "permissions blocked state writes); continue with native/deterministic tools"
         )
-    return (
-        "Knowledge is not authorized in this session (no /mindie-agent receipt for this "
-        "session; send /mindie-agent interactively, or if already sent here, UserPromptSubmit "
-        "did not run for this session—do not resend in a loop; continue with native tools)"
-    )
+    return "Knowledge is inactive for this session; continue with native/deterministic tools"
 
 
 def requested(event):
-    return (isinstance(event, dict)
-            and event.get("hook_event_name") == "UserPromptSubmit"
-            and not event.get("agent_id")
-            and isinstance(event.get("prompt"), str)
-            and GESTURE.match(event["prompt"]) is not None)
+    """UserPromptSubmit is always a fast passive pass-through."""
+    return False
 
 
 def read_event(stream):
@@ -254,42 +225,8 @@ def read_event(stream):
 
 
 def action(event):
-    return event["prompt"][GESTURE.match(event["prompt"]).end():].strip()
+    return ""
 
 
 def authorize(adapter, event):
-    if not requested(event):
-        return {}
-    session, scope = event.get("session_id"), event.get("cwd")
-    if not isinstance(session, str) or not IDENTITY.fullmatch(session):
-        raise ValueError("native prompt hook has no valid session identity")
-    if not isinstance(scope, str) or not Path(scope).is_absolute():
-        raise ValueError("native prompt hook has no absolute project scope")
-    from mindie_knowledge.loop.activation import Admission
-
-    if action(event) == "deactivate":
-        from mindie_knowledge.loop.domain_routes import deactivate_registered_domains
-        result = deactivate_registered_domains(
-            adapter["engine_config"], domain_configs=adapter.get("domain_configs"),
-            session=session,
-        )
-        if result["status"] != "inactive":
-            return dict(
-                systemMessage="MindIE session deactivation is incomplete; inspect the per-domain result.",
-                hookSpecificOutput=dict(hookEventName="UserPromptSubmit", additionalContext=
-                    "The user requested session deactivation. Preserve completed revocations and inspect "
-                    "the remaining domains; do not claim global completion: " + json.dumps(result)),
-            )
-        context = "MindIE knowledge is deactivated for this session. Remote-dev remains available."
-    else:
-        Admission(adapter["admission_path"]).activate(
-            session, project_root=str(Path(scope).resolve()), root_session=session,
-        )
-        context = ("The user explicitly enabled MindIE knowledge for this session. "
-                   "Follow the installed mindie-agent skill for this task. Later turns keep this grant; "
-                   "background capture additionally requires saved contribution consent and project scope.")
-        plugin_root = os.environ.get("PLUGIN_ROOT")
-        if plugin_root:
-            context += " Read the entry instructions at " + str(
-                Path(plugin_root) / "skills/mindie-agent/SKILL.md") + "."
-    return dict(hookSpecificOutput=dict(hookEventName="UserPromptSubmit", additionalContext=context))
+    return {}

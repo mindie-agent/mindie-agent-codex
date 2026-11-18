@@ -1,31 +1,39 @@
-"""[Role] Private knowledge entry loaded only by the explicitly invoked Skill.
+"""[Role] Direct CLI wrapper for MindIE knowledge operations and catalog inspection.
 
 [Invariants]
-- Neither this catalog nor its tool descriptions belongs in default MCP discovery.
-- Identity comes from the native shell, never model-supplied session arguments.
-- Catalog access and execution require the current task's manual grant.
+- Available out of the box alongside default `mindie-tools` MCP discovery.
+- Uses `CODEX_THREAD_ID` when present or falls back to a local CLI session ID;
+  never trusts model-supplied session arguments.
+- Respects explicit session deactivation (`status == "inactive"`).
 - Input is exactly one byte source: binary stdin or one UTF-8 `--input-file`.
   A selected file is authoritative; an unreadable file never falls back to stdin.
 
 [Timeouts & Locks]
 - Calls reuse Gate's runtime lock, knowledge deadlines and owned child cleanup.
-- Arguments are bounded to 1 MiB; describe only reads the existing lease/catalog.
+- Arguments are bounded to 1 MiB; describe reads the static/live catalog.
 
 [Side-Effect Policy]
 - Describe never activates knowledge or starts a service. Calls retain the
   knowledge engine's domain, contribution and capture checks.
 """
 import json
+import os
 from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from admission_ops import admission, native_session, read_config
+from admission_ops import IDENTITY, admission, read_config
 from mcp_gate import Gate, InputUnavailableError, InvalidToolArguments, call_failure
 from runtime_call import KnowledgeInactive
 
 INPUT_LIMIT = 1024 * 1024
+DEFAULT_CLI_SESSION = "codex-cli-default"
+
+
+def _cli_session():
+    raw = os.environ.get("CODEX_THREAD_ID", "")
+    return raw if IDENTITY.fullmatch(raw) else DEFAULT_CLI_SESSION
 
 
 def _read_arguments(argv):
@@ -87,14 +95,12 @@ def _read_arguments(argv):
 
 def invoke(operation, arguments):
     try:
-        session = native_session()
-        if operation == "describe":
-            config = read_config()
-            if admission(config).knowledge_lease(session) is None:
-                from admission_ops import config_path
-                from manual_entry import explain_inactive_session
-                raise KnowledgeInactive(explain_inactive_session(
-                    config_path(), session, admission_path=config.get("admission_path")))
+        session = _cli_session()
+        config = read_config()
+        adm_path = config.get("admission_path")
+        if isinstance(adm_path, str) and os.path.isabs(adm_path) and Path(adm_path).is_file():
+            if admission(config).inspect(session).get("status") == "inactive":
+                raise KnowledgeInactive("Knowledge is deactivated for this session")
         gate = Gate("knowledge")
         if operation == "describe":
             return dict(tools=gate.tools)

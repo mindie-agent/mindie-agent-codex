@@ -248,7 +248,7 @@ class GateTests(SharingFixture):
                 elif state == "wrong-schema":
                     self.community.write_text(json.dumps(dict(schema="other/1")))
                 result = self.bridge("stop", self.event(last_assistant_message="Done"))
-                expected = 0 if state == "disabled" else 1
+                expected = 0 if state in {"missing", "disabled"} else 1
                 self.assertEqual((result.returncode, json.loads(result.stdout)), (expected, {}))
                 self.assertEqual(self.attempts(), 0)
 
@@ -355,13 +355,13 @@ class GateTests(SharingFixture):
         self.assertEqual({row["session"] for row in wake_requests(wake)}, {"manual-A"})
 
     def test_env_thread_disagreeing_with_event_session_drops_capture(self):
-        # A child with no manual grant stays passive before transcript parsing.
+        # When CODEX_THREAD_ID disagrees with event["session_id"], Stop fails closed before capture.
         self.write_sharing()
         self.activate()
         self.prepare_store()
         with patch.dict(os.environ, CODEX_THREAD_ID="child-task"):
             result = self.bridge("stop", self.event(last_assistant_message="Done"))
-        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))
         self.assertEqual(self.captures(), 0)
         self.assertEqual(self.attempts(), 0)
 
@@ -394,7 +394,7 @@ class GateTests(SharingFixture):
         self.activate()
         before = self.attempts()
         code, stdout, _stderr, elapsed = self.bridge_stop_held_open()
-        self.assertEqual((code, json.loads(stdout)), (1, {}))
+        self.assertEqual((code, json.loads(stdout)), (0, {}))
         self.assertLess(elapsed, 0.75)
         self.assertEqual(self.attempts(), before)
         self.assertFalse(self.community.exists())
@@ -405,13 +405,17 @@ class GateTests(SharingFixture):
         self.prepare_store()
         from mindie_knowledge.loop.activation import Admission
         authority = Admission(self.sessions.path)
-        authority.associate("manual-A", project_root=str(self.scope), not_before=time.time())
+        other_cwd = self.root / "mcp-other-cwd"
+        other_cwd.mkdir()
+        authority.activate("manual-A", project_root=str(other_cwd), not_before=0.0)
         result = self.bridge("stop", self.event(last_assistant_message="Done"))
         self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {}))
-        self.assertEqual(self.captures(), 0)
+        self.assertEqual(self.captures(), 1)
         self.assertEqual(self.attempts(), 0)
-        self.assertEqual(wake_requests(wake), [])
-        self.assertIsNone(authority.knowledge_lease("manual-A"))
+        self.assertEqual({row["session"] for row in wake_requests(wake)}, {"manual-A"})
+        updated_lease = authority.knowledge_lease("manual-A")
+        self.assertIsNotNone(updated_lease)
+        self.assertEqual(Path(updated_lease["project_root"]).resolve(), self.scope.resolve())
 
     def test_sharing_toggle_does_not_invalidate_ordinary_activation(self):
         self.write_sharing()

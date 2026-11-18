@@ -47,7 +47,7 @@ def run_imports(sources, *, emit, retry_summary=False):
     session = native_session()
     lease = authority.knowledge_lease(session)
     if lease is None:
-        raise ValueError('history import requires manual /mindie-agent activation in this session')
+        raise ValueError('history import requires an active task lease in this session')
     import sharing
     if not sharing.capture_allowed(lease, None):
         raise ValueError('history import requires enabled contribution in this task scope')

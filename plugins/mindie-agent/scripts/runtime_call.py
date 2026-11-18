@@ -167,11 +167,15 @@ def call(payload):
         surface = payload["catalog_surface"]
         if surface == "components":
             from component_tools import catalog
-            return catalog()
+            from export_catalog import catalog as exported_catalog
+            return [*catalog(), *exported_catalog()["knowledge"]]
         if surface == "remote":
             from export_catalog import catalog
             return catalog()["remote"]
-        raise ValueError("private knowledge catalog is not public MCP discovery")
+        if surface == "knowledge":
+            from export_catalog import catalog
+            return catalog()["knowledge"]
+        raise ValueError("unknown catalog surface")
     if payload["surface"] == "remote":
         return remote(payload)
     if payload["surface"] == "components":
@@ -225,21 +229,50 @@ def call(payload):
         config["engine_config"], domain=route_domain, ref=route_ref,
         domain_configs=config.get("domain_configs"),
     )
-    # A host identity is not a manual-entry grant. Reads and usage feedback
-    # retain the session grant while routing to the target's own consent.
-    # Capture and paid distillation additionally need that engine's lease.
-    default_lease = _admission(config).knowledge_lease(session)
-    target_lease = _admission(selected).knowledge_lease(session) if routed else default_lease
-    if target_lease is None and default_lease is None:
-        from manual_entry import explain_inactive_session
-        raise KnowledgeInactive(explain_inactive_session(
-            config_path(), session, admission_path=config.get("admission_path")))
-    if target_lease is None and name in {"knowledge_distill", "knowledge_attach"}:
-        raise LeaseRequired("the selected domain requires its own manual /mindie-agent activation")
-    # C6 capture admission needs the existing target-engine lease token, not a
-    # fabricated `_session_verified` flag. A target with an independent
-    # admission store must already hold this session's lease; a deliberately
-    # shared admission_path remains supported configuration.
+    default_adm = _admission(config)
+    if default_adm.path.is_file() and default_adm.inspect(session).get("status") == "inactive":
+        raise KnowledgeInactive("Knowledge is deactivated for this session")
+    target_adm = _admission(selected) if routed else default_adm
+    if routed and target_adm.path.is_file() and target_adm.inspect(session).get("status") == "inactive":
+        raise KnowledgeInactive("Knowledge is deactivated for the selected domain")
+    same_admission = (not routed) or (target_adm.path.resolve() == default_adm.path.resolve())
+    default_lease = default_adm.knowledge_lease(session) if default_adm.path.is_file() else None
+    target_lease = (
+        default_lease
+        if same_admission
+        else (target_adm.knowledge_lease(session) if target_adm.path.is_file() else None)
+    )
+    if name in {"knowledge_distill", "knowledge_attach"} and target_lease is None:
+        if same_admission:
+            default_adm.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            default_lease = default_adm.activate(
+                session,
+                project_root=str(Path.cwd().resolve()),
+                root_session=session,
+                not_before=0.0,
+            )
+            target_lease = default_lease
+        else:
+            raise LeaseRequired("the selected domain requires an active task lease")
+    elif name == "knowledge_feedback" and same_admission and default_lease is None:
+        try:
+            import sharing
+            settings = sharing.read(adapter=config)
+            if settings is not None and settings["enabled"] and sharing.consent_allows(settings) is not False:
+                cwd_root = Path(sharing.canonical_root(str(Path.cwd().resolve())))
+                if any(cwd_root.is_relative_to(Path(allowed)) for allowed in settings["project_roots"]):
+                    default_adm.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    default_lease = default_adm.activate(
+                        session,
+                        project_root=str(cwd_root),
+                        root_session=session,
+                        not_before=0.0,
+                    )
+                    target_lease = default_lease
+        except TimeoutError:
+            raise
+        except Exception:
+            pass
     lease_config = selected if routed else config
     if name == "knowledge_distill" and token is None:
         try:
@@ -247,7 +280,6 @@ def call(payload):
         except LeaseRequired:
             if routed:
                 raise
-            # Preserve the installed no-domain call's historical disposition.
             raise ValueError(
                 "knowledge distill requires an active task lease"
             ) from None
@@ -290,7 +322,11 @@ def call(payload):
             else:
                 identity["_activation"] = token
             rpc_args = dict(args, **identity)
-            rpc_timeout = distill_rpc_timeout() if name == "knowledge_distill" else None
+            rpc_timeout = (
+                distill_rpc_timeout()
+                if name == "knowledge_distill"
+                else (90.0 if name == "knowledge_sync" else None)
+            )
             _DISPATCH_STATE["execution"] = (
                 "not_started" if name in _READ_ONLY_KNOWLEDGE else "outcome_unconfirmed"
             )
@@ -301,7 +337,12 @@ def call(payload):
                 timeout=rpc_timeout,
             )
             is_error = False
-            if name == "knowledge_distill":
+            if name == "knowledge_sync":
+                from feed_sync import fold_feed_results
+                status, rows, detail = fold_feed_results(json.dumps(value))
+                value = dict(status=status, feeds=rows, detail=detail)
+                is_error = status == "sync_failed"
+            elif name == "knowledge_distill":
                 from mindie_knowledge.graded.distill import result_view
                 value, is_error = result_view(value)
             succeeded = not is_error
@@ -311,6 +352,15 @@ def call(payload):
                 isError=is_error,
             )
         except RequestRejected as exc:
+            msg = str(exc)
+            if (
+                "outside current contribution authorization" in msg
+                or "distill accepts explicit inputs" in msg
+                or "domain differs from the selected knowledge service" in msg
+            ):
+                _DISPATCH_STATE["execution"] = "not_started"
+                exc.request_not_started = True
+                raise
             if name not in {"knowledge_query", "knowledge_explain"}:
                 raise
             code = getattr(exc, "error_code", None)
@@ -334,6 +384,16 @@ def call(payload):
             read_ref = getattr(exc, "read_ref", None)
             if isinstance(read_ref, str) and read_ref.startswith("mindie://") and len(read_ref) <= 1024:
                 result["structuredContent"]["read_ref"] = read_ref
+        except Exception as exc:
+            msg = str(exc)
+            if (
+                "outside current contribution authorization" in msg
+                or "distill accepts explicit inputs" in msg
+                or "domain differs from the selected knowledge service" in msg
+            ):
+                _DISPATCH_STATE["execution"] = "not_started"
+                exc.request_not_started = True
+            raise
         return result
     finally:
         pending = sys.exc_info()[1]
@@ -346,8 +406,18 @@ def call(payload):
                 # The operation already ran. Expose the bookkeeping fault
                 # without telling the caller to repeat a successful mutation.
                 if pending is None:
+                    warning = f"{type(exc).__name__}: {exc}"[:240]
                     result["accounting"] = dict(status="failed", error_type=type(exc).__name__,
                                                 execution="completed", automatic_retry=False)
+                    if not result.get("isError"):
+                        result["receipt_warning"] = warning
+                        result["receipt_unconfirmed"] = True
+                        if isinstance(result.get("structuredContent"), dict):
+                            result["structuredContent"] = dict(
+                                result["structuredContent"],
+                                receipt_warning=warning,
+                                receipt_unconfirmed=True,
+                            )
                     result["content"].append(dict(type="text", text=
                         "Knowledge operation completed; outcome accounting failed. Do not repeat the operation."))
                 else:

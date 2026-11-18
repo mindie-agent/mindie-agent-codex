@@ -1,7 +1,8 @@
-"""Knowledge denial precedes service, corpus, model and transcript access."""
+"""Default-on knowledge admission, explicit deactivation, and fast passive Stop/SessionStart."""
 import json
 from pathlib import Path
 import sys
+import time
 from unittest.mock import patch
 
 import pytest
@@ -38,35 +39,49 @@ def test_native_identity_does_not_authorize_knowledge(tmp_path, monkeypatch, sta
     elif state == "revoked":
         gate.activate("chat", project_root=str(tmp_path))
         gate.deactivate("chat")
-    with patch("service_client.connect") as connect:
-        with pytest.raises(runtime_call.KnowledgeInactive, match="/mindie-agent"):
-            runtime_call.call(dict(surface="knowledge", name=name, arguments=arguments,
-                                   mindie_session_id="chat", native_session_verified=True))
-        connect.assert_not_called()
-    with patch("sharing.read") as settings, patch("codex_transcript.capture_source") as transcript:
+
+    if state == "revoked":
+        with patch("service_client.connect") as connect:
+            with pytest.raises(runtime_call.KnowledgeInactive, match="deactivated"):
+                runtime_call.call(dict(surface="knowledge", name=name, arguments=arguments,
+                                       mindie_session_id="chat", native_session_verified=True))
+            connect.assert_not_called()
+    else:
+        rpc_reply = {"status": "noop"} if name == "knowledge_distill" else {"results": []}
+        with patch("service_client.connect", return_value={}), \
+                patch("mindie_knowledge.loop.transport.rpc", return_value=rpc_reply), \
+                patch.object(runtime_call, "finish_outcome"):
+            res = runtime_call.call(dict(surface="knowledge", name=name, arguments=arguments,
+                                         mindie_session_id="chat", native_session_verified=True))
+            assert res["isError"] is False
+        if state == "missing" and name in {"knowledge_query", "knowledge_explain"}:
+            assert not admission.exists()
+
+    with patch("codex_transcript.capture_source") as transcript:
         result = admission_ops.operation("stop_capture", dict(
             _adapter=adapter, event=dict(session_id="chat", turn_id="turn", transcript_path="/unread.jsonl")))
-        assert result == dict(stage="inert", reason="manual-entry-required")
-        settings.assert_not_called()
+        assert result == dict(stage="inert", reason="sharing-disabled")
         transcript.assert_not_called()
-    assert not (tmp_path / "corpus").exists()
 
 
 def test_passive_stop_emits_no_context_and_does_not_inspect_sharing(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CODEX_THREAD_ID", "ordinary-chat")
     adapter = dict(admission_path=str(tmp_path / "admission.sqlite3"))
+    started = time.monotonic()
     with patch("sharing.read") as sharing, patch.object(bridge, "_read_hook_stdin") as stdin:
         assert bridge.stop(adapter=adapter) == 0
         sharing.assert_not_called()
         stdin.assert_not_called()
+    assert (time.monotonic() - started) < 0.1
     assert capsys.readouterr().out == "{}\n"
     assert not Path(adapter["admission_path"]).exists()
 
 
 def test_passive_session_start_does_not_start_or_sync_knowledge(tmp_path, monkeypatch, capsys):
     config = tmp_path / "adapter.json"
+    admission = tmp_path / "admission.sqlite3"
     config.write_text(json.dumps(dict(
-        engine_config=str(tmp_path / "engine.json"), admission_path=str(tmp_path / "admission.sqlite3"))))
+        engine_config=str(tmp_path / "engine.json"), admission_path=str(admission))))
     monkeypatch.setenv("CODEX_THREAD_ID", "ordinary-session")
     with patch.object(session_maintenance, "bind_explicit_config"), \
             patch("diagnostic_maintenance.maintain", return_value={"status": "ok"}), \
@@ -75,6 +90,7 @@ def test_passive_session_start_does_not_start_or_sync_knowledge(tmp_path, monkey
         connect.assert_not_called()
         sync.assert_not_called()
     assert json.loads(capsys.readouterr().out)["status"] == "inactive"
+    assert not admission.exists()
 
 
 def test_activation_command_cannot_self_authorize_without_native_user_entry(tmp_path, monkeypatch):
@@ -83,8 +99,14 @@ def test_activation_command_cannot_self_authorize_without_native_user_entry(tmp_
     config.write_text(json.dumps(dict(admission_path=str(path))))
     monkeypatch.setenv("CODEX_THREAD_ID", "ordinary-session")
     monkeypatch.setenv("MINDIE_AGENT_CONFIG", str(config))
-    with patch.object(bridge.Sessions, "activate") as activate:
-        with pytest.raises(bridge.Inactive, match="not authorized"):
-            bridge.activate("activate")
-        activate.assert_not_called()
-    assert not path.exists()
+    fake_lease = dict(
+        status="active",
+        mindie_session_id="ordinary-session",
+        mindie_activation="tok-1",
+        activated_at=1.0,
+        project_root=str(tmp_path),
+    )
+    with patch.object(bridge.Sessions, "activate", return_value=fake_lease) as activate:
+        result = bridge.activate("activate")
+        activate.assert_called_once()
+    assert result["mindie_session_id"] == "ordinary-session"

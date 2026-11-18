@@ -1,8 +1,26 @@
 """Keep standing-host integration selectable outside the unit CI runner."""
 import os
 from pathlib import Path
+import shutil
 
 import pytest
+
+
+def _link_or_copy(src, dst):
+    try:
+        os.link(src, dst)
+    except OSError:
+        shutil.copy2(src, dst)
+
+
+@pytest.fixture(scope="session")
+def _session_gitleaks_seed(tmp_path_factory):
+    """Session-local read-only copy of verified Gitleaks cache to avoid repeated GitHub downloads."""
+    seed = tmp_path_factory.mktemp("gitleaks-seed") / "gitleaks"
+    real_cache = Path(os.path.expanduser("~")) / ".cache" / "mindie-agent" / "gitleaks"
+    if real_cache.is_dir():
+        shutil.copytree(real_cache, seed)
+    return seed
 
 
 def pytest_configure(config):
@@ -16,7 +34,7 @@ def pytest_collection_modifyitems(items):
 
 
 @pytest.fixture(autouse=True)
-def isolate_host_environment(monkeypatch, tmp_path, request):
+def isolate_host_environment(monkeypatch, tmp_path, request, _session_gitleaks_seed):
     """Give every test its own host home and XDG/MindIE state roots."""
     host = tmp_path / "host"
     home = host / "home"
@@ -46,6 +64,11 @@ def isolate_host_environment(monkeypatch, tmp_path, request):
                  or str(real_home / ".local/share/uv/python"))
     if Path(uv_python).is_dir():
         monkeypatch.setenv("UV_PYTHON_INSTALL_DIR", uv_python)
+    if _session_gitleaks_seed.is_dir():
+        target_gl = home / ".cache" / "mindie-agent" / "gitleaks"
+        if not target_gl.exists():
+            target_gl.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(_session_gitleaks_seed, target_gl, copy_function=_link_or_copy)
     if request.node.get_closest_marker("live_npu"):
         real_ssh = real_home / ".ssh"
         if real_ssh.exists() and not (home / ".ssh").exists():

@@ -16,7 +16,7 @@ python3 <PLUGIN_DATA>/releases/0.1.1/entry.py bridge history-import \
 ```
 
 - **No Automatic Discovery**: Only the exact files passed via `--source` are read; there is no directory watcher or background history scanner.
-- **Requires Active Manual Session Entry & Approved Scope**: The requesting session (`CODEX_THREAD_ID`) must already hold an active manual-entry lease granted by `/mindie-agent` or `$mindie-agent` (`authority.knowledge_lease(session)`)—`history-import` never auto-associates an unactivated session. Both the requesting session and the historical transcript's working directory must fall within your already approved contribution project scope (`sharing.capture_allowed`). No duplicate consent prompt is shown, and historical sessions remain inactive.
+- **Requires Active Task Lease & Approved Scope**: The requesting session (`CODEX_THREAD_ID`) must hold an active task lease (`authority.knowledge_lease(session)`)—`history-import` never auto-associates an unactivated session. Both the requesting session and the historical transcript's working directory must fall within your already approved contribution project scope (`sharing.capture_allowed`). No duplicate consent prompt is shown, and historical sessions remain inactive.
 
 ---
 

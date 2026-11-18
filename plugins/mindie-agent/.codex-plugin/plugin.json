@@ -1,6 +1,6 @@
 {
   "name": "mindie-agent",
-  "version": "0.1.36",
+  "version": "0.1.37",
   "description": "Domain knowledge and experience feedback for Ascend development",
   "author": {
     "name": "MindIE Agent contributors"
@@ -12,12 +12,12 @@
     "composerIcon": "./assets/mindie-agent-icon.png",
     "logo": "./assets/mindie-agent-logo.png",
     "logoDark": "./assets/mindie-agent-logo.png",
-    "shortDescription": "Ascend domain knowledge and experience.",
-    "longDescription": "One domain entry skill, local knowledge and remote-dev tools, community-gated experience capture and optional feedback.",
+    "shortDescription": "Ascend NPU engineering tools and L1-L4 knowledge.",
+    "longDescription": "Silent default-on Ascend NPU engineering skill, MindIE remote-dev and L1-L4 knowledge MCP tools, and opt-in community experience capture.",
     "developerName": "MindIE Agent contributors",
     "category": "Productivity",
     "capabilities": [],
-    "defaultPrompt": "$mindie-agent:mindie-agent Help with this vLLM-Ascend task."
+    "defaultPrompt": "Help investigate and optimize this Ascend NPU / vLLM-Ascend workload."
   },
   "mcpServers": "./.mcp.json"
 }

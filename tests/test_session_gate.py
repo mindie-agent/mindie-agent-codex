@@ -259,7 +259,9 @@ class SessionGateTests(unittest.TestCase):
             dict(jsonrpc="2.0", id=2, method="tools/list"),
         ]
         for script, argv, expected_names in [
-            ("bridge.py", ["mcp"], set()),
+            ("bridge.py", ["mcp"], {
+                tool["name"] for tool in mcp_gate.Gate("knowledge").tools
+            }),
             ("mcp_gate.py", ["components"], {
                 tool["name"] for tool in mcp_gate.Gate("components").tools
             }),
@@ -295,7 +297,7 @@ class SessionGateTests(unittest.TestCase):
             self.assertTrue(
                 gate.call(self.request(lease, mindie_activation="x"))["isError"]
             )
-            # Contradictory and missing metadata fail closed, no fallback.
+            # Contradictory metadata fails closed.
             contradictory = {
                 "x-codex-turn-metadata": {
                     "session_id": "manual-A",
@@ -305,8 +307,14 @@ class SessionGateTests(unittest.TestCase):
                 "threadId": "other",
             }
             self.assertTrue(gate.call(self.request(lease, meta=contradictory))["isError"])
-            self.assertTrue(gate.call(self.request(lease, meta={}))["isError"])
             self.assertEqual(run.call_count, 0)
+        # Missing/empty _meta falls back cleanly to connection session with zero gate!
+        with patch.object(
+            mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)
+        ) as run:
+            self.assertFalse(gate.call(self.request(lease, meta={}))["isError"])
+            self.assertFalse(gate.call(self.request(lease, meta=None))["isError"])
+            self.assertEqual(run.call_count, 2)
 
     def test_session_tree_does_not_own_the_child_thread(self):
         # Synthetic component frames only. Not an observed native child.
@@ -360,13 +368,24 @@ class SessionGateTests(unittest.TestCase):
                 gate.call(self.request(child, ident=12, meta=child_meta))["isError"]
             )
             self.assertEqual(run.call_count, 1)
+        # Work-mode partial turn metadata (threadId present, thread_id omitted) still
+        # binds strictly to child-thread rather than root-tree on Gate("knowledge"),
+        # while strict native_identity continues to reject missing thread_id.
+        work_partial = frame("child-thread", "root-tree", drop=("thread_id",))
+        with self.assertRaises(ValueError):
+            mcp_gate.native_identity(self.request(meta=work_partial))
+        with patch.object(
+            mcp_gate, "run", return_value=ProcessResult("completed", '{"content":[],"isError":false}', 0)
+        ) as run:
+            self.assertFalse(gate.call(self.request(child, ident=13, meta=work_partial))["isError"])
+            self.assertEqual(json.loads(run.call_args.args[1])["mindie_session_id"], "child-thread")
+
         rejected = [
             frame("child-thread", "root-tree", alias="other-thread"),
             frame("child-thread", "root-tree", "other-tree"),
             frame("child-thread", "root-tree", None),
             frame("child-thread", "root-tree", ""),
             frame("child-thread", "root-tree", 7),
-            frame("child-thread", "root-tree", drop=("thread_id",)),
             frame("bad id", "root-tree"),
         ]
         with patch.object(mcp_gate, "run") as run:
@@ -627,6 +646,7 @@ class SessionGateTests(unittest.TestCase):
 
     def test_corrupt_activation_state_fails_closed(self):
         marker = self.runtime_fixture()
+        self.enable_sharing()
         self.sessions.path.write_text("corrupt")
         result = self.bridge("stop", self.event())
         self.assertEqual((result.returncode, json.loads(result.stdout)), (1, {}))

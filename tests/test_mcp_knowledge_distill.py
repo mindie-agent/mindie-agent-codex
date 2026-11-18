@@ -485,11 +485,22 @@ class DistillRoutingTests(ServiceCase):
         self.assertFalse(self.marker.exists())
 
     def test_verified_milestone_reaches_engine_and_applies_decision(self):
-        self._activate()
         self._enable_sharing()
-        gate = mcp_gate.Gate('knowledge')
-        result = gate.call(self._request(12, 'knowledge_distill', {
-            'inputs': EVIDENCE, 'task_state': 'verified_milestone'}))
+        gate = mcp_gate.Gate('components')
+        prev_cwd = os.getcwd()
+        os.chdir(self.scope)
+        try:
+            result = gate.call({
+                'jsonrpc': '2.0',
+                'id': 12,
+                'method': 'tools/call',
+                'params': {
+                    'name': 'knowledge_distill',
+                    'arguments': {'inputs': EVIDENCE, 'task_state': 'verified_milestone'},
+                },
+            })
+        finally:
+            os.chdir(prev_cwd)
         self.assertFalse(result['isError'], result)
         value = result['structuredContent']
         self.assertEqual(value['status'], 'applied')

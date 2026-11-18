@@ -10,9 +10,9 @@ English version: [`CONTRIBUTING.en.md`](CONTRIBUTING.en.md)
    - `plugins/mindie-agent/hooks/hooks.json` 的字节内容与 SHA-256（`ea80d0815485ba5f762ff5275f1e40817130694870405237dbd65d03f28f9981`）已冻结，用于保持跨版本 Codex 钩子信任连续性。
    - `.mcp.json` 仅通过薄路径定位转发至 `hook_launcher.py` / `mcp_entry.py`，严禁内联复杂 JSON 状态机。
    - 共享进程监管、文件锁与 RSI 循环统一委托给 `mindie-harness`，本仓仅保留 Codex 专有的会话身份解析、转录适配（`codex_transcript.py`）与宿主配置绑定。
-2. **零门禁确定性工具与显式知识门禁（`HOST-ADMISSION`）**：
-   - `mindie-remote-dev` 与 `mindie-tools` 在未输入 `/mindie-agent`、无 `_meta` 的普通会话与子代理中必须开箱可用；只读远程工具（`remote_read`、`remote_grep` 等）不占用写并发槽位，也不得在热路径扫描 `.owner.lock`。
-   - `knowledge_*` 能力仅在用户显式输入 `/mindie-agent` 或 `$mindie-agent` 激活当前会话后开放。
+2. **静默默认启用与准入边界（`HOST-ADMISSION`）**：
+   - `mindie-remote-dev` 与 `mindie-tools`（含 `knowledge_*`）在普通会话、Desktop Work 模式、自动化任务与子代理中必须零前置门禁开箱可用；只读工具（`remote_read`、`remote_grep`、`knowledge_query`、`knowledge_explain` 等）不占用写并发槽位，也不得在热路径扫描 `.owner.lock`。
+   - `SessionStart` 与 `UserPromptSubmit` 保持被动零 SQLite 直通；`Stop` 优先检查社区贡献授权与 `project_roots`，未开启或越界时 `< 100ms` 零 SQLite 退出。
 3. **升级兼容与状态诚实（`HOST-UPGRADE`）**：
    - 保持 `codex.json`、`prepare.lock` 与 `releases/<version>/runtime.json` 指针兼容，支持旧版本平滑升级与回滚。
    - 严格区分 `completed`、`failed` 与 `unknown`；捕获 `OSError` 前必须显式 `except TimeoutError: raise`。

@@ -1,7 +1,7 @@
 """Build baseline snapshots and read-only schemas for a selected runtime.
 
 [Role]
-Generates `mcp_catalog.json` containing the static `knowledge` (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`) and the exact Codex-profile `remote` tool set returned by `remote_dev.mcp.schemas.harness_catalog("codex")` for `mcp_gate.py`.
+Generates `mcp_catalog.json` containing the static `knowledge` (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`) and the exact Codex-profile `remote` tool set returned by `remote_dev.mcp.schemas.harness_catalog("codex")` for `mcp_gate.py`.
 
 [Invariants]
 - The remote set is not a hand-maintained whitelist; it is the same `harness_catalog` payload the MCP server serves, so discovery cannot drift from dispatch.
@@ -43,6 +43,9 @@ FEEDBACK_WRITE = dict(
 )
 DISTILL_WRITE = dict(
     readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
+)
+SYNC_WRITE = dict(
+    readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True
 )
 REMOTE_MUTATION = dict(
     readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True
@@ -219,6 +222,20 @@ KNOWLEDGE_TOOLS = [
         ),
         annotations=DISTILL_WRITE,
     ),
+    dict(
+        name="knowledge_sync",
+        description=(
+            "Synchronize configured public graded knowledge feeds for the selected "
+            "domain and return per-feed sync receipts."
+        ),
+        inputSchema=schema(
+            dict(
+                domain=domain_property(),
+            ),
+            [],
+        ),
+        annotations=SYNC_WRITE,
+    ),
 ]
 
 
@@ -270,7 +287,8 @@ def catalog():
         tool["annotations"] = REMOTE_READ if tool["name"] in REMOTE_READ_TOOLS else REMOTE_MUTATION
     for tool in result["knowledge"]:
         tool["description"] = (
-            "The host binds native task identity per call. " + tool["description"]
+            "Default-enabled MindIE knowledge tool; no manual activation needed. "
+            + tool["description"]
         )
     for tool in result["remote"]:
         tool["description"] = (

@@ -156,19 +156,30 @@ class McpKnowledgeEndToEndTests(unittest.TestCase):
         return gate.call(request)
 
     def test_mcp_knowledge_query_explain_feedback_end_to_end(self):
-        gate = mcp_gate.Gate("knowledge")
-        denied = self._call_mcp(gate, 0, "knowledge_query", {"query": "HCCL"})
-        self.assertTrue(denied["isError"])
-        self.assertEqual(denied["structuredContent"]["code"], "knowledge_inactive")
-        self.assertEqual(denied["structuredContent"]["execution"], "not_started")
-        from manual_entry import authorize
-        authorize(json.loads(self.config.read_text()), dict(
-            hook_event_name="UserPromptSubmit", session_id="thread-e2e-1",
-            cwd=str(self.scope), prompt="/mindie-agent"))
-        with patch.object(Path, "cwd", return_value=self.scope):
-            activated = bridge.activate("activate")
-        self.assertEqual(activated["status"], "active")
-        self.assertEqual(activated["mindie_session_id"], "thread-e2e-1")
+        # Default-enabled on mindie-tools (Gate("components")) with zero _meta and zero prior activation!
+        tools_gate = mcp_gate.Gate("components")
+        zero_meta_res = tools_gate.call({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "tools/call",
+            "params": {
+                "name": "knowledge_query",
+                "arguments": {"query": "HCCL ring initialization timeout", "limit": 5},
+            },
+        })
+        self.assertFalse(zero_meta_res.get("isError"), f"Unexpected zero-meta query error: {zero_meta_res}")
+        self.assertEqual(zero_meta_res["structuredContent"]["domain"], "mindie")
+        self.assertFalse(self.admission.exists())
+
+        sync_res = tools_gate.call({
+            "jsonrpc": "2.0",
+            "id": "sync-0",
+            "method": "tools/call",
+            "params": {"name": "knowledge_sync", "arguments": {}},
+        })
+        self.assertFalse(sync_res.get("isError"), f"Unexpected sync error: {sync_res}")
+        self.assertEqual(sync_res["structuredContent"]["status"], "ok")
+        self.assertIsInstance(sync_res["structuredContent"]["feeds"], list)
 
         gate = mcp_gate.Gate("knowledge")
 
@@ -219,6 +230,11 @@ class McpKnowledgeEndToEndTests(unittest.TestCase):
         self.assertEqual(structured_feedback["entry_id"], self.seeded["entry_id"])
         self.assertEqual(structured_feedback["rating"], "up")
         self.assertTrue(structured_feedback["vote_id"])
+
+        # Explicit activate + deactivate still mutes the session.
+        with patch.object(Path, "cwd", return_value=self.scope):
+            activated = bridge.activate("activate")
+        self.assertEqual(activated["status"], "active")
         gate.sessions.deactivate()
         denied = self._call_mcp(gate, 4, "knowledge_query", {"query": "HCCL"})
         self.assertTrue(denied["isError"])

@@ -133,7 +133,17 @@ def test_native_locked_runtime_and_mcp_discovery(monkeypatch, tmp_path):
         assert {"distributions", "python_executable", "python_candidates", "required_distributions"} <= set(
             probe["inputSchema"]["properties"])
         assert "diagnostics_status" in components["tools"]
-        assert not any("knowledge_" in name for r in rows for name in r["tools"])
+        for expected_tool in (
+            "knowledge_query",
+            "knowledge_explain",
+            "knowledge_feedback",
+            "knowledge_distill",
+            "knowledge_sync",
+            "npu_top",
+            "rsi_loop",
+            "experiment_ledger",
+        ):
+            assert expected_tool in components["tools"]
         print("native MCP discovery:", len(remote["tools"]), "remote tools,",
               len(components["tools"]), "component tools; thread", thread)
     upgraded = invoke([

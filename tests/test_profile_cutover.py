@@ -120,27 +120,23 @@ def test_mcp_preserves_unread_stdio_and_serves_the_committed_catalog(installatio
     tools = rows[1]["result"]["tools"]
     assert any(tool["name"] == ("remote_probe" if role == "remote-mcp" else "diagnostics_status")
                for tool in tools)
-    assert not any(tool["name"].startswith("knowledge_") for tool in tools)
+    if role == "remote-mcp":
+        assert not any(tool["name"].startswith("knowledge_") for tool in tools)
+    else:
+        assert any(tool["name"] == "knowledge_query" for tool in tools)
+        assert any(tool["name"] == "knowledge_sync" for tool in tools)
+        assert any(tool["name"] == "npu_top" for tool in tools)
 
 
 def test_explicit_prompt_is_forwarded_once_after_it_was_read(installation, tmp_path):
-    from mindie_knowledge.loop.activation import Admission
-    authority = Admission(installation[3][1]["admission_path"])
-    authority.activate("cutover-session", project_root=str(tmp_path), root_session="cutover-session")
-    authority.activate("other-session", project_root=str(tmp_path), root_session="other-session")
+    # UserPromptSubmit is a passive pass-through: returns {} before any runtime start or SQLite touch.
     event = dict(hook_event_name="UserPromptSubmit", session_id="cutover-session",
-                 cwd=str(tmp_path), prompt="/mindie-agent deactivate")
+                 cwd=str(tmp_path), prompt="Help optimize vLLM-Ascend attention")
     result = launch_after_cutover(installation, "user-prompt-submit", json.dumps(event))
     assert result.returncode == 0, result.stderr
-    response = json.loads(result.stdout)
-    assert response["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
-    assert "systemMessage" not in response
-    assert authority.knowledge_lease("cutover-session") is None
-    assert authority.knowledge_lease("other-session")
-    starts = [json.loads(line) for line in (installation[1] / "runtime-starts.jsonl").read_text(
-        encoding="utf-8").splitlines()]
-    assert [row["argv"][0] for row in starts] == [str(installation[3][0] / "entry.py"),
-        str(Path(installation[3][1]["runtime_scripts"]) / "entry.py")]
+    assert json.loads(result.stdout) == {}
+    assert not (installation[1] / "runtime-starts.jsonl").exists()
+    assert not Path(installation[3][1]["admission_path"]).exists()
 
 
 def test_inconsistent_profile_fails_without_reinstalling_or_dispatching(installation):

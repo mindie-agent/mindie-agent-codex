@@ -5,9 +5,9 @@ This repository implements the native OpenAI Codex plugin (`plugins/mindie-agent
 ## 1. Frozen Host Contracts & Boundaries
 
 - **Byte-Frozen Hook Manifest (`HOST-NATIVE`)**: `plugins/mindie-agent/hooks/hooks.json` is trust-pinned by Codex (`25,650` bytes, `sha256 == ea80d0815485ba5f762ff5275f1e40817130694870405237dbd65d03f28f9981`). Never alter hook shell commands or `hooks/hooks.json` without explicit architecture approval.
-- **MCP Surfaces & Zero-Gate Deterministic Tools (`HOST-ADMISSION`, `P2.7`)**:
-  - Public MCP servers in `.mcp.json` (`mindie-remote-dev`, `mindie-tools`) work immediately in CLI, Desktop, Work mode, Automations, and Subagents without `/mindie-agent`, `x-codex-turn-metadata`, or `request_nonce`.
-  - Knowledge tools (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`) remain strictly private to explicit `/mindie-agent` or `$mindie-agent` sessions (`P2.1`) via `knowledge_cli.py`.
+- **Silent Default-On MCP Surfaces (`HOST-ADMISSION`)**:
+  - Public MCP servers in `.mcp.json` (`mindie-remote-dev`, `mindie-tools`) work immediately in CLI, Desktop, Work mode, Automations, and Subagents with zero prompt-prefix gates, `x-codex-turn-metadata`, or `request_nonce`.
+  - Knowledge tools (`knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`) are exposed by default on `mindie-tools` (`tools-mcp`) and via `knowledge_cli.py`; `Stop` checks community sharing consent + `project_roots` before touching SQLite.
   - Read-only remote tools (`remote_read`, `remote_grep`, `remote_glob`, `remote_stat`, `remote_ls`, `remote_job_status`, `remote_job_output`, `remote_job_list`) run concurrently without mutation-slot throttling or hot-path `.owner.lock` scans (`AD-09`).
 - **Thin Host Plugin Delegation (`HOST-WIRE`)**:
   - Bundle deterministic `assets/{mindie-harness-seed.pyz, seed-lock.json}` and delegate shared RSI (`rsi_loop.py`, `rsi_explore.py`, `experiment_ledger.py`), file-locking, and `HostAdapter` contracts to `mindie_harness`.

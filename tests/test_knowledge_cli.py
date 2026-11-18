@@ -86,26 +86,36 @@ def test_isolated_describe_requires_the_current_session_grant(tmp_path):
     admission = tmp_path / "admission.sqlite3"
     config = tmp_path / "adapter.json"
     config.write_text(json.dumps(dict(admission_path=str(admission))))
-    environment = dict(os.environ, MINDIE_AGENT_CONFIG=str(config),
-                       CODEX_THREAD_ID="manual-cli")
+    environment = dict(os.environ, MINDIE_AGENT_CONFIG=str(config))
+    environment.pop("CODEX_THREAD_ID", None)
     command = [sys.executable, "-I", str(SCRIPTS / "knowledge_cli.py"), "describe"]
 
-    denied = subprocess.run(command, cwd=tmp_path, env=environment,
-                            capture_output=True, text=True, timeout=5)
-    assert denied.returncode == 1, denied.stderr
-    assert json.loads(denied.stdout)["isError"] is True
-    assert "tools" not in json.loads(denied.stdout)
-    gate = Admission(admission)
-    assert gate.knowledge_lease("manual-cli") is None
-
-    gate.activate("manual-cli", project_root=str(tmp_path))
+    # Out-of-the-box describe works without CODEX_THREAD_ID or SQLite admission state.
     allowed = subprocess.run(command, cwd=tmp_path, env=environment,
                              capture_output=True, text=True, timeout=5)
     assert allowed.returncode == 0, allowed.stderr
     tools = json.loads(allowed.stdout)["tools"]
+    names = {tool["name"] for tool in tools}
+    assert {"knowledge_query", "knowledge_explain", "knowledge_feedback", "knowledge_distill", "knowledge_sync"} <= names
     explain = next(tool for tool in tools if tool["name"] == "knowledge_explain")
     assert "refs" in explain["inputSchema"]["properties"]
-    assert gate.knowledge_lease("manual-cli") is not None
+    assert not admission.exists()
+
+    # Explicit session deactivation is still honored.
+    gate = Admission(admission)
+    gate.activate("manual-cli", project_root=str(tmp_path))
+    gate.deactivate("manual-cli")
+    denied = subprocess.run(
+        command,
+        cwd=tmp_path,
+        env=dict(environment, CODEX_THREAD_ID="manual-cli"),
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert denied.returncode == 1, denied.stderr
+    assert json.loads(denied.stdout)["isError"] is True
+    assert "tools" not in json.loads(denied.stdout)
 
 
 def test_stdin_round_trips_chinese_and_non_bmp_emoji():

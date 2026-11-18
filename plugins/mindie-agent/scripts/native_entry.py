@@ -396,8 +396,8 @@ def write_manifests(root):
             # 600s native Bash poll + 60s helper grace + bounded cleanup.
             server["tool_timeout_sec"] = 720
         if role == "tools-mcp":
-            # 300s component + 30s selected-helper envelope + native drain.
-            server["tool_timeout_sec"] = 360
+            # 450s knowledge_distill helper + 60s cleanup grace (covers 300s component + 36s reserve).
+            server["tool_timeout_sec"] = 510
         servers[name] = server
 
     (root / ".mcp.json").write_text(json.dumps({"mcpServers": servers}, indent=2) + "\n",

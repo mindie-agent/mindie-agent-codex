@@ -36,14 +36,6 @@ MCP_ROLES = ("remote-mcp", "tools-mcp", "knowledge-mcp")
 VERSION_PATTERN = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+!-]{0,79}")
 NUMERIC_VERSION = re.compile(r"[0-9]+(?:\.[0-9]+)*")
 _IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
-_GESTURE = re.compile(
-    r"^[\s\ufeff]*(?:"
-    r"/mindie-agent"
-    r"|\$mindie-agent(?::mindie-agent)?"
-    r"|\[\$mindie-agent(?::mindie-agent)?\]\([^\r\n)]+\)"
-    r"|\[@mindie-agent\]\(plugin://mindie-agent@[^\r\n)]+\)"
-    r")(?=\s|$)"
-)
 
 
 def _same_interpreter(left, right, *, windows=None):
@@ -239,44 +231,10 @@ def _record_launcher_failure(session_id, error_type):
 
 def _report_prompt_launcher_failure(exc):
     try:
-        raw = sys.stdin.buffer.read(32 * 1024 * 1024 + 1)
-        if len(raw) > 32 * 1024 * 1024:
-            return
-        event = json.loads(raw.decode("utf-8-sig"))
-    except (OSError, UnicodeDecodeError, ValueError, TypeError):
-        return
-    explicit = (
-        isinstance(event, dict)
-        and event.get("hook_event_name") == "UserPromptSubmit"
-        and not event.get("agent_id")
-        and isinstance(event.get("prompt"), str)
-        and _GESTURE.match(event["prompt"]) is not None
-    )
-    if not explicit:
-        # Passive Default (P2.1): ordinary prompts remain completely silent and context-free.
-        print("{}")
-        raise SystemExit(0)
-    error_type = type(exc).__name__
-    print(f"MindIE hook launcher failed: {error_type}", file=sys.stderr)
-    try:
-        _record_launcher_failure(event.get("session_id"), error_type)
-    except Exception:
+        sys.stdin.buffer.read(32 * 1024 * 1024 + 1)
+    except OSError:
         pass
-    print(json.dumps(dict(
-        systemMessage=(
-            f"MindIE session authorization failed at hook-launcher ({error_type}); "
-            "inspect local status/permissions and do not repeat /mindie-agent in a loop."
-        ),
-        hookSpecificOutput=dict(
-            hookEventName="UserPromptSubmit",
-            additionalContext=(
-                f"MindIE UserPromptSubmit failed at stage 'hook-launcher' ({error_type}) "
-                "before session authorization completed. Do NOT ask the user to resend "
-                "/mindie-agent in a loop; inspect local status/permissions if needed and "
-                "continue independent task work with native or deterministic tools."
-            ),
-        ),
-    )))
+    print("{}")
     raise SystemExit(0)
 
 

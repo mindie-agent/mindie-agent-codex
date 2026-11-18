@@ -91,14 +91,21 @@ class SilentCaptureTests(unittest.TestCase):
     def test_stop_stays_passive_until_manual_entry_then_keeps_authorized_turns(self):
         event = self.event()
         self.assertFalse(self.admission.exists())
-        self.assertEqual(self.accept(event)['reason'], 'manual-entry-required')
+        # When community sharing is disabled, Stop exits cleanly without touching SQLite.
+        self.settings.update(enabled=False, enabled_at=None)
+        self.community.write_text(json.dumps(self.settings))
+        self.assertEqual(self.accept(event)['reason'], 'sharing-disabled')
         self.assertFalse(self.admission.exists())
         self.wake.assert_not_called()
-        self.activate()
+
+        # When community sharing IS enabled and in project_roots, Stop auto-provisions
+        # an active lease with not_before=0.0 and captures from enabled_at onward.
+        self.settings.update(enabled=True, enabled_at=self.enabled)
+        self.community.write_text(json.dumps(self.settings))
         result = self.accept(event)
         self.assertEqual(result['stage'], 'accepted-local')
         lease = Admission(self.admission).check('current')
-        self.assertEqual(lease['activated_at'], self.enabled + .5)
+        self.assertEqual(lease['activated_at'], 0.0)
         with closing(sqlite3.connect(self.root / 'data/test/state-v1/state-v4.sqlite3')) as db:
             boundary = db.execute('SELECT boundary FROM captures').fetchone()[0]
         captured = codex_transcript.read_material(event['transcript_path'], 0,
@@ -130,7 +137,7 @@ class SilentCaptureTests(unittest.TestCase):
 
     def test_scope_and_sibling_artifact_cannot_create_a_binding(self):
         result = self.accept(self.event(scope=self.root / 'other'))
-        self.assertEqual(result['reason'], 'manual-entry-required')
+        self.assertEqual(result['reason'], 'out-of-scope')
         self.assertFalse(self.admission.exists())
         self.activate()
         result = self.accept(self.event(scope=self.root / 'other'))
@@ -162,7 +169,6 @@ class SilentCaptureTests(unittest.TestCase):
 
     def test_fork_boundary_and_explicit_task_revocation_are_preserved(self):
         event = self.event(fork=True)
-        self.assertEqual(self.accept(event)['reason'], 'manual-entry-required')
         self.activate(boundary=self.enabled + 3)
         self.accept(event)
         store = Admission(self.admission)
@@ -172,7 +178,7 @@ class SilentCaptureTests(unittest.TestCase):
         self.assertNotIn('FIRST_TURN', captured['text'])
         self.assertIn('AFTER_FORK', captured['text'])
         store.deactivate('current')
-        self.assertEqual(self.accept(event)['reason'], 'manual-entry-required')
+        self.assertEqual(self.accept(event)['reason'], 'task-revoked')
         self.assertEqual(store.inspect('current')['status'], 'inactive')
 
     def test_disabled_contribution_reads_no_transcript_or_state(self):

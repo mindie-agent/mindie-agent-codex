@@ -42,8 +42,12 @@ def maintain(config):
     from storage_gc import cleanup_fact
     storage_cleanup = cleanup_fact(
         keep_paths=[sys.executable, adapter.get("python")], budget_seconds=2.0)
-    from mindie_knowledge.loop.activation import Admission
-    if Admission(adapter["admission_path"]).knowledge_lease(os.environ.get("CODEX_THREAD_ID")) is None:
+    adm_path = adapter.get("admission_path")
+    has_lease = False
+    if isinstance(adm_path, str) and os.path.isabs(adm_path) and Path(adm_path).is_file():
+        from mindie_knowledge.loop.activation import Admission
+        has_lease = Admission(adm_path).knowledge_lease(os.environ.get("CODEX_THREAD_ID")) is not None
+    if not has_lease:
         print(json.dumps(dict(status="inactive", diagnostics=diagnostics,
                               storage_cleanup=storage_cleanup)))
         return

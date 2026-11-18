@@ -96,6 +96,18 @@ def _tools(surface, config, bundled):
                 catalog = json.loads(output.checked_stdout())
             if not isinstance(catalog, list):
                 raise ValueError("selected helper returned an invalid catalog")
+            if surface == "components" and not any(
+                isinstance(item, dict) and str(item.get("name", "")).startswith("knowledge_")
+                for item in catalog
+            ):
+                catalog = [
+                    *catalog,
+                    *(
+                        item
+                        for item in bundled
+                        if isinstance(item, dict) and str(item.get("name", "")).startswith("knowledge_")
+                    ),
+                ]
             _cache[surface] = key, catalog
         return _cache[surface][1]
 

@@ -1,4 +1,4 @@
-"""Exercise MCP discovery and explicit private entry without starting services."""
+"""Exercise default-on MCP discovery and CLI catalog inspection without starting services."""
 import io
 import json
 from pathlib import Path
@@ -33,25 +33,39 @@ def test_public_wire_discovery_never_leaks_another_chats_knowledge(tmp_path, mon
     config.write_text(json.dumps(dict(admission_path=str(admission))))
     monkeypatch.setenv("MINDIE_AGENT_CONFIG", str(config))
     authority = Admission(admission)
+    expected_knowledge = {
+        "knowledge_query",
+        "knowledge_explain",
+        "knowledge_feedback",
+        "knowledge_distill",
+        "knowledge_sync",
+    }
     with patch("service_client.connect", side_effect=AssertionError("discovery started knowledge")):
-        assert discover("knowledge") == {"tools": []}
-        for surface in ("remote", "components"):
-            descriptions = discover(surface)["tools"]
-            assert descriptions
-            # Inspect the actual response, not just whether calls are denied.
-            assert all(not tool["name"].startswith("knowledge_") for tool in descriptions)
+        know_tools = discover("knowledge")["tools"]
+        assert {t["name"] for t in know_tools} == expected_knowledge
+        for ro_name in ("knowledge_query", "knowledge_explain"):
+            tool_def = next(t for t in know_tools if t["name"] == ro_name)
+            assert tool_def["annotations"]["readOnlyHint"] is True
+
+        remote_tools = discover("remote")["tools"]
+        assert remote_tools
+        assert all(not tool["name"].startswith("knowledge_") for tool in remote_tools)
+
+        comp_tools = discover("components")["tools"]
+        comp_names = {t["name"] for t in comp_tools}
+        assert expected_knowledge <= comp_names
+        assert {"diagnostics_status", "diagnostics_bundle", "debugger", "coordinator",
+                "profiler", "sim", "npu_top", "rsi_loop", "experiment_ledger"} <= comp_names
         assert not admission.exists()
-        authority.activate("enabled-chat", project_root=str(tmp_path))
-        monkeypatch.setenv("CODEX_THREAD_ID", "ordinary-chat")
-        assert discover("knowledge") == {"tools": []}
-        with pytest.raises(knowledge_cli.KnowledgeInactive):
-            knowledge_cli.invoke("describe", {})
-        monkeypatch.setenv("CODEX_THREAD_ID", "enabled-chat")
+
+        monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
         schemas = knowledge_cli.invoke("describe", {})["tools"]
-        assert any(tool["name"] == "knowledge_query" for tool in schemas)
-        # Even an enabled thread never changes shared MCP discovery.
-        assert discover("knowledge") == {"tools": []}
-        authority.deactivate("enabled-chat")
+        assert {tool["name"] for tool in schemas} == expected_knowledge
+        assert not admission.exists()
+
+        authority.activate("muted-chat", project_root=str(tmp_path))
+        authority.deactivate("muted-chat")
+        monkeypatch.setenv("CODEX_THREAD_ID", "muted-chat")
         with pytest.raises(knowledge_cli.KnowledgeInactive):
             knowledge_cli.invoke("describe", {})
 
@@ -66,7 +80,16 @@ def test_manifest_routes_every_public_server_to_nonknowledge_discovery(tmp_path)
     visible = []
     for server in servers.values():
         visible.extend(discover(roles[server["args"][-1]])["tools"])
-    assert any(tool["name"] == "remote_bash" for tool in visible)
-    assert any(tool["name"] == "profiler" for tool in visible)
-    assert all(not tool["name"].startswith("knowledge_") for tool in visible)
-    assert all("npu_top" not in tool["name"] for tool in visible)
+    names = {tool["name"] for tool in visible}
+    assert {
+        "remote_bash",
+        "profiler",
+        "npu_top",
+        "rsi_loop",
+        "experiment_ledger",
+        "knowledge_query",
+        "knowledge_explain",
+        "knowledge_feedback",
+        "knowledge_distill",
+        "knowledge_sync",
+    } <= names
