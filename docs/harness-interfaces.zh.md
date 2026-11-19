@@ -28,6 +28,14 @@
 
 上述两个 Codex 版本均在 `codex-rs/app-server-protocol/src/protocol/common.rs` 中声明了 `hooks/list`、`config/read` 与 `config/value/write` 接口，支持读取并通过乐观并发控制（CAS `expectedVersion`）更新 Hook 的启用状态与信任哈希（`hooks.state.<key>.trusted_hash`）。
 
+### Codex 0.162.1 / 0.164.0 稳定版验收（2026-10-26）
+
+兼容声明新增两个精确版本：本机 `0.162.1` 与当日官方最新稳定版 `0.164.0`。原有支持项保留，未验证的补丁版和预发布版本仍不放行。
+
+两个版本均在 WSL Linux 使用真实可执行程序通过 `tests/test_native_harness_acceptance.py`：插件安装与回读、五个 Hook 的发现、配置 CAS、已信任 Hook 的继承与显式禁用的保留、锁定运行时构建、原生 SessionStart，以及 22 个远端工具和 5 个组件工具的 MCP 发现。普通会话保持知识系统未启用。Ubuntu CI 对这两个版本执行同一无模型验收；本次证据不包含付费模型轮次、远端 NPU 或新增版本在 Windows/macOS 的实机验收。
+
+两个官方版本的 `mcp_tool_call.rs` 均保留插件依赖的原生线程与轮次元数据；现有协议测试继续验证身份拒绝与按轮次取消行为。复现方式：设置 `MINDIE_TEST_CODEX_BIN` 为目标 Codex 的绝对路径，并在锁定测试环境中运行上述测试文件。
+
 ### 原生插件市场与 Hook 信任继承机制
 - **固定不可变 Release Tag**：通过 `--ref v0.0.2` 注册插件市场可将目录锁定在不可变发行标签上，防止后续 `main` 分支演进时宿主在未经兼容性检查的情况下自动拉取未验证版本。
 - **Git 子目录插件源**：原生目录项采用 `source: "git-subdir"`（指定精确的 `url`、`path` 与 `sha`），已通过原生 `codex plugin list` 与 `codex plugin add` 实机验证。
@@ -72,12 +80,3 @@
 ## 运行时与归属边界
 
 - **宿主与运行时解耦**：Codex 宿主管理插件安装记录与缓存目录；`uv` 在宿主易失缓存之外构建不可变的锁定 Python 环境；适配器配置文件作为唯一权威绑定指向当前生效的完整运行时。
-
-
-## Codex 0.162.1 / 0.164.0 稳定版验收（2026-10-26）
-
-兼容声明新增两个精确版本：本机 `0.162.1` 与当日官方最新稳定版 `0.164.0`。原有支持项保留，未验证的补丁版和预发布版本仍不放行。
-
-两个版本均在 WSL Linux 使用真实可执行程序通过 `tests/test_native_harness_acceptance.py`：插件安装与回读、五个 Hook 的发现、配置 CAS、已信任 Hook 的继承与显式禁用的保留、锁定运行时构建、原生 SessionStart，以及 22 个远端工具和 5 个组件工具的 MCP 发现。普通会话保持知识系统未启用。Ubuntu CI 对这两个版本执行同一无模型验收；本次证据不包含付费模型轮次、远端 NPU 或新增版本在 Windows/macOS 的实机验收。
-
-两个官方版本的 `mcp_tool_call.rs` 均保留插件依赖的原生线程与轮次元数据；现有协议测试继续验证身份拒绝与按轮次取消行为。复现方式：设置 `MINDIE_TEST_CODEX_BIN` 为目标 Codex 的绝对路径，并在锁定测试环境中运行上述测试文件。
