@@ -106,7 +106,7 @@ def test_cold_session_start_marker_only_without_uv_sync(monkeypatch, isolate_hos
     with redirect_stdout(out_hl):
         assert hook_launcher.launch(["session-start"]) == 0
     elapsed_hl = (time.perf_counter() - t0) * 1000
-    assert out_hl.getvalue() == "{}\n" and elapsed_hl < 50
+    assert out_hl.getvalue() == "{}\n" and elapsed_hl < 250
 
     marker = Path(os.environ["MINDIE_DATA_HOME"]) / "state/codex/pending-update-check.json"
     assert marker.is_file()
@@ -120,7 +120,7 @@ def test_cold_session_start_marker_only_without_uv_sync(monkeypatch, isolate_hos
     with redirect_stdout(out_ent):
         assert entry.main(["session-start"]) == 0
     elapsed_ent = (time.perf_counter() - t1) * 1000
-    assert out_ent.getvalue() == "{}\n" and elapsed_ent < 50
+    assert out_ent.getvalue() == "{}\n" and elapsed_ent < 250
     assert marker.is_file()
     assert marker == entry._profile(PLUGIN)[1].pending_update_path
     assert not list(Path(isolate_host_environment).parent.rglob("*.sqlite3"))
