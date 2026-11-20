@@ -112,7 +112,7 @@ def ensure_runtime(source, data) -> tuple[Path, Path, Path]:
         if before is None and os.environ.get("MINDIE_CHANNEL_BASE_URL") and (seed := source / "assets/mindie-harness-seed.pyz").is_file():
             subprocess.run([sys.executable, "-I", "-X", "utf8", str(seed), "--host", "codex", "--plugin-root", str(source), "--config", str(cfg_path), "status"], stdin=subprocess.DEVNULL, capture_output=True, timeout=240.0, check=False, creationflags=_NO_WIN); before = _read(cfg_path)
         old = Path(before["python"]) if isinstance(before, dict) and isinstance(before.get("python"), str) else None
-        if old is not None and old.is_file() and isinstance(before, dict) and isinstance(before.get("channel_base_url"), str) and before["channel_base_url"].strip() and (source / "scripts/entry.py").is_file():
+        if old is not None and old.is_file() and isinstance(before, dict) and (str(before.get("channel_base_url") or "").strip() or os.environ.get("MINDIE_CHANNEL_BASE_URL")) and (source / "scripts/entry.py").is_file():
             adopted = (isinstance(receipt, dict) and receipt.get("wheelhouse_adopted") is True and receipt.get("python") == str(old)) or _has_harness(old)
             if adopted:
                 if not (isinstance(receipt, dict) and receipt.get("wheelhouse_adopted") is True and receipt.get("python") == str(old)):
