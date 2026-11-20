@@ -8,7 +8,7 @@
 
 ## 1. 日常使用与配置持久化
 
-- **授权一次配置，全量工具静默默认启用**：社区知识贡献与自动工具故障上报共用 `<profile>/.mindie/mindie-consent.json` 中的统一贡献开关。保存后的统一贡献选择与已批准项目范围跨任务、Fork 分支、宿主重启、插件升级与普通临时故障持久保持，无需重复确认授权。`mindie-remote-dev` 与 `mindie-tools`（含 `knowledge_query`、`knowledge_explain`、`knowledge_feedback`、`knowledge_distill`、`knowledge_sync`、`coordinator`、`profiler`、`debugger`、`sim`、`diagnostics_*`、`rsi_loop` 与 `experiment_ledger`）在所有会话中默认开箱可用，无需手动输入激活前缀。若旧版仅知识 `contribute` 配置缺少统一授权版本（`choice_revision`），升级后不会自动开启故障上传，而是保留原状态并显示 `needs_choice`，待用户显式确认一次后再启用。
+- **授权一次配置，全量工具静默默认启用**：社区知识贡献与自动工具故障上报共用与 `codex.json` 同目录的 `mindie-consent.json` 统一贡献开关。保存后的统一贡献选择与已批准项目范围跨任务、Fork 分支、宿主重启、插件升级与普通临时故障持久保持，无需重复确认授权。`mindie-remote-dev` 与 `mindie-tools`（含 `knowledge_query`、`knowledge_explain`、`knowledge_feedback`、`knowledge_distill`、`knowledge_sync`、`mindie_status`、`mindie_doctor`、`coordinator`、`profiler`、`debugger`、`sim`、`npu_top`、`diagnostics_*`、`rsi_loop` 与 `experiment_ledger`）在所有会话中默认开箱可用，无需手动输入激活前缀。若旧版仅知识 `contribute` 配置缺少统一授权版本（`choice_revision`），升级后不会自动开启故障上传，而是保留原状态并显示 `needs_choice`，待用户显式确认一次后再启用。
 - **关闭贡献或越界时零额外开销**：当社区贡献未配置、处于关闭状态或工作目录不在批准的 `project_roots` 内时，`Stop` 阶段会在 `< 100ms` 内直接退出，不创建 SQLite 状态或读取会话记录；同时 `mindie-remote-dev` 与 `mindie-tools` 保持常驻可用。
 - **损坏配置保护**：临时网络或服务波动由后台 Worker 自动恢复；若配置文件损坏，系统直接作为显式故障报告，绝不静默重置为首次安装状态。
 
@@ -32,6 +32,6 @@ uv sync --project plugins/mindie-agent --locked --no-editable
 uv run --project plugins/mindie-agent --no-sync python -m pytest -q -m "not live_npu" tests
 ```
 
-- **随版 CPU 微基准测试（Release Microbenchmark）**：每个 `0.0.2` 发行版均运行 [`benchmarks/release.json`](../benchmarks/release.json)（[`benchmarks/release.py`](../benchmarks/release.py)）测量 `public-transcript` 公开消息解析与隐藏推理过滤的延迟（`us/op`），并随 GitHub Release 附带 `benchmark-results.json` 和 `benchmark-results.md` 作为可复现的本地 CPU 性能基线。
+- **随版 CPU 微基准测试（Release Microbenchmark）**：每个 `0.1.40` 发行版均运行 [`benchmarks/release.json`](../benchmarks/release.json)（[`benchmarks/release.py`](../benchmarks/release.py)）测量 `public-transcript` 公开消息解析与隐藏推理过滤的延迟（`us/op`），并随 GitHub Release 附带 `benchmark-results.json` 和 `benchmark-results.md` 作为可复现的本地 CPU 性能基线。
 - **配套发布顺序**：在更新共享运行时依赖时，先发布底层组件正式 Release，再执行各宿主插件适配器的验证与发布。
 - **清晰的验收边界**：自动化 CI 与 CPU 微基准负责验证锁定依赖、解析器夹具与跨平台文件系统契约；原生宿主会话闭环与远端昇腾 NPU 硬件执行作为独立验收项管理。

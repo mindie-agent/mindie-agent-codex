@@ -6,7 +6,7 @@
 - **`0.153.4`**（对应官方上游源码提交 `3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`）
 - **`0.162.0-alpha.17.2`**（对应官方上游源码提交 `740e5af33c71225640e0c1c1555c514c2c93ab74`）
 
-在 CI 流程中，`plugins/mindie-agent/scripts/setup.py release-metadata` 会自动核对每个已登记的生产代码符号与契约测试方法，并校验所有使用接口与声明版本区间的一致性。
+在 CI 流程中，`plugins/mindie-agent/scripts/setup.py release-metadata` 会自动核对每个已登记的生产代码符号与契约测试方法，并校验所有使用接口与声明版本区间的一致性；`tests/test_native_harness_acceptance.py` 同时对 `mindie-tools` 执行真实 `mcpServer/tool/call` 断言（`mindie_doctor` 与 `knowledge_query`，`isError == False`），`.github/workflows/tests.yml` 接入 `mindie-bench/.github/workflows/verify-host-plugin.yml`（`host: codex`）跨仓宿主验收门禁。
 
 ---
 
@@ -53,9 +53,9 @@
 
 ## Native Interrupt Hook {#native-interrupt-hook}
 
-插件为 `mindie-knowledge` 与 `mindie-remote-dev` 两个 MCP 服务声明了 `mcp_tool` 类型的原生 `Interrupt` Hook：
-- **精准定位在途调用**：当主线程回合被用户打断时，宿主通过该 Hook 在同一条 MCP 连接上调用内部控制入口 `mindie_interrupt`（传入原生 `${session_id}` 与 `${turn_id}`，该控制入口不对大模型暴露）。
-- **绕过工作队列阻塞**：控制请求在 MCP 读取层（进入 Worker 容量门限之前）直接执行，核对 `_meta.threadId` 后仅向线程与回合 ID 完全匹配的在途调用发送取消事件。
+插件为 `mindie-tools` 与 `mindie-remote-dev` 两个 MCP 服务声明了 `mcp_tool` 类型的原生 `Interrupt` Hook：
+- **按轮次精准定位在途调用**：当回合被用户打断时，宿主通过该 Hook 在同一条 MCP 连接上调用内部控制入口 `mindie_interrupt`（传入原生 `${session_id}`/`thread_id` 与 `${turn_id}`，该控制入口不对大模型暴露）。
+- **绕过工作队列阻塞与跨轮次防误伤**：`CodexHostAdapter` 在 MCP 读取线程（进入 Worker 池前）直接拦截 `mindie_interrupt`，通过 `extract_turn_scope` 对齐 `(thread_id, turn_id)`（拒绝互相矛盾的参数/头字段），仅向线程与回合作用域严格匹配的在途请求发送 `notifications/cancelled`，绝不误伤并发的其他轮次或子代理。
 - **毫秒级本地进程树回收**：在 macOS、原生 Windows 与 WSL Ubuntu 24.04 三大平台（Codex `0.153.4` 锁定非 editable 安装包）实机验证中，打断挂起的 SSH 工具调用后均在百毫秒内干净回收全部本地辅助与 SSH 子进程，且 MCP 服务与宿主会话保持健康响应：
 
 | 运行平台 | 验证 Codex 版本 | 中断后本地进程树清理耗时 | 回收归属进程数 |

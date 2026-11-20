@@ -1,4 +1,4 @@
-"""Pre-0.1.38 (`v0.1.34`–`v0.1.37 -> v0.1.39`) live-session and self-upgrade handoff tests."""
+"""Pre-0.1.38 (`v0.1.34`–`v0.1.37 -> v0.1.40`) live-session and self-upgrade handoff tests."""
 from __future__ import annotations
 
 import json
@@ -62,7 +62,6 @@ def test_in_flight_v0137_shims_harness_update_runtime_call_and_admission_ops(tmp
     )
     assert stdin_call.returncode == 0, stdin_call.stderr
     stdin_res = json.loads(stdin_call.stdout)
-    # Must reach remote-dev job lookup under legacy-remote-root/runtime/thread-abc (never rejected as forged_identity_argument)
     assert "forged_identity_argument" not in json.dumps(stdin_res)
     assert "identity override" not in json.dumps(stdin_res).lower()
 
@@ -71,7 +70,7 @@ def test_in_flight_v0137_shims_harness_update_runtime_call_and_admission_ops(tmp
         [sys.executable, str(SCRIPTS / "entry.py"), "remote-mcp"],
         input=json.dumps({
             "jsonrpc": "2.0", "id": 9, "method": "tools/call",
-            "params": {"name": "remote_write_stdin", "arguments": {"session_id": "missing-pty-2", "chars": "pwd\n"}},
+            "params": {"name": "remote_write_stdin", "arguments": {"session_id": 1, "chars": "ls\n"}},
         }) + "\n",
         env=env, capture_output=True, text=True, timeout=30, creationflags=_NO_WIN,
     )
@@ -81,7 +80,7 @@ def test_in_flight_v0137_shims_harness_update_runtime_call_and_admission_ops(tmp
 
     # 3) harness_update.py --config <cfg> exits 0 with JSON dict and no status_receipt_error_type
     upd = subprocess.run(
-        [sys.executable, "-I", str(SCRIPTS / "harness_update.py"), "--config", str(cfg)],
+        [sys.executable, str(SCRIPTS / "harness_update.py"), "--config", str(cfg)],
         env=env, capture_output=True, text=True, timeout=30, creationflags=_NO_WIN,
     )
     assert upd.returncode == 0, upd.stderr
@@ -96,11 +95,19 @@ def test_release_activation_refuses_uncertain_retirement(tmp_path: Path, monkeyp
 
     cfg = tmp_path / "codex.json"
     eng = tmp_path / "codex.engine.json"
-    rel = tmp_path / "releases/0.1.39"
+    rel = tmp_path / "releases/0.1.40"
     rel.mkdir(parents=True)
     kroot = tmp_path / "kroot"
     (kroot / "vllm-ascend").mkdir(parents=True, exist_ok=True)
-    eng.write_text(json.dumps({"root": str(kroot), "domain": "vllm-ascend"}), encoding="utf-8")
+    eng.write_text(json.dumps({
+        "root": str(kroot),
+        "domain": "vllm-ascend",
+        "capture_mode": "public-transcript",
+        "transcript_adapter": str(SCRIPTS / "codex_transcript.py"),
+        "redactor_executable": str((tmp_path / "gitleaks").resolve()),
+        "admission_path": str((tmp_path / "codex.admission.sqlite3").resolve()),
+        "community_config": str((tmp_path / "mindie-community.json").resolve()),
+    }), encoding="utf-8")
     current = {
         "python": "/old/python",
         "runtime_scripts": "/old/scripts",
@@ -112,7 +119,7 @@ def test_release_activation_refuses_uncertain_retirement(tmp_path: Path, monkeyp
     (rel / "runtime.json").write_text(json.dumps({
         "python": sys.executable,
         "source": str(ROOT / "plugins/mindie-agent"),
-        "validation": {"schema": "mindie-candidate-check/1", "status": "validated", "native_version": "0.1.39"},
+        "validation": {"schema": "mindie-candidate-check/1", "status": "validated", "native_version": "0.1.40"},
     }), encoding="utf-8")
     monkeypatch.setattr(lifecycle, "retire_service", lambda *a, **kw: {"idle": True, "cleanup_failed": True})
     import io

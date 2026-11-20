@@ -9,22 +9,22 @@
 ## 1. 脱离易失缓存的持久化运行时
 
 - **为什么要脱离宿主缓存**：实机验证表明，当 Codex 刷新插件市场缓存时，可能会清理旧版本的缓存目录，而正在运行的 `app-server` 仍持有旧命令引用。将发行版入口（`entry.py`）与锁定运行时放置在持久化的 `PLUGIN_DATA` 目录下，可确保长会话期间的 `SessionStart`、`Stop` 与 MCP 调用始终稳定可达。
-- **单一权威安装绑定**：用户的适配器配置文件是当前生效运行时的唯一权威绑定。稳定入口每次调用时按完整绑定分派对应的 Python 解释器与脚本，绝不跨版本混用模块或原地覆盖已准备好的运行时文件。
-- **保持 Hook 信任哈希稳定与原生缓存零写入**：固定入口命令文本并在所有源码 Python 启动路径显式加 `-B`、将基线 `uv sync` 放入 `PLUGIN_DATA/releases/<version>/build` 短生命副本目录中执行并清理，防止 `.pyc`、`build/` 与 `*.egg-info` 污染原生插件缓存目录，避免宿主因命令或缓存载荷变化而跳过已获用户信任的 `SessionStart`、`UserPromptSubmit`、`Stop` 或 `Interrupt` Hook。
+- **单一权威安装绑定**：用户的适配器配置文件（`codex.json`，对称支持 Windows `%APPDATA%/mindie-agent` 与 POSIX `XDG_CONFIG_HOME`）是当前生效运行时及 9 域内容寻址 `domain_configs`（`engines/codex/<20hex>/<domain>.engine.json`）的唯一权威绑定。稳定入口每次调用时按完整绑定分派对应的 Python 解释器与脚本，绝不跨版本混用模块或原地覆盖已准备好的运行时文件。
+- **保持 Hook 信任哈希稳定与原生缓存零写入**：保持 `hooks/hooks.json` 字节级冻结并在源码 Python 启动路径显式加 `-B`、将基线 `uv sync` 放入系统临时目录（`%TEMP%` 下的 `mindie-build-*`）短生命副本中执行并清理，防止 `.pyc`、`build/` 与 `*.egg-info` 污染原生插件缓存目录，避免宿主因命令或缓存载荷变化而跳过已获用户信任的 `SessionStart`、`UserPromptSubmit`、`Stop` 或 `Interrupt` Hook。
 
 ---
 
 ## 2. 共享锁保护与空闲原子切换
 
-- **在途请求持有共享锁**：常驻 MCP 进程在处理每次请求前，会在共享操作锁下读取完整运行时绑定，确保在途操作在同一个一致的运行时中完成。
-- **锁外隔离准备候选版本**：现有常驻 MCP 进程内的可取消 `300s`（`CHECK_INTERVAL = 300`）等待循环（`update_trigger.py`）负责调度兼容插件 Release 更新与共享组件正式 Release 独立更新检查（直接从各官方组件仓库发现并继承已安装组件版本下界），不新增独立知识 worker 或守护进程。候选 `uv` 运行时在操作锁之外旁路构建，并通过隔离包清单核验与无模型 API 探针完成校验，不在准备阶段拉起知识后台服务，也绝不阻塞前台工具调用。
-- **仅在空闲时排他切换**：仅当确认后台服务空闲时才获取排他锁，安全退役旧服务实例并原子更新配置绑定（`codex.json`，绑定切换阶段约 `10ms`，即 `unavailable_seconds`，不含前置构建），知识后台服务仅在后续已授权的手动知识操作中按需拉起；若服务正忙则自动推迟切换，无需用户手动重载会话。
+- **在途请求持有代际租约**：常驻 MCP 进程在处理每次请求前受代际租约保护，确保在途操作在同一个一致的运行时中完成；运行时代际回收（`Active + Rollback <= 2`）唯一交由 `mindie-harness` 管理，`bootstrap.py` 绝不清理 `<data>/runtimes/codex/` 目录。
+- **冷/热 `SessionStart` 标记握手与锁外候选构建**：冷/热 `SessionStart` 仅在 `ProfileRef.state_dir` 原子写入 `pending-update-check.json` 并在 `< 30ms` 内返回 `{}`，绝不同步执行 `uv sync` 或创建 SQLite。后台维护由 `mindie_harness.runtime.wheelhouse.update_runtime` 驱动，在锁外旁路构建候选 `uv` 运行时、继承全部 9 个运行时组件的版本下界并执行无模型探针校验，准备阶段不拉起知识后台服务，也不阻塞前台工具调用。
+- **单一 `.codex.json.update.lock` 排他切换**：切换或重绑运行时统一获取 `.codex.json.update.lock` 排他锁，调用 `ensure_knowledge_binding(..., retire_previous=True, already_locked=True)` 确认旧服务空闲退役并生成内容寻址 9 域引擎配置后，再原子更新 `codex.json`；若服务正忙则自动推迟切换，无需用户手动重载会话。
 
 ---
 
 ## 3. 用户授权与代码版本解耦
 
-- 社区知识贡献与自动工具故障上报共用 `<profile>/.mindie/mindie-consent.json` 中的单一统一贡献开关，与批准的项目范围、已采集分块及用量账本一起作为持久化用户数据独立保存。
+- 社区知识贡献与自动工具故障上报共用与 `codex.json` 同目录的 `mindie-consent.json` 单一统一贡献开关，与批准的项目范围、已采集分块及用量账本一起作为持久化用户数据独立保存。
 - 当用户显式开启统一贡献开关（带当前统一授权版本的 `contribute`）时，系统会配置知识共享并启动后台 reporter，同时严格区分三种状态：（1）本地授权配置已保存、（2）后台 reporter 进程运行中、（3）外部 GitHub Issue/PR 已实际创建。
 - 插件升级或代码重载绝不会重新弹窗索要授权，不会修改已保存的 `disabled` / `later` / `read-only` 选择，也不会将缺少统一授权版本的旧版 `contribute` 记录（`needs_choice`）自动扩大为故障上报授权。
 

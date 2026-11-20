@@ -121,9 +121,14 @@ jobs:
       - name: Native plugin, hook trust, SessionStart and MCP acceptance
         run: uv run --project plugins/mindie-agent --no-sync python -m pytest -q -s --tb=short tests/test_native_harness_acceptance.py
 
+  host-acceptance:
+    uses: mindie-agent/mindie-bench/.github/workflows/verify-host-plugin.yml@main
+    with:
+      host: codex
+
   release-ready:
     name: release-ready
-    needs: [adapter, native-harness]
+    needs: [adapter, native-harness, host-acceptance]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

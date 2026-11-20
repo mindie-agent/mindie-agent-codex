@@ -1,5 +1,5 @@
 """Execute a script with the configured MindIE runtime interpreter.
-[Role] Resolve `MINDIE_AGENT_CONFIG`, select its configured `"python"` (or `sys.executable`), strip `PYTHONPATH`, and `execv` the target on POSIX.
+[Role] Resolve `MINDIE_AGENT_CONFIG`, select its configured `"python"` (or worktree `.venv` / `sys.executable`), strip `PYTHONPATH`, and `execv` the target on POSIX.
 [Invariants] Every Windows spawn passes `CREATE_NO_WINDOW`; missing harness is tolerated.
 [Timeouts & Locks] None; the target script owns its deadlines.
 [Side-Effect Policy] Read-only configuration lookup before executing the target.
@@ -15,14 +15,15 @@ def _config() -> Path:
 def selected_python() -> str:
     try: value = json.loads(_config().read_bytes().decode("utf-8-sig"))
     except TimeoutError: raise
-    except (OSError, ValueError): return sys.executable
+    except (OSError, ValueError): value = None
     python = value.get("python") if isinstance(value, dict) else None
-    return python if isinstance(python, str) and Path(python).is_file() else sys.executable
+    if isinstance(python, str) and Path(python).is_file(): return python
+    local = Path(__file__).resolve().parents[3] / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    return str(local) if local.is_file() else sys.executable
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args: print("usage: with_runtime.py <script.py> [args...]", file=sys.stderr); return 2
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}; python = selected_python(); command = [python, "-I", "-X", "utf8", *args]
     if os.name != "nt": os.execve(python, command, env)
     return subprocess.run(command, env=env, creationflags=CREATE_NO_WINDOW).returncode
-if __name__ == "__main__":
-    raise SystemExit(main())
+if __name__ == "__main__": raise SystemExit(main())

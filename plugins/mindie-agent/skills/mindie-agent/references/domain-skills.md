@@ -31,11 +31,11 @@ The `mindie-remote-dev` and `mindie-tools` MCP servers (including `knowledge_que
 ## 3. Optional Iterative Optimization Helpers (`mindie_harness.rsi`)
 
 - **Handle-First Continuation**: `coordinator` (`execution_id`) and `remote-dev` (`job_id`) persist authoritative run state on disk. After any context compaction, interruption, or session resume, inspect existing handles (`coordinator` status/observe or `remote_job_status`) before launching duplicate runs.
-- **Optional Experiment Ledger & Loop (`experiment_ledger.py` / `rsi_loop.py`)**:
-  - Both `<runtime_scripts>/experiment_ledger.py` and `<runtime_scripts>/rsi_loop.py` forward to `mindie_harness.rsi` and remain strictly optional helpers for multi-round kernel or serving tuning.
-  - `experiment_ledger.py` provides `fingerprint <repo>`, `judge` (paired-trial median ratio + multi-factor leave-one-out attribution check), and `append --ledger experiment-ledger.jsonl`. Compile errors, SSH drops, or invalid measurement windows are recorded as `inconclusive` rather than `refuted`.
+- **Optional Experiment Ledger & Loop (`experiment_ledger` / `rsi_loop`)**:
+  - The `experiment_ledger` and `rsi_loop` MCP tools on `mindie-tools` (backed by `python -m mindie_harness.rsi.experiment_ledger` and `python -m mindie_harness.rsi.rsi_loop`) remain strictly optional helpers for multi-round kernel or serving tuning.
+  - `experiment_ledger` (`python -m mindie_harness.rsi.experiment_ledger`) provides `fingerprint <repo>`, `judge` (paired-trial median ratio + multi-factor leave-one-out attribution check), and `append --ledger experiment-ledger.jsonl`. Compile errors, SSH drops, or invalid measurement windows are recorded as `inconclusive` rather than `refuted`.
   - For multi-factor candidates, verify individual factor necessity via sequential leave-one-out pruning where the retained combination passes both correctness and performance checks.
-  - `rsi_loop.py` (`init`, `next`, `complete <step>`, `finish`) coordinates optional `profile -> consult -> propose -> measure -> learn` rounds over `experiment-ledger.jsonl`.
+  - `rsi_loop` (`python -m mindie_harness.rsi.rsi_loop`: `init`, `next`, `complete <step>`, `finish`) coordinates optional `profile -> consult -> propose -> measure -> learn` rounds over `experiment-ledger.jsonl`.
 
 ## 4. NPU Timing Mutual Exclusion & Profiler Discipline
 

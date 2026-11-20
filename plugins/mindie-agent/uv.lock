@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -15,14 +15,15 @@ resolution-markers = [
 
 [manifest]
 overrides = [
-    { name = "mindie-coordinator", git = "https://github.com/mindie-agent/coordinator?rev=a3c7336faa0bc14ebdb8f2fd75606c82e96422e9" },
+    { name = "mindie-coordinator", git = "https://github.com/mindie-agent/coordinator?rev=79df7c373bf35fda2a94907d1f3beb51c6462357" },
     { name = "mindie-debugger", git = "https://github.com/mindie-agent/debugger?rev=e15c2ed38d8f928db67c5bb1a94269f62207227c" },
     { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=7464cbb4381e9dc996871d192eb3f05f61dfdb28" },
-    { name = "mindie-harness", git = "https://github.com/mindie-agent/harness?rev=14313b8ba58c888b20c9c216ec41d14f5e62f4f7" },
-    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=9f48272a3ba87248bfda0e4068692511aac4dfa4" },
+    { name = "mindie-harness", git = "https://github.com/mindie-agent/harness?rev=440b8bd3dfa47f3c2e2131259c391c8cee14f13d" },
+    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=9befde292ea0e6c79e9e5f475c266cbcf845d59a" },
     { name = "mindie-profiler", git = "https://github.com/mindie-agent/profiler?rev=b702893129724b852c5abcb8971724b8b0a6e870" },
     { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=83fb8288aa998e0a6ad345ca7a16269f0181545b" },
-    { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=b33ca60baac81c237dd1bd6e7a8068945820727b" },
+    { name = "npu-top", git = "https://github.com/mindie-agent/npu-top?rev=72654fe6047df6ccc67746c242b3ce18bcabc945" },
+    { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=784fc2ca1db172f683889a6d47543c37141b3278" },
 ]
 
 [[package]]
@@ -1377,7 +1378,7 @@ name = "importlib-metadata"
 version = "9.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "zipp", marker = "python_full_version < '3.12'" },
+    { name = "zipp" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6f/7e/1e7e8dc30634b93ebb3d58a3dea569ad146e656218d3960ab04f62047b29/importlib_metadata-9.0.1.tar.gz", hash = "sha256:ab830580bc0ef3db61ce8fae716389e5462b67e033018bab6d8f80ef17172f99", size = 59124, upload-time = "2026-08-28T15:30:34.646Z" }
 wheels = [
@@ -2048,7 +2049,7 @@ wheels = [
 
 [[package]]
 name = "mindie-agent-codex"
-version = "0.1.39"
+version = "0.1.40"
 source = { editable = "." }
 dependencies = [
     { name = "mindie-coordinator" },
@@ -2058,25 +2059,27 @@ dependencies = [
     { name = "mindie-knowledge" },
     { name = "mindie-profiler" },
     { name = "mindie-sim" },
+    { name = "npu-top" },
     { name = "remote-dev" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "mindie-coordinator", git = "https://github.com/mindie-agent/coordinator?rev=a3c7336faa0bc14ebdb8f2fd75606c82e96422e9" },
+    { name = "mindie-coordinator", git = "https://github.com/mindie-agent/coordinator?rev=79df7c373bf35fda2a94907d1f3beb51c6462357" },
     { name = "mindie-debugger", git = "https://github.com/mindie-agent/debugger?rev=e15c2ed38d8f928db67c5bb1a94269f62207227c" },
     { name = "mindie-diagnostics", git = "https://github.com/mindie-agent/diagnostics?rev=7464cbb4381e9dc996871d192eb3f05f61dfdb28" },
-    { name = "mindie-harness", git = "https://github.com/mindie-agent/harness?rev=14313b8ba58c888b20c9c216ec41d14f5e62f4f7" },
-    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=9f48272a3ba87248bfda0e4068692511aac4dfa4" },
+    { name = "mindie-harness", git = "https://github.com/mindie-agent/harness?rev=440b8bd3dfa47f3c2e2131259c391c8cee14f13d" },
+    { name = "mindie-knowledge", git = "https://github.com/mindie-agent/knowledge?rev=9befde292ea0e6c79e9e5f475c266cbcf845d59a" },
     { name = "mindie-profiler", git = "https://github.com/mindie-agent/profiler?rev=b702893129724b852c5abcb8971724b8b0a6e870" },
     { name = "mindie-sim", git = "https://github.com/mindie-agent/sim?rev=83fb8288aa998e0a6ad345ca7a16269f0181545b" },
-    { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=b33ca60baac81c237dd1bd6e7a8068945820727b" },
+    { name = "npu-top", git = "https://github.com/mindie-agent/npu-top?rev=72654fe6047df6ccc67746c242b3ce18bcabc945" },
+    { name = "remote-dev", git = "https://github.com/mindie-agent/remote-dev?rev=784fc2ca1db172f683889a6d47543c37141b3278" },
 ]
 
 [[package]]
 name = "mindie-coordinator"
-version = "0.7.13"
-source = { git = "https://github.com/mindie-agent/coordinator?rev=a3c7336faa0bc14ebdb8f2fd75606c82e96422e9#a3c7336faa0bc14ebdb8f2fd75606c82e96422e9" }
+version = "0.7.14"
+source = { git = "https://github.com/mindie-agent/coordinator?rev=79df7c373bf35fda2a94907d1f3beb51c6462357#79df7c373bf35fda2a94907d1f3beb51c6462357" }
 dependencies = [
     { name = "mindie-diagnostics" },
     { name = "remote-dev" },
@@ -2095,13 +2098,13 @@ source = { git = "https://github.com/mindie-agent/diagnostics?rev=7464cbb4381e9d
 
 [[package]]
 name = "mindie-harness"
-version = "0.1.4"
-source = { git = "https://github.com/mindie-agent/harness?rev=14313b8ba58c888b20c9c216ec41d14f5e62f4f7#14313b8ba58c888b20c9c216ec41d14f5e62f4f7" }
+version = "0.1.5"
+source = { git = "https://github.com/mindie-agent/harness?rev=440b8bd3dfa47f3c2e2131259c391c8cee14f13d#440b8bd3dfa47f3c2e2131259c391c8cee14f13d" }
 
 [[package]]
 name = "mindie-knowledge"
-version = "0.13.24"
-source = { git = "https://github.com/mindie-agent/knowledge?rev=9f48272a3ba87248bfda0e4068692511aac4dfa4#9f48272a3ba87248bfda0e4068692511aac4dfa4" }
+version = "0.13.25"
+source = { git = "https://github.com/mindie-agent/knowledge?rev=9befde292ea0e6c79e9e5f475c266cbcf845d59a#9befde292ea0e6c79e9e5f475c266cbcf845d59a" }
 dependencies = [
     { name = "langmem" },
     { name = "mindie-diagnostics" },
@@ -2303,6 +2306,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b3/ce/2efa1f32a07adfe041d48c6d04c08b6f9db66b8512c765983172399b2855/multidict-7.1.0-cp315-cp315t-win_amd64.whl", hash = "sha256:55392202cb374dd1a1f89a8ce1586644870d9e936752059d053e576acc50bc89", size = 99671, upload-time = "2026-10-09T20:31:31.282Z" },
     { url = "https://files.pythonhosted.org/packages/a9/b3/a44c301fe13716c5f2c08afd89a481018988cde4b337b36e28a2b0fcf3a3/multidict-7.1.0-cp315-cp315t-win_arm64.whl", hash = "sha256:f979a077d1c0a9a36dd4fab0d3a36b8de7b593bf935e13df85a380395b2c11ad", size = 98893, upload-time = "2026-10-09T20:31:33.62Z" },
     { url = "https://files.pythonhosted.org/packages/d0/86/a3de309c5e28ee85b314d0e3ba0e0dea6fd361c313322a05e67be4656e1e/multidict-7.1.0-py3-none-any.whl", hash = "sha256:d9ef29cfd98e17085b4f91bba8fa1570bec6787d5c52ce653ed33a58785585d0", size = 28087, upload-time = "2026-10-09T20:31:35.945Z" },
+]
+
+[[package]]
+name = "npu-top"
+version = "0.3.5"
+source = { git = "https://github.com/mindie-agent/npu-top?rev=72654fe6047df6ccc67746c242b3ce18bcabc945#72654fe6047df6ccc67746c242b3ce18bcabc945" }
+dependencies = [
+    { name = "mindie-diagnostics" },
+    { name = "remote-dev" },
 ]
 
 [[package]]
@@ -3535,8 +3547,8 @@ as = [
 
 [[package]]
 name = "remote-dev"
-version = "0.11.14"
-source = { git = "https://github.com/mindie-agent/remote-dev?rev=b33ca60baac81c237dd1bd6e7a8068945820727b#b33ca60baac81c237dd1bd6e7a8068945820727b" }
+version = "0.11.15"
+source = { git = "https://github.com/mindie-agent/remote-dev?rev=784fc2ca1db172f683889a6d47543c37141b3278#784fc2ca1db172f683889a6d47543c37141b3278" }
 dependencies = [
     { name = "mindie-diagnostics" },
 ]
@@ -3734,8 +3746,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography", marker = "python_full_version >= '3.15' or sys_platform != 'win32'" },
-    { name = "jeepney", marker = "python_full_version >= '3.15' or sys_platform != 'win32'" },
+    { name = "cryptography" },
+    { name = "jeepney" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [

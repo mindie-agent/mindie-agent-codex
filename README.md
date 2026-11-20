@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.39-0F766E.svg" alt="Release v0.1.39"></a>
+  <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.40-0F766E.svg" alt="Release v0.1.40"></a>
   <a href="plugins/mindie-agent/harness-compatibility.json"><img src="https://img.shields.io/badge/Codex_CLI-0.153.4_%7C_%3E%3D0.162.0--alpha.2-10A37F.svg" alt="Codex CLI 0.153.4 | >=0.162.0-alpha.2"></a>
   <a href="plugins/mindie-agent/pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
@@ -27,7 +27,7 @@
 
 ---
 
-**MindIE Agent for OpenAI Codex CLI**（`mindie-agent-codex`）是 [MindIE Agent](https://github.com/mindie-agent/mindie-agent) 面向 OpenAI Codex CLI 的原生插件，服务于**昇腾（Ascend）NPU 上的 AI Infra 设计、开发与测试全流程**。当前 `v0.1.39` 已交付三大核心能力：**本地与社区知识库检索及隐私脱敏**（覆盖 `vLLM-Ascend`、`xLLM`、`MindIE-SD` 特性开发与 `AscendC` / `Triton` 算子工程）、**远端 SSH / Docker 开发与 NPU 状态巡检**，以及**统一故障诊断与脱敏上报**；更多昇腾基础软件领域将随演进路线图持续扩展。
+**MindIE Agent for OpenAI Codex CLI**（`mindie-agent-codex`）是 [MindIE Agent](https://github.com/mindie-agent/mindie-agent) 面向 OpenAI Codex CLI 的原生插件，服务于**昇腾（Ascend）NPU 上的 AI Infra 设计、开发与测试全流程**。当前 [`v0.1.40`](docs/releases/mindie-agent-codex-0.1.40.md) 已锁齐全部 9 个共享运行时组件（含 `mindie-harness >= 0.1.5` 与 `npu-top 0.3.5`）及 9 个公开昇腾知识域内容寻址绑定，交付三大核心能力：**本地与社区知识库检索及隐私脱敏**（覆盖 `vLLM-Ascend`、`xLLM`、`MindIE-SD` 特性开发与 `AscendC` / `Triton` 算子工程）、**远端 SSH / Docker 开发与 NPU 看板/状态巡检**，以及**统一故障诊断与脱敏上报**。
 
 项目设计遵循 [MindIE Agent 工程设计原则](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.md)：**全部能力采用静默默认启用（Silent Default-On）设计**——无需输入任何斜杠或前缀命令，领域 Skill、`mindie-tools`（含 `L1–L4` 知识工具）与 `mindie-remote-dev` 均开箱即用；所有状态与报错真实可定位，不做静默降级或盲目重试。
 
@@ -41,11 +41,11 @@ MindIE Agent 采用**「100% 静默默认启用 + 社区贡献显式授权按范
 | :--- | :--- | :--- | :--- |
 | **经验、知识库与 Skill 系统**<br/>（`mindie-knowledge` + `mindie-agent` Skill） | **⚡ 默认自动触发** | 开展昇腾 AI Infra 架构设计、`vLLM-Ascend` / `xLLM` / `MindIE-SD` 特性开发、`AscendC` / `Triton` 算子实现、单测/精度测试构建、性能调优或问题定位时 | **无需输入任何激活前缀**，直接用自然语言描述昇腾任务即可自动调用 `knowledge_query`、`knowledge_explain`、`knowledge_feedback`、`knowledge_distill` 与 `knowledge_sync` |
 | **远端昇腾 NPU 开发与测试**<br/>（`mindie-remote-dev` MCP 工具集 + 事实状态查询） | **⚡ 默认自动触发** | 日常需要将本地代码或测试同步到远端昇腾服务器/容器、在 NPU 上跑编译/测试、查看 `npu-smi` 或实时轮询长日志时 | 直接用自然语言描述远端操作即可 |
-| **Profiling、仿真、资源协调与本地诊断**<br/>（`mindie-tools` MCP 工具集） | **⚡ 默认自动触发** | 调用已安装的 `profiler`、`sim`、`debugger`、`coordinator`、`rsi_loop`、`experiment_ledger`，或查看本地 `diagnostics` 状态与导出诊断包 | 直接在任意会话、Desktop Work 模式、自动化任务或子代理中调用 |
-| **研发经验沉淀与社区共建**<br/>（`Stop` 后台采集 + Gitleaks 脱敏） | **🔄 已授权目录后台自动运行** | 希望将有价值的架构设计、算子开发、测试验证或调优经验脱敏沉淀回开源知识库时 | **授权一次配置，在批准项目目录内自动生效**——开启社区贡献后，处于已批准 `project_roots` 内的会话在回合结束自动完成本地脱敏与知识 PR 整理；未开启或目录外的会话 `< 100ms` 零 SQLite 直接退出 |
+| **Profiling、仿真、资源协调与本地诊断**<br/>（`mindie-tools` MCP 工具集） | **⚡ 默认自动触发** | 调用已安装的 `mindie_status`、`mindie_doctor`、`profiler`、`sim`、`debugger`、`coordinator`、`npu_top`、`rsi_loop`、`experiment_ledger`，或查看本地 `diagnostics` 状态与导出诊断包 | 直接在任意会话、Desktop Work 模式、自动化任务或子代理中调用 |
+| **研发经验沉淀与社区共建**<br/>（`Stop` 后台采集 + Gitleaks 脱敏） | **🔄 已授权目录后台自动运行** | 希望将有价值的架构设计、算子开发、测试验证或调优经验脱敏沉淀回开源知识库时 | **授权一次配置，在批准项目目录内自动生效**——开启社区贡献后，处于已批准 `project_roots` 内的会话在回合结束自动经 `run_stop_capture`（诚实区分 `turn` 与 `notification` 身份）完成本地脱敏与知识 PR 整理；未开启或目录外的会话 `< 100ms` 零 SQLite 直接退出 |
 
 > **默认启用工具面与组件自动更新说明**：
-> - **全量 MCP 工具开箱即用**：`mindie-remote-dev` 与 `mindie-tools`（含 `knowledge_query`、`knowledge_explain`、`knowledge_feedback`、`knowledge_distill`、`knowledge_sync`、`coordinator`、`profiler`、`debugger`、`sim`、`diagnostics_status`、`diagnostics_bundle`、`rsi_loop`、`experiment_ledger`）在启动时即默认暴露，无需任何前置会话绑定门禁。
+> - **全量 MCP 工具开箱即用**：`mindie-remote-dev`（10 项 Codex 远端工具）与 `mindie-tools`（含 `knowledge_query`、`knowledge_explain`、`knowledge_feedback`、`knowledge_distill`、`knowledge_sync`、`mindie_status`、`mindie_doctor`、`coordinator`、`profiler`、`debugger`、`sim`、`npu_top`、`diagnostics_status`、`diagnostics_bundle`、`rsi_loop`、`experiment_ledger`）在启动时即默认暴露，无需任何前置会话绑定门禁；冷/热 `SessionStart` 仅原子写入 `pending-update-check.json`，`< 30ms` 零 SQLite 返回。
 > - **`mindie-tools` 零拷贝桥接**：直接复用 `PATH`（或适配器配置 `component_commands` 中显式指定的独立虚拟环境解释器）下的 `mindie-profiler`、`mindie-sim`、`mindie-debugger`、`mindie-coordinator` 与内置 `diagnostics`，完整保留原始退出码与输出，大体积报告直接通过组件的 `--output` 落盘。
 > - **共享组件平滑自动更新**：后台维护机制会自动检查受管运行时中已安装的官方组件及 `component_commands` 标准模块绑定的最新正式版 Release，在旁路构建并通过校验后，趁空闲时将标准命令与解释器原子切换至新版本（保留你的本地知识库、授权设置与在途任务，也不会覆盖自定义 wrapper）。
 
@@ -106,7 +106,7 @@ MindIE Agent 采用**「100% 静默默认启用 + 社区贡献显式授权按范
    uv run https://github.com/mindie-agent/mindie-agent/releases/latest/download/install.py --host codex
    ```
    - 不要手工 clone 或拼接 `bootstrap.py`/`setup.py` 路径；`install.py --host codex` 是唯一稳定入口。
-   - 完成后用 `codex plugin list --json` 确认 `mindie-agent@mindie-agent` 版本为 `0.1.39` 且已启用。
+   - 完成后用 `codex plugin list --json` 确认 `mindie-agent@mindie-agent` 版本为 `0.1.40` 且已启用。
 
 3. **弹出 3 问动态 Onboarding（必须使用 OpenAI Codex 原生 `request_user_input`；若当前模式未暴露该工具，则输出编号选项等待用户回复）**：
    1. **工作区**（`id: "workspace"`）：`初始化 vllm-ascend-workspace (Recommended)` / `保持当前目录` / `使用已有工作区目录`。
@@ -150,49 +150,52 @@ MindIE Agent 采用**全自动自然语言交互**——日常使用无需输入
 
 ### 静默更新、安全卸载与已知限制
 
-- **后台静默更新**：后台维护线程按冷却周期异步检查兼容当前 Codex 版本的最高正式插件 Release 以及各官方共享组件仓库的正式 GitHub Release（参见 [`docs/releases/mindie-agent-codex-0.1.19.md`](docs/releases/mindie-agent-codex-0.1.19.md)），在操作锁外构建旁路锁定 `uv` 运行时并通过无模型探针校验，待后台服务空闲时退役旧服务并冷态原子切换绑定（不主动启动知识服务，完整保留已保存的统一贡献开关设置与会话授权状态）。
+- **后台静默更新**：后台维护机制通过 `mindie-harness` 异步检查兼容当前 Codex 版本的最高正式插件 Release 以及全部 9 个官方共享组件的正式 GitHub Release（参见 [`docs/releases/mindie-agent-codex-0.1.40.md`](docs/releases/mindie-agent-codex-0.1.40.md)），在操作锁外构建旁路锁定 `uv` 运行时并通过无模型探针校验，运行时代际回收（`Active + Rollback <= 2`）唯一交由 `mindie-harness` 管理；待后台服务空闲时在 `.codex.json.update.lock` 下退役旧服务并按内容哈希切换 9 域 `engines/codex/<20hex>/<domain>.engine.json` 与 `codex.json` 绑定（完整保留已保存的统一贡献开关设置与会话授权状态）。
 - **安全卸载**：关闭正在使用插件的会话后，通过 Codex 原生命令卸载：
   ```sh
   codex plugin remove mindie-agent@mindie-agent --json
   ```
-- **已知宿主限制（子代理中断）**：在 `0.0.2` 中，当主会话打断正在等待 MCP 工具返回的子代理（Child Agent）时，由于 Codex 宿主未向子代理分派 Interrupt 信号，子代理发起的本地辅助进程/SSH 或已启动的远端命令可能继续运行直至宿主退出（主线程中断已在约 73ms 内通过原生 `Interrupt` Hook 精准回收）。详见 [Harness 接口兼容性证据 — 子代理取消限制](docs/harness-interfaces.zh.md#known-limitation-child-agent-cancellation)。
+- **已知宿主限制（子代理中断）**：当主会话打断正在等待 MCP 工具返回的子代理（Child Agent）时，由于 Codex 宿主未向子代理分派原生 `Interrupt` 信号，子代理发起的本地辅助进程/SSH 或已启动的远端命令可能继续运行直至宿主退出（主线程中断通过原生 `Interrupt` Hook 按精确 `(thread_id, turn_id)` 作用域回收在途调用，不会误伤并发的其他轮次）。详见 [Harness 接口兼容性证据 — 子代理取消限制](docs/harness-interfaces.zh.md#known-limitation-child-agent-cancellation)。
 
 ---
 
 ## 架构与组件边界
 
-`mindie-agent-codex` 采用**薄适配层（Thin Adapter）**架构：本仓库仅负责对接 Codex 原生插件清单、Hook 事件桥接、公开 `response_item` 对话提取与不可变运行时入口；核心知识引擎、远端昇腾执行与故障诊断均由独立的共享组件承载。
+`mindie-agent-codex` 采用**薄适配层（Thin Adapter）**架构：`plugins/mindie-agent/scripts/*.py` 全量仅 `1,094` 行（`<= 1,100`），仅负责对接 Codex 原生插件清单（含 Windows `%APPDATA%` 与 POSIX `XDG_CONFIG_HOME` 对称 `.mcp.json` 定位）、字节冻结 `hooks/hooks.json`、按轮次精准匹配的 `mindie_interrupt` 协调、公开 `response_item` 对话提取与不可变运行时入口；MCP 路由、9 域内容寻址知识绑定、运行时代际管理、远端昇腾执行与故障诊断均由 [`mindie-harness`](https://github.com/mindie-agent/harness) 及独立共享组件承载。
 
 ```mermaid
 flowchart LR
-  Codex["OpenAI Codex CLI<br/>(App-Server / Hooks / MCP stdio)"] --> Entry["mindie-agent-codex<br/>(原生事件桥接 & 锁定运行时入口)"]
-  Entry --> Knowledge["mindie-agent/knowledge<br/>(BM25/分块检索、Gitleaks 脱敏与 PR 闭环)"]
-  Knowledge --> Feed["mindie-agent/knowledge-vllm-ascend<br/>(vLLM-Ascend 领域知识源)"]
-  Entry --> RemoteDev["mindie-agent/remote-dev<br/>(SSH 远端昇腾文件、补丁与后台作业)"]
-  Entry --> Diagnostics["mindie-agent/diagnostics<br/>(有界本地诊断 & 可选故障上报)"]
+  Codex["OpenAI Codex CLI<br/>(App-Server / Hooks / MCP stdio)"] --> Entry["mindie-agent-codex<br/>(薄宿主桥接 & 锁定运行时入口)"]
+  Entry --> Harness["mindie-agent/harness<br/>(MCPRouter / 9 域知识绑定 / 代际 GC)"]
+  Harness --> Knowledge["mindie-agent/knowledge<br/>(BM25/分块检索、Gitleaks 脱敏与 PR 闭环)"]
+  Knowledge --> Feed["mindie-agent/knowledge-vllm-ascend<br/>(9 公开昇腾领域知识源)"]
+  Harness --> RemoteDev["mindie-agent/remote-dev<br/>(SSH 远端昇腾文件、补丁与后台作业)"]
+  Harness --> Tools["mindie-tools<br/>(profiler / sim / debugger / coordinator / npu-top / diagnostics)"]
 ```
 
 | 仓库 / 组件 | 核心职责 |
 |---|---|
 | [`mindie-agent/mindie-agent`](https://github.com/mindie-agent/mindie-agent) | 顶层架构、MindIE Agent 工程设计原则、领域边界与配套发布规范。 |
-| `mindie-agent/mindie-agent-codex`（本仓库） | Codex 原生插件目录（`.codex-plugin/`、`plugins/mindie-agent/`）、Hook 信任哈希 CAS 管理、主线程 `Interrupt` 取消桥接、公开对话解析与固定运行时管理。 |
+| `mindie-agent/mindie-agent-codex`（本仓库） | Codex 原生插件目录（`.codex-plugin/`、`plugins/mindie-agent/`）、Hook 信任哈希 CAS 管理、按 `(thread_id, turn_id)` 隔离的 `Interrupt` 取消桥接、公开对话解析与固定运行时入口。 |
+| [`mindie-agent/harness`](https://github.com/mindie-agent/harness) | 共享底座（`>= 0.1.5`）：`MCPRouter` / `ManagedMCPAdapter`、9 域内容寻址 `ensure_knowledge_binding`、`run_stop_capture`、`Active + Rollback` 代际 GC 与单状态 `rsi` 闭环。 |
 | [`mindie-agent/knowledge`](https://github.com/mindie-agent/knowledge) | 共享知识核心：本地 SQLite/BM25 检索、确定性脱敏、采集队列、分块导航索引与 GitHub PR 发布对账。 |
-| [`mindie-agent/knowledge-vllm-ascend`](https://github.com/mindie-agent/knowledge-vllm-ascend) | `vllm-ascend` 领域知识包（在 [`product-contract.json`](plugins/mindie-agent/product-contract.json) 中固定契约哈希与验证提交）。 |
+| [`mindie-agent/knowledge-vllm-ascend`](https://github.com/mindie-agent/knowledge-vllm-ascend) | `vllm-ascend` 等 9 个公开领域知识包（在 [`product-contract.json`](plugins/mindie-agent/product-contract.json) 中固定契约哈希与验证提交）。 |
 | [`mindie-agent/remote-dev`](https://github.com/mindie-agent/remote-dev) | 面向远端昇腾服务器的 SSH 文件读写、补丁同步、受管后台作业与实时日志流。 |
-| [`mindie-agent/diagnostics`](https://github.com/mindie-agent/diagnostics) | 本地有界结构化诊断日志与可选的脱敏 GitHub Issue 自动上报。 |
+| [`mindie-agent/profiler`](https://github.com/mindie-agent/profiler) / [`sim`](https://github.com/mindie-agent/sim) / [`debugger`](https://github.com/mindie-agent/debugger) / [`coordinator`](https://github.com/mindie-agent/coordinator) / [`npu-top`](https://github.com/mindie-agent/npu-top) / [`diagnostics`](https://github.com/mindie-agent/diagnostics) | 性能剖析、Roofline 仿真、故障/精度定位、硬件探针与租约协调、NPU 实时看板、本地结构化诊断与可选脱敏上报。 |
 
 ---
 
 ## 开发者验证与测试
 
-在仓库根目录下运行快速、隔离的薄插件契约测试：
+在仓库根目录下运行快速、隔离的薄插件契约测试（CI 同步接入 `mindie-bench` 的 `verify-host-plugin.yml` `host: codex` 端到端宿主门禁）：
 
 ```sh
+uv run --no-project python .github/scripts/check_lf_eol.py
 uv run --project plugins/mindie-agent --no-sync python -m pytest -q -m "not live_npu" tests
 uv run --project plugins/mindie-agent --no-sync python plugins/mindie-agent/scripts/setup.py release-metadata --source plugins/mindie-agent --tests tests --revision "$(git rev-parse HEAD)"
 ```
 
-- **发行版微基准测试（Release Microbenchmark）**：每个 `0.1.39` 插件 Release 均随附 `benchmark-results.json` 和 `benchmark-results.md`，按 [`benchmarks/release.json`](benchmarks/release.json) 测量 `public-transcript` 公开消息解析与隐藏推理过滤的耗时（单位 `us/op`）。该指标作为可复现的本地 CPU 微基准基线，与远端 A2/A3 NPU 实机集成验收及端到端 Agent 研发效率评估相互独立。
+- **发行版微基准测试（Release Microbenchmark）**：每个 `0.1.40` 插件 Release 均随附 `benchmark-results.json` 和 `benchmark-results.md`，按 [`benchmarks/release.json`](benchmarks/release.json) 测量 `public-transcript` 公开消息解析与隐藏推理过滤的耗时（单位 `us/op`）。该指标作为可复现的本地 CPU 微基准基线，与远端 A2/A3 NPU 实机集成验收及端到端 Agent 研发效率评估相互独立。
 
 ---
 

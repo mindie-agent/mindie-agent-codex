@@ -1,41 +1,42 @@
 """Thin MindIE profile, sharing, doctor, update, and release-metadata CLI.
-[Role] Initialize adapter/engine config, persist sharing, delegate `doctor`/`update` to `mindie_harness`, and validate release metadata.
-[Invariants] Config writes are atomic; `transcript_adapter` points at `codex_transcript.py`; every interface code path and test id must resolve.
-[Timeouts & Locks] Doctor/update deadlines come from `mindie_harness`; no local locks.
+[Role] Provision 9-domain knowledge bindings via `ensure_knowledge_binding(..., already_locked=True)`, persist sharing, delegate `doctor`/`update` to `mindie_harness`, and validate release metadata.
+[Invariants] Config writes hold `.codex.json.update.lock` once and never persist a half-initialized `validated` profile without `engine_config`; every interface code path and test id must resolve.
+[Timeouts & Locks] Config init holds `.codex.json.update.lock` (`15s`); doctor/update deadlines come from `mindie_harness`.
 [Side-Effect Policy] Only install/configure write; status and metadata are read-only.
 """
 from __future__ import annotations
-import ast, importlib.util, json, os, re, shutil, subprocess, sys, tempfile
+import ast, importlib.util, json, os, re, subprocess, sys, time
 from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
+if str(SCRIPTS) not in sys.path: sys.path.insert(0, str(SCRIPTS))
 _NO_WIN = 0x08000000 if os.name == "nt" else 0
-REPOSITORY = "mindie-agent/mindie-agent-codex"
-SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
-def _version(root: Path) -> str: return str(json.loads((root / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))["version"]) if (root / ".codex-plugin/plugin.json").is_file() else "0.1.39"
-def _atomic(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True); descriptor, raw = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent); temporary = Path(raw)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-            json.dump(value, stream, indent=2, sort_keys=True); stream.write("\n")
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
-def ensure_initialized(profile, *, python: Path, scripts_dir: Path, release_dir: Path):
-    """Write the canonical adapter and engine documents once; return both."""
-    config, engine = Path(profile.config_path), Path(profile.config_path).with_name(Path(profile.config_path).stem + ".engine.json")
-    if config.is_file() and engine.is_file():
-        return json.loads(config.read_text(encoding="utf-8")), json.loads(engine.read_text(encoding="utf-8"))
-    version = _version(Path(scripts_dir).parent); validation = {"schema": "mindie-candidate-check/1", "status": "validated", "native_version": version}
-    community = config.parent / "mindie-community.json"; admission = config.parent / (config.stem + ".admission.sqlite3")
-    existing = json.loads(config.read_text(encoding="utf-8")) if config.is_file() else {}
-    old_ep = existing.get("engine_config"); prev_engine = json.loads(Path(old_ep).read_text(encoding="utf-8")) if isinstance(old_ep, str) and Path(old_ep).is_file() else {}
-    engine_doc = {**prev_engine, "root": str(Path(os.environ.get("MINDIE_KNOWLEDGE_ROOT") or prev_engine.get("root") or Path(profile.data_dir) / "knowledge")), "domain": str(prev_engine.get("domain") or "vllm-ascend"), "admission_path": str(admission), "transcript_adapter": str(Path(scripts_dir) / "codex_transcript.py"), "community_config": str(community), "product_validation": validation}
-    adapter = {**existing, "host": "codex", "python": str(python), "engine_config": str(engine), "community_config": str(community), "consent_config": str(config.parent / "mindie-consent.json"), "admission_path": str(admission), "runtime_scripts": str(scripts_dir), "source_root": str(Path(scripts_dir).parent), "component_release": str(release_dir), "product_validation": validation, "domain_configs": existing.get("domain_configs", {})}
-    if redactor := (shutil.which("gitleaks") or os.environ.get("MINDIE_REDACTOR_EXECUTABLE")):
-        engine_doc["redactor_executable"] = redactor
-    _atomic(engine, engine_doc); _atomic(config, adapter); return adapter, engine_doc
+REPOSITORY, SHA_RE = "mindie-agent/mindie-agent-codex", re.compile(r"[0-9a-f]{40}\Z")
+def _version(root: Path) -> str: return str(json.loads((root / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))["version"]) if (root / ".codex-plugin/plugin.json").is_file() else "0.1.40"
+def ensure_initialized(profile, *, python: Path, scripts_dir: Path, release_dir: Path, install_redactor: bool = False, retire_previous: bool = False, root: str | Path | None = None, domain: str | None = None):
+    from mindie_harness.atomic import atomic_write_json
+    from mindie_harness.locks import FileLock
+    from mindie_harness.runtime.knowledge_binding import ensure_knowledge_binding
+    config, plugin_root = Path(profile.config_path), Path(scripts_dir).parent; version = _version(plugin_root)
+    with FileLock(config.with_name(f".{config.name}.update.lock"), exclusive=True, timeout=15.0):
+        existing = json.loads(config.read_text(encoding="utf-8")) if config.is_file() else {}; ep = existing.get("engine_config")
+        if not retire_previous and not root and not domain and isinstance(ep, str) and Path(ep).is_file() and isinstance(existing.get("domain_configs"), dict) and len(existing["domain_configs"]) >= 9:
+            return existing, json.loads(Path(ep).read_text(encoding="utf-8"))
+        prev_env = os.environ.get("MINDIE_KNOWLEDGE_ROOT")
+        if root is not None: os.environ["MINDIE_KNOWLEDGE_ROOT"] = str(Path(root).expanduser().resolve())
+        try: res = ensure_knowledge_binding(profile, plugin_root=plugin_root, python_executable=python, install_redactor=install_redactor, retire_previous=retire_previous, already_locked=True)
+        finally:
+            if root is not None:
+                if prev_env is None: os.environ.pop("MINDIE_KNOWLEDGE_ROOT", None)
+                else: os.environ["MINDIE_KNOWLEDGE_ROOT"] = prev_env
+        ret_st = (res.get("retirement") or {}).get("status") if isinstance(res, dict) else None
+        if not isinstance(res, dict) or res.get("status") != "configured" or ret_st in {"deferred", "incomplete"}:
+            raise RuntimeError(f"MindIE knowledge binding {(res or {}).get('status') or 'failed'}: {(res or {}).get('reason') or ret_st}")
+        validation = {"schema": "mindie-candidate-check/1", "status": "validated", "native_version": version}
+        adapter = {**existing, **(res.get("binding_fields") or {}), "host": "codex", "python": str(python), "runtime_scripts": str(scripts_dir),
+                   "source_root": str(plugin_root), "component_release": str(release_dir), "product_validation": validation, "updated_at": time.time()}
+        if domain and isinstance(adapter.get("domain_configs"), dict) and domain in adapter["domain_configs"]: adapter["engine_config"] = adapter["domain_configs"][domain]
+        atomic_write_json(config, adapter)
+        return adapter, json.loads(Path(adapter["engine_config"]).read_text(encoding="utf-8"))
 def _profile(config: str | None):
     from mindie_harness.paths import ProfileRef
     return ProfileRef.resolve("codex", config_path=config or os.environ.get("MINDIE_AGENT_CONFIG"), plugin_root=SCRIPTS.parent)
@@ -54,8 +55,8 @@ def release_metadata(source: Path, tests: Path | None, revision: str | None) -> 
     from mindie_knowledge.releases import validate_compatibility
     if revision is not None and not SHA_RE.fullmatch(revision): raise ValueError("revision must be a 40-character lowercase SHA")
     version = _version(source); compatibility = json.loads((source / "harness-compatibility.json").read_text(encoding="utf-8")); validate_compatibility(compatibility, harness_name="codex")
-    for entry in compatibility["interface_registry"].values():
-        if any(not _has(path, source) for path in entry["code_paths"]) or (tests is not None and any(not _has(test, tests) for test in entry["test_ids"])):
+    for item in compatibility["interface_registry"].values():
+        if any(not _has(path, source) for path in item["code_paths"]) or (tests is not None and any(not _has(test, tests) for test in item["test_ids"])):
             raise ValueError("harness-compatibility code_paths/test_ids do not resolve")
     servers = json.loads((source / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"].values()
     if {argv[index + 1] for server in servers for argv in [server.get("args", [])] for index, token in enumerate(argv[:-1]) if token == "--seed"} != {version}:
@@ -74,11 +75,9 @@ def _install(argv: list[str]) -> dict:
     flags = _flags(argv, {"--knowledge-python": False, "--config": False, "--root": False, "--domain": False, "--no-public-feed": True}); profile = _profile(flags.get("--config"))
     existing = json.loads(Path(profile.config_path).read_text(encoding="utf-8")) if Path(profile.config_path).is_file() else {}
     chosen_py = flags.get("--knowledge-python") or (existing.get("python") if isinstance(existing.get("python"), str) and Path(existing["python"]).is_file() else sys.executable)
-    adapter, engine = ensure_initialized(profile, python=Path(chosen_py), scripts_dir=SCRIPTS, release_dir=SCRIPTS.parent)
-    if root := flags.get("--root"): engine["root"] = str(Path(root).expanduser().absolute())
-    if domain := flags.get("--domain"): engine["domain"] = domain
-    _atomic(Path(profile.config_path).with_name(Path(profile.config_path).stem + ".engine.json"), engine)
-    return {"status": "configured", "config": str(profile.config_path), "engine_config": str(adapter["engine_config"]), "admission_path": adapter["admission_path"], "transcript_adapter": engine["transcript_adapter"], "domain": engine["domain"]}
+    install_red = not bool(flags.get("--no-public-feed")) and os.environ.get("_MINDIE_UV_FLAGS") != "--offline"
+    adapter, engine = ensure_initialized(profile, python=Path(chosen_py), scripts_dir=SCRIPTS, release_dir=SCRIPTS.parent, install_redactor=install_red, retire_previous=True, root=flags.get("--root"), domain=flags.get("--domain"))
+    return {"status": "configured", "config": str(profile.config_path), "engine_config": str(adapter["engine_config"]), "domain_configs": adapter.get("domain_configs", {}), "admission_path": adapter["admission_path"], "transcript_adapter": engine["transcript_adapter"], "domain": engine["domain"]}
 def _sharing(argv: list[str]) -> dict:
     flags = _flags(argv, {"--config": False, "--status": True, "--enable": True, "--local-only": True, "--disable": True, "--project-root": False, "--repository": False, "--fork": False, "--account": False})
     if sum(bool(flags.get(key)) for key in ("--status", "--enable", "--local-only", "--disable")) > 1:
@@ -112,5 +111,4 @@ def main(argv: list[str] | None = None) -> int:
         flags = _flags(rest, {"--source": False, "--tests": False, "--revision": False})
         print(json.dumps(release_metadata(Path(flags.get("--source") or SCRIPTS.parent).resolve(), Path(flags["--tests"]).resolve() if flags.get("--tests") else None, flags.get("--revision")), sort_keys=True)); return 0
     raise SystemExit(f"unknown setup command: {command}")
-if __name__ == "__main__":
-    raise SystemExit(main())
+if __name__ == "__main__": raise SystemExit(main())

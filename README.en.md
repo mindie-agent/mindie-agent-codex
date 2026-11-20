@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.39-0F766E.svg" alt="Release v0.1.39"></a>
+  <a href="https://github.com/mindie-agent/mindie-agent-codex/releases"><img src="https://img.shields.io/badge/release-v0.1.40-0F766E.svg" alt="Release v0.1.40"></a>
   <a href="plugins/mindie-agent/harness-compatibility.json"><img src="https://img.shields.io/badge/Codex_CLI-0.153.4_%7C_%3E%3D0.162.0--alpha.2-10A37F.svg" alt="Codex CLI 0.153.4 | >=0.162.0-alpha.2"></a>
   <a href="plugins/mindie-agent/pyproject.toml"><img src="https://img.shields.io/badge/python-3.13-3776AB.svg" alt="Python 3.13"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0F766E.svg" alt="License: MIT"></a>
@@ -27,7 +27,7 @@
 
 ---
 
-**MindIE Agent for OpenAI Codex CLI** (`mindie-agent-codex`) is the native OpenAI Codex CLI plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release `v0.1.39` delivers three core capabilities: **local and community knowledge base retrieval with privacy redaction** (covering `vLLM-Ascend`, `xLLM`, and `MindIE-SD` feature development plus `AscendC` / `Triton` kernel engineering), **remote SSH / Docker development and NPU inspection**, and **unified fault diagnostics with sanitized reporting**; additional Ascend software domains are tracked on the project roadmap.
+**MindIE Agent for OpenAI Codex CLI** (`mindie-agent-codex`) is the native OpenAI Codex CLI plugin for [MindIE Agent](https://github.com/mindie-agent/mindie-agent), supporting the **Ascend NPU AI Infra design, development, and testing lifecycle**. Release [`v0.1.40`](docs/releases/mindie-agent-codex-0.1.40.en.md) locks all 9 shared runtime packages (including `mindie-harness >= 0.1.5` and `npu-top 0.3.5`) and content-addressed 9-domain knowledge bindings, delivering three core capabilities: **local and community knowledge base retrieval with privacy redaction** (covering `vLLM-Ascend`, `xLLM`, and `MindIE-SD` feature development plus `AscendC` / `Triton` kernel engineering), **remote SSH / Docker development and NPU dashboard/inspection**, and **unified fault diagnostics with sanitized reporting**.
 
 Designed around the [MindIE Agent Engineering Design Principles](https://github.com/mindie-agent/mindie-agent/blob/main/docs/design-principles.en.md), **every capability runs in Silent Default-On mode**—requiring zero slash or prompt-prefix commands so the Ascend domain Skill, `mindie-tools` (including `L1–L4` `knowledge_*` tools), and `mindie-remote-dev` work out of the box across CLI, Desktop Work mode, Automations, and Subagents while keeping all errors and uncertain external effects explicitly visible to the caller.
 
@@ -41,11 +41,11 @@ MindIE Agent combines **100% silent default-on tools and skills** with **opt-in,
 | :--- | :--- | :--- | :--- |
 | **Experience, Knowledge & Skill System**<br/>(`mindie-knowledge` + `mindie-agent` Skill) | **⚡ Default Auto-Trigger** | When designing Ascend AI Infra features, developing in `vLLM-Ascend` / `xLLM` / `MindIE-SD`, writing `AscendC` / `Triton` kernels, authoring unit/accuracy tests, or tuning performance | **No activation prefix needed**—describe your Ascend task in natural language to invoke `knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, and `knowledge_sync` automatically |
 | **Remote Ascend NPU Dev & Testing**<br/>(`mindie-remote-dev` MCP toolset + factual status) | **⚡ Default Auto-Trigger** | When syncing local code/tests to a remote Ascend server/container, running NPU builds/tests, checking `npu-smi`, or streaming long job logs | Just describe the remote task in natural language |
-| **Profiling, Simulation, Resource Coordination & Local Diagnostics**<br/>(`mindie-tools` MCP toolset) | **⚡ Default Auto-Trigger** | When running installed `profiler`, `sim`, `debugger`, `coordinator`, `rsi_loop`, or `experiment_ledger` components, inspecting local `diagnostics`, or exporting a support bundle | Call directly in any CLI chat, Desktop Work mode, Automation, or Subagent |
-| **Engineering Experience Loop**<br/>(`Stop` Auto-Capture + Gitleaks Redaction) | **🔄 Background Run in Authorized Scope** | When contributing sanitized design, kernel development, testing, or tuning takeaways back to the open-source knowledge base | **Configure Consent Once, Active in Approved `project_roots`**—once contribution is enabled, sessions inside approved `project_roots` are automatically redacted and packaged into a knowledge PR on `Stop`; unconfigured, disabled, or out-of-scope sessions exit `< 100ms` with zero SQLite |
+| **Profiling, Simulation, Resource Coordination & Local Diagnostics**<br/>(`mindie-tools` MCP toolset) | **⚡ Default Auto-Trigger** | When running installed `mindie_status`, `mindie_doctor`, `profiler`, `sim`, `debugger`, `coordinator`, `npu_top`, `rsi_loop`, or `experiment_ledger` tools, inspecting local `diagnostics`, or exporting a support bundle | Call directly in any CLI chat, Desktop Work mode, Automation, or Subagent |
+| **Engineering Experience Loop**<br/>(`Stop` Auto-Capture + Gitleaks Redaction) | **🔄 Background Run in Authorized Scope** | When contributing sanitized design, kernel development, testing, or tuning takeaways back to the open-source knowledge base | **Configure Consent Once, Active in Approved `project_roots`**—once contribution is enabled, sessions inside approved `project_roots` are automatically redacted via `run_stop_capture` (distinguishing `turn` vs `notification` identity) and packaged into a knowledge PR on `Stop`; unconfigured, disabled, or out-of-scope sessions exit `< 100ms` with zero SQLite |
 
 > **Default-On Tool Surface & Component Auto-Updates**:
-> - **Out-of-the-Box MCP Discovery**: Both `mindie-remote-dev` and `mindie-tools` (including `knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`, `coordinator`, `profiler`, `debugger`, `sim`, `diagnostics_status`, `diagnostics_bundle`, `rsi_loop`, and `experiment_ledger`) are exposed by default on startup with zero prior session-binding gate.
+> - **Out-of-the-Box MCP Discovery**: Both `mindie-remote-dev` (10 Codex remote tools) and `mindie-tools` (including `knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`, `mindie_status`, `mindie_doctor`, `coordinator`, `profiler`, `debugger`, `sim`, `npu_top`, `diagnostics_status`, `diagnostics_bundle`, `rsi_loop`, and `experiment_ledger`) are exposed by default on startup with zero prior session-binding gate; cold and warm `SessionStart` write only `pending-update-check.json` and exit `{}` in `< 30ms` without SQLite.
 > - **Zero-Copy `mindie-tools` Delegation**: Delegates directly to installed `mindie-profiler`, `mindie-sim`, `mindie-debugger`, and `mindie-coordinator` CLIs on `PATH` (or explicit virtual-environment bindings in `component_commands`) and the built-in `diagnostics` runtime, preserving exit codes and raw outputs while writing large reports via `--output`.
 > - **Seamless Component Auto-Updates**: Background maintenance checks for verified formal Releases of official components installed in the managed runtime or bound via standard Python module entries in `component_commands`, builds a side-by-side candidate runtime, and atomically switches both the interpreter and standard bindings when idle—preserving your knowledge store, consent settings, in-flight work, and any custom wrappers.
 
@@ -106,7 +106,7 @@ If you are an AI agent asked to install MindIE Agent, execute these steps in ord
    uv run https://github.com/mindie-agent/mindie-agent/releases/latest/download/install.py --host codex
    ```
    - Do not clone manually or assemble `bootstrap.py`/`setup.py` paths; `install.py --host codex` is the only stable entry.
-   - Verify with `codex plugin list --json` that `mindie-agent@mindie-agent` version `0.1.39` is enabled.
+   - Verify with `codex plugin list --json` that `mindie-agent@mindie-agent` version `0.1.40` is enabled.
 
 3. **Show the 3-question dynamic onboarding (use the native Codex `request_user_input`; if unavailable, print numbered options and wait)**:
    1. **Workspace** (`id: "workspace"`): `Initialize vllm-ascend-workspace (Recommended)` / `Keep the current directory` / `Use an existing workspace`.
@@ -150,49 +150,52 @@ MindIE Agent works directly from **natural-language prompts with zero prefix com
 
 ### Silent Updates, Uninstall & Known Limitations
 
-- **Silent Compatible Updates**: A background maintenance thread checks asynchronously for both the highest compatible plugin Release and formal GitHub Releases of shared runtime components from their official repositories (see [`docs/releases/mindie-agent-codex-0.1.19.md`](docs/releases/mindie-agent-codex-0.1.19.md)), builds a side-by-side locked `uv` runtime outside the operation lock, runs a model-free API probe, and retires the idle service before atomically publishing the binding (never starting a knowledge worker during updates and preserving your saved unified contribution setting and session lease state).
+- **Silent Compatible Updates**: Background maintenance via `mindie-harness` checks asynchronously for both the highest compatible plugin Release and formal GitHub Releases of all 9 shared runtime packages (see [`docs/releases/mindie-agent-codex-0.1.40.en.md`](docs/releases/mindie-agent-codex-0.1.40.en.md)), builds a side-by-side locked `uv` runtime outside the operation lock, runs a model-free API probe, leaves runtime generation GC (`Active + Rollback <= 2`) solely to `mindie-harness`, and retires idle services under `.codex.json.update.lock` before atomically switching content-addressed 9-domain `engines/codex/<20hex>/<domain>.engine.json` bindings and `codex.json` (preserving your saved unified contribution setting and session lease state).
 - **Safe Uninstall**: Close active sessions using the plugin and remove it via native Codex CLI:
   ```sh
   codex plugin remove mindie-agent@mindie-agent --json
   ```
-- **Known Host Limitation (Child-Agent Cancellation)**: In `0.0.2`, interrupting a spawned child agent turn in Codex does not dispatch the native `Interrupt` event to the child's pending MCP call, which may leave its local helper/SSH process or an already-started remote command running until the host exits (main-thread interrupts clean up local helper trees in ~73ms via the native `Interrupt` hook). See [Harness Interface Evidence — Child-Agent Limitation](docs/harness-interfaces.md#known-limitation-child-agent-cancellation).
+- **Known Host Limitation (Child-Agent Cancellation)**: Interrupting a spawned child agent turn in Codex does not dispatch the native `Interrupt` event to the child's pending MCP call, which may leave its local helper/SSH process or an already-started remote command running until the host exits (main-thread interrupts scope `mindie_interrupt` strictly by `(thread_id, turn_id)` so concurrent turns are never cross-cancelled). See [Harness Interface Evidence — Child-Agent Limitation](docs/harness-interfaces.md#known-limitation-child-agent-cancellation).
 
 ---
 
 ## Architecture & Component Map
 
-`mindie-agent-codex` is built as a **thin native adapter**: it handles Codex plugin manifests, hook trust CAS updates, main-thread `Interrupt` routing, public `response_item` extraction, and the immutable runtime entry, while delegating core capabilities to shared packages.
+`mindie-agent-codex` is built as a **thin native adapter**: `plugins/mindie-agent/scripts/*.py` totals `1,094` lines (`<= 1,100`) and owns only Codex plugin manifests (including Windows `%APPDATA%` + POSIX `XDG_CONFIG_HOME` parity in `.mcp.json`), byte-frozen `hooks/hooks.json`, turn-scoped `(thread_id, turn_id)` `Interrupt` correlation, public `response_item` extraction, and the immutable runtime entry, while delegating MCP routing, 9-domain content-addressed knowledge bindings, runtime generation management, remote execution, and diagnostics to [`mindie-harness`](https://github.com/mindie-agent/harness) and shared packages.
 
 ```mermaid
 flowchart LR
-  Codex["OpenAI Codex CLI<br/>(App-Server / Hooks / MCP stdio)"] --> Entry["mindie-agent-codex<br/>(Native Bridge & Locked Runtime Entry)"]
-  Entry --> Knowledge["mindie-agent/knowledge<br/>(BM25/Block Search, Gitleaks Redaction & PR Loop)"]
-  Knowledge --> Feed["mindie-agent/knowledge-vllm-ascend<br/>(vLLM-Ascend Knowledge Feed)"]
-  Entry --> RemoteDev["mindie-agent/remote-dev<br/>(SSH Remote Ascend Files, Patches & Jobs)"]
-  Entry --> Diagnostics["mindie-agent/diagnostics<br/>(Bounded Local Diagnostics & Opt-In Reporter)"]
+  Codex["OpenAI Codex CLI<br/>(App-Server / Hooks / MCP stdio)"] --> Entry["mindie-agent-codex<br/>(Thin Host Bridge & Locked Runtime Entry)"]
+  Entry --> Harness["mindie-agent/harness<br/>(MCPRouter / 9-Domain Binding / Generation GC)"]
+  Harness --> Knowledge["mindie-agent/knowledge<br/>(BM25/Block Search, Gitleaks Redaction & PR Loop)"]
+  Knowledge --> Feed["mindie-agent/knowledge-vllm-ascend<br/>(9 Public Ascend Knowledge Feeds)"]
+  Harness --> RemoteDev["mindie-agent/remote-dev<br/>(SSH Remote Ascend Files, Patches & Jobs)"]
+  Harness --> Tools["mindie-tools<br/>(profiler / sim / debugger / coordinator / npu-top / diagnostics)"]
 ```
 
 | Repository / Component | Responsibility |
 |---|---|
 | [`mindie-agent/mindie-agent`](https://github.com/mindie-agent/mindie-agent) | Top-level architecture, MindIE Agent Engineering Design Principles, domain boundaries, and paired-release governance. |
-| `mindie-agent/mindie-agent-codex` (this repo) | Codex native plugin manifests (`.codex-plugin/`, `plugins/mindie-agent/`), hook trust CAS management, main-thread `Interrupt` cancellation bridge, public transcript parser, and immutable runtime lifecycle. |
+| `mindie-agent/mindie-agent-codex` (this repo) | Codex native plugin manifests (`.codex-plugin/`, `plugins/mindie-agent/`), hook trust CAS management, turn-scoped `(thread_id, turn_id)` `Interrupt` cancellation bridge, public transcript parser, and immutable runtime entrypoint. |
+| [`mindie-agent/harness`](https://github.com/mindie-agent/harness) | Shared substrate (`>= 0.1.5`): `MCPRouter` / `ManagedMCPAdapter`, 9-domain `ensure_knowledge_binding`, `run_stop_capture`, `Active + Rollback` generation GC, and single-state `rsi` loop. |
 | [`mindie-agent/knowledge`](https://github.com/mindie-agent/knowledge) | Shared knowledge core: local SQLite/BM25 search, deterministic redaction, capture queue, block-index scheduling, and GitHub PR publication reconciliation. |
-| [`mindie-agent/knowledge-vllm-ascend`](https://github.com/mindie-agent/knowledge-vllm-ascend) | Curated `vllm-ascend` domain knowledge feed. |
+| [`mindie-agent/knowledge-vllm-ascend`](https://github.com/mindie-agent/knowledge-vllm-ascend) | Curated `vllm-ascend` and sibling Ascend domain knowledge feeds (pinned in [`product-contract.json`](plugins/mindie-agent/product-contract.json)). |
 | [`mindie-agent/remote-dev`](https://github.com/mindie-agent/remote-dev) | Editor-semantics remote file operations, patching, managed background jobs, and live log polling over SSH for Ascend servers. |
-| [`mindie-agent/diagnostics`](https://github.com/mindie-agent/diagnostics) | Bounded local diagnostic logs and optional sanitized GitHub Issue fault reporting. |
+| [`mindie-agent/profiler`](https://github.com/mindie-agent/profiler) / [`sim`](https://github.com/mindie-agent/sim) / [`debugger`](https://github.com/mindie-agent/debugger) / [`coordinator`](https://github.com/mindie-agent/coordinator) / [`npu-top`](https://github.com/mindie-agent/npu-top) / [`diagnostics`](https://github.com/mindie-agent/diagnostics) | Profiling, Roofline simulation, fault/precision localization, hardware probe/lease coordination, NPU dashboard, bounded local diagnostics, and opt-in sanitized Issue reporting. |
 
 ---
 
 ## Developer Verification
 
-Run the fast, isolated thin-plugin contract suite from the repository root:
+Run the fast, isolated thin-plugin contract suite from the repository root (CI also runs `mindie-bench`'s reusable `verify-host-plugin.yml` with `host: codex`):
 
 ```sh
+uv run --no-project python .github/scripts/check_lf_eol.py
 uv run --project plugins/mindie-agent --no-sync python -m pytest -q -m "not live_npu" tests
 uv run --project plugins/mindie-agent --no-sync python plugins/mindie-agent/scripts/setup.py release-metadata --source plugins/mindie-agent --tests tests --revision "$(git rev-parse HEAD)"
 ```
 
-- **Release Microbenchmark**: Each `0.1.39` plugin release attaches `benchmark-results.json` and `benchmark-results.md` measuring the `public-transcript` public-message parsing and hidden-reasoning filtering workload ([`benchmarks/release.json`](benchmarks/release.json)) in `us/op`. This serves as a reproducible CPU microbenchmark baseline, distinct from live A2/A3 NPU acceptance and end-to-end Agent productivity evaluation.
+- **Release Microbenchmark**: Each `0.1.40` plugin release attaches `benchmark-results.json` and `benchmark-results.md` measuring the `public-transcript` public-message parsing and hidden-reasoning filtering workload ([`benchmarks/release.json`](benchmarks/release.json)) in `us/op`. This serves as a reproducible CPU microbenchmark baseline, distinct from live A2/A3 NPU acceptance and end-to-end Agent productivity evaluation.
 
 ---
 

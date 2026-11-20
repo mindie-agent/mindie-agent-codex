@@ -8,7 +8,7 @@ On WSL Linux, both added versions pass `tests/test_native_harness_acceptance.py`
 
 The official source for [0.162.1](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/mcp_tool_call.rs) and [0.164.0](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/mcp_tool_call.rs) retains the native thread and turn metadata used by the adapter. Existing protocol tests continue to cover identity rejection and targeted cancellation.
 
-In CI, `plugins/mindie-agent/scripts/setup.py release-metadata` verifies that every registered production symbol and contract test exists and validates the declared version intervals against all consumed interfaces.
+In CI, `plugins/mindie-agent/scripts/setup.py release-metadata` verifies that every registered production symbol and contract test exists and validates the declared version intervals against all consumed interfaces; `tests/test_native_harness_acceptance.py` also executes positive `mcpServer/tool/call` invocations (`mindie_doctor` and `knowledge_query`, `isError == False`) on `mindie-tools`, and `.github/workflows/tests.yml` runs `mindie-bench/.github/workflows/verify-host-plugin.yml` (`host: codex`).
 
 ---
 
@@ -87,9 +87,9 @@ To ensure local helper and SSH subprocesses are cleaned up immediately when a us
 
 ## Native Interrupt Hook
 
-`mindie-agent-codex` registers native `Interrupt` hooks of type `mcp_tool` on both MCP connections (`mindie-knowledge` and `mindie-remote-dev`):
-- **Targeted In-Flight Cancellation**: When the user interrupts the active main-thread turn, the hook invokes the internal `mindie_interrupt` control on the existing MCP connection with `${session_id}` and `${turn_id}`.
-- **Bypassing Worker Queue Saturation**: The control handler runs directly on the MCP reader before the worker capacity gate, verifies `_meta.threadId`, and signals only in-flight requests matching both the native thread and turn ID.
+`mindie-agent-codex` registers native `Interrupt` hooks of type `mcp_tool` on its MCP connections (`mindie-tools` and `mindie-remote-dev`):
+- **Turn-Scoped In-Flight Cancellation**: When the user interrupts an active turn, the hook invokes the internal `mindie_interrupt` control on the existing MCP connection with `${session_id}` (`thread_id`) and `${turn_id}`.
+- **Bypassing Worker Queue Saturation**: `CodexHostAdapter` intercepts `mindie_interrupt` directly on the MCP reader pump before worker dispatch, correlates `(thread_id, turn_id)` via `extract_turn_scope` (rejecting contradictory argument/header scopes), and emits `notifications/cancelled` only for in-flight requests matching that exact thread and turn scope—never cancelling unrelated concurrent turns or subagents.
 - **Fast Subprocess Cleanup**: Signalling triggers the same deterministic process-tree cleanup used by `notifications/cancelled`. Across locked non-editable installations on `0.153.4`, interrupting a pending SSH tool call cleaned up all owned local helper/SSH processes while keeping the MCP server and Codex host responsive:
 
 | Platform | Verified Codex Version | Observed Cleanup After Interrupt | Reclaimed Local Processes |

@@ -93,5 +93,17 @@ def test_native_locked_runtime_and_mcp_discovery(monkeypatch, tmp_path):
         assert "remote_probe" in remote["tools"] and "remote_exec_command" in remote["tools"]
         assert "remote_BashOutput" not in remote["tools"] and "remote_KillShell" not in remote["tools"]
         assert not any(name.startswith("knowledge_") for name in remote["tools"])
-        assert {"mindie_doctor", "diagnostics_status"} <= set(tools["tools"])
+        assert {"mindie_doctor", "diagnostics_status", "npu_top"} <= set(tools["tools"])
         assert all(name in tools["tools"] for name in expected)
+        doctor_res = api.call(
+            "mcpServer/tool/call",
+            dict(threadId=thread, server=tools["name"], tool="mindie_doctor", arguments={"probe_remote": False}),
+            timeout=60,
+        )
+        assert doctor_res.get("isError") is False and doctor_res.get("content")
+        kq_res = api.call(
+            "mcpServer/tool/call",
+            dict(threadId=thread, server=tools["name"], tool="knowledge_query", arguments={"query": "aclgraph", "domain": "vllm-ascend"}),
+            timeout=90,
+        )
+        assert kq_res.get("isError") is False and kq_res.get("content")

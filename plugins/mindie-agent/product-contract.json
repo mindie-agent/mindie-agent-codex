@@ -1,10 +1,23 @@
 {
   "schema": "mindie-product/1",
   "validation": "mindie-candidate-check/1",
+  "harness": "codex",
+  "native_version": "0.1.40",
   "publication": {
     "repository": "mindie-agent/knowledge-vllm-ascend",
     "ref": "main",
     "domain": "vllm-ascend",
     "verified_commit": "9a614ccda3a82ab863be72edec92ada219af5112"
+  },
+  "components": {
+    "mindie-harness": "0.1.5",
+    "mindie-knowledge": "0.13.25",
+    "remote-dev": "0.11.15",
+    "mindie-diagnostics": "0.5.17",
+    "mindie-coordinator": "0.7.14",
+    "mindie-debugger": "0.1.4",
+    "mindie-profiler": "0.5.16",
+    "mindie-sim": "0.9.18",
+    "npu-top": "0.3.5"
   }
 }
