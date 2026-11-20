@@ -56,12 +56,10 @@ def _lock(path: Path, *, timeout: float = 600.0):
             finally: fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 def _env(runtime: Path, data: Path) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
-    env.update(UV_PROJECT_ENVIRONMENT=str(runtime), UV_CACHE_DIR=env.get("UV_CACHE_DIR") or str(data / ".uv-cache"), UV_SYSTEM_CERTS="true", UV_NO_PROGRESS="1",
-               GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never", GIT_CONFIG_COUNT="2", GIT_CONFIG_KEY_0="core.longpaths", GIT_CONFIG_VALUE_0="true", GIT_CONFIG_KEY_1="core.autocrlf", GIT_CONFIG_VALUE_1="false")
+    env.update(UV_PROJECT_ENVIRONMENT=str(runtime), UV_CACHE_DIR=env.get("UV_CACHE_DIR") or str(data / ".uv-cache"), UV_SYSTEM_CERTS="true", UV_NO_PROGRESS="1", GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never", GIT_CONFIG_COUNT="2", GIT_CONFIG_KEY_0="core.longpaths", GIT_CONFIG_VALUE_0="true", GIT_CONFIG_KEY_1="core.autocrlf", GIT_CONFIG_VALUE_1="false")
     return env
 def _run(argv: list[str], *, env: dict[str, str], timeout: float) -> None:
-    if subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, stdout=sys.stderr, stderr=sys.stderr, timeout=timeout, check=False, creationflags=_NO_WIN).returncode:
-        raise RuntimeError(f"{Path(argv[0]).name} failed")
+    if subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, stdout=sys.stderr, stderr=sys.stderr, timeout=timeout, check=False, creationflags=_NO_WIN).returncode: raise RuntimeError(f"{Path(argv[0]).name} failed")
 def _probe(python: Path, code: str, *, timeout: float = 60.0) -> dict:
     res = subprocess.run([str(python), "-I", "-X", "utf8", "-c", code], capture_output=True, timeout=timeout, check=False, creationflags=_NO_WIN)
     val = json.loads(res.stdout.decode("utf-8")) if res.returncode == 0 else None
@@ -69,8 +67,7 @@ def _probe(python: Path, code: str, *, timeout: float = 60.0) -> dict:
     return val
 def _scripts(python: Path, version: str) -> Path:
     val = _probe(python, _PROBE); root = Path(val["root"]); manifest = _read(root / ".codex-plugin/plugin.json")
-    if val.get("version") != version or not isinstance(manifest, dict) or manifest.get("version") != version or not (root / "scripts/entry.py").is_file():
-        raise ValueError("installed runtime differs")
+    if val.get("version") != version or not isinstance(manifest, dict) or manifest.get("version") != version or not (root / "scripts/entry.py").is_file(): raise ValueError("installed runtime differs")
     return root / "scripts"
 def _semver(v: str) -> tuple[int, ...]: return tuple(int("".join(c for c in tok if c.isdigit()) or 0) for tok in str(v).split(".")[:3])
 def _uv() -> str:
@@ -89,12 +86,10 @@ def _restore_floors(old: Path, new: Path) -> None:
         spec = f"{name} @ git+{repo if '://' in repo else 'https://github.com/' + repo}@{rev}" if (isinstance(repo, str) and repo and isinstance(rev, str) and rev) else (f"{name} @ {repo}" if isinstance(repo, str) and repo.endswith(".whl") else f"{name}>={row['version']}")
         _run([_uv(), "pip", "install", "--python", str(new), "--no-deps", spec], env=env, timeout=240.0); upgraded = True
     final = _probe(new, _INVENTORY, timeout=30.0) if upgraded else after
-    if any(isinstance(row, dict) and name not in {"mindie-codex", "mindie-agent-codex"} and _semver(final.get(name, {}).get("version", "0")) < _semver(row.get("version", "0")) for name, row in before.items()):
-        raise RuntimeError("component floor verification failed")
+    if any(isinstance(row, dict) and name not in {"mindie-codex", "mindie-agent-codex"} and _semver(final.get(name, {}).get("version", "0")) < _semver(row.get("version", "0")) for name, row in before.items()): raise RuntimeError("component floor verification failed")
 def _build(source: Path, data: Path, runtime: Path) -> None:
-    ignore = shutil.ignore_patterns(".git", "__pycache__", ".venv", "build", "dist", "releases", "runtimes")
     with tempfile.TemporaryDirectory(prefix="mindie-build-") as directory:
-        project = Path(directory) / "project"; shutil.copytree(source, project, ignore=ignore)
+        project = Path(directory) / "project"; shutil.copytree(source, project, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv", "build", "dist", "releases", "runtimes"))
         cmd = [_uv(), "--native-tls", "sync", "--project", str(project), "--locked", "--no-editable", "--no-dev", "--python", sys.executable]
         try: _run(cmd, env=_env(runtime, data), timeout=540.0)
         except RuntimeError: time.sleep(1.5); _run(cmd, env=_env(runtime, data), timeout=540.0)
@@ -104,30 +99,39 @@ def _publish(python: Path, scripts: Path, release: Path, data: Path, source: Pat
              "env={k:v for k,v in os.environ.items() if k!='PYTHONPATH'}\ncmd=[python,'-I','-X','utf8',entry,'--release',release,'--source',source,*sys.argv[1:]]\n"
              "if os.name=='nt':\n raise SystemExit(subprocess.run(cmd,env=env,stdin=sys.stdin,stdout=sys.stdout,stderr=sys.stderr,creationflags=0x08000000).returncode)\nos.execve(python,cmd,env)\n")
     for target, text in ((release / "entry.py", entry), (release / "hook_launcher.py", launcher), (data / "hook_launcher.py", launcher)): _write_atomic_text(target, text)
+def _has_harness(python: Path) -> bool:
+    try: return _probe(python, "import importlib.util,json;print(json.dumps({'ok':importlib.util.find_spec('mindie_harness') is not None}))", timeout=30.0).get("ok") is True
+    except TimeoutError: raise
+    except (OSError, ValueError, subprocess.TimeoutExpired): return False
 def ensure_runtime(source, data) -> tuple[Path, Path, Path]:
     source, data = Path(source).resolve(), Path(data).absolute(); version = _version(source); key = _key(source, version)
     release, runtime = data / "releases" / version, data / "runtimes" / key[:24]; python = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    data.mkdir(parents=True, exist_ok=True)
+    data.mkdir(parents=True, exist_ok=True); check = {"schema": "mindie-candidate-check/1", "status": "validated", "native_version": version}
     with _lock(data / ".prepare-codex.lock"):
-        receipt = _read(release / "runtime.json")
-        if isinstance(receipt, dict) and isinstance(receipt.get("python"), str) and Path(receipt["python"]).is_file():
+        cfg_path = _config_file(); before, receipt = _read(cfg_path), _read(release / "runtime.json")
+        if before is None and os.environ.get("MINDIE_CHANNEL_BASE_URL") and (seed := source / "assets/mindie-harness-seed.pyz").is_file():
+            subprocess.run([sys.executable, "-I", "-X", "utf8", str(seed), "--host", "codex", "--plugin-root", str(source), "--config", str(cfg_path), "status"], stdin=subprocess.DEVNULL, capture_output=True, timeout=240.0, check=False, creationflags=_NO_WIN); before = _read(cfg_path)
+        old = Path(before["python"]) if isinstance(before, dict) and isinstance(before.get("python"), str) else None
+        if old is not None and old.is_file() and isinstance(before, dict) and isinstance(before.get("channel_base_url"), str) and before["channel_base_url"].strip() and (source / "scripts/entry.py").is_file():
+            adopted = (isinstance(receipt, dict) and receipt.get("wheelhouse_adopted") is True and receipt.get("python") == str(old)) or _has_harness(old)
+            if adopted:
+                if not (isinstance(receipt, dict) and receipt.get("wheelhouse_adopted") is True and receipt.get("python") == str(old)):
+                    _atomic(release / "runtime.json", {"key": key, "python": str(old), "source": str(source), "wheelhouse_adopted": True, "validation": check})
+                _publish(old, source / "scripts", release, data, source); return old, source / "scripts", release
+        if isinstance(receipt, dict) and not receipt.get("wheelhouse_adopted") and isinstance(receipt.get("python"), str) and Path(receipt["python"]).is_file():
             try: scripts = _scripts(Path(receipt["python"]), version)
             except TimeoutError: raise
             except (OSError, ValueError, subprocess.TimeoutExpired): pass
             else: _publish(Path(receipt["python"]), scripts, release, data, source); return Path(receipt["python"]), scripts, release
-        before = _read(_config_file()); old = Path(before["python"]) if isinstance(before, dict) and isinstance(before.get("python"), str) else None
         _build(source, data, runtime)
         if old is not None: _restore_floors(old, python)
-        scripts = _scripts(python, version)
-        _atomic(release / "runtime.json", {"key": key, "python": str(python), "source": str(source), "validation": {"schema": "mindie-candidate-check/1", "status": "validated", "native_version": version}})
+        scripts = _scripts(python, version); _atomic(release / "runtime.json", {"key": key, "python": str(python), "source": str(source), "validation": check})
         _publish(python, scripts, release, data, source); return python, scripts, release
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args: raise SystemExit("usage: bootstrap.py <data-dir> [--source <source>] [role ...]")
     data, source = Path(args.pop(0)), Path(__file__).resolve().parents[1]
-    if "--source" in args:
-        idx = args.index("--source"); source = Path(args[idx + 1]).resolve(); del args[idx:idx + 2]
+    if "--source" in args: idx = args.index("--source"); source = Path(args[idx + 1]).resolve(); del args[idx:idx + 2]
     python, scripts, release = ensure_runtime(source, data); cmd = [str(python), "-I", "-X", "utf8", str(scripts / "entry.py"), "--release", str(release), "--source", str(source), *args]
-    if os.name != "nt": os.execv(str(python), cmd)
-    return subprocess.run(cmd, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, creationflags=_NO_WIN).returncode
+    return subprocess.run(cmd, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, creationflags=_NO_WIN).returncode if os.name == "nt" else os.execv(str(python), cmd)
 if __name__ == "__main__": raise SystemExit(main())

@@ -49,7 +49,8 @@ def _rebind_unlocked(profile, *, source: Path, release: Path, version: str, curr
         return {"status": st, "reason": str((res or {}).get("reason") or ("service_busy" if st == "deferred" else "old_retirement_unconfirmed"))}
     adapter = {**before, **(res.get("binding_fields") or {})}; validation = dict(adapter.get("product_validation") or {})
     validation.update(schema="mindie-candidate-check/1", status="validated", native_version=version)
-    adapter.update(host="codex", python=sys.executable, runtime_scripts=str(SCRIPTS), source_root=str(source), component_release=str(release), product_validation=validation, updated_at=time.time())
+    prev_rel = before.get("component_release"); comp_rel = prev_rel if isinstance(prev_rel, str) and prev_rel and Path(prev_rel) in Path(sys.executable).parents else str(release)
+    adapter.update(host="codex", python=sys.executable, runtime_scripts=str(SCRIPTS), source_root=str(source), component_release=comp_rel, product_validation=validation, updated_at=time.time())
     rebind_component_commands(adapter, sys.executable); atomic_write_json(config_path, adapter); return adapter
 def _rebind(profile, *, source: Path, release: Path, version: str) -> dict:
     from mindie_harness.locks import FileLock
