@@ -28,3 +28,4 @@ description: "Ascend NPU, vLLM-Ascend, xLLM, MindIE-SD, AscendC, and Triton engi
 - Tool schemas, profiler flags, and experiment ledger: [Domain Tooling](references/domain-skills.md)
 - Diagnostic isolation and scale-up verification (`W1-W7`): [Diagnostic Reasoning](references/diagnostic-reasoning.md)
 - Session, sharing, `mindie_doctor`, and SSH/NPU setup: [Capture & Operation Lifecycle](references/activation-lifecycle.md)
+- Natural-language RSI planning and bounded autonomous iteration: [RSI Natural Language Contract](references/rsi-natural-language.md)
