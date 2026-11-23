@@ -12,7 +12,7 @@ description: "Ascend NPU, vLLM-Ascend, xLLM, MindIE-SD, AscendC, and Triton engi
 
 ## 2. Silent Default-On Tooling
 - `mindie-remote-dev` exposes the curated 10-tool Codex profile: `remote_exec_command`, `remote_write_stdin`, `remote_view_image`, `remote_apply_patch`, `remote_auth`, `remote_probe`, `remote_artifact_pull`, `remote_artifact_push`, `remote_job_status`, and `remote_job_stop`.
-- `mindie-tools` exposes `mindie_doctor`, `mindie_status`, `diagnostics_status`, `diagnostics_bundle`, `profiler`, `sim`, `coordinator`, `debugger`, `rsi_loop`, `experiment_ledger`, and the five `knowledge_*` tools.
+- `mindie-tools` exposes `mindie_doctor`, `mindie_status`, `diagnostics_status`, `diagnostics_bundle`, `profiler`, `sim`, `coordinator`, `debugger`, `rsi_plan`, `rsi_autotune`, `rsi_loop`, `experiment_ledger`, and the five `knowledge_*` tools.
 - Privacy modes are explicit: `contribute` (community PRs), `local-only` (local capture only, zero GitHub upload, no `gh` required), and `read-only` (no capture).
 - Physical NPU exclusivity: acquire a `coordinator` lease (or verify an existing reservation) before benchmarks, profiling, or workloads; check existing `execution_id` / `job_id` handles before resubmitting.
 
@@ -28,3 +28,4 @@ description: "Ascend NPU, vLLM-Ascend, xLLM, MindIE-SD, AscendC, and Triton engi
 - Tool schemas, profiler flags, and experiment ledger: [Domain Tooling](references/domain-skills.md)
 - Diagnostic isolation and scale-up verification (`W1-W7`): [Diagnostic Reasoning](references/diagnostic-reasoning.md)
 - Session, sharing, `mindie_doctor`, and SSH/NPU setup: [Capture & Operation Lifecycle](references/activation-lifecycle.md)
+- Natural-language RSI planning and bounded autonomous iteration via `mindie-harness.rsi`: [RSI Natural Language Contract](references/rsi-natural-language.md)

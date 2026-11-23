@@ -1,6 +1,6 @@
 # Domain Tooling, Graded Knowledge & Long-Horizon Execution
 
-The `mindie-remote-dev` and `mindie-tools` MCP servers (including `knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`, `coordinator`, `profiler`, `debugger`, `sim`, `diagnostics_status`, `diagnostics_bundle`, `rsi_loop`, and `experiment_ledger`) are enabled by default in every session with zero activation gate. Pass explicit host, port, user, container, and working directory parameters, and poll or manage returned job/execution handles directly.
+The `mindie-remote-dev` and `mindie-tools` MCP servers (including `knowledge_query`, `knowledge_explain`, `knowledge_feedback`, `knowledge_distill`, `knowledge_sync`, `coordinator`, `profiler`, `debugger`, `sim`, `diagnostics_status`, `diagnostics_bundle`, `rsi_plan`, `rsi_autotune`, `rsi_loop`, and `experiment_ledger`) are enabled by default in every session with zero activation gate. Pass explicit host, port, user, container, and working directory parameters, and poll or manage returned job/execution handles directly.
 
 ## 1. Graded Knowledge (`L1–L4`), Reference Identity & `knowledge_distill`
 
@@ -36,6 +36,10 @@ The `mindie-remote-dev` and `mindie-tools` MCP servers (including `knowledge_que
   - `experiment_ledger` (`python -m mindie_harness.rsi.experiment_ledger`) provides `fingerprint <repo>`, `judge` (paired-trial median ratio + multi-factor leave-one-out attribution check), and `append --ledger experiment-ledger.jsonl`. Compile errors, SSH drops, or invalid measurement windows are recorded as `inconclusive` rather than `refuted`.
   - For multi-factor candidates, verify individual factor necessity via sequential leave-one-out pruning where the retained combination passes both correctness and performance checks.
   - `rsi_loop` (`python -m mindie_harness.rsi.rsi_loop`: `init`, `next`, `complete <step>`, `finish`) coordinates optional `profile -> consult -> propose -> measure -> learn` rounds over `experiment-ledger.jsonl`.
+
+- **Natural-language RSI (`rsi_plan` / `rsi_autotune`)**:
+  - `rsi_plan` validates or renders the `mindie-agent/rsi-plan/v1` contract and reports missing customer inputs without guessing them.
+  - `rsi_autotune` executes bounded, resumable candidate waves and promotes a candidate only after correctness, benchmark, repeated-measurement, and configured evidence gates pass.
 
 ## 4. NPU Timing Mutual Exclusion & Profiler Discipline
 
